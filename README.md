@@ -1,19 +1,38 @@
-# Falakhe PMS
-
-Property Management System Foundation - Phase 0-1
+# Falakhe PMS - Phase 0-1 Foundation
 
 ## Overview
-Falakhe PMS is a multi-tenant property management system designed to handle organizations, branches, and properties with strict Role-Based Access Control (RBAC) and comprehensive audit logging.
+Falakhe PMS is a modern, multi-tenant Property Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
 
-> **Note**: This is currently a Frontend UI Mockup. The backend architecture described below is simulated in the UI to allow for rapid design iteration and feedback.
+## Architecture & Tech Stack
+*   **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + Wouter
+*   **Backend Strategy**: Modular API routes with Zod validation, shared DTOs (simulated in mockup mode)
+*   **Database**: PostgreSQL + Prisma ORM (simulated in mockup mode)
+*   **Styling**: Custom CSS Variables matching a modern SaaS aesthetic
 
-## Architecture Highlights
-- **Frontend**: React + Vite (Simulating Next.js App Router for mockup purposes)
-- **Styling**: Tailwind CSS v4, custom design system, Shadcn/UI
-- **Multi-tenancy**: Organization and Branch scoping on all major entities.
-- **Authentication**: Staff login via Google OAuth/OIDC only (simulated).
-- **RBAC**: Database-driven roles and permissions mapped to users.
+## Core Implementations
 
-## Route Structure
-- `/staff`: Internal portal for property managers, admins, and agents.
-- `/client`: External portal for tenants/clients to view leases and payments.
+### 1. Multi-Tenancy
+*   Data is strictly isolated using `Organization` and `Branch` scoping.
+*   The `organization_id` is propagated through all major tables.
+*   Queries are implicitly scoped to the active tenant context.
+
+### 2. Authentication & Authorization
+*   **Auth**: Staff authenticate exclusively via Google OAuth/OIDC. Passwords are not supported to reduce attack surface.
+*   **RBAC**: Database-driven Role-Based Access Control.
+*   Roles map to fine-grained permissions.
+*   Support for optional per-user overrides for specific edge cases.
+
+### 3. Audit & Compliance
+*   Comprehensive Audit Logging framework.
+*   Captures `actor`, `action`, `target_entity`, and full `before/after` JSON diffs.
+*   Staff UI includes an Audit Log viewer.
+
+### 4. Tenant Branding
+*   Tenant-specific branding (logos, primary colors) is config-driven.
+*   Settings UI allows dynamic updates to the organization's visual identity.
+
+## Development Setup
+```bash
+npm install
+npm run dev:client
+```
