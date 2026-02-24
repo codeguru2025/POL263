@@ -352,9 +352,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     const tx = await storage.createPaymentTransaction(parsed);
 
+    let receipt = null;
     if (tx.status === "cleared" && tx.policyId) {
       const receiptNumber = await storage.getNextReceiptNumber(user.organizationId);
-      await storage.createReceipt({
+      receipt = await storage.createReceipt({
         organizationId: user.organizationId,
         receiptNumber,
         transactionId: tx.id,
@@ -366,7 +367,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", tx.id, null, tx);
-    return res.status(201).json(tx);
+    return res.status(201).json({ ...tx, receipt });
   });
 
   app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

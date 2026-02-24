@@ -522,6 +522,17 @@ export default function StaffFinance() {
           </DialogHeader>
           {receiptResult && (
             <div className="space-y-4">
+              {receiptResult.receipt && (
+                <div className="bg-green-100 dark:bg-green-950/40 border border-green-300 dark:border-green-800 rounded-lg px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-green-700 dark:text-green-400 font-medium uppercase tracking-wide">Receipt Number</p>
+                    <p className="text-xl font-bold font-mono text-green-800 dark:text-green-300" data-testid="text-receipt-number">
+                      {receiptResult.receipt.receiptNumber}
+                    </p>
+                  </div>
+                  <Receipt className="h-8 w-8 text-green-600/50" />
+                </div>
+              )}
               <Card className="bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900">
                 <CardContent className="pt-4 space-y-2">
                   <div className="flex justify-between">
@@ -554,6 +565,12 @@ export default function StaffFinance() {
                     <span className="text-sm text-muted-foreground">Date</span>
                     <span className="text-sm">{new Date(receiptResult.receivedAt).toLocaleString()}</span>
                   </div>
+                  {receiptResult.receipt && (
+                    <div className="flex justify-between">
+                      <span className="text-sm text-muted-foreground">Issued At</span>
+                      <span className="text-sm">{new Date(receiptResult.receipt.issuedAt).toLocaleString()}</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
               <p className="text-xs text-muted-foreground text-center">
