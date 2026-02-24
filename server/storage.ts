@@ -13,7 +13,7 @@ import {
   payrollEmployees, payrollRuns, payslips,
   notificationTemplates, notificationLogs, leads, expenditures,
   approvalRequests, featureFlags, dependentChangeRequests, securityQuestions,
-  productBenefitBundleLinks, groups, settlementAllocations,
+  productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   type Organization, type InsertOrganization,
   type Branch, type InsertBranch,
   type User, type InsertUser,
@@ -50,6 +50,7 @@ import {
   type Group, type InsertGroup,
   type ChibikhuluReceivable, type InsertChibikhuluReceivable,
   type Settlement, type InsertSettlement,
+  type TermsAndConditions, type InsertTerms,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -161,6 +162,10 @@ export interface IStorage {
   updatePriceBookItem(id: string, data: Partial<InsertPriceBookItem>): Promise<PriceBookItem | undefined>;
   getApprovalRequests(orgId: string, status?: string): Promise<ApprovalRequest[]>;
   createApprovalRequest(req: InsertApprovalRequest): Promise<ApprovalRequest>;
+  getTermsByOrg(orgId: string): Promise<TermsAndConditions[]>;
+  createTerms(terms: InsertTerms): Promise<TermsAndConditions>;
+  updateTerms(id: string, data: Partial<InsertTerms>): Promise<TermsAndConditions | undefined>;
+  deleteTerms(id: string): Promise<void>;
   updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>): Promise<ApprovalRequest | undefined>;
   getPayrollEmployees(orgId: string): Promise<PayrollEmployee[]>;
   createPayrollEmployee(emp: InsertPayrollEmployee): Promise<PayrollEmployee>;
@@ -653,6 +658,24 @@ export class DatabaseStorage implements IStorage {
   async updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>): Promise<ApprovalRequest | undefined> {
     const [updated] = await db.update(approvalRequests).set(data).where(eq(approvalRequests.id, id)).returning();
     return updated;
+  }
+
+  // ─── Terms & Conditions ────────────────────────────────────
+  async getTermsByOrg(orgId: string): Promise<TermsAndConditions[]> {
+    return db.select().from(termsAndConditions)
+      .where(and(eq(termsAndConditions.organizationId, orgId), eq(termsAndConditions.isActive, true)))
+      .orderBy(termsAndConditions.sortOrder);
+  }
+  async createTerms(terms: InsertTerms): Promise<TermsAndConditions> {
+    const [created] = await db.insert(termsAndConditions).values(terms).returning();
+    return created;
+  }
+  async updateTerms(id: string, data: Partial<InsertTerms>): Promise<TermsAndConditions | undefined> {
+    const [updated] = await db.update(termsAndConditions).set(data).where(eq(termsAndConditions.id, id)).returning();
+    return updated;
+  }
+  async deleteTerms(id: string): Promise<void> {
+    await db.delete(termsAndConditions).where(eq(termsAndConditions.id, id));
   }
 
   // ─── Payroll ───────────────────────────────────────────────

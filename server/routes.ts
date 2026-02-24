@@ -19,9 +19,10 @@ import {
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertChibikhuluReceivableSchema, insertSettlementSchema,
-  insertDependentSchema,
+  insertDependentSchema, insertTermsSchema,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
 } from "@shared/schema";
+import PDFDocument from "pdfkit";
 
 function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any) {
   const user = req.user as any;
@@ -1098,6 +1099,234 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const retentionRate = total > 0 ? ((active / total) * 100).toFixed(1) : "0";
     const lapseRate = total > 0 ? ((lapsed / total) * 100).toFixed(1) : "0";
     return res.json({ total, active, lapsed, grace, cancelled, retentionRate, lapseRate });
+  });
+
+  // ─── Terms & Conditions ──────────────────────────────────
+
+  app.get("/api/terms", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getTermsByOrg(user.organizationId));
+  });
+
+  app.post("/api/terms", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
+    const user = req.user as any;
+    const parsed = insertTermsSchema.parse({ ...req.body, organizationId: user.organizationId });
+    const created = await storage.createTerms(parsed);
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
+    const updated = await storage.updateTerms(req.params.id as string, req.body);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    return res.json(updated);
+  });
+
+  app.delete("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
+    await storage.deleteTerms(req.params.id as string);
+    return res.status(204).send();
+  });
+
+  // ─── Policy Document PDF ───────────────────────────────────
+
+  app.get("/api/policies/:id/document", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string);
+    if (!policy || policy.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "Policy not found" });
+    }
+
+    const org = await storage.getOrganization(policy.organizationId);
+    const client = await storage.getClient(policy.clientId);
+    const dependentsList = await storage.getDependentsByClient(policy.clientId);
+    const terms = await storage.getTermsByOrg(policy.organizationId);
+
+    let productName = "N/A";
+    let productVersion: any = null;
+    if (policy.productVersionId) {
+      const pv = await storage.getProductVersion(policy.productVersionId);
+      if (pv) {
+        productVersion = pv;
+        const prod = await storage.getProduct(pv.productId);
+        if (prod) productName = `${prod.name} (${prod.code})`;
+      }
+    }
+
+    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="Policy-${policy.policyNumber}.pdf"`);
+    doc.pipe(res);
+
+    const primaryColor = org?.primaryColor || "#2563EB";
+
+    doc.rect(0, 0, doc.page.width, 100).fill(primaryColor);
+    doc.fillColor("#FFFFFF").fontSize(22).font("Helvetica-Bold")
+      .text(org?.name || "Falakhe PMS", 50, 25, { align: "left" });
+    doc.fontSize(10).font("Helvetica")
+      .text("POLICY SCHEDULE", 50, 55, { align: "left" });
+
+    const headerRight: string[] = [];
+    if (org?.address) headerRight.push(org.address);
+    if (org?.phone) headerRight.push(`Tel: ${org.phone}`);
+    if (org?.email) headerRight.push(org.email);
+    if (org?.website) headerRight.push(org.website);
+    if (headerRight.length > 0) {
+      doc.fontSize(8).text(headerRight.join(" | "), 50, 75, { align: "right", width: doc.page.width - 100 });
+    }
+
+    let y = 120;
+
+    doc.fillColor("#000000").fontSize(16).font("Helvetica-Bold")
+      .text("Policy Certificate", 50, y);
+    y += 25;
+
+    doc.fontSize(9).font("Helvetica").fillColor("#666666")
+      .text(`Date Issued: ${new Date().toLocaleDateString("en-GB")}`, 50, y);
+    y += 20;
+
+    // Policy Details
+    doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Policy Details", 50, y);
+    y += 5;
+    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+    y += 20;
+
+    const policyFields = [
+      ["Policy Number", policy.policyNumber],
+      ["Status", (policy.status || "draft").toUpperCase()],
+      ["Product", productName],
+      ["Currency", policy.currency],
+      ["Premium Amount", `${policy.currency} ${parseFloat(policy.premiumAmount).toFixed(2)}`],
+      ["Payment Schedule", (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() + (policy.paymentSchedule || "monthly").slice(1)],
+      ["Effective Date", policy.effectiveDate || "Not set"],
+      ["Waiting Period End", policy.waitingPeriodEndDate || "N/A"],
+    ];
+
+    doc.font("Helvetica").fontSize(9).fillColor("#000000");
+    for (const [label, value] of policyFields) {
+      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
+      doc.font("Helvetica").text(`  ${value}`, { width: 350 });
+      y += 15;
+    }
+    y += 10;
+
+    // Principal Member Details
+    if (client) {
+      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Principal Member", 50, y);
+      y += 5;
+      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+      y += 20;
+
+      const fullName = [client.title, client.firstName, client.lastName].filter(Boolean).join(" ");
+      const clientFields = [
+        ["Full Name", fullName],
+        ["National ID", client.nationalId || "—"],
+        ["Date of Birth", client.dateOfBirth || "—"],
+        ["Gender", client.gender ? client.gender.charAt(0).toUpperCase() + client.gender.slice(1) : "—"],
+        ["Marital Status", client.maritalStatus || "—"],
+        ["Phone", client.phone || "—"],
+        ["Email", client.email || "—"],
+        ["Address", client.address || "—"],
+      ];
+
+      doc.font("Helvetica").fontSize(9).fillColor("#000000");
+      for (const [label, value] of clientFields) {
+        doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
+        doc.font("Helvetica").text(`  ${value}`, { width: 350 });
+        y += 15;
+      }
+      y += 10;
+    }
+
+    // Dependents
+    if (dependentsList.length > 0) {
+      if (y > 620) { doc.addPage(); y = 50; }
+      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Dependents / Beneficiaries", 50, y);
+      y += 5;
+      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+      y += 20;
+
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#333333");
+      doc.text("Name", 50, y, { width: 140 });
+      doc.text("Relationship", 195, y, { width: 80 });
+      doc.text("National ID", 280, y, { width: 90 });
+      doc.text("DOB", 375, y, { width: 70 });
+      doc.text("Gender", 450, y, { width: 60 });
+      y += 14;
+      doc.moveTo(50, y).lineTo(545, y).strokeColor("#CCCCCC").lineWidth(0.5).stroke();
+      y += 4;
+
+      doc.font("Helvetica").fontSize(8).fillColor("#000000");
+      for (const dep of dependentsList) {
+        if (y > 750) { doc.addPage(); y = 50; }
+        doc.text(`${dep.firstName} ${dep.lastName}`, 50, y, { width: 140 });
+        doc.text(dep.relationship, 195, y, { width: 80 });
+        doc.text(dep.nationalId || "—", 280, y, { width: 90 });
+        doc.text(dep.dateOfBirth || "—", 375, y, { width: 70 });
+        doc.text(dep.gender ? dep.gender.charAt(0).toUpperCase() + dep.gender.slice(1) : "—", 450, y, { width: 60 });
+        y += 14;
+      }
+      y += 10;
+    }
+
+    // Product Coverage Details
+    if (productVersion) {
+      if (y > 620) { doc.addPage(); y = 50; }
+      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Coverage Details", 50, y);
+      y += 5;
+      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+      y += 20;
+
+      const covFields = [
+        ["Waiting Period", `${productVersion.waitingPeriodDays} days`],
+        ["Grace Period", `${productVersion.gracePeriodDays} days`],
+        ["Eligible Age Range", `${productVersion.eligibilityMinAge} - ${productVersion.eligibilityMaxAge} years`],
+        ["Dependent Max Age", `${productVersion.dependentMaxAge} years`],
+      ];
+
+      doc.font("Helvetica").fontSize(9).fillColor("#000000");
+      for (const [label, value] of covFields) {
+        doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
+        doc.font("Helvetica").text(`  ${value}`, { width: 350 });
+        y += 15;
+      }
+      y += 10;
+    }
+
+    // Terms and Conditions
+    if (terms.length > 0) {
+      if (y > 500) { doc.addPage(); y = 50; }
+      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Terms and Conditions", 50, y);
+      y += 5;
+      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+      y += 20;
+
+      for (const term of terms) {
+        if (y > 700) { doc.addPage(); y = 50; }
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#000000").text(term.title, 50, y);
+        y += 14;
+        doc.font("Helvetica").fontSize(8).fillColor("#333333").text(term.content, 50, y, {
+          width: 495,
+          lineGap: 3,
+        });
+        y = doc.y + 12;
+      }
+    }
+
+    // Footer
+    if (y > 700) { doc.addPage(); y = 50; }
+    y = Math.max(y, 700);
+    doc.moveTo(50, y).lineTo(545, y).strokeColor("#CCCCCC").lineWidth(0.5).stroke();
+    y += 8;
+    doc.font("Helvetica").fontSize(7).fillColor("#999999")
+      .text(org?.footerText || `${org?.name || "Falakhe PMS"} — All rights reserved`, 50, y, { align: "center", width: 495 });
+
+    doc.end();
+  });
+
+  // ─── Add-ons by org ─────────────────────────────────────────
+
+  app.get("/api/add-ons", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getAddOns(user.organizationId));
   });
 
   // ─── Reports CSV Export ────────────────────────────────────

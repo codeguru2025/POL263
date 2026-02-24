@@ -24,6 +24,10 @@ export const organizations = pgTable("organizations", {
   logoUrl: text("logo_url").default("/assets/logo.png"),
   primaryColor: text("primary_color").default("#2563EB"),
   footerText: text("footer_text"),
+  address: text("address"),
+  phone: text("phone"),
+  email: text("email"),
+  website: text("website"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1088,6 +1092,29 @@ export const approvalRequests = pgTable(
     index("ar_status_idx").on(t.status),
   ]
 );
+
+// ─── TERMS AND CONDITIONS ───────────────────────────────────
+
+export const termsAndConditions = pgTable(
+  "terms_and_conditions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    category: text("category").default("general").notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("tc_org_idx").on(t.organizationId)]
+);
+
+export const insertTermsSchema = createInsertSchema(termsAndConditions).omit({ id: true, createdAt: true });
+export type TermsAndConditions = typeof termsAndConditions.$inferSelect;
+export type InsertTerms = z.infer<typeof insertTermsSchema>;
 
 // ─── FEATURE FLAGS ──────────────────────────────────────────
 

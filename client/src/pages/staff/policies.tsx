@@ -13,7 +13,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useState, useMemo } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -68,11 +69,13 @@ export default function StaffPolicies() {
 
   const [createForm, setCreateForm] = useState({
     clientId: "",
+    selectedProductId: "",
     productVersionId: "",
     premiumAmount: "",
     currency: "USD",
     paymentSchedule: "monthly",
     effectiveDate: "",
+    selectedAddOns: [] as string[],
   });
 
   const { data: policies, isLoading: policiesLoading } = useQuery<any[]>({
@@ -86,6 +89,69 @@ export default function StaffPolicies() {
   const { data: products } = useQuery<any[]>({
     queryKey: ["/api/products"],
   });
+
+  const { data: addOns } = useQuery<any[]>({
+    queryKey: ["/api/add-ons"],
+  });
+
+  const { data: productVersions } = useQuery<any[]>({
+    queryKey: ["/api/products", createForm.selectedProductId, "versions"],
+    queryFn: async () => {
+      const res = await fetch(`/api/products/${createForm.selectedProductId}/versions`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!createForm.selectedProductId,
+  });
+
+  const selectedClient = useMemo(() => {
+    if (!createForm.clientId || !clients) return null;
+    return clients.find((c: any) => c.id === createForm.clientId);
+  }, [createForm.clientId, clients]);
+
+  const clientAge = useMemo(() => {
+    if (!selectedClient?.dateOfBirth) return null;
+    const dob = new Date(selectedClient.dateOfBirth);
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const m = today.getMonth() - dob.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+    return age;
+  }, [selectedClient]);
+
+  const selectedVersion = useMemo(() => {
+    if (!createForm.productVersionId || !productVersions) return null;
+    return productVersions.find((v: any) => v.id === createForm.productVersionId);
+  }, [createForm.productVersionId, productVersions]);
+
+  const calculatedPremium = useMemo(() => {
+    if (!selectedVersion) return null;
+    const { currency, paymentSchedule } = createForm;
+    let base = 0;
+    if (paymentSchedule === "monthly") {
+      base = currency === "ZAR" ? parseFloat(selectedVersion.premiumMonthlyZar || "0") : parseFloat(selectedVersion.premiumMonthlyUsd || "0");
+    } else if (paymentSchedule === "weekly") {
+      base = parseFloat(selectedVersion.premiumWeeklyUsd || "0");
+    } else if (paymentSchedule === "biweekly") {
+      base = parseFloat(selectedVersion.premiumBiweeklyUsd || "0");
+    }
+    if (base === 0) return null;
+
+    let addOnTotal = 0;
+    if (addOns && createForm.selectedAddOns.length > 0) {
+      for (const aoId of createForm.selectedAddOns) {
+        const ao = addOns.find((a: any) => a.id === aoId);
+        if (!ao) continue;
+        const price = parseFloat(ao.priceAmount || "0");
+        if (ao.pricingMode === "percentage") {
+          addOnTotal += base * (price / 100);
+        } else {
+          addOnTotal += price;
+        }
+      }
+    }
+    return (base + addOnTotal).toFixed(2);
+  }, [selectedVersion, createForm.currency, createForm.paymentSchedule, createForm.selectedAddOns, addOns]);
 
   const { data: policyMembers, isLoading: membersLoading } = useQuery<any[]>({
     queryKey: ["/api/policies", selectedPolicy?.id, "members"],
