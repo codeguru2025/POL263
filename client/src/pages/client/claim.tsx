@@ -48,11 +48,13 @@ export default function ClientClaim() {
 
   const enrollMutation = useMutation({
     mutationFn: async () => {
+      const referralCode = sessionStorage.getItem("agent_referral_code") || undefined;
       const res = await apiRequest("POST", "/api/client-auth/enroll", {
         clientId,
         password: newPassword,
         securityQuestionId,
         securityAnswer,
+        referralCode,
       });
       return res.json();
     },

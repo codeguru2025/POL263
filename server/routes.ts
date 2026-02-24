@@ -403,11 +403,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/policies", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     const policyNumber = await storage.generatePolicyNumber(user.organizationId);
+
+    let agentId = req.body.agentId || null;
+    if (!agentId && req.body.referralCode) {
+      const agent = await storage.getUserByReferralCode(req.body.referralCode);
+      if (agent && agent.organizationId === user.organizationId) {
+        agentId = agent.id;
+      }
+    }
+
     const parsed = insertPolicySchema.parse({
       ...req.body,
       organizationId: user.organizationId,
       policyNumber,
       status: "draft",
+      agentId,
     });
     const policy = await storage.createPolicy(parsed);
     await storage.createPolicyStatusHistory(policy.id, null, "draft", "Policy created", user.id);

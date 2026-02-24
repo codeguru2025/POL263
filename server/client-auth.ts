@@ -53,7 +53,7 @@ export function setupClientAuth(app: Express) {
   });
 
   app.post("/api/client-auth/enroll", async (req: Request, res: Response) => {
-    const { clientId, password, securityQuestionId, securityAnswer } = req.body;
+    const { clientId, password, securityQuestionId, securityAnswer, referralCode } = req.body;
     if (!clientId || !password || !securityQuestionId || !securityAnswer) {
       return res.status(400).json({ message: "All fields are required" });
     }
@@ -81,7 +81,24 @@ export function setupClientAuth(app: Express) {
         activationCode: null,
       });
 
-      structuredLog("info", "Client enrolled", { clientId });
+      if (referralCode) {
+        const agent = await storage.getUserByReferralCode(referralCode);
+        if (agent) {
+          const clientPolicies = await storage.getPoliciesByClient(clientId);
+          for (const policy of clientPolicies) {
+            if (!policy.agentId) {
+              await storage.updatePolicy(policy.id, { agentId: agent.id });
+              structuredLog("info", "Agent auto-assigned to policy via referral", {
+                policyId: policy.id,
+                agentId: agent.id,
+                referralCode,
+              });
+            }
+          }
+        }
+      }
+
+      structuredLog("info", "Client enrolled", { clientId, referralCode: referralCode || null });
       return res.json({ message: "Enrollment successful" });
     } catch (err) {
       structuredLog("error", "Client enrollment error", { error: (err as Error).message });
