@@ -8,7 +8,8 @@ import {
   ChevronDown,
   Box,
   FileStack,
-  Users
+  Users,
+  FileText
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -29,6 +30,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       items: [
         { href: "/staff/policies", label: "Policies", icon: FileStack },
         { href: "/staff/clients", label: "Clients", icon: Users },
+        { href: "/staff/claims", label: "Claims", icon: FileText },
+        { href: "/staff/funerals", label: "Funeral Ops", icon: Box },
       ]
     },
     {
