@@ -53,6 +53,7 @@ export const users = pgTable(
     googleId: text("google_id").unique(),
     displayName: text("display_name"),
     avatarUrl: text("avatar_url"),
+    referralCode: text("referral_code").unique(),
     organizationId: uuid("organization_id").references(() => organizations.id),
     branchId: uuid("branch_id").references(() => branches.id),
     isActive: boolean("is_active").default(true).notNull(),
@@ -385,6 +386,7 @@ export const policies = pgTable(
       .notNull()
       .references(() => productVersions.id),
     agentId: uuid("agent_id").references(() => users.id),
+    groupId: uuid("group_id").references(() => groups.id),
     status: text("status").default("draft").notNull(),
     currency: text("currency").default("USD").notNull(),
     premiumAmount: numeric("premium_amount").notNull(),
@@ -405,6 +407,7 @@ export const policies = pgTable(
     index("policies_agent_idx").on(t.agentId),
     index("policies_status_idx").on(t.status),
     index("policies_branch_idx").on(t.branchId),
+    index("policies_group_idx").on(t.groupId),
   ]
 );
 
@@ -1266,3 +1269,52 @@ export const VALID_CLAIM_TRANSITIONS: Record<string, string[]> = {
 
 export const LEAD_STAGES = ["captured", "contacted", "quote_generated", "application_started", "submitted", "approved", "activated", "lost"] as const;
 export type LeadStage = typeof LEAD_STAGES[number];
+
+// ─── GROUPS ────────────────────────────────────────────────
+
+export const groups = pgTable(
+  "groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    name: text("name").notNull(),
+    type: text("type").default("community").notNull(),
+    description: text("description"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("groups_org_idx").on(t.organizationId)]
+);
+
+export const insertGroupSchema = createInsertSchema(groups).omit({ id: true, createdAt: true });
+export type Group = typeof groups.$inferSelect;
+export type InsertGroup = z.infer<typeof insertGroupSchema>;
+
+// ─── SETTLEMENT ALLOCATIONS ────────────────────────────────
+
+export const settlementAllocations = pgTable(
+  "settlement_allocations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    settlementId: uuid("settlement_id")
+      .notNull()
+      .references(() => settlements.id),
+    receivableId: uuid("receivable_id")
+      .notNull()
+      .references(() => chibikhuluReceivables.id),
+    amount: numeric("amount").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  }
+);
+
+// ─── CHIBIKHULU + SETTLEMENT SCHEMAS ───────────────────────
+
+export const insertChibikhuluReceivableSchema = createInsertSchema(chibikhuluReceivables).omit({ id: true, createdAt: true });
+export type ChibikhuluReceivable = typeof chibikhuluReceivables.$inferSelect;
+export type InsertChibikhuluReceivable = z.infer<typeof insertChibikhuluReceivableSchema>;
+
+export const insertSettlementSchema = createInsertSchema(settlements).omit({ id: true, createdAt: true });
+export type Settlement = typeof settlements.$inferSelect;
+export type InsertSettlement = z.infer<typeof insertSettlementSchema>;

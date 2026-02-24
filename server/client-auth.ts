@@ -190,6 +190,18 @@ export function setupClientAuth(app: Express) {
     return res.json(await storage.getPaymentsByPolicy(policy.id));
   });
 
+  app.get("/api/client-auth/policies/:id/members", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    if (!clientId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const policy = await storage.getPolicy(req.params.id as string);
+    if (!policy || policy.clientId !== clientId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    return res.json(await storage.getPolicyMembers(policy.id));
+  });
+
   app.post("/api/client-auth/reset-password", async (req: Request, res: Response) => {
     const { policyNumber, securityAnswer, newPassword } = req.body;
     if (!policyNumber || !securityAnswer || !newPassword) {

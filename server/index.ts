@@ -98,7 +98,7 @@ app.use((req, res, next) => {
   try {
     structuredLog("info", "Pushing database schema...");
     const { execSync } = await import("child_process");
-    execSync("npx drizzle-kit push --force", { stdio: "inherit" });
+    execSync("echo '' | npx drizzle-kit push", { stdio: "inherit", timeout: 30000 });
     structuredLog("info", "Database schema pushed successfully.");
 
     await seedDatabase();

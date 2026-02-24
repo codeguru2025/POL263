@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText } from "lucide-react";
+import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 export default function StaffFinance() {
@@ -28,6 +28,11 @@ export default function StaffFinance() {
   const [paymentNotes, setPaymentNotes] = useState("");
   const [receiptResult, setReceiptResult] = useState<any>(null);
   const [showReceiptDialog, setShowReceiptDialog] = useState(false);
+  const [showSettlementDialog, setShowSettlementDialog] = useState(false);
+  const [settlementAmount, setSettlementAmount] = useState("");
+  const [settlementCurrency, setSettlementCurrency] = useState("USD");
+  const [settlementMethod, setSettlementMethod] = useState("bank");
+  const [settlementReference, setSettlementReference] = useState("");
 
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
   const { data: cashups = [] } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
@@ -35,6 +40,9 @@ export default function StaffFinance() {
   const { data: expenditures = [] } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
   const { data: policies = [] } = useQuery<any[]>({ queryKey: ["/api/policies"] });
   const { data: clients = [] } = useQuery<any[]>({ queryKey: ["/api/clients"] });
+  const { data: chibReceivables = [] } = useQuery<any[]>({ queryKey: ["/api/chibikhulu/receivables"] });
+  const { data: chibSummary } = useQuery<{ totalDue: string; totalSettled: string; outstanding: string }>({ queryKey: ["/api/chibikhulu/summary"] });
+  const { data: settlements = [] } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
 
   const clientMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -86,6 +94,66 @@ export default function StaffFinance() {
     setPaymentReference("");
     setPaymentNotes("");
   };
+
+  const chibDailyDue = useMemo(() => {
+    const today = new Date().toISOString().split("T")[0];
+    return chibReceivables
+      .filter((r: any) => !r.isSettled && r.createdAt?.startsWith(today))
+      .reduce((sum: number, r: any) => sum + parseFloat(r.amount || "0"), 0);
+  }, [chibReceivables]);
+
+  const chibMTD = useMemo(() => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    return chibReceivables
+      .filter((r: any) => r.createdAt >= monthStart)
+      .reduce((sum: number, r: any) => sum + parseFloat(r.amount || "0"), 0);
+  }, [chibReceivables]);
+
+  const chibAging = useMemo(() => {
+    const now = Date.now();
+    const unsettled = chibReceivables.filter((r: any) => !r.isSettled);
+    const buckets = { current: 0, days30: 0, days60: 0, days90plus: 0 };
+    unsettled.forEach((r: any) => {
+      const age = (now - new Date(r.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+      const amt = parseFloat(r.amount || "0");
+      if (age <= 30) buckets.current += amt;
+      else if (age <= 60) buckets.days30 += amt;
+      else if (age <= 90) buckets.days60 += amt;
+      else buckets.days90plus += amt;
+    });
+    return buckets;
+  }, [chibReceivables]);
+
+  const createSettlementMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/settlements", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settlements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/chibikhulu/summary"] });
+      setShowSettlementDialog(false);
+      setSettlementAmount("");
+      setSettlementReference("");
+      toast({ title: "Settlement recorded", description: "Pending approval from a second user." });
+    },
+    onError: (err: any) => toast({ title: "Settlement failed", description: err.message, variant: "destructive" }),
+  });
+
+  const approveSettlementMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/settlements/${id}/approve`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settlements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/chibikhulu/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/chibikhulu/receivables"] });
+      toast({ title: "Settlement approved" });
+    },
+    onError: (err: any) => toast({ title: "Approval failed", description: err.message, variant: "destructive" }),
+  });
 
   const handleOpenPaymentDialog = () => {
     resetPaymentForm();
@@ -185,6 +253,7 @@ export default function StaffFinance() {
             <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>
             <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>
             <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>
+            <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu">Chibikhulu</TabsTrigger>
           </TabsList>
 
           <TabsContent value="payments">
@@ -337,6 +406,184 @@ export default function StaffFinance() {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="chibikhulu">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Landmark className="h-5 w-5" />
+                    Chibikhulu Revenue Share (2.5%)
+                  </h2>
+                  <p className="text-sm text-muted-foreground">Auto-calculated on every cleared payment</p>
+                </div>
+                <Button onClick={() => setShowSettlementDialog(true)} data-testid="button-new-settlement">
+                  <Plus className="h-4 w-4 mr-2" />Record Settlement
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-3">
+                      <CalendarDays className="h-8 w-8 text-blue-600" />
+                      <div>
+                        <p className="text-sm text-muted-foreground">Daily Due</p>
+                        <p className="text-2xl font-bold" data-testid="text-chib-daily">{chibDailyDue.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-3">
+                      <TrendingUp className="h-8 w-8 text-green-600" />
+                      <div>
+                        <p className="text-sm text-muted-foreground">MTD Accrued</p>
+                        <p className="text-2xl font-bold" data-testid="text-chib-mtd">{chibMTD.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-3">
+                      <ArrowUpRight className="h-8 w-8 text-orange-600" />
+                      <div>
+                        <p className="text-sm text-muted-foreground">Outstanding</p>
+                        <p className="text-2xl font-bold" data-testid="text-chib-outstanding">
+                          {chibSummary ? parseFloat(chibSummary.outstanding).toFixed(2) : "0.00"}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle2 className="h-8 w-8 text-primary" />
+                      <div>
+                        <p className="text-sm text-muted-foreground">Total Settled</p>
+                        <p className="text-2xl font-bold" data-testid="text-chib-settled">
+                          {chibSummary ? parseFloat(chibSummary.totalSettled).toFixed(2) : "0.00"}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader><CardTitle>Aging Buckets</CardTitle></CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-4 gap-4">
+                    <div className="text-center p-4 rounded-lg bg-green-50 dark:bg-green-950/20">
+                      <p className="text-xs text-muted-foreground mb-1">0–30 Days</p>
+                      <p className="text-xl font-bold text-green-700 dark:text-green-400" data-testid="text-aging-current">{chibAging.current.toFixed(2)}</p>
+                    </div>
+                    <div className="text-center p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20">
+                      <p className="text-xs text-muted-foreground mb-1">31–60 Days</p>
+                      <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400" data-testid="text-aging-30">{chibAging.days30.toFixed(2)}</p>
+                    </div>
+                    <div className="text-center p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20">
+                      <p className="text-xs text-muted-foreground mb-1">61–90 Days</p>
+                      <p className="text-xl font-bold text-orange-700 dark:text-orange-400" data-testid="text-aging-60">{chibAging.days60.toFixed(2)}</p>
+                    </div>
+                    <div className="text-center p-4 rounded-lg bg-red-50 dark:bg-red-950/20">
+                      <p className="text-xs text-muted-foreground mb-1">90+ Days</p>
+                      <p className="text-xl font-bold text-red-700 dark:text-red-400" data-testid="text-aging-90plus">{chibAging.days90plus.toFixed(2)}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader><CardTitle>Settlements</CardTitle></CardHeader>
+                <CardContent>
+                  {settlements.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-8">No settlements recorded yet</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Method</TableHead>
+                          <TableHead>Reference</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {settlements.map((s: any) => (
+                          <TableRow key={s.id} data-testid={`row-settlement-${s.id}`}>
+                            <TableCell className="text-sm">{new Date(s.createdAt).toLocaleDateString()}</TableCell>
+                            <TableCell className="font-semibold">{s.currency} {parseFloat(s.amount).toFixed(2)}</TableCell>
+                            <TableCell><Badge variant="outline">{s.method}</Badge></TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground">{s.reference || "—"}</TableCell>
+                            <TableCell>
+                              <Badge variant={s.status === "approved" ? "default" : s.status === "rejected" ? "destructive" : "secondary"}>
+                                {s.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {s.status === "pending" && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => approveSettlementMutation.mutate(s.id)}
+                                  disabled={approveSettlementMutation.isPending}
+                                  data-testid={`button-approve-settlement-${s.id}`}
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader><CardTitle>Receivables</CardTitle></CardHeader>
+                <CardContent>
+                  {chibReceivables.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-8">No receivables yet — they are auto-created when payments are cleared</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Currency</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {chibReceivables.map((r: any) => (
+                          <TableRow key={r.id} data-testid={`row-receivable-${r.id}`}>
+                            <TableCell className="text-sm">{new Date(r.createdAt).toLocaleDateString()}</TableCell>
+                            <TableCell className="text-sm">{r.description || "—"}</TableCell>
+                            <TableCell className="font-semibold">{parseFloat(r.amount).toFixed(2)}</TableCell>
+                            <TableCell>{r.currency}</TableCell>
+                            <TableCell>
+                              <Badge variant={r.isSettled ? "default" : "secondary"}>
+                                {r.isSettled ? "Settled" : "Outstanding"}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
         </Tabs>
       </div>
@@ -507,6 +754,87 @@ export default function StaffFinance() {
               {createPaymentMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               <Receipt className="h-4 w-4 mr-2" />
               Record Payment & Generate Receipt
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showSettlementDialog} onOpenChange={setShowSettlementDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Record Chibikhulu Settlement</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Amount</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0.01"
+                placeholder="0.00"
+                value={settlementAmount}
+                onChange={(e) => setSettlementAmount(e.target.value)}
+                data-testid="input-settlement-amount"
+              />
+            </div>
+            <div>
+              <Label>Currency</Label>
+              <Select value={settlementCurrency} onValueChange={setSettlementCurrency}>
+                <SelectTrigger data-testid="select-settlement-currency"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="ZAR">ZAR</SelectItem>
+                  <SelectItem value="ZWL">ZWL</SelectItem>
+                  <SelectItem value="BWP">BWP</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Payment Method</Label>
+              <Select value={settlementMethod} onValueChange={setSettlementMethod}>
+                <SelectTrigger data-testid="select-settlement-method"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="bank">Bank Transfer</SelectItem>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="ecocash">EcoCash</SelectItem>
+                  <SelectItem value="paynow">Paynow</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Reference</Label>
+              <Input
+                placeholder="Payment reference..."
+                value={settlementReference}
+                onChange={(e) => setSettlementReference(e.target.value)}
+                data-testid="input-settlement-reference"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <Clock className="h-3.5 w-3.5" />
+              Settlement requires approval from a second user (maker-checker)
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSettlementDialog(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!settlementAmount || parseFloat(settlementAmount) <= 0) {
+                  toast({ title: "Enter amount", variant: "destructive" });
+                  return;
+                }
+                createSettlementMutation.mutate({
+                  amount: settlementAmount,
+                  currency: settlementCurrency,
+                  method: settlementMethod,
+                  reference: settlementReference || undefined,
+                });
+              }}
+              disabled={!settlementAmount || createSettlementMutation.isPending}
+              data-testid="button-submit-settlement"
+            >
+              {createSettlementMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Record Settlement
             </Button>
           </DialogFooter>
         </DialogContent>

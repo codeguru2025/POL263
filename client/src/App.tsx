@@ -20,10 +20,16 @@ import StaffFinance from "@/pages/staff/finance";
 import StaffReports from "@/pages/staff/reports";
 import StaffLeads from "@/pages/staff/leads";
 import StaffNotifications from "@/pages/staff/notifications";
+import StaffGroups from "@/pages/staff/groups";
+import StaffApprovals from "@/pages/staff/approvals";
+import StaffDiagnostics from "@/pages/staff/diagnostics";
+import StaffPriceBook from "@/pages/staff/pricebook";
+import StaffPayroll from "@/pages/staff/payroll";
 
 import ClientLogin from "@/pages/client/login";
 import ClientClaim from "@/pages/client/claim";
 import ClientDashboard from "@/pages/client/dashboard";
+import JoinPage from "@/pages/join";
 
 function Router() {
   return (
@@ -43,6 +49,13 @@ function Router() {
       <Route path="/staff/reports" component={StaffReports} />
       <Route path="/staff/leads" component={StaffLeads} />
       <Route path="/staff/notifications" component={StaffNotifications} />
+      <Route path="/staff/groups" component={StaffGroups} />
+      <Route path="/staff/approvals" component={StaffApprovals} />
+      <Route path="/staff/diagnostics" component={StaffDiagnostics} />
+      <Route path="/staff/pricebook" component={StaffPriceBook} />
+      <Route path="/staff/payroll" component={StaffPayroll} />
+      
+      <Route path="/join" component={JoinPage} />
       
       <Route path="/client/login" component={ClientLogin} />
       <Route path="/client/claim" component={ClientClaim} />

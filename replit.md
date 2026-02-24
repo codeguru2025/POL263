@@ -3,7 +3,7 @@
 ## Architecture
 
 ### Tech Stack
-- **Frontend**: React + Vite + Tailwind CSS v4 + shadcn/ui + Wouter (routing) + TanStack Query
+- **Frontend**: React + Vite + Tailwind CSS v4 + shadcn/ui + Wouter (routing) + TanStack Query + Recharts
 - **Backend**: Express.js + TypeScript + Passport.js (Google OAuth) + Helmet + Rate Limiting
 - **Database**: PostgreSQL + Drizzle ORM (UUID primary keys, auto-push schema on startup)
 - **Auth**: Google OIDC/OAuth (staff) + Policy Number/Password (clients) + Demo login (dev)
@@ -11,46 +11,63 @@
 
 ### Portal Structure
 - `/` - Landing page (portal selector)
-- `/staff/*` - Internal staff portal (13 pages, requires staff authentication)
-- `/client/*` - Client/policyholder portal (login, claim enrollment, dashboard)
+- `/join?ref=AGTxxxx` - Agent referral landing page
+- `/staff/*` - Internal staff portal (19 pages, requires staff authentication)
+- `/client/*` - Client/policyholder portal (login, claim enrollment, dashboard with tabs)
 
-### Database Schema (40+ tables)
-**Core Identity**: organizations, branches, users, roles, permissions, userRoles, userPermissionOverrides
+### Database Schema (45+ tables)
+**Core Identity**: organizations, branches, users (with referralCode), roles, permissions, userRoles, userPermissionOverrides
 **Clients**: clients, dependents, dependentChangeRequests, securityQuestions
 **Products**: products, productVersions, benefitCatalogItems, benefitBundles, productBenefitBundleLinks, addOns, ageBandConfigs
-**Policies**: policies, policyMembers, policyStatusHistory
+**Policies**: policies (with groupId), policyMembers, policyStatusHistory
 **Payments**: paymentTransactions (immutable), receipts (immutable), reversalEntries, cashups
 **Claims**: claims, claimDocuments, claimStatusHistory
 **Operations**: funeralCases, funeralTasks, fleetVehicles, driverAssignments, fleetFuelLogs, fleetMaintenance
-**Finance**: priceBookItems, costSheets, costLineItems, commissionPlans, commissionLedgerEntries, chibikhuluReceivables, settlements, expenditures
+**Finance**: priceBookItems, costSheets, costLineItems, commissionPlans, commissionLedgerEntries, chibikhuluReceivables, settlements, settlementAllocations, expenditures
 **Payroll**: payrollEmployees, payrollRuns, payslips
 **Notifications**: notificationTemplates, notificationLogs
-**CRM**: leads
+**CRM**: leads, groups
 **System**: auditLogs, approvalRequests, featureFlags, sessions
 
 ### Key Backend Files
-- `shared/schema.ts` - Complete Drizzle schema with 40+ tables, insert schemas, types, status machines
+- `shared/schema.ts` - Complete Drizzle schema with 45+ tables, insert schemas, types, status machines
 - `server/db.ts` - PostgreSQL pool + Drizzle instance
-- `server/storage.ts` - IStorage interface + DatabaseStorage (80+ methods)
+- `server/storage.ts` - IStorage interface + DatabaseStorage (90+ methods)
 - `server/auth.ts` - Staff authentication (Google OAuth + demo login + RBAC guards)
-- `server/client-auth.ts` - Client authentication (policy number + password + enrollment + security questions)
-- `server/routes.ts` - All API routes (/api prefix, tenant-scoped, permission-guarded)
+- `server/client-auth.ts` - Client authentication (policy number + password + enrollment + security questions + members)
+- `server/routes.ts` - All API routes (100+ endpoints, /api prefix, tenant-scoped, permission-guarded)
 - `server/seed.ts` - Database seeder (41 permissions, 9 roles, default org, superuser provisioning)
 - `server/logger.ts` - Structured JSON logging with request_id
 
-### Staff Portal Pages
-1. `/staff` - Dashboard with live stats (policies, clients, claims, funerals, leads, transactions)
+### Staff Portal Pages (19 pages)
+1. `/staff` - Dashboard with live stats, charts (revenue trend, policy breakdown, lead funnel), filters (date, branch, status), covered lives, retention metrics, product performance
 2. `/staff/policies` - Policy management with status state machine transitions
 3. `/staff/clients` - Client CRUD with search, detail view, linked policies
 4. `/staff/claims` - Claim workflow (Submitted→Verified→Approved→Paid→Closed)
 5. `/staff/funerals` - Funeral case management, task checklists, fleet vehicles
 6. `/staff/leads` - Kanban-style lead pipeline (captured→contacted→quote→activated→lost)
-7. `/staff/finance` - Payments, cashups, commissions, expenditures (tabbed view)
-8. `/staff/reports` - Date-filtered reports for policies, claims, payments, funerals
-9. `/staff/products` - Product builder with versions, benefits, add-ons, age bands
-10. `/staff/notifications` - Notification template builder with merge tags
-11. `/staff/audit` - Searchable audit log viewer with before/after diffs
-12. `/staff/settings` - Tenant branding settings + RBAC permission matrix
+7. `/staff/groups` - Groups module (churches/SMEs/community), assign policies, group dashboards
+8. `/staff/finance` - Payments, cashups, commissions, expenditures, Chibikhulu 2.5% revenue share (tabbed view)
+9. `/staff/pricebook` - Price book items CRUD, cost sheets with itemized line items
+10. `/staff/payroll` - Employee records, payroll runs, payslips
+11. `/staff/reports` - 9 report types (policies, claims, payments, funerals, fleet, expenditure, payroll, commissions, chibikhulu) with CSV export
+12. `/staff/products` - Product builder with versions, benefits, add-ons, age bands, casket types
+13. `/staff/notifications` - Notification template builder with merge tags
+14. `/staff/approvals` - Approval workflow UI with pending/resolved tabs, approve/reject with reason
+15. `/staff/diagnostics` - System health, DB stats, notification failures, unallocated payments, recent errors
+16. `/staff/audit` - Searchable audit log viewer with before/after diffs
+17. `/staff/settings` - Tenant branding settings + RBAC permission matrix
+18. `/staff/login` - Staff login page
+
+### Client Portal Features
+- Login with policy number + password
+- Enrollment via activation code + policy number
+- Dashboard with 4 tabs: Overview, Payments, Members, Notifications/Alerts
+- Grace period warnings, lapse alerts, waiting period countdowns
+- Payment history per policy with receipt references
+- Covered members view per policy
+- Dependent change request form (submit for admin review)
+- Pay Now button placeholder (for future Paynow integration)
 
 ### RBAC System
 - 9 Roles: superuser, executive, manager, administrator, cashier, agent, claims_officer, fleet_ops, staff
@@ -67,6 +84,15 @@
 - All tables include `organization_id`; most include `branch_id`
 - API queries are tenant-scoped via authenticated user's organizationId
 - Cross-tenant access denied even for superusers
+
+### Financial Features
+- Immutable payment ledger (corrections via reversals only)
+- Sequential receipt numbering (RCP-000001)
+- Auto Chibikhulu 2.5% receivable on every cleared payment
+- Settlement workflow with maker-checker approval
+- Cost sheets with itemized line items linked to price book
+- Commission plans with configurable rates and clawback thresholds
+- Daily cashup reconciliation with locking
 
 ### Client Authentication
 - Enrollment: activation code + policy number → set password + security question

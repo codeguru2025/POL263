@@ -18,6 +18,7 @@ import {
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
+  insertGroupSchema, insertChibikhuluReceivableSchema, insertSettlementSchema,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
 } from "@shared/schema";
 
@@ -397,6 +398,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     }
 
+    if (tx.status === "cleared") {
+      const chibAmount = (parseFloat(tx.amount) * 0.025).toFixed(2);
+      await storage.createChibikhuluReceivable({
+        organizationId: user.organizationId,
+        sourceTransactionId: tx.id,
+        amount: chibAmount,
+        currency: tx.currency,
+        description: `2.5% on payment ${tx.id}`,
+        isSettled: false,
+      });
+    }
+
     await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", tx.id, null, tx);
     return res.status(201).json({ ...tx, receipt });
   });
@@ -727,6 +740,415 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(await storage.getSecurityQuestions(orgs[0].id));
     }
     return res.json([]);
+  });
+
+  // ─── Agent Referral Links ─────────────────────────────────
+
+  app.get("/api/agents/by-referral/:code", async (req, res) => {
+    const code = String(req.params.code);
+    const orgs = await storage.getOrganizations();
+    if (orgs.length === 0) return res.status(404).json({ error: "Not found" });
+    const allUsers = await storage.getUsersByOrg(orgs[0].id);
+    const agent = allUsers.find((u: any) => u.referralCode === code);
+    if (!agent) return res.status(404).json({ error: "Agent not found" });
+    return res.json({ name: agent.displayName || agent.email, referralCode: code });
+  });
+
+  // ─── Groups ──────────────────────────────────────────────
+
+  app.get("/api/groups", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getGroupsByOrg(user.organizationId));
+  });
+
+  app.post("/api/groups", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const parsed = insertGroupSchema.parse({ ...req.body, organizationId: user.organizationId });
+    const group = await storage.createGroup(parsed);
+    await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
+    return res.status(201).json(group);
+  });
+
+  app.patch("/api/groups/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const id = String(req.params.id);
+    const existing = await storage.getGroup(id);
+    if (!existing) return res.status(404).json({ error: "Group not found" });
+    const user = req.user as any;
+    if (existing.organizationId !== user.organizationId) return res.status(403).json({ error: "Forbidden" });
+    const updated = await storage.updateGroup(id, req.body);
+    await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
+    return res.json(updated);
+  });
+
+  // ─── Chibikhulu Revenue Share ────────────────────────────
+
+  app.get("/api/chibikhulu/receivables", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const limit = parseInt(String(req.query.limit) || "100");
+    const offset = parseInt(String(req.query.offset) || "0");
+    return res.json(await storage.getChibikhuluReceivables(user.organizationId, limit, offset));
+  });
+
+  app.get("/api/chibikhulu/summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getChibikhuluSummary(user.organizationId));
+  });
+
+  app.get("/api/settlements", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getSettlements(user.organizationId));
+  });
+
+  app.post("/api/settlements", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const parsed = insertSettlementSchema.parse({
+      ...req.body,
+      organizationId: user.organizationId,
+      initiatedBy: user.id,
+      status: "pending",
+    });
+    const settlement = await storage.createSettlement(parsed);
+    await auditLog(req, "CREATE_SETTLEMENT", "Settlement", settlement.id, null, settlement);
+    return res.status(201).json(settlement);
+  });
+
+  app.post("/api/settlements/:id/approve", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+    const id = String(req.params.id);
+    const user = req.user as any;
+    const existing = await storage.getSettlements(user.organizationId);
+    const settlement = existing.find(s => s.id === id);
+    if (!settlement) return res.status(404).json({ error: "Settlement not found" });
+    if (settlement.initiatedBy === user.id) return res.status(400).json({ error: "Cannot approve own settlement" });
+    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: user.id });
+    await auditLog(req, "APPROVE_SETTLEMENT", "Settlement", id, settlement, updated);
+    return res.json(updated);
+  });
+
+  // ─── Cost Sheets ────────────────────────────────────────
+
+  app.get("/api/cost-sheets", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getCostSheetsByOrg(user.organizationId));
+  });
+
+  app.post("/api/cost-sheets", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const data = { ...req.body, organizationId: user.organizationId };
+    const cs = await storage.createCostSheet(data);
+    await auditLog(req, "CREATE_COST_SHEET", "CostSheet", cs.id, null, cs);
+    return res.status(201).json(cs);
+  });
+
+  app.get("/api/cost-sheets/:id/items", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const id = String(req.params.id);
+    return res.json(await storage.getCostLineItems(id));
+  });
+
+  app.post("/api/cost-sheets/:id/items", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const costSheetId = String(req.params.id);
+    const item = await storage.createCostLineItem({ ...req.body, costSheetId });
+    return res.status(201).json(item);
+  });
+
+  // ─── Diagnostics ────────────────────────────────────────
+
+  app.get("/api/diagnostics", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const stats = await storage.getDashboardStats(user.organizationId);
+    const unallocated = await storage.getPaymentsByOrg(user.organizationId, 100, 0);
+    const unallocatedPayments = unallocated.filter((p: any) => !p.policyId);
+    return res.json({
+      uptime: process.uptime(),
+      memoryUsage: process.memoryUsage(),
+      nodeVersion: process.version,
+      tableCounts: stats,
+      unallocatedPayments: unallocatedPayments.length,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // ─── Enhanced Dashboard Stats ───────────────────────────
+
+  app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const payments = await storage.getPaymentsByOrg(user.organizationId, 1000, 0);
+    const cleared = payments.filter((p: any) => p.status === "cleared");
+    const daily: Record<string, number> = {};
+    cleared.forEach((p: any) => {
+      const day = new Date(p.receivedAt || p.createdAt).toISOString().slice(0, 10);
+      daily[day] = (daily[day] || 0) + parseFloat(p.amount || "0");
+    });
+    const trend = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, total]) => ({ date, total }));
+    return res.json(trend);
+  });
+
+  app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, 10000, 0);
+    const breakdown: Record<string, number> = {};
+    allPolicies.forEach((p: any) => {
+      breakdown[p.status] = (breakdown[p.status] || 0) + 1;
+    });
+    return res.json(breakdown);
+  });
+
+  app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const allLeads = await storage.getLeadsByOrg(user.organizationId, 10000, 0);
+    const stages: Record<string, number> = {};
+    allLeads.forEach((l: any) => {
+      stages[l.stage] = (stages[l.stage] || 0) + 1;
+    });
+    return res.json(stages);
+  });
+
+  app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const activePolicies = await storage.getPoliciesByOrg(user.organizationId, 100000, 0);
+    const active = activePolicies.filter((p: any) => p.status === "active");
+    let totalMembers = 0;
+    for (const p of active) {
+      totalMembers += (p as any).numberOfMembers || 1;
+    }
+    return res.json({ coveredLives: totalMembers, activePolicyCount: active.length });
+  });
+
+  app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const allProducts = await storage.getProductsByOrg(user.organizationId);
+    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, 100000, 0);
+    const allPayments = await storage.getPaymentsByOrg(user.organizationId, 100000, 0);
+
+    const policyByProduct: Record<string, { total: number; active: number; lapsed: number }> = {};
+    allPolicies.forEach((p: any) => {
+      const pid = p.productId || "unknown";
+      if (!policyByProduct[pid]) policyByProduct[pid] = { total: 0, active: 0, lapsed: 0 };
+      policyByProduct[pid].total++;
+      if (p.status === "active") policyByProduct[pid].active++;
+      if (p.status === "lapsed") policyByProduct[pid].lapsed++;
+    });
+
+    const revenueByProduct: Record<string, number> = {};
+    allPayments.filter((p: any) => p.status === "cleared").forEach((p: any) => {
+      const pol = allPolicies.find((pol: any) => pol.id === p.policyId);
+      const pid = pol?.productId || "unknown";
+      revenueByProduct[pid] = (revenueByProduct[pid] || 0) + parseFloat(p.amount || "0");
+    });
+
+    const performance = allProducts.map((prod: any) => ({
+      id: prod.id,
+      name: prod.name,
+      totalPolicies: policyByProduct[prod.id]?.total || 0,
+      activePolicies: policyByProduct[prod.id]?.active || 0,
+      lapsedPolicies: policyByProduct[prod.id]?.lapsed || 0,
+      revenue: revenueByProduct[prod.id] || 0,
+    }));
+
+    return res.json(performance);
+  });
+
+  app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, 100000, 0);
+    const total = allPolicies.length;
+    const active = allPolicies.filter((p: any) => p.status === "active").length;
+    const lapsed = allPolicies.filter((p: any) => p.status === "lapsed").length;
+    const grace = allPolicies.filter((p: any) => p.status === "grace").length;
+    const cancelled = allPolicies.filter((p: any) => p.status === "cancelled").length;
+    const retentionRate = total > 0 ? ((active / total) * 100).toFixed(1) : "0";
+    const lapseRate = total > 0 ? ((lapsed / total) * 100).toFixed(1) : "0";
+    return res.json({ total, active, lapsed, grace, cancelled, retentionRate, lapseRate });
+  });
+
+  // ─── Reports CSV Export ────────────────────────────────────
+
+  app.get("/api/reports/export/:type", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const reportType = req.params.type as string;
+
+    try {
+      let rows: any[] = [];
+      let headers: string[] = [];
+
+      switch (reportType) {
+        case "policies": {
+          rows = await storage.getPoliciesByOrg(user.organizationId, 5000, 0);
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
+          rows = rows.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "claims": {
+          rows = await storage.getClaimsByOrg(user.organizationId, 5000, 0);
+          headers = ["Claim Number", "Type", "Status", "Deceased Name", "Created"];
+          rows = rows.map((r: any) => [r.claimNumber, r.claimType, r.status, r.deceasedName || "", r.createdAt]);
+          break;
+        }
+        case "payments": {
+          rows = await storage.getPaymentsByOrg(user.organizationId, 5000, 0);
+          headers = ["Reference", "Amount", "Currency", "Method", "Status", "Received At"];
+          rows = rows.map((r: any) => [r.reference || "", r.amount, r.currency, r.paymentMethod, r.status, r.receivedAt]);
+          break;
+        }
+        case "funerals": {
+          const cases = await storage.getFuneralCasesByOrg(user.organizationId);
+          headers = ["Case Number", "Deceased Name", "Status", "Funeral Date"];
+          rows = cases.map((r: any) => [r.caseNumber, r.deceasedName, r.status, r.funeralDate || ""]);
+          break;
+        }
+        case "fleet": {
+          const vehicles = await storage.getFleetVehicles(user.organizationId);
+          headers = ["Registration", "Make", "Model", "Year", "Status", "Mileage"];
+          rows = vehicles.map((r: any) => [r.registration, r.make, r.model, r.year, r.status, r.currentMileage || ""]);
+          break;
+        }
+        case "expenditures": {
+          const exps = await storage.getExpenditures(user.organizationId, 5000, 0);
+          headers = ["Description", "Category", "Amount", "Currency", "Date", "Status"];
+          rows = exps.map((r: any) => [r.description, r.category, r.amount, r.currency, r.expenseDate, r.status]);
+          break;
+        }
+        case "payroll": {
+          const employees = await storage.getPayrollEmployees(user.organizationId);
+          headers = ["Employee Name", "ID Number", "Position", "Department", "Basic Salary", "Status"];
+          rows = employees.map((r: any) => [r.employeeName, r.idNumber, r.position, r.department, r.basicSalary, r.status]);
+          break;
+        }
+        case "commissions": {
+          const plans = await storage.getCommissionPlans(user.organizationId);
+          headers = ["Plan Name", "Type", "Rate (%)", "Status", "Created"];
+          rows = plans.map((r: any) => [r.name, r.commissionType, r.ratePercent, r.isActive ? "Active" : "Inactive", r.createdAt]);
+          break;
+        }
+        case "chibikhulu": {
+          const receivables = await storage.getChibikhuluReceivables(user.organizationId, 5000, 0);
+          headers = ["Description", "Amount", "Currency", "Settled", "Created"];
+          rows = receivables.map((r: any) => [r.description, r.amount, r.currency, r.isSettled ? "Yes" : "No", r.createdAt]);
+          break;
+        }
+        default:
+          return res.status(400).json({ message: `Unknown report type: ${reportType}` });
+      }
+
+      const escapeCsv = (val: any) => {
+        const str = String(val ?? "");
+        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const csvLines = [headers.join(",")];
+      for (const row of rows) {
+        csvLines.push(row.map(escapeCsv).join(","));
+      }
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${reportType}-report.csv"`);
+      return res.send(csvLines.join("\n"));
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ─── ADMIN DIAGNOSTICS ─────────────────────────────────────
+
+  app.get("/api/diagnostics/health", requireAuth, async (_req, res) => {
+    try {
+      const { pool } = await import("./db");
+      let dbConnected = false;
+      const tableCounts: Record<string, number> = {};
+      try {
+        const testResult = await pool.query("SELECT 1");
+        dbConnected = testResult.rowCount !== null && testResult.rowCount > 0;
+        const tableNames = [
+          "organizations", "branches", "users", "roles", "permissions",
+          "clients", "products", "policies", "claims", "funeral_cases",
+          "payment_transactions", "notification_logs", "audit_logs", "leads",
+        ];
+        for (const table of tableNames) {
+          try {
+            const countResult = await pool.query(`SELECT COUNT(*)::int as count FROM ${table}`);
+            tableCounts[table] = countResult.rows[0]?.count ?? 0;
+          } catch {
+            tableCounts[table] = -1;
+          }
+        }
+      } catch {
+        dbConnected = false;
+      }
+      return res.json({
+        dbConnected,
+        uptime: process.uptime(),
+        tableCounts,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/diagnostics/notification-failures", requireAuth, requireTenantScope, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const { pool } = await import("./db");
+      const result = await pool.query(
+        `SELECT id, channel, subject, recipient_type, failure_reason, attempts, created_at
+         FROM notification_logs
+         WHERE organization_id = $1 AND status = 'failed'
+         ORDER BY created_at DESC LIMIT 50`,
+        [user.organizationId]
+      );
+      const rows = result.rows.map((r: any) => ({
+        id: r.id, channel: r.channel, subject: r.subject,
+        recipientType: r.recipient_type, failureReason: r.failure_reason,
+        attempts: r.attempts, createdAt: r.created_at,
+      }));
+      return res.json(rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/diagnostics/unallocated-payments", requireAuth, requireTenantScope, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const { pool } = await import("./db");
+      const result = await pool.query(
+        `SELECT id, amount, method, reference, status, received_at, created_at
+         FROM payment_transactions
+         WHERE organization_id = $1 AND policy_id IS NULL
+         ORDER BY created_at DESC LIMIT 50`,
+        [user.organizationId]
+      );
+      const rows = result.rows.map((r: any) => ({
+        id: r.id, amount: r.amount, method: r.method, reference: r.reference,
+        status: r.status, receivedAt: r.received_at, createdAt: r.created_at,
+      }));
+      return res.json(rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/diagnostics/recent-errors", requireAuth, requireTenantScope, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const { pool } = await import("./db");
+      const result = await pool.query(
+        `SELECT id, action, entity_type, actor_email, timestamp
+         FROM audit_logs
+         WHERE organization_id = $1 AND action ILIKE '%error%'
+         ORDER BY timestamp DESC LIMIT 50`,
+        [user.organizationId]
+      );
+      const rows = result.rows.map((r: any) => ({
+        id: r.id, action: r.action, entityType: r.entity_type,
+        actorEmail: r.actor_email, timestamp: r.timestamp,
+      }));
+      return res.json(rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
   });
 
   return httpServer;

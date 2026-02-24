@@ -13,7 +13,7 @@ import {
   payrollEmployees, payrollRuns, payslips,
   notificationTemplates, notificationLogs, leads, expenditures,
   approvalRequests, featureFlags, dependentChangeRequests, securityQuestions,
-  productBenefitBundleLinks,
+  productBenefitBundleLinks, groups, settlementAllocations,
   type Organization, type InsertOrganization,
   type Branch, type InsertBranch,
   type User, type InsertUser,
@@ -47,6 +47,9 @@ import {
   type PayrollEmployee, type InsertPayrollEmployee,
   type PayrollRun, type InsertPayrollRun,
   type Cashup, type InsertCashup,
+  type Group, type InsertGroup,
+  type ChibikhuluReceivable, type InsertChibikhuluReceivable,
+  type Settlement, type InsertSettlement,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -164,6 +167,21 @@ export interface IStorage {
   generatePolicyNumber(orgId: string): Promise<string>;
   generateClaimNumber(orgId: string): Promise<string>;
   generateCaseNumber(orgId: string): Promise<string>;
+  getGroupsByOrg(orgId: string): Promise<Group[]>;
+  getGroup(id: string): Promise<Group | undefined>;
+  createGroup(group: InsertGroup): Promise<Group>;
+  updateGroup(id: string, data: Partial<InsertGroup>): Promise<Group | undefined>;
+  getChibikhuluReceivables(orgId: string, limit?: number, offset?: number): Promise<ChibikhuluReceivable[]>;
+  createChibikhuluReceivable(entry: InsertChibikhuluReceivable): Promise<ChibikhuluReceivable>;
+  getChibikhuluSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }>;
+  getSettlements(orgId: string): Promise<Settlement[]>;
+  createSettlement(settlement: InsertSettlement): Promise<Settlement>;
+  updateSettlement(id: string, data: Partial<InsertSettlement>): Promise<Settlement | undefined>;
+  getCostSheetsByOrg(orgId: string): Promise<any[]>;
+  getCostSheet(id: string): Promise<any>;
+  createCostSheet(data: any): Promise<any>;
+  getCostLineItems(costSheetId: string): Promise<any[]>;
+  createCostLineItem(data: any): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -682,6 +700,90 @@ export class DatabaseStorage implements IStorage {
     const [result] = await db.select({ cnt: count() }).from(funeralCases).where(eq(funeralCases.organizationId, orgId));
     const num = ((result?.cnt || 0) as number) + 1;
     return `FNC-${String(num).padStart(6, "0")}`;
+  }
+
+  // ─── Groups ──────────────────────────────────────────────
+  async getGroupsByOrg(orgId: string): Promise<Group[]> {
+    return db.select().from(groups).where(eq(groups.organizationId, orgId)).orderBy(desc(groups.createdAt));
+  }
+  async getGroup(id: string): Promise<Group | undefined> {
+    const [g] = await db.select().from(groups).where(eq(groups.id, id));
+    return g;
+  }
+  async createGroup(group: InsertGroup): Promise<Group> {
+    const [created] = await db.insert(groups).values(group).returning();
+    return created;
+  }
+  async updateGroup(id: string, data: Partial<InsertGroup>): Promise<Group | undefined> {
+    const [updated] = await db.update(groups).set(data).where(eq(groups.id, id)).returning();
+    return updated;
+  }
+
+  // ─── Chibikhulu Receivables ──────────────────────────────
+  async getChibikhuluReceivables(orgId: string, limit = 100, offset = 0): Promise<ChibikhuluReceivable[]> {
+    return db.select().from(chibikhuluReceivables)
+      .where(eq(chibikhuluReceivables.organizationId, orgId))
+      .orderBy(desc(chibikhuluReceivables.createdAt))
+      .limit(limit).offset(offset);
+  }
+  async createChibikhuluReceivable(entry: InsertChibikhuluReceivable): Promise<ChibikhuluReceivable> {
+    const [created] = await db.insert(chibikhuluReceivables).values(entry).returning();
+    return created;
+  }
+  async getChibikhuluSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }> {
+    const [totals] = await db.select({
+      totalDue: sql<string>`COALESCE(SUM(${chibikhuluReceivables.amount}), '0')`,
+    }).from(chibikhuluReceivables).where(eq(chibikhuluReceivables.organizationId, orgId));
+    const [settled] = await db.select({
+      totalSettled: sql<string>`COALESCE(SUM(${chibikhuluReceivables.amount}), '0')`,
+    }).from(chibikhuluReceivables).where(and(
+      eq(chibikhuluReceivables.organizationId, orgId),
+      eq(chibikhuluReceivables.isSettled, true)
+    ));
+    const due = parseFloat(totals?.totalDue || "0");
+    const stl = parseFloat(settled?.totalSettled || "0");
+    return {
+      totalDue: due.toFixed(2),
+      totalSettled: stl.toFixed(2),
+      outstanding: (due - stl).toFixed(2),
+    };
+  }
+
+  // ─── Settlements ────────────────────────────────────────
+  async getSettlements(orgId: string): Promise<Settlement[]> {
+    return db.select().from(settlements)
+      .where(eq(settlements.organizationId, orgId))
+      .orderBy(desc(settlements.createdAt));
+  }
+  async createSettlement(settlement: InsertSettlement): Promise<Settlement> {
+    const [created] = await db.insert(settlements).values(settlement).returning();
+    return created;
+  }
+  async updateSettlement(id: string, data: Partial<InsertSettlement>): Promise<Settlement | undefined> {
+    const [updated] = await db.update(settlements).set(data).where(eq(settlements.id, id)).returning();
+    return updated;
+  }
+
+  // ─── Cost Sheets ────────────────────────────────────────
+  async getCostSheetsByOrg(orgId: string): Promise<any[]> {
+    return db.select().from(costSheets)
+      .where(eq(costSheets.organizationId, orgId))
+      .orderBy(desc(costSheets.createdAt));
+  }
+  async getCostSheet(id: string): Promise<any> {
+    const [cs] = await db.select().from(costSheets).where(eq(costSheets.id, id));
+    return cs;
+  }
+  async createCostSheet(data: any): Promise<any> {
+    const [created] = await db.insert(costSheets).values(data).returning();
+    return created;
+  }
+  async getCostLineItems(costSheetId: string): Promise<any[]> {
+    return db.select().from(costLineItems).where(eq(costLineItems.costSheetId, costSheetId));
+  }
+  async createCostLineItem(data: any): Promise<any> {
+    const [created] = await db.insert(costLineItems).values(data).returning();
+    return created;
   }
 }
 

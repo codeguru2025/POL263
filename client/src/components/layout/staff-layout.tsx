@@ -18,8 +18,14 @@ import {
   Target,
   Bell,
   Truck,
+  Layers,
+  ShieldCheck,
+  Stethoscope,
+  BookOpen,
+  Wallet2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -36,6 +42,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     queryKey: ["/api/branches"],
     enabled: isAuthenticated,
   });
+
+  const { data: approvals } = useQuery<any[]>({
+    queryKey: ["/api/approvals"],
+    enabled: isAuthenticated,
+  });
+
+  const pendingApprovalsCount = approvals?.filter((a: any) => a.status === "pending").length || 0;
 
   if (isLoading) {
     return (
@@ -73,12 +86,15 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/claims", label: "Claims", icon: FileText },
         { href: "/staff/funerals", label: "Funeral Ops", icon: Truck },
         { href: "/staff/leads", label: "Lead Pipeline", icon: Target },
+        { href: "/staff/groups", label: "Groups", icon: Layers },
       ],
     },
     {
       title: "Finance",
       items: [
         { href: "/staff/finance", label: "Finance", icon: DollarSign },
+        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen },
+        { href: "/staff/payroll", label: "Payroll", icon: Wallet2 },
         { href: "/staff/reports", label: "Reports", icon: BarChart3 },
       ],
     },
@@ -92,7 +108,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     {
       title: "System & Audit",
       items: [
+        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, badge: pendingApprovalsCount },
         { href: "/staff/audit", label: "Audit Logs", icon: History },
+        { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope },
         { href: "/staff/settings", label: "Tenant Settings", icon: Settings },
       ],
     },
@@ -133,6 +151,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                       >
                         <item.icon className={`mr-3 h-5 w-5 ${isActive ? "text-primary" : ""}`} />
                         {item.label}
+                        {"badge" in item && (item as any).badge > 0 && (
+                          <Badge variant="destructive" className="ml-auto h-5 min-w-[20px] px-1.5 text-[10px]" data-testid={`badge-nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                            {(item as any).badge}
+                          </Badge>
+                        )}
                       </Button>
                     </Link>
                   );
