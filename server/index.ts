@@ -19,7 +19,6 @@ declare module "http" {
   }
 }
 
-// Security headers
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -48,7 +47,6 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 
-// Rate limiting on auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -59,10 +57,15 @@ const authLimiter = rateLimit({
 app.use("/api/auth", authLimiter);
 app.use("/api/client-auth", authLimiter);
 
+let dbReady = false;
+
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok", dbReady });
+});
+
 setupAuth(app);
 setupClientAuth(app);
 
-// Request logging
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -94,18 +97,6 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // Push schema and seed the database
-  try {
-    structuredLog("info", "Pushing database schema...");
-    const { execSync } = await import("child_process");
-    execSync("echo '' | npx drizzle-kit push", { stdio: "inherit", timeout: 30000 });
-    structuredLog("info", "Database schema pushed successfully.");
-
-    await seedDatabase();
-  } catch (err) {
-    structuredLog("error", "Database initialization failed", { error: String(err) });
-  }
-
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -142,8 +133,22 @@ app.use((req, res, next) => {
       host: "0.0.0.0",
       reusePort: true,
     },
-    () => {
+    async () => {
       structuredLog("info", `Falakhe PMS serving on port ${port}`);
+
+      try {
+        structuredLog("info", "Pushing database schema...");
+        const { execSync } = await import("child_process");
+        execSync("yes '' | npx drizzle-kit push", { stdio: ["pipe", "inherit", "inherit"], timeout: 60000 });
+        structuredLog("info", "Database schema pushed successfully.");
+
+        structuredLog("info", "Starting database seed...");
+        await seedDatabase();
+        structuredLog("info", "Database seed completed successfully.");
+        dbReady = true;
+      } catch (err) {
+        structuredLog("error", "Database initialization failed", { error: String(err) });
+      }
     }
   );
 })();
