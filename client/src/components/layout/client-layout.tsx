@@ -1,47 +1,58 @@
 import { Link, useLocation } from "wouter";
-import { 
-  Home, 
-  FileText, 
-  MessageSquare,
+import {
+  Home,
+  Shield,
   LogOut,
   UserCircle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-export default function ClientLayout({ children }: { children: React.ReactNode }) {
+interface ClientLayoutProps {
+  children: React.ReactNode;
+  clientName?: string;
+  onLogout?: () => void;
+}
+
+export default function ClientLayout({ children, clientName = "Client", onLogout }: ClientLayoutProps) {
   const [location] = useLocation();
 
   const navItems = [
     { href: "/client", label: "Overview", icon: Home },
-    { href: "/client/leases", label: "My Leases", icon: FileText },
-    { href: "/client/messages", label: "Messages", icon: MessageSquare },
   ];
+
+  const handleLogout = () => {
+    if (onLogout) {
+      onLogout();
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Top Navbar for Client Portal */}
       <header className="h-16 border-b bg-card flex items-center justify-between px-6 shrink-0 sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <img src="/assets/logo.png" alt="Logo" className="h-8 w-8 rounded" />
-          <span className="font-display font-bold text-lg">Acme Corp Resident Portal</span>
+          <span className="font-display font-bold text-lg">Client Portal</span>
         </div>
-        
+
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <UserCircle className="h-5 w-5 text-muted-foreground" />
-            <span className="text-sm font-medium">Jane Doe</span>
+            <span className="text-sm font-medium" data-testid="text-client-name">{clientName}</span>
           </div>
           <div className="h-4 w-px bg-border"></div>
-          <Link href="/">
-            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
-              <LogOut className="h-4 w-4 mr-2" />
-              Logout
-            </Button>
-          </Link>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={handleLogout}
+            data-testid="btn-client-logout"
+          >
+            <LogOut className="h-4 w-4 mr-2" />
+            Logout
+          </Button>
         </div>
       </header>
 
-      {/* Client Sub-navigation */}
       <div className="border-b bg-muted/20">
         <div className="max-w-5xl mx-auto px-6 flex gap-6">
           {navItems.map((item) => {
@@ -53,7 +64,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                   {item.label}
                 </div>
               </Link>
-            )
+            );
           })}
         </div>
       </div>

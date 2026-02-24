@@ -9,6 +9,7 @@ import {
   permissions,
   rolePermissions,
   userRoles,
+  securityQuestions,
 } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
@@ -29,6 +30,7 @@ const SYSTEM_PERMISSIONS = [
   { name: "delete:policy", description: "Cancel/void policies", category: "policy" },
   { name: "read:claim", description: "View claims", category: "claims" },
   { name: "write:claim", description: "Create/adjudicate claims", category: "claims" },
+  { name: "approve:claim", description: "Approve/reject claims (maker-checker)", category: "claims" },
   { name: "read:client", description: "View clients", category: "clients" },
   { name: "write:client", description: "Create/edit clients", category: "clients" },
   { name: "read:product", description: "View products", category: "product" },
@@ -38,6 +40,21 @@ const SYSTEM_PERMISSIONS = [
   { name: "write:funeral_ops", description: "Manage funeral cases", category: "operations" },
   { name: "read:finance", description: "View financial records", category: "finance" },
   { name: "write:finance", description: "Create financial entries", category: "finance" },
+  { name: "approve:finance", description: "Approve financial actions (maker-checker)", category: "finance" },
+  { name: "read:fleet", description: "View fleet", category: "fleet" },
+  { name: "write:fleet", description: "Manage fleet", category: "fleet" },
+  { name: "read:commission", description: "View commissions", category: "commission" },
+  { name: "write:commission", description: "Manage commissions", category: "commission" },
+  { name: "read:payroll", description: "View payroll", category: "payroll" },
+  { name: "write:payroll", description: "Run payroll", category: "payroll" },
+  { name: "read:report", description: "View reports", category: "reports" },
+  { name: "write:report", description: "Generate/export reports", category: "reports" },
+  { name: "read:lead", description: "View leads/pipeline", category: "leads" },
+  { name: "write:lead", description: "Manage leads", category: "leads" },
+  { name: "read:notification", description: "View notifications", category: "notifications" },
+  { name: "write:notification", description: "Manage notification templates", category: "notifications" },
+  { name: "manage:approvals", description: "Handle maker-checker approvals", category: "approvals" },
+  { name: "backdate:payment", description: "Backdate payment value dates", category: "finance" },
 ];
 
 const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -45,38 +62,61 @@ const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   executive: [
     "read:organization", "read:branch", "read:user", "read:role", "read:audit_log",
     "read:policy", "read:claim", "read:client", "read:product", "read:funeral_ops",
-    "read:finance",
+    "read:finance", "read:fleet", "read:commission", "read:payroll", "read:report",
+    "read:lead", "read:notification",
   ],
   manager: [
     "read:organization", "read:branch", "write:branch", "read:user", "write:user",
     "read:role", "read:audit_log", "read:policy", "write:policy", "read:claim",
-    "write:claim", "read:client", "write:client", "read:product", "read:funeral_ops",
-    "write:funeral_ops", "read:finance",
+    "write:claim", "approve:claim", "read:client", "write:client", "read:product",
+    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
+    "read:commission", "read:report", "write:report", "read:lead", "write:lead",
+    "read:notification", "manage:approvals",
   ],
   administrator: [
     "read:organization", "write:organization", "read:branch", "write:branch",
     "read:user", "write:user", "delete:user", "read:role", "write:role",
     "manage:permissions", "read:audit_log", "read:policy", "write:policy",
-    "read:claim", "write:claim", "read:client", "write:client", "read:product",
-    "write:product", "manage:settings", "read:funeral_ops", "write:funeral_ops",
-    "read:finance", "write:finance",
+    "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
+    "read:product", "write:product", "manage:settings", "read:funeral_ops",
+    "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
+    "read:fleet", "write:fleet", "read:commission", "write:commission",
+    "read:payroll", "write:payroll", "read:report", "write:report",
+    "read:lead", "write:lead", "read:notification", "write:notification",
+    "manage:approvals", "backdate:payment",
   ],
   cashier: [
-    "read:policy", "read:client", "read:finance", "write:finance",
+    "read:policy", "read:client", "read:finance", "write:finance", "read:report",
   ],
   agent: [
     "read:policy", "write:policy", "read:client", "write:client", "read:product",
+    "read:lead", "write:lead", "read:commission",
+  ],
+  claims_officer: [
+    "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
+    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report",
+  ],
+  fleet_ops: [
+    "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops",
+    "read:report",
   ],
   staff: [
     "read:organization", "read:branch", "read:policy", "read:claim",
-    "read:client", "read:product", "read:funeral_ops",
+    "read:client", "read:product", "read:funeral_ops", "read:report",
   ],
 };
+
+const DEFAULT_SECURITY_QUESTIONS = [
+  "What was the name of your first pet?",
+  "In what city were you born?",
+  "What was the name of your primary school?",
+  "What is your mother's maiden name?",
+  "What was the make of your first car?",
+];
 
 export async function seedDatabase() {
   structuredLog("info", "Starting database seed...");
 
-  // 1. Seed permissions
   const existingPerms = await storage.getPermissions();
   const permMap = new Map<string, string>();
 
@@ -91,7 +131,6 @@ export async function seedDatabase() {
     }
   }
 
-  // 2. Seed default organization
   let defaultOrg = (await storage.getOrganizations())[0];
   if (!defaultOrg) {
     defaultOrg = await storage.createOrganization({
@@ -103,7 +142,6 @@ export async function seedDatabase() {
     structuredLog("info", `Created default organization: ${defaultOrg.name}`);
   }
 
-  // 3. Seed default branch
   const existingBranches = await storage.getBranchesByOrg(defaultOrg.id);
   let defaultBranch = existingBranches[0];
   if (!defaultBranch) {
@@ -114,7 +152,6 @@ export async function seedDatabase() {
     structuredLog("info", `Created default branch: ${defaultBranch.name}`);
   }
 
-  // 4. Seed roles with permissions
   for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
     let role = await storage.getRoleByName(roleName, defaultOrg.id);
     if (!role) {
@@ -137,7 +174,13 @@ export async function seedDatabase() {
     }
   }
 
-  // 5. Superuser provisioning
+  for (const question of DEFAULT_SECURITY_QUESTIONS) {
+    await db
+      .insert(securityQuestions)
+      .values({ organizationId: defaultOrg.id, question })
+      .onConflictDoNothing();
+  }
+
   const superuserEmail = process.env.SUPERUSER_EMAIL || "ausiziba@gmail.com";
   let superuser = await storage.getUserByEmail(superuserEmail);
 
@@ -171,7 +214,6 @@ export async function seedDatabase() {
     }
   }
 
-  // Log the auto-assignment as an audit entry
   await storage.createAuditLog({
     organizationId: defaultOrg.id,
     actorId: superuser!.id,

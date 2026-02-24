@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth } from "./auth";
+import { setupClientAuth } from "./client-auth";
 import { seedDatabase } from "./seed";
 import { requestIdMiddleware, structuredLog } from "./logger";
 import helmet from "helmet";
@@ -56,9 +57,10 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use("/api/auth", authLimiter);
+app.use("/api/client-auth", authLimiter);
 
-// Setup authentication (sessions + passport)
 setupAuth(app);
+setupClientAuth(app);
 
 // Request logging
 app.use((req, res, next) => {

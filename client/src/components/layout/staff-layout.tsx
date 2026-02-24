@@ -13,6 +13,11 @@ import {
   Users,
   FileText,
   Loader2,
+  DollarSign,
+  BarChart3,
+  Target,
+  Bell,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -66,12 +71,23 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/policies", label: "Policies", icon: FileStack },
         { href: "/staff/clients", label: "Clients", icon: Users },
         { href: "/staff/claims", label: "Claims", icon: FileText },
-        { href: "/staff/funerals", label: "Funeral Ops", icon: Box },
+        { href: "/staff/funerals", label: "Funeral Ops", icon: Truck },
+        { href: "/staff/leads", label: "Lead Pipeline", icon: Target },
       ],
     },
     {
-      title: "Policy Engine",
-      items: [{ href: "/staff/products", label: "Product Builder", icon: Box }],
+      title: "Finance",
+      items: [
+        { href: "/staff/finance", label: "Finance", icon: DollarSign },
+        { href: "/staff/reports", label: "Reports", icon: BarChart3 },
+      ],
+    },
+    {
+      title: "Configuration",
+      items: [
+        { href: "/staff/products", label: "Product Builder", icon: Box },
+        { href: "/staff/notifications", label: "Notifications", icon: Bell },
+      ],
     },
     {
       title: "System & Audit",

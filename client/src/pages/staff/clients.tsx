@@ -1,19 +1,369 @@
+import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Plus, Search, Filter, MoreHorizontal, Mail, Phone } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/hooks/use-toast";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import {
+  Plus,
+  Search,
+  Filter,
+  Mail,
+  Phone,
+  Eye,
+  Pencil,
+  X,
+  ChevronLeft,
+  Users,
+  FileStack,
+  Loader2,
+} from "lucide-react";
 
-const mockClients = [
-  { id: "CL-8849", name: "Jane Doe", email: "jane.doe@example.com", phone: "+1 (555) 123-4567", policies: 1, status: "Active" },
-  { id: "CL-8850", name: "Michael Smith", email: "msmith@example.com", phone: "+1 (555) 987-6543", policies: 2, status: "Active" },
-  { id: "CL-8851", name: "Sarah Johnson", email: "s.johnson@example.com", phone: "+1 (555) 456-7890", policies: 1, status: "Inactive" },
-  { id: "CL-8852", name: "David Brown", email: "davidb@example.com", phone: "+1 (555) 222-3333", policies: 0, status: "Prospect" },
-];
+interface Client {
+  id: string;
+  organizationId: string;
+  branchId: string | null;
+  firstName: string;
+  lastName: string;
+  nationalId: string | null;
+  dateOfBirth: string | null;
+  gender: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  activationCode: string | null;
+  isEnrolled: boolean;
+  isActive: boolean;
+  createdAt: string;
+}
+
+interface Policy {
+  id: string;
+  policyNumber: string;
+  status: string;
+  premiumAmount: string;
+  currency: string;
+  effectiveDate: string | null;
+  createdAt: string;
+}
+
+type ViewMode = "list" | "detail";
+
+interface ClientFormData {
+  firstName: string;
+  lastName: string;
+  nationalId: string;
+  dateOfBirth: string;
+  gender: string;
+  phone: string;
+  email: string;
+  address: string;
+}
+
+const emptyForm: ClientFormData = {
+  firstName: "",
+  lastName: "",
+  nationalId: "",
+  dateOfBirth: "",
+  gender: "",
+  phone: "",
+  email: "",
+  address: "",
+};
 
 export default function StaffClients() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [formData, setFormData] = useState<ClientFormData>(emptyForm);
+
+  const { data: clientsList, isLoading } = useQuery<Client[]>({
+    queryKey: ["/api/clients"],
+  });
+
+  const { data: selectedClient, isLoading: isLoadingDetail } = useQuery<Client>({
+    queryKey: ["/api/clients", selectedClientId],
+    queryFn: async () => {
+      const res = await fetch(`/api/clients/${selectedClientId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch client");
+      return res.json();
+    },
+    enabled: !!selectedClientId && viewMode === "detail",
+  });
+
+  const { data: clientPolicies } = useQuery<Policy[]>({
+    queryKey: ["/api/policies"],
+    enabled: viewMode === "detail" && !!selectedClientId,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: ClientFormData) => {
+      const res = await apiRequest("POST", "/api/clients", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setShowCreateDialog(false);
+      setFormData(emptyForm);
+      toast({ title: "Client created", description: "New client has been added successfully." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<ClientFormData> }) => {
+      const res = await apiRequest("PATCH", `/api/clients/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      if (selectedClientId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId] });
+      }
+      setShowEditDialog(false);
+      toast({ title: "Client updated", description: "Client details have been updated." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const filteredClients = (clientsList || []).filter((client) => {
+    const fullName = `${client.firstName} ${client.lastName}`.toLowerCase();
+    const matchesSearch =
+      !searchQuery ||
+      fullName.includes(searchQuery.toLowerCase()) ||
+      (client.email || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (client.phone || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (client.nationalId || "").toLowerCase().includes(searchQuery.toLowerCase());
+
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "active" && client.isActive) ||
+      (statusFilter === "inactive" && !client.isActive) ||
+      (statusFilter === "enrolled" && client.isEnrolled) ||
+      (statusFilter === "not_enrolled" && !client.isEnrolled);
+
+    return matchesSearch && matchesStatus;
+  });
+
+  const linkedPolicies = (clientPolicies || []).filter(
+    (p: any) => p.clientId === selectedClientId
+  );
+
+  const openDetail = (clientId: string) => {
+    setSelectedClientId(clientId);
+    setViewMode("detail");
+  };
+
+  const openEdit = (client: Client) => {
+    setFormData({
+      firstName: client.firstName,
+      lastName: client.lastName,
+      nationalId: client.nationalId || "",
+      dateOfBirth: client.dateOfBirth || "",
+      gender: client.gender || "",
+      phone: client.phone || "",
+      email: client.email || "",
+      address: client.address || "",
+    });
+    setShowEditDialog(true);
+  };
+
+  const handleCreate = () => {
+    if (!formData.firstName || !formData.lastName) {
+      toast({ title: "Validation", description: "First name and last name are required.", variant: "destructive" });
+      return;
+    }
+    createMutation.mutate(formData);
+  };
+
+  const handleUpdate = () => {
+    if (!selectedClientId) return;
+    updateMutation.mutate({ id: selectedClientId, data: formData });
+  };
+
+  const getInitials = (first: string, last: string) =>
+    `${first[0] || ""}${last[0] || ""}`.toUpperCase();
+
+  if (viewMode === "detail" && selectedClientId) {
+    return (
+      <StaffLayout>
+        <div className="space-y-6">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => { setViewMode("list"); setSelectedClientId(null); }}
+              data-testid="btn-back-to-list"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+            <div>
+              <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-client-name">
+                {isLoadingDetail ? "Loading..." : `${selectedClient?.firstName} ${selectedClient?.lastName}`}
+              </h1>
+              <p className="text-muted-foreground mt-1">Client Details</p>
+            </div>
+            {selectedClient && (
+              <div className="ml-auto flex items-center gap-2">
+                <Badge variant={selectedClient.isActive ? "default" : "secondary"} data-testid="badge-client-status">
+                  {selectedClient.isActive ? "Active" : "Inactive"}
+                </Badge>
+                <Badge variant={selectedClient.isEnrolled ? "default" : "outline"} data-testid="badge-client-enrolled">
+                  {selectedClient.isEnrolled ? "Enrolled" : "Not Enrolled"}
+                </Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => openEdit(selectedClient)}
+                  data-testid="btn-edit-client"
+                >
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {isLoadingDetail ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Skeleton className="h-48" />
+              <Skeleton className="h-48" />
+            </div>
+          ) : selectedClient ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card className="shadow-sm">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Users className="h-4 w-4" /> Personal Information</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Full Name</p>
+                      <p className="font-medium" data-testid="text-detail-fullname">{selectedClient.firstName} {selectedClient.lastName}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">National ID</p>
+                      <p className="font-medium" data-testid="text-detail-nationalid">{selectedClient.nationalId || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Date of Birth</p>
+                      <p className="font-medium" data-testid="text-detail-dob">{selectedClient.dateOfBirth || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Gender</p>
+                      <p className="font-medium" data-testid="text-detail-gender">{selectedClient.gender || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Phone</p>
+                      <p className="font-medium" data-testid="text-detail-phone">{selectedClient.phone || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Email</p>
+                      <p className="font-medium" data-testid="text-detail-email">{selectedClient.email || "—"}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-muted-foreground">Address</p>
+                      <p className="font-medium" data-testid="text-detail-address">{selectedClient.address || "—"}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><FileStack className="h-4 w-4" /> Linked Policies</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {linkedPolicies.length === 0 ? (
+                    <p className="text-sm text-muted-foreground" data-testid="text-no-policies">No policies linked to this client.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {linkedPolicies.map((policy: any) => (
+                        <div
+                          key={policy.id}
+                          className="flex items-center justify-between p-3 rounded-lg border"
+                          data-testid={`card-policy-${policy.id}`}
+                        >
+                          <div>
+                            <p className="font-medium font-mono text-sm">{policy.policyNumber}</p>
+                            <p className="text-xs text-muted-foreground">
+                              Effective: {policy.effectiveDate || "—"}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-medium text-sm">
+                              {policy.currency} {parseFloat(policy.premiumAmount).toFixed(2)}
+                            </p>
+                            <Badge
+                              variant={policy.status === "active" ? "default" : "secondary"}
+                              className="mt-1"
+                            >
+                              {policy.status}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm">
+                <CardHeader>
+                  <CardTitle>Enrollment & Access</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-muted-foreground">Activation Code</p>
+                      <p className="font-mono font-medium" data-testid="text-detail-activation-code">
+                        {selectedClient.activationCode || "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Client Since</p>
+                      <p className="font-medium" data-testid="text-detail-created">
+                        {new Date(selectedClient.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+        </div>
+
+        <EditClientDialog
+          open={showEditDialog}
+          onOpenChange={setShowEditDialog}
+          formData={formData}
+          setFormData={setFormData}
+          onSubmit={handleUpdate}
+          isPending={updateMutation.isPending}
+        />
+      </StaffLayout>
+    );
+  }
+
   return (
     <StaffLayout>
       <div className="space-y-6">
@@ -22,89 +372,348 @@ export default function StaffClients() {
             <h1 className="text-3xl font-display font-bold tracking-tight">Clients</h1>
             <p className="text-muted-foreground mt-1">Manage policyholders and their communication preferences.</p>
           </div>
-          <Button className="gap-2 shadow-sm">
+          <Button
+            className="gap-2 shadow-sm"
+            onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }}
+            data-testid="btn-add-client"
+          >
             <Plus className="h-4 w-4" /> Add New Client
           </Button>
         </div>
 
         <Card className="shadow-sm border-border/60">
           <CardHeader className="pb-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <CardTitle>Client Registry</CardTitle>
               <div className="flex items-center gap-2">
                 <div className="relative w-64">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input placeholder="Search clients..." className="pl-9 bg-background" />
+                  <Input
+                    placeholder="Search clients..."
+                    className="pl-9 bg-background"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    data-testid="input-search-clients"
+                  />
                 </div>
-                <Button variant="outline" size="icon">
-                  <Filter className="h-4 w-4" />
-                </Button>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="w-36" data-testid="select-status-filter">
+                    <Filter className="h-4 w-4 mr-2" />
+                    <SelectValue placeholder="Filter" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
+                    <SelectItem value="enrolled">Enrolled</SelectItem>
+                    <SelectItem value="not_enrolled">Not Enrolled</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader className="bg-muted/50">
-                <TableRow>
-                  <TableHead className="pl-6">Client</TableHead>
-                  <TableHead>Contact Info</TableHead>
-                  <TableHead>Active Policies</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right pr-6">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {mockClients.map((client) => (
-                  <TableRow key={client.id} className="hover:bg-muted/30 transition-colors">
-                    <TableCell className="pl-6">
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-9 w-9">
-                          <AvatarFallback className="bg-primary/10 text-primary font-medium">
-                            {client.name.split(' ').map(n => n[0]).join('')}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="font-medium">{client.name}</p>
-                          <p className="text-xs text-muted-foreground font-mono">{client.id}</p>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Mail className="h-3 w-3" /> {client.email}
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Phone className="h-3 w-3" /> {client.phone}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="font-medium text-center w-8 bg-muted rounded-md py-1">
-                        {client.policies}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        client.status === 'Active' ? 'bg-green-100 text-green-800' : 
-                        client.status === 'Inactive' ? 'bg-red-100 text-red-800' : 
-                        'bg-gray-100 text-gray-800'
-                      }`}>
-                        {client.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right pr-6">
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
+            {isLoading ? (
+              <div className="p-8 flex items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : filteredClients.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground" data-testid="text-no-clients">
+                {searchQuery || statusFilter !== "all"
+                  ? "No clients match your search criteria."
+                  : "No clients found. Add your first client to get started."}
+              </div>
+            ) : (
+              <Table>
+                <TableHeader className="bg-muted/50">
+                  <TableRow>
+                    <TableHead className="pl-6">Client</TableHead>
+                    <TableHead>Contact Info</TableHead>
+                    <TableHead>National ID</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right pr-6">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filteredClients.map((client) => (
+                    <TableRow
+                      key={client.id}
+                      className="hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => openDetail(client.id)}
+                      data-testid={`row-client-${client.id}`}
+                    >
+                      <TableCell className="pl-6">
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-9 w-9">
+                            <AvatarFallback className="bg-primary/10 text-primary font-medium">
+                              {getInitials(client.firstName, client.lastName)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="font-medium" data-testid={`text-client-name-${client.id}`}>
+                              {client.firstName} {client.lastName}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(client.createdAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          {client.email && (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Mail className="h-3 w-3" /> {client.email}
+                            </div>
+                          )}
+                          {client.phone && (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Phone className="h-3 w-3" /> {client.phone}
+                            </div>
+                          )}
+                          {!client.email && !client.phone && (
+                            <span className="text-sm text-muted-foreground">—</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm font-mono" data-testid={`text-client-nid-${client.id}`}>
+                          {client.nationalId || "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={client.isActive ? "default" : "secondary"}>
+                            {client.isActive ? "Active" : "Inactive"}
+                          </Badge>
+                          {client.isEnrolled && (
+                            <Badge variant="outline" className="text-xs">Enrolled</Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right pr-6">
+                        <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openDetail(client.id)}
+                            data-testid={`btn-view-client-${client.id}`}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openEdit(client)}
+                            data-testid={`btn-edit-client-${client.id}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      <ClientFormDialog
+        open={showCreateDialog}
+        onOpenChange={setShowCreateDialog}
+        formData={formData}
+        setFormData={setFormData}
+        onSubmit={handleCreate}
+        isPending={createMutation.isPending}
+        title="Add New Client"
+      />
+
+      <EditClientDialog
+        open={showEditDialog}
+        onOpenChange={setShowEditDialog}
+        formData={formData}
+        setFormData={setFormData}
+        onSubmit={handleUpdate}
+        isPending={updateMutation.isPending}
+      />
     </StaffLayout>
+  );
+}
+
+function ClientFormDialog({
+  open,
+  onOpenChange,
+  formData,
+  setFormData,
+  onSubmit,
+  isPending,
+  title,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  formData: ClientFormData;
+  setFormData: (data: ClientFormData) => void;
+  onSubmit: () => void;
+  isPending: boolean;
+  title: string;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <ClientForm formData={formData} setFormData={setFormData} />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="btn-cancel-form">
+            Cancel
+          </Button>
+          <Button onClick={onSubmit} disabled={isPending} data-testid="btn-submit-client">
+            {isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Create Client
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditClientDialog({
+  open,
+  onOpenChange,
+  formData,
+  setFormData,
+  onSubmit,
+  isPending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  formData: ClientFormData;
+  setFormData: (data: ClientFormData) => void;
+  onSubmit: () => void;
+  isPending: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Edit Client</DialogTitle>
+        </DialogHeader>
+        <ClientForm formData={formData} setFormData={setFormData} />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="btn-cancel-edit">
+            Cancel
+          </Button>
+          <Button onClick={onSubmit} disabled={isPending} data-testid="btn-save-client">
+            {isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Save Changes
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ClientForm({
+  formData,
+  setFormData,
+}: {
+  formData: ClientFormData;
+  setFormData: (data: ClientFormData) => void;
+}) {
+  const update = (field: keyof ClientFormData, value: string) =>
+    setFormData({ ...formData, [field]: value });
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-2">
+        <Label htmlFor="firstName">First Name *</Label>
+        <Input
+          id="firstName"
+          value={formData.firstName}
+          onChange={(e) => update("firstName", e.target.value)}
+          placeholder="First name"
+          data-testid="input-first-name"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="lastName">Last Name *</Label>
+        <Input
+          id="lastName"
+          value={formData.lastName}
+          onChange={(e) => update("lastName", e.target.value)}
+          placeholder="Last name"
+          data-testid="input-last-name"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="nationalId">National ID</Label>
+        <Input
+          id="nationalId"
+          value={formData.nationalId}
+          onChange={(e) => update("nationalId", e.target.value)}
+          placeholder="ID number"
+          data-testid="input-national-id"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="dateOfBirth">Date of Birth</Label>
+        <Input
+          id="dateOfBirth"
+          type="date"
+          value={formData.dateOfBirth}
+          onChange={(e) => update("dateOfBirth", e.target.value)}
+          data-testid="input-dob"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="gender">Gender</Label>
+        <Select value={formData.gender} onValueChange={(v) => update("gender", v)}>
+          <SelectTrigger data-testid="select-gender">
+            <SelectValue placeholder="Select gender" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="male">Male</SelectItem>
+            <SelectItem value="female">Female</SelectItem>
+            <SelectItem value="other">Other</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="phone">Phone</Label>
+        <Input
+          id="phone"
+          value={formData.phone}
+          onChange={(e) => update("phone", e.target.value)}
+          placeholder="+263 77 123 4567"
+          data-testid="input-phone"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="email">Email</Label>
+        <Input
+          id="email"
+          type="email"
+          value={formData.email}
+          onChange={(e) => update("email", e.target.value)}
+          placeholder="email@example.com"
+          data-testid="input-email"
+        />
+      </div>
+      <div className="space-y-2 col-span-2">
+        <Label htmlFor="address">Address</Label>
+        <Input
+          id="address"
+          value={formData.address}
+          onChange={(e) => update("address", e.target.value)}
+          placeholder="Street address"
+          data-testid="input-address"
+        />
+      </div>
+    </div>
   );
 }
