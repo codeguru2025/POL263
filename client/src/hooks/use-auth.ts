@@ -8,6 +8,7 @@ interface AuthUser {
   avatarUrl: string | null;
   organizationId: string | null;
   isActive: boolean;
+  referralCode: string | null;
 }
 
 interface AuthSession {
@@ -23,16 +24,6 @@ export function useAuth() {
     queryKey: ["/api/auth/me"],
     retry: false,
     staleTime: 5 * 60 * 1000,
-  });
-
-  const loginMutation = useMutation({
-    mutationFn: async (email: string) => {
-      const res = await apiRequest("POST", "/api/auth/demo-login", { email });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-    },
   });
 
   const logoutMutation = useMutation({
@@ -51,8 +42,6 @@ export function useAuth() {
     permissions: session?.permissions ?? [],
     isAuthenticated: !!session?.user,
     isLoading,
-    login: loginMutation.mutateAsync,
     logout: logoutMutation.mutateAsync,
-    isLoggingIn: loginMutation.isPending,
   };
 }

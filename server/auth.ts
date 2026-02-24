@@ -12,6 +12,10 @@ const PgSession = connectPgSimple(session);
 export function setupAuth(app: Express) {
   const sessionSecret = process.env.SESSION_SECRET || "falakhe-pms-session-secret-change-in-prod";
 
+  if (process.env.NODE_ENV === "production") {
+    app.set("trust proxy", 1);
+  }
+
   app.use(
     session({
       store: new PgSession({
@@ -22,6 +26,7 @@ export function setupAuth(app: Express) {
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
+      proxy: process.env.NODE_ENV === "production",
       cookie: {
         secure: process.env.NODE_ENV === "production",
         httpOnly: true,

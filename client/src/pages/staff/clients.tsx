@@ -111,16 +111,18 @@ export default function StaffClients() {
     enabled: viewMode === "detail" && !!selectedClientId,
   });
 
+  const [lastCreatedClient, setLastCreatedClient] = useState<Client | null>(null);
+
   const createMutation = useMutation({
     mutationFn: async (data: ClientFormData) => {
       const res = await apiRequest("POST", "/api/clients", data);
-      return res.json();
+      return res.json() as Promise<Client>;
     },
-    onSuccess: () => {
+    onSuccess: (client) => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       setShowCreateDialog(false);
       setFormData(emptyForm);
-      toast({ title: "Client created", description: "New client has been added successfully." });
+      setLastCreatedClient(client);
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -540,6 +542,45 @@ export default function StaffClients() {
         onSubmit={handleUpdate}
         isPending={updateMutation.isPending}
       />
+
+      <Dialog open={!!lastCreatedClient} onOpenChange={(open) => !open && setLastCreatedClient(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Client Created Successfully</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              Share the activation code below with <strong>{lastCreatedClient?.firstName} {lastCreatedClient?.lastName}</strong> so they can set up their client portal account.
+            </p>
+            <div className="bg-muted rounded-lg p-4 text-center space-y-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Activation Code</p>
+              <p className="text-2xl font-mono font-bold tracking-widest" data-testid="text-new-activation-code">
+                {lastCreatedClient?.activationCode}
+              </p>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The client will use this code along with their policy number on the enrollment page to create their login credentials.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (lastCreatedClient?.activationCode) {
+                  navigator.clipboard.writeText(lastCreatedClient.activationCode);
+                  toast({ title: "Copied", description: "Activation code copied to clipboard." });
+                }
+              }}
+              data-testid="button-copy-activation-code"
+            >
+              Copy Code
+            </Button>
+            <Button onClick={() => setLastCreatedClient(null)} data-testid="button-dismiss-activation">
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </StaffLayout>
   );
 }

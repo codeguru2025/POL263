@@ -1,36 +1,33 @@
-import { useState } from "react";
+import { useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
 
 export default function StaffLogin() {
   const [, setLocation] = useLocation();
-  const { login, isLoggingIn, isAuthenticated } = useAuth();
-  const [email, setEmail] = useState("");
-  const [error, setError] = useState("");
+  const { isAuthenticated, isLoading } = useAuth();
 
-  if (isAuthenticated) {
-    setLocation("/staff");
-    return null;
+  useEffect(() => {
+    if (isAuthenticated) {
+      setLocation("/staff");
+    }
+  }, [isAuthenticated, setLocation]);
+
+  if (isLoading || isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
   }
+
+  const params = new URLSearchParams(window.location.search);
+  const authError = params.get("error");
 
   const handleGoogleLogin = () => {
     window.location.href = "/api/auth/google";
-  };
-
-  const handleDemoLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    try {
-      await login(email || "ausiziba@gmail.com");
-      setLocation("/staff");
-    } catch (err: any) {
-      setError(err.message || "Login failed");
-    }
   };
 
   return (
@@ -46,6 +43,12 @@ export default function StaffLogin() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {authError && (
+            <p className="text-sm text-destructive bg-destructive/10 p-3 rounded text-center" data-testid="text-auth-error">
+              Authentication failed. Please try again or contact your administrator.
+            </p>
+          )}
+
           <Button
             className="w-full h-12 text-base font-medium bg-white text-black border border-gray-200 hover:bg-gray-50 hover:text-black shadow-sm flex items-center gap-3"
             data-testid="btn-google-login"
@@ -60,50 +63,11 @@ export default function StaffLogin() {
             Sign in with Google
           </Button>
 
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-border"></div>
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">Or use demo login</span>
-            </div>
-          </div>
+          <p className="text-xs text-center text-muted-foreground pt-4">
+            Only authorized staff members can access this portal. Contact your administrator if you need access.
+          </p>
 
-          <form onSubmit={handleDemoLogin} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email Address</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="ausiziba@gmail.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                data-testid="input-email"
-              />
-            </div>
-
-            {error && (
-              <p className="text-sm text-destructive bg-destructive/10 p-2 rounded">{error}</p>
-            )}
-
-            <Button
-              type="submit"
-              className="w-full h-11"
-              disabled={isLoggingIn}
-              data-testid="btn-demo-login"
-            >
-              {isLoggingIn ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Signing in...
-                </>
-              ) : (
-                "Sign in (Demo)"
-              )}
-            </Button>
-          </form>
-
-          <div className="text-center pt-6">
+          <div className="text-center pt-2">
             <Link href="/">
               <Button variant="link" className="text-muted-foreground" data-testid="link-back-home">
                 &larr; Back to Home
