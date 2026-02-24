@@ -89,6 +89,10 @@ export interface IStorage {
   getClientByActivationCode(code: string, orgId: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, data: Partial<InsertClient>): Promise<Client | undefined>;
+  getDependentsByClient(clientId: string): Promise<Dependent[]>;
+  createDependent(dep: InsertDependent): Promise<Dependent>;
+  updateDependent(id: string, data: Partial<InsertDependent>): Promise<Dependent | undefined>;
+  deleteDependent(id: string): Promise<void>;
   getProductsByOrg(organizationId: string): Promise<Product[]>;
   getProduct(id: string): Promise<Product | undefined>;
   createProduct(product: InsertProduct): Promise<Product>;
@@ -345,6 +349,22 @@ export class DatabaseStorage implements IStorage {
   async updateClient(id: string, data: Partial<InsertClient>): Promise<Client | undefined> {
     const [updated] = await db.update(clients).set(data).where(eq(clients.id, id)).returning();
     return updated;
+  }
+
+  // ─── Dependents ────────────────────────────────────────────
+  async getDependentsByClient(clientId: string): Promise<Dependent[]> {
+    return db.select().from(dependents).where(eq(dependents.clientId, clientId)).orderBy(dependents.createdAt);
+  }
+  async createDependent(dep: InsertDependent): Promise<Dependent> {
+    const [created] = await db.insert(dependents).values(dep).returning();
+    return created;
+  }
+  async updateDependent(id: string, data: Partial<InsertDependent>): Promise<Dependent | undefined> {
+    const [updated] = await db.update(dependents).set(data).where(eq(dependents.id, id)).returning();
+    return updated;
+  }
+  async deleteDependent(id: string): Promise<void> {
+    await db.delete(dependents).where(eq(dependents.id, id));
   }
 
   // ─── Products ──────────────────────────────────────────────

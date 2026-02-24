@@ -19,6 +19,7 @@ import {
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertChibikhuluReceivableSchema, insertSettlementSchema,
+  insertDependentSchema,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
 } from "@shared/schema";
 
@@ -280,6 +281,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = await storage.updateClient(req.params.id as string, req.body);
     await auditLog(req, "UPDATE_CLIENT", "Client", req.params.id as string, before, updated);
     return res.json(updated);
+  });
+
+  // ─── Dependents / Beneficiaries ─────────────────────────────
+
+  app.get("/api/clients/:clientId/dependents", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    return res.json(await storage.getDependentsByClient(req.params.clientId as string));
+  });
+
+  app.post("/api/clients/:clientId/dependents", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    const parsed = insertDependentSchema.parse({
+      ...req.body,
+      organizationId: user.organizationId,
+      clientId: req.params.clientId,
+    });
+    const dep = await storage.createDependent(parsed);
+    await auditLog(req, "CREATE_DEPENDENT", "Dependent", dep.id, null, dep);
+    return res.status(201).json(dep);
+  });
+
+  app.patch("/api/clients/:clientId/dependents/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    const updated = await storage.updateDependent(req.params.id as string, req.body);
+    if (!updated) return res.status(404).json({ message: "Dependent not found" });
+    await auditLog(req, "UPDATE_DEPENDENT", "Dependent", req.params.id as string, null, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/clients/:clientId/dependents/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    await storage.deleteDependent(req.params.id as string);
+    await auditLog(req, "DELETE_DEPENDENT", "Dependent", req.params.id as string, null, null);
+    return res.status(204).send();
   });
 
   // ─── Products ───────────────────────────────────────────────

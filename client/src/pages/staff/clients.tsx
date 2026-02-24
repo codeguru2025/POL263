@@ -26,6 +26,9 @@ import {
   Users,
   FileStack,
   Loader2,
+  Trash2,
+  UserPlus,
+  Heart,
 } from "lucide-react";
 
 interface Client {
@@ -56,6 +59,20 @@ interface Policy {
   createdAt: string;
 }
 
+interface Dependent {
+  id: string;
+  organizationId: string;
+  clientId: string;
+  firstName: string;
+  lastName: string;
+  nationalId: string | null;
+  dateOfBirth: string | null;
+  gender: string | null;
+  relationship: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
 type ViewMode = "list" | "detail";
 
 interface ClientFormData {
@@ -69,6 +86,15 @@ interface ClientFormData {
   address: string;
 }
 
+interface DependentFormData {
+  firstName: string;
+  lastName: string;
+  nationalId: string;
+  dateOfBirth: string;
+  gender: string;
+  relationship: string;
+}
+
 const emptyForm: ClientFormData = {
   firstName: "",
   lastName: "",
@@ -79,6 +105,34 @@ const emptyForm: ClientFormData = {
   email: "",
   address: "",
 };
+
+const emptyDependent: DependentFormData = {
+  firstName: "",
+  lastName: "",
+  nationalId: "",
+  dateOfBirth: "",
+  gender: "",
+  relationship: "",
+};
+
+const RELATIONSHIPS = [
+  "Spouse",
+  "Son",
+  "Daughter",
+  "Father",
+  "Mother",
+  "Brother",
+  "Sister",
+  "Grandparent",
+  "Grandchild",
+  "Uncle",
+  "Aunt",
+  "Nephew",
+  "Niece",
+  "Cousin",
+  "In-law",
+  "Other",
+];
 
 export default function StaffClients() {
   const { toast } = useToast();
@@ -91,6 +145,11 @@ export default function StaffClients() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [formData, setFormData] = useState<ClientFormData>(emptyForm);
+  const [pendingDependents, setPendingDependents] = useState<DependentFormData[]>([]);
+
+  const [showAddDepDialog, setShowAddDepDialog] = useState(false);
+  const [editingDep, setEditingDep] = useState<Dependent | null>(null);
+  const [depForm, setDepForm] = useState<DependentFormData>(emptyDependent);
 
   const { data: clientsList, isLoading } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
@@ -111,6 +170,16 @@ export default function StaffClients() {
     enabled: viewMode === "detail" && !!selectedClientId,
   });
 
+  const { data: clientDependents, isLoading: isLoadingDeps } = useQuery<Dependent[]>({
+    queryKey: ["/api/clients", selectedClientId, "dependents"],
+    queryFn: async () => {
+      const res = await fetch(`/api/clients/${selectedClientId}/dependents`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch dependents");
+      return res.json();
+    },
+    enabled: !!selectedClientId && viewMode === "detail",
+  });
+
   const [lastCreatedClient, setLastCreatedClient] = useState<Client | null>(null);
 
   const createMutation = useMutation({
@@ -118,10 +187,16 @@ export default function StaffClients() {
       const res = await apiRequest("POST", "/api/clients", data);
       return res.json() as Promise<Client>;
     },
-    onSuccess: (client) => {
+    onSuccess: async (client) => {
+      if (pendingDependents.length > 0) {
+        for (const dep of pendingDependents) {
+          await apiRequest("POST", `/api/clients/${client.id}/dependents`, dep);
+        }
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       setShowCreateDialog(false);
       setFormData(emptyForm);
+      setPendingDependents([]);
       setLastCreatedClient(client);
     },
     onError: (err: Error) => {
@@ -141,6 +216,51 @@ export default function StaffClients() {
       }
       setShowEditDialog(false);
       toast({ title: "Client updated", description: "Client details have been updated." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const addDepMutation = useMutation({
+    mutationFn: async (data: DependentFormData) => {
+      const res = await apiRequest("POST", `/api/clients/${selectedClientId}/dependents`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "dependents"] });
+      setShowAddDepDialog(false);
+      setDepForm(emptyDependent);
+      toast({ title: "Dependent added", description: "Dependent/beneficiary has been added." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateDepMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<DependentFormData> }) => {
+      const res = await apiRequest("PATCH", `/api/clients/${selectedClientId}/dependents/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "dependents"] });
+      setEditingDep(null);
+      setDepForm(emptyDependent);
+      toast({ title: "Dependent updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteDepMutation = useMutation({
+    mutationFn: async (depId: string) => {
+      await apiRequest("DELETE", `/api/clients/${selectedClientId}/dependents/${depId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "dependents"] });
+      toast({ title: "Dependent removed" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -329,6 +449,105 @@ export default function StaffClients() {
                 </CardContent>
               </Card>
 
+              <Card className="shadow-sm md:col-span-2">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center gap-2">
+                      <Heart className="h-4 w-4" /> Dependents & Beneficiaries
+                    </CardTitle>
+                    <Button
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => { setDepForm(emptyDependent); setShowAddDepDialog(true); }}
+                      data-testid="btn-add-dependent"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" /> Add Dependent
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {isLoadingDeps ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : !clientDependents || clientDependents.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4 text-center" data-testid="text-no-dependents">
+                      No dependents or beneficiaries recorded yet.
+                    </p>
+                  ) : (
+                    <Table>
+                      <TableHeader className="bg-muted/50">
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Relationship</TableHead>
+                          <TableHead>National ID</TableHead>
+                          <TableHead>Date of Birth</TableHead>
+                          <TableHead>Gender</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {clientDependents.map((dep) => (
+                          <TableRow key={dep.id} data-testid={`row-dependent-${dep.id}`}>
+                            <TableCell className="font-medium">
+                              {dep.firstName} {dep.lastName}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{dep.relationship}</Badge>
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">{dep.nationalId || "—"}</TableCell>
+                            <TableCell>{dep.dateOfBirth || "—"}</TableCell>
+                            <TableCell className="capitalize">{dep.gender || "—"}</TableCell>
+                            <TableCell>
+                              <Badge variant={dep.isActive ? "default" : "secondary"}>
+                                {dep.isActive ? "Active" : "Inactive"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    setEditingDep(dep);
+                                    setDepForm({
+                                      firstName: dep.firstName,
+                                      lastName: dep.lastName,
+                                      nationalId: dep.nationalId || "",
+                                      dateOfBirth: dep.dateOfBirth || "",
+                                      gender: dep.gender || "",
+                                      relationship: dep.relationship,
+                                    });
+                                  }}
+                                  data-testid={`btn-edit-dep-${dep.id}`}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:text-destructive"
+                                  onClick={() => {
+                                    if (confirm(`Remove ${dep.firstName} ${dep.lastName} as a dependent?`)) {
+                                      deleteDepMutation.mutate(dep.id);
+                                    }
+                                  }}
+                                  data-testid={`btn-delete-dep-${dep.id}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+
               <Card className="shadow-sm">
                 <CardHeader>
                   <CardTitle>Enrollment & Access</CardTitle>
@@ -362,6 +581,37 @@ export default function StaffClients() {
           onSubmit={handleUpdate}
           isPending={updateMutation.isPending}
         />
+
+        <DependentDialog
+          open={showAddDepDialog}
+          onOpenChange={setShowAddDepDialog}
+          title="Add Dependent / Beneficiary"
+          depForm={depForm}
+          setDepForm={setDepForm}
+          onSubmit={() => {
+            if (!depForm.firstName || !depForm.lastName || !depForm.relationship) {
+              toast({ title: "Validation", description: "Name and relationship are required.", variant: "destructive" });
+              return;
+            }
+            addDepMutation.mutate(depForm);
+          }}
+          isPending={addDepMutation.isPending}
+          submitLabel="Add Dependent"
+        />
+
+        <DependentDialog
+          open={!!editingDep}
+          onOpenChange={(open) => { if (!open) setEditingDep(null); }}
+          title="Edit Dependent / Beneficiary"
+          depForm={depForm}
+          setDepForm={setDepForm}
+          onSubmit={() => {
+            if (!editingDep) return;
+            updateDepMutation.mutate({ id: editingDep.id, data: depForm });
+          }}
+          isPending={updateDepMutation.isPending}
+          submitLabel="Save Changes"
+        />
       </StaffLayout>
     );
   }
@@ -376,7 +626,7 @@ export default function StaffClients() {
           </div>
           <Button
             className="gap-2 shadow-sm"
-            onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }}
+            onClick={() => { setFormData(emptyForm); setPendingDependents([]); setShowCreateDialog(true); }}
             data-testid="btn-add-client"
           >
             <Plus className="h-4 w-4" /> Add New Client
@@ -524,14 +774,15 @@ export default function StaffClients() {
         </Card>
       </div>
 
-      <ClientFormDialog
+      <CreateClientDialog
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
         formData={formData}
         setFormData={setFormData}
+        pendingDependents={pendingDependents}
+        setPendingDependents={setPendingDependents}
         onSubmit={handleCreate}
         isPending={createMutation.isPending}
-        title="Add New Client"
       />
 
       <EditClientDialog
@@ -585,30 +836,138 @@ export default function StaffClients() {
   );
 }
 
-function ClientFormDialog({
+function CreateClientDialog({
   open,
   onOpenChange,
   formData,
   setFormData,
+  pendingDependents,
+  setPendingDependents,
   onSubmit,
   isPending,
-  title,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   formData: ClientFormData;
   setFormData: (data: ClientFormData) => void;
+  pendingDependents: DependentFormData[];
+  setPendingDependents: (deps: DependentFormData[]) => void;
   onSubmit: () => void;
   isPending: boolean;
-  title: string;
 }) {
+  const [showInlineDepForm, setShowInlineDepForm] = useState(false);
+  const [inlineDepForm, setInlineDepForm] = useState<DependentFormData>(emptyDependent);
+
+  const addInlineDependent = () => {
+    if (!inlineDepForm.firstName || !inlineDepForm.lastName || !inlineDepForm.relationship) return;
+    setPendingDependents([...pendingDependents, { ...inlineDepForm }]);
+    setInlineDepForm(emptyDependent);
+    setShowInlineDepForm(false);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>Add New Client</DialogTitle>
         </DialogHeader>
-        <ClientForm formData={formData} setFormData={setFormData} />
+
+        <div className="space-y-6">
+          <div>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Client Details</h3>
+            <ClientForm formData={formData} setFormData={setFormData} />
+          </div>
+
+          <div className="border-t pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                Dependents & Beneficiaries
+              </h3>
+              {!showInlineDepForm && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1"
+                  onClick={() => setShowInlineDepForm(true)}
+                  data-testid="btn-add-inline-dependent"
+                >
+                  <UserPlus className="h-3.5 w-3.5" /> Add
+                </Button>
+              )}
+            </div>
+
+            {pendingDependents.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {pendingDependents.map((dep, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
+                    data-testid={`card-pending-dep-${idx}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8">
+                        <AvatarFallback className="text-xs bg-primary/10 text-primary">
+                          {dep.firstName[0]}{dep.lastName[0]}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="font-medium text-sm">{dep.firstName} {dep.lastName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {dep.relationship}
+                          {dep.dateOfBirth ? ` · DOB: ${dep.dateOfBirth}` : ""}
+                          {dep.gender ? ` · ${dep.gender}` : ""}
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive hover:text-destructive"
+                      onClick={() => setPendingDependents(pendingDependents.filter((_, i) => i !== idx))}
+                      data-testid={`btn-remove-pending-dep-${idx}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {showInlineDepForm && (
+              <div className="border rounded-lg p-4 space-y-3 bg-muted/20">
+                <DependentFormFields depForm={inlineDepForm} setDepForm={setInlineDepForm} />
+                <div className="flex items-center gap-2 pt-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={addInlineDependent}
+                    disabled={!inlineDepForm.firstName || !inlineDepForm.lastName || !inlineDepForm.relationship}
+                    data-testid="btn-confirm-inline-dep"
+                  >
+                    Add to List
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setShowInlineDepForm(false); setInlineDepForm(emptyDependent); }}
+                    data-testid="btn-cancel-inline-dep"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {pendingDependents.length === 0 && !showInlineDepForm && (
+              <p className="text-sm text-muted-foreground text-center py-3">
+                No dependents added yet. You can add them now or later from the client detail view.
+              </p>
+            )}
+          </div>
+        </div>
+
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="btn-cancel-form">
             Cancel
@@ -656,6 +1015,124 @@ function EditClientDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function DependentDialog({
+  open,
+  onOpenChange,
+  title,
+  depForm,
+  setDepForm,
+  onSubmit,
+  isPending,
+  submitLabel,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  depForm: DependentFormData;
+  setDepForm: (data: DependentFormData) => void;
+  onSubmit: () => void;
+  isPending: boolean;
+  submitLabel: string;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <DependentFormFields depForm={depForm} setDepForm={setDepForm} />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="btn-cancel-dep-form">
+            Cancel
+          </Button>
+          <Button onClick={onSubmit} disabled={isPending} data-testid="btn-submit-dependent">
+            {isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            {submitLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DependentFormFields({
+  depForm,
+  setDepForm,
+}: {
+  depForm: DependentFormData;
+  setDepForm: (data: DependentFormData) => void;
+}) {
+  const update = (field: keyof DependentFormData, value: string) =>
+    setDepForm({ ...depForm, [field]: value });
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-2">
+        <Label>First Name *</Label>
+        <Input
+          value={depForm.firstName}
+          onChange={(e) => update("firstName", e.target.value)}
+          placeholder="First name"
+          data-testid="input-dep-first-name"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Last Name *</Label>
+        <Input
+          value={depForm.lastName}
+          onChange={(e) => update("lastName", e.target.value)}
+          placeholder="Last name"
+          data-testid="input-dep-last-name"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Relationship *</Label>
+        <Select value={depForm.relationship} onValueChange={(v) => update("relationship", v)}>
+          <SelectTrigger data-testid="select-dep-relationship">
+            <SelectValue placeholder="Select relationship" />
+          </SelectTrigger>
+          <SelectContent>
+            {RELATIONSHIPS.map((r) => (
+              <SelectItem key={r} value={r}>{r}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label>National ID</Label>
+        <Input
+          value={depForm.nationalId}
+          onChange={(e) => update("nationalId", e.target.value)}
+          placeholder="ID number"
+          data-testid="input-dep-national-id"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Date of Birth</Label>
+        <Input
+          type="date"
+          value={depForm.dateOfBirth}
+          onChange={(e) => update("dateOfBirth", e.target.value)}
+          data-testid="input-dep-dob"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Gender</Label>
+        <Select value={depForm.gender} onValueChange={(v) => update("gender", v)}>
+          <SelectTrigger data-testid="select-dep-gender">
+            <SelectValue placeholder="Select gender" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="male">Male</SelectItem>
+            <SelectItem value="female">Female</SelectItem>
+            <SelectItem value="other">Other</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
   );
 }
 
