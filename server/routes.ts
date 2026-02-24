@@ -4,6 +4,10 @@ import { storage } from "./storage";
 import { requireAuth, requirePermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { z } from "zod";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import express from "express";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -33,6 +37,33 @@ function auditLog(req: any, action: string, entityType: string, entityId: string
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+
+  const uploadsDir = path.resolve(process.cwd(), "uploads");
+  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+  app.use("/uploads", express.static(uploadsDir));
+
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, uploadsDir),
+      filename: (_req, file, cb) => {
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        cb(null, uniqueSuffix + path.extname(file.originalname));
+      },
+    }),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = /\.(jpg|jpeg|png|gif|webp)$/i;
+      if (allowed.test(path.extname(file.originalname))) cb(null, true);
+      else cb(new Error("Only image files are allowed"));
+    },
+  });
+
+  app.post("/api/upload", requireAuth, upload.single("file"), (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    const url = `/uploads/${req.file.filename}`;
+    return res.json({ url, filename: req.file.filename });
+  });
 
   // ─── Organization / Tenant ──────────────────────────────────
 
