@@ -29,6 +29,15 @@ interface Group {
   name: string;
   type: string;
   description: string | null;
+  chairpersonName: string | null;
+  chairpersonPhone: string | null;
+  chairpersonEmail: string | null;
+  secretaryName: string | null;
+  secretaryPhone: string | null;
+  secretaryEmail: string | null;
+  treasurerName: string | null;
+  treasurerPhone: string | null;
+  treasurerEmail: string | null;
   isActive: boolean;
   createdAt: string;
 }
@@ -49,12 +58,30 @@ interface GroupFormData {
   name: string;
   type: string;
   description: string;
+  chairpersonName: string;
+  chairpersonPhone: string;
+  chairpersonEmail: string;
+  secretaryName: string;
+  secretaryPhone: string;
+  secretaryEmail: string;
+  treasurerName: string;
+  treasurerPhone: string;
+  treasurerEmail: string;
 }
 
 const emptyForm: GroupFormData = {
   name: "",
   type: "community",
   description: "",
+  chairpersonName: "",
+  chairpersonPhone: "",
+  chairpersonEmail: "",
+  secretaryName: "",
+  secretaryPhone: "",
+  secretaryEmail: "",
+  treasurerName: "",
+  treasurerPhone: "",
+  treasurerEmail: "",
 };
 
 const GROUP_TYPES = [
@@ -180,6 +207,15 @@ export default function StaffGroups() {
       name: group.name,
       type: group.type,
       description: group.description || "",
+      chairpersonName: group.chairpersonName || "",
+      chairpersonPhone: group.chairpersonPhone || "",
+      chairpersonEmail: group.chairpersonEmail || "",
+      secretaryName: group.secretaryName || "",
+      secretaryPhone: group.secretaryPhone || "",
+      secretaryEmail: group.secretaryEmail || "",
+      treasurerName: group.treasurerName || "",
+      treasurerPhone: group.treasurerPhone || "",
+      treasurerEmail: group.treasurerEmail || "",
     });
     setShowEditDialog(true);
   };
@@ -267,7 +303,10 @@ export default function StaffGroups() {
                             </div>
                             <div>
                               <p className="font-medium" data-testid={`text-group-name-${group.id}`}>{group.name}</p>
-                              {group.description && (
+                              {group.chairpersonName && (
+                                <p className="text-xs text-muted-foreground">Chair: {group.chairpersonName}</p>
+                              )}
+                              {!group.chairpersonName && group.description && (
                                 <p className="text-xs text-muted-foreground truncate max-w-[200px]">{group.description}</p>
                               )}
                             </div>
@@ -388,44 +427,11 @@ export default function StaffGroups() {
       </div>
 
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create New Group</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Group Name *</Label>
-              <Input
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g. Sunrise Community Group"
-                data-testid="input-group-name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Type</Label>
-              <Select value={formData.type} onValueChange={(val) => setFormData({ ...formData, type: val })}>
-                <SelectTrigger data-testid="select-group-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {GROUP_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Description</Label>
-              <Textarea
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Optional description..."
-                rows={3}
-                data-testid="input-group-description"
-              />
-            </div>
-          </div>
+          <GroupFormFields formData={formData} setFormData={setFormData} prefix="create" />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)} data-testid="btn-cancel-create-group">
               Cancel
@@ -439,42 +445,11 @@ export default function StaffGroups() {
       </Dialog>
 
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Group</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Group Name *</Label>
-              <Input
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                data-testid="input-edit-group-name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Type</Label>
-              <Select value={formData.type} onValueChange={(val) => setFormData({ ...formData, type: val })}>
-                <SelectTrigger data-testid="select-edit-group-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {GROUP_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Description</Label>
-              <Textarea
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                rows={3}
-                data-testid="input-edit-group-description"
-              />
-            </div>
-          </div>
+          <GroupFormFields formData={formData} setFormData={setFormData} prefix="edit" />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditDialog(false)} data-testid="btn-cancel-edit-group">
               Cancel
@@ -528,5 +503,162 @@ export default function StaffGroups() {
         </DialogContent>
       </Dialog>
     </StaffLayout>
+  );
+}
+
+function GroupFormFields({
+  formData,
+  setFormData,
+  prefix,
+}: {
+  formData: GroupFormData;
+  setFormData: (data: GroupFormData) => void;
+  prefix: string;
+}) {
+  const update = (field: keyof GroupFormData, value: string) =>
+    setFormData({ ...formData, [field]: value });
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Group Details</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Group Name *</Label>
+            <Input
+              value={formData.name}
+              onChange={(e) => update("name", e.target.value)}
+              placeholder="e.g. Sunrise Community Group"
+              data-testid={`input-${prefix}-group-name`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Type</Label>
+            <Select value={formData.type} onValueChange={(val) => update("type", val)}>
+              <SelectTrigger data-testid={`select-${prefix}-group-type`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {GROUP_TYPES.map((t) => (
+                  <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2 col-span-2">
+            <Label>Description</Label>
+            <Textarea
+              value={formData.description}
+              onChange={(e) => update("description", e.target.value)}
+              placeholder="Optional description..."
+              rows={2}
+              data-testid={`input-${prefix}-group-description`}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t pt-4 space-y-4">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Chairperson</h3>
+        <div className="grid grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <Label>Full Name</Label>
+            <Input
+              value={formData.chairpersonName}
+              onChange={(e) => update("chairpersonName", e.target.value)}
+              placeholder="Full name"
+              data-testid={`input-${prefix}-chairperson-name`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Phone</Label>
+            <Input
+              value={formData.chairpersonPhone}
+              onChange={(e) => update("chairpersonPhone", e.target.value)}
+              placeholder="+263 77 123 4567"
+              data-testid={`input-${prefix}-chairperson-phone`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Email</Label>
+            <Input
+              type="email"
+              value={formData.chairpersonEmail}
+              onChange={(e) => update("chairpersonEmail", e.target.value)}
+              placeholder="email@example.com"
+              data-testid={`input-${prefix}-chairperson-email`}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t pt-4 space-y-4">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Secretary</h3>
+        <div className="grid grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <Label>Full Name</Label>
+            <Input
+              value={formData.secretaryName}
+              onChange={(e) => update("secretaryName", e.target.value)}
+              placeholder="Full name"
+              data-testid={`input-${prefix}-secretary-name`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Phone</Label>
+            <Input
+              value={formData.secretaryPhone}
+              onChange={(e) => update("secretaryPhone", e.target.value)}
+              placeholder="+263 77 123 4567"
+              data-testid={`input-${prefix}-secretary-phone`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Email</Label>
+            <Input
+              type="email"
+              value={formData.secretaryEmail}
+              onChange={(e) => update("secretaryEmail", e.target.value)}
+              placeholder="email@example.com"
+              data-testid={`input-${prefix}-secretary-email`}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t pt-4 space-y-4">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Treasurer</h3>
+        <div className="grid grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <Label>Full Name</Label>
+            <Input
+              value={formData.treasurerName}
+              onChange={(e) => update("treasurerName", e.target.value)}
+              placeholder="Full name"
+              data-testid={`input-${prefix}-treasurer-name`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Phone</Label>
+            <Input
+              value={formData.treasurerPhone}
+              onChange={(e) => update("treasurerPhone", e.target.value)}
+              placeholder="+263 77 123 4567"
+              data-testid={`input-${prefix}-treasurer-phone`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Email</Label>
+            <Input
+              type="email"
+              value={formData.treasurerEmail}
+              onChange={(e) => update("treasurerEmail", e.target.value)}
+              placeholder="email@example.com"
+              data-testid={`input-${prefix}-treasurer-email`}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

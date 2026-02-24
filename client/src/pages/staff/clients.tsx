@@ -35,14 +35,17 @@ interface Client {
   id: string;
   organizationId: string;
   branchId: string | null;
+  title: string | null;
   firstName: string;
   lastName: string;
   nationalId: string | null;
   dateOfBirth: string | null;
   gender: string | null;
+  maritalStatus: string | null;
   phone: string | null;
   email: string | null;
   address: string | null;
+  preferredCommMethod: string | null;
   activationCode: string | null;
   isEnrolled: boolean;
   isActive: boolean;
@@ -76,14 +79,17 @@ interface Dependent {
 type ViewMode = "list" | "detail";
 
 interface ClientFormData {
+  title: string;
   firstName: string;
   lastName: string;
   nationalId: string;
   dateOfBirth: string;
   gender: string;
+  maritalStatus: string;
   phone: string;
   email: string;
   address: string;
+  preferredCommMethod: string;
 }
 
 interface DependentFormData {
@@ -96,15 +102,27 @@ interface DependentFormData {
 }
 
 const emptyForm: ClientFormData = {
+  title: "",
   firstName: "",
   lastName: "",
   nationalId: "",
   dateOfBirth: "",
   gender: "",
+  maritalStatus: "",
   phone: "",
   email: "",
   address: "",
+  preferredCommMethod: "",
 };
+
+const TITLES = ["Mr", "Mrs", "Ms", "Miss", "Dr", "Prof", "Rev", "Chief"];
+const MARITAL_STATUSES = ["Single", "Married", "Divorced", "Widowed", "Separated"];
+const COMM_METHODS = [
+  { value: "sms", label: "SMS" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "calls", label: "Phone Calls" },
+  { value: "email", label: "Email" },
+];
 
 const emptyDependent: DependentFormData = {
   firstName: "",
@@ -297,14 +315,17 @@ export default function StaffClients() {
 
   const openEdit = (client: Client) => {
     setFormData({
+      title: client.title || "",
       firstName: client.firstName,
       lastName: client.lastName,
       nationalId: client.nationalId || "",
       dateOfBirth: client.dateOfBirth || "",
       gender: client.gender || "",
+      maritalStatus: client.maritalStatus || "",
       phone: client.phone || "",
       email: client.email || "",
       address: client.address || "",
+      preferredCommMethod: client.preferredCommMethod || "",
     });
     setShowEditDialog(true);
   };
@@ -380,7 +401,9 @@ export default function StaffClients() {
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-muted-foreground">Full Name</p>
-                      <p className="font-medium" data-testid="text-detail-fullname">{selectedClient.firstName} {selectedClient.lastName}</p>
+                      <p className="font-medium" data-testid="text-detail-fullname">
+                        {selectedClient.title ? `${selectedClient.title} ` : ""}{selectedClient.firstName} {selectedClient.lastName}
+                      </p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">National ID</p>
@@ -392,7 +415,11 @@ export default function StaffClients() {
                     </div>
                     <div>
                       <p className="text-muted-foreground">Gender</p>
-                      <p className="font-medium" data-testid="text-detail-gender">{selectedClient.gender || "—"}</p>
+                      <p className="font-medium capitalize" data-testid="text-detail-gender">{selectedClient.gender || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Marital Status</p>
+                      <p className="font-medium" data-testid="text-detail-marital">{selectedClient.maritalStatus || "—"}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Phone</p>
@@ -401,6 +428,12 @@ export default function StaffClients() {
                     <div>
                       <p className="text-muted-foreground">Email</p>
                       <p className="font-medium" data-testid="text-detail-email">{selectedClient.email || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Preferred Contact</p>
+                      <p className="font-medium" data-testid="text-detail-comm">
+                        {COMM_METHODS.find(m => m.value === selectedClient.preferredCommMethod)?.label || selectedClient.preferredCommMethod || "—"}
+                      </p>
                     </div>
                     <div className="col-span-2">
                       <p className="text-muted-foreground">Address</p>
@@ -999,7 +1032,7 @@ function EditClientDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Client</DialogTitle>
         </DialogHeader>
@@ -1147,7 +1180,20 @@ function ClientForm({
     setFormData({ ...formData, [field]: value });
 
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-3 gap-4">
+      <div className="space-y-2">
+        <Label>Title</Label>
+        <Select value={formData.title} onValueChange={(v) => update("title", v)}>
+          <SelectTrigger data-testid="select-title">
+            <SelectValue placeholder="Select title" />
+          </SelectTrigger>
+          <SelectContent>
+            {TITLES.map((t) => (
+              <SelectItem key={t} value={t}>{t}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="space-y-2">
         <Label htmlFor="firstName">First Name *</Label>
         <Input
@@ -1189,7 +1235,7 @@ function ClientForm({
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="gender">Gender</Label>
+        <Label>Gender</Label>
         <Select value={formData.gender} onValueChange={(v) => update("gender", v)}>
           <SelectTrigger data-testid="select-gender">
             <SelectValue placeholder="Select gender" />
@@ -1202,7 +1248,20 @@ function ClientForm({
         </Select>
       </div>
       <div className="space-y-2">
-        <Label htmlFor="phone">Phone</Label>
+        <Label>Marital Status</Label>
+        <Select value={formData.maritalStatus} onValueChange={(v) => update("maritalStatus", v)}>
+          <SelectTrigger data-testid="select-marital-status">
+            <SelectValue placeholder="Select status" />
+          </SelectTrigger>
+          <SelectContent>
+            {MARITAL_STATUSES.map((s) => (
+              <SelectItem key={s} value={s}>{s}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="phone">Phone Number</Label>
         <Input
           id="phone"
           value={formData.phone}
@@ -1212,6 +1271,19 @@ function ClientForm({
         />
       </div>
       <div className="space-y-2">
+        <Label>Preferred Contact Method</Label>
+        <Select value={formData.preferredCommMethod} onValueChange={(v) => update("preferredCommMethod", v)}>
+          <SelectTrigger data-testid="select-comm-method">
+            <SelectValue placeholder="Select method" />
+          </SelectTrigger>
+          <SelectContent>
+            {COMM_METHODS.map((m) => (
+              <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2 col-span-2">
         <Label htmlFor="email">Email</Label>
         <Input
           id="email"
@@ -1222,7 +1294,7 @@ function ClientForm({
           data-testid="input-email"
         />
       </div>
-      <div className="space-y-2 col-span-2">
+      <div className="space-y-2 col-span-3">
         <Label htmlFor="address">Address</Label>
         <Input
           id="address"
