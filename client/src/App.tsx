@@ -25,6 +25,7 @@ import StaffApprovals from "@/pages/staff/approvals";
 import StaffDiagnostics from "@/pages/staff/diagnostics";
 import StaffPriceBook from "@/pages/staff/pricebook";
 import StaffPayroll from "@/pages/staff/payroll";
+import StaffUsers from "@/pages/staff/users";
 
 import ClientLogin from "@/pages/client/login";
 import ClientClaim from "@/pages/client/claim";
@@ -54,6 +55,7 @@ function Router() {
       <Route path="/staff/diagnostics" component={StaffDiagnostics} />
       <Route path="/staff/pricebook" component={StaffPriceBook} />
       <Route path="/staff/payroll" component={StaffPayroll} />
+      <Route path="/staff/users" component={StaffUsers} />
       
       <Route path="/join" component={JoinPage} />
       

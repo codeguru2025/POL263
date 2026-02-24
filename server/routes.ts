@@ -116,10 +116,97 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/users", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
     const user = req.user as any;
     const usersList = await storage.getUsersByOrg(user.organizationId);
-    return res.json(usersList.map((u) => ({
-      id: u.id, email: u.email, displayName: u.displayName,
-      avatarUrl: u.avatarUrl, isActive: u.isActive, createdAt: u.createdAt,
-    })));
+    const usersWithRoles = await Promise.all(usersList.map(async (u) => {
+      const userRoles = await storage.getUserRoles(u.id);
+      return {
+        id: u.id, email: u.email, displayName: u.displayName,
+        avatarUrl: u.avatarUrl, isActive: u.isActive, createdAt: u.createdAt,
+        referralCode: u.referralCode, branchId: u.branchId,
+        roles: userRoles.map(r => ({ id: r.id, name: r.name })),
+      };
+    }));
+    return res.json(usersWithRoles);
+  });
+
+  app.get("/api/users/:id", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
+    const targetUser = await storage.getUser(req.params.id as string);
+    if (!targetUser) return res.status(404).json({ message: "User not found" });
+    const currentUser = req.user as any;
+    if (targetUser.organizationId !== currentUser.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
+    const userRoles = await storage.getUserRoles(targetUser.id);
+    return res.json({
+      ...targetUser,
+      roles: userRoles.map(r => ({ id: r.id, name: r.name })),
+    });
+  });
+
+  app.post("/api/users", requireAuth, requireTenantScope, requirePermission("write:user"), async (req, res) => {
+    const currentUser = req.user as any;
+    const { email, displayName, roleIds, branchId } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is required" });
+
+    const existing = await storage.getUserByEmail(email);
+    if (existing) return res.status(409).json({ message: "A user with this email already exists" });
+
+    const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const newUser = await storage.createUser({
+      email,
+      displayName: displayName || email.split("@")[0],
+      organizationId: currentUser.organizationId,
+      branchId: branchId || currentUser.branchId,
+      referralCode: refCode,
+      isActive: true,
+    });
+
+    if (roleIds && Array.isArray(roleIds)) {
+      for (const roleId of roleIds) {
+        await storage.addUserRole(newUser.id, roleId);
+      }
+    }
+
+    const userRoles = await storage.getUserRoles(newUser.id);
+    await auditLog(req, "CREATE_USER", "User", newUser.id, null, { ...newUser, roles: userRoles.map(r => r.name) });
+    return res.status(201).json({ ...newUser, roles: userRoles.map(r => ({ id: r.id, name: r.name })) });
+  });
+
+  app.patch("/api/users/:id", requireAuth, requireTenantScope, requirePermission("write:user"), async (req, res) => {
+    const currentUser = req.user as any;
+    const targetUser = await storage.getUser(req.params.id as string);
+    if (!targetUser || targetUser.organizationId !== currentUser.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const before = { ...targetUser };
+    const { displayName, isActive, branchId, roleIds } = req.body;
+    const updates: any = {};
+    if (displayName !== undefined) updates.displayName = displayName;
+    if (isActive !== undefined) updates.isActive = isActive;
+    if (branchId !== undefined) updates.branchId = branchId;
+    const updated = await storage.updateUser(req.params.id as string, updates);
+
+    if (roleIds && Array.isArray(roleIds)) {
+      await storage.clearUserRoles(req.params.id as string);
+      for (const roleId of roleIds) {
+        await storage.addUserRole(req.params.id as string, roleId);
+      }
+    }
+
+    const userRoles = await storage.getUserRoles(req.params.id as string);
+    await auditLog(req, "UPDATE_USER", "User", req.params.id as string, before, { ...updated, roles: userRoles.map(r => r.name) });
+    return res.json({ ...updated, roles: userRoles.map(r => ({ id: r.id, name: r.name })) });
+  });
+
+  app.delete("/api/users/:id", requireAuth, requireTenantScope, requirePermission("delete:user"), async (req, res) => {
+    const currentUser = req.user as any;
+    const targetUser = await storage.getUser(req.params.id as string);
+    if (!targetUser || targetUser.organizationId !== currentUser.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    if (targetUser.id === currentUser.id) {
+      return res.status(400).json({ message: "Cannot deactivate yourself" });
+    }
+    const updated = await storage.updateUser(req.params.id as string, { isActive: false });
+    await auditLog(req, "DEACTIVATE_USER", "User", req.params.id as string, targetUser, updated);
+    return res.json(updated);
   });
 
   // ─── Roles ──────────────────────────────────────────────────

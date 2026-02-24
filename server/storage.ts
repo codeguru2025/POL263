@@ -76,6 +76,8 @@ export interface IStorage {
   addRolePermission(roleId: string, permissionId: string): Promise<void>;
   getUserRoles(userId: string): Promise<(Role & { branchId: string | null })[]>;
   addUserRole(userId: string, roleId: string, branchId?: string): Promise<void>;
+  removeUserRole(userId: string, roleId: string): Promise<void>;
+  clearUserRoles(userId: string): Promise<void>;
   getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]>;
   addUserPermissionOverride(userId: string, permissionId: string, isGranted: boolean): Promise<void>;
   getUserEffectivePermissions(userId: string): Promise<string[]>;
@@ -273,6 +275,12 @@ export class DatabaseStorage implements IStorage {
   }
   async addUserRole(userId: string, roleId: string, branchId?: string): Promise<void> {
     await db.insert(userRoles).values({ userId, roleId, branchId: branchId ?? null });
+  }
+  async removeUserRole(userId: string, roleId: string): Promise<void> {
+    await db.delete(userRoles).where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
+  }
+  async clearUserRoles(userId: string): Promise<void> {
+    await db.delete(userRoles).where(eq(userRoles.userId, userId));
   }
   async getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]> {
     const rows = await db.select({ permissionName: permissions.name, isGranted: userPermissionOverrides.isGranted })

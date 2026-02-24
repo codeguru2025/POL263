@@ -23,6 +23,7 @@ import {
   Stethoscope,
   BookOpen,
   Wallet2,
+  UserCog,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -108,6 +109,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     {
       title: "System & Audit",
       items: [
+        { href: "/staff/users", label: "User Management", icon: UserCog },
         { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, badge: pendingApprovalsCount },
         { href: "/staff/audit", label: "Audit Logs", icon: History },
         { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope },

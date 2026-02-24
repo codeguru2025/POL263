@@ -39,7 +39,7 @@
 - `server/seed.ts` - Database seeder (41 permissions, 9 roles, default org, superuser provisioning)
 - `server/logger.ts` - Structured JSON logging with request_id
 
-### Staff Portal Pages (19 pages)
+### Staff Portal Pages (20 pages)
 1. `/staff` - Dashboard with live stats, charts (revenue trend, policy breakdown, lead funnel), filters (date, branch, status), covered lives, retention metrics, product performance
 2. `/staff/policies` - Policy management with status state machine transitions
 3. `/staff/clients` - Client CRUD with search, detail view, linked policies
@@ -56,8 +56,9 @@
 14. `/staff/approvals` - Approval workflow UI with pending/resolved tabs, approve/reject with reason
 15. `/staff/diagnostics` - System health, DB stats, notification failures, unallocated payments, recent errors
 16. `/staff/audit` - Searchable audit log viewer with before/after diffs
-17. `/staff/settings` - Tenant branding settings + RBAC permission matrix
-18. `/staff/login` - Staff login page
+17. `/staff/users` - User & team management: create users, assign roles (agent/manager/etc.), deactivate, referral codes, branch assignment
+18. `/staff/settings` - Tenant branding settings + RBAC permission matrix
+19. `/staff/login` - Staff login page
 
 ### Client Portal Features
 - Login with policy number + password
