@@ -6,50 +6,54 @@ import { Building2, Users } from "lucide-react";
 export default function Home() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
-      <div className="mb-12 flex flex-col items-center">
-        <img src="/assets/logo.png" alt="Falakhe PMS Logo" className="h-16 w-16 mb-4 rounded-xl shadow-sm" />
-        <h1 className="text-4xl font-display font-bold text-foreground">Falakhe PMS</h1>
-        <p className="text-muted-foreground mt-2 text-lg">Property Management System</p>
+      <div className="mb-12 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <img src="/assets/logo.png" alt="Falakhe PMS Logo" className="h-20 w-20 mb-6 rounded-2xl shadow-md border border-border/50" />
+        <h1 className="text-5xl font-display font-bold text-foreground tracking-tight">Falakhe PMS</h1>
+        <p className="text-muted-foreground mt-3 text-xl font-medium">Core Administration Platform</p>
       </div>
 
       <div className="grid md:grid-cols-2 gap-6 w-full max-w-4xl">
-        <Card className="hover:border-primary/50 transition-colors cursor-pointer group">
+        <Card className="hover:border-primary/50 hover:shadow-md transition-all duration-300 cursor-pointer group">
           <CardHeader>
-            <div className="h-12 w-12 bg-primary/10 text-primary rounded-lg flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-              <Building2 size={24} />
+            <div className="h-14 w-14 bg-primary/10 text-primary rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-300">
+              <Building2 size={28} />
             </div>
             <CardTitle className="text-2xl font-display">Staff Portal</CardTitle>
             <CardDescription className="text-base">
-              Manage properties, view audit logs, and configure tenant settings.
+              Manage policies, claims, funeral operations, and configure the tenant policy engine.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Link href="/staff/login">
-              <Button className="w-full" size="lg" data-testid="link-staff-portal">
+              <Button className="w-full h-12 text-md shadow-sm group-hover:shadow transition-all" size="lg" data-testid="link-staff-portal">
                 Access Staff Portal
               </Button>
             </Link>
           </CardContent>
         </Card>
 
-        <Card className="hover:border-primary/50 transition-colors cursor-pointer group">
+        <Card className="hover:border-primary/50 hover:shadow-md transition-all duration-300 cursor-pointer group">
           <CardHeader>
-            <div className="h-12 w-12 bg-primary/10 text-primary rounded-lg flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-              <Users size={24} />
+            <div className="h-14 w-14 bg-secondary text-secondary-foreground border rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform duration-300">
+              <Users size={28} />
             </div>
             <CardTitle className="text-2xl font-display">Client Portal</CardTitle>
             <CardDescription className="text-base">
-              View your properties, leases, and communications.
+              Secure access for policyholders to view coverage, pay premiums, and update details.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Link href="/client">
-              <Button variant="outline" className="w-full" size="lg" data-testid="link-client-portal">
+            <Link href="/client/login">
+              <Button variant="outline" className="w-full h-12 text-md bg-white hover:bg-gray-50 text-black border-gray-200" size="lg" data-testid="link-client-portal">
                 Access Client Portal
               </Button>
             </Link>
           </CardContent>
         </Card>
+      </div>
+      
+      <div className="mt-16 text-center text-sm text-muted-foreground max-w-md">
+        <p>Phase 0-1 Foundation: Multi-Tenant Architecture & RBAC</p>
       </div>
     </div>
   );
