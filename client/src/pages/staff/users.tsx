@@ -206,7 +206,7 @@ export default function StaffUsers() {
                     <TableHead>Name</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Roles</TableHead>
-                    <TableHead>Referral Code</TableHead>
+                    <TableHead>Referral Link</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Joined</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -228,9 +228,11 @@ export default function StaffUsers() {
                       </TableCell>
                       <TableCell>
                         {u.referralCode ? (
-                          <button className="inline-flex items-center gap-1 text-sm font-mono bg-muted px-2 py-0.5 rounded hover:bg-muted/80" onClick={() => copyToClipboard(u.referralCode)} data-testid={`button-copy-referral-${u.id}`}>
-                            {u.referralCode} <Copy className="h-3 w-3" />
-                          </button>
+                          <div className="flex flex-col gap-1">
+                            <button className="inline-flex items-center gap-1 text-sm font-mono bg-muted px-2 py-0.5 rounded hover:bg-muted/80" onClick={() => copyToClipboard(`${window.location.origin}/join?ref=${u.referralCode}`)} data-testid={`button-copy-referral-${u.id}`}>
+                              {u.referralCode} <Copy className="h-3 w-3" />
+                            </button>
+                          </div>
                         ) : "—"}
                       </TableCell>
                       <TableCell>

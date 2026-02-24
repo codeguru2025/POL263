@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
@@ -24,11 +25,46 @@ import {
   BookOpen,
   Wallet2,
   UserCog,
+  Copy,
+  Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+
+function ReferralLinkBox({ referralCode }: { referralCode: string }) {
+  const [copied, setCopied] = useState(false);
+  const referralUrl = `${window.location.origin}/join?ref=${referralCode}`;
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(referralUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="mb-3 p-3 rounded-lg border bg-gradient-to-r from-primary/5 to-primary/10 space-y-2">
+      <div className="flex items-center gap-2">
+        <Link2 className="h-4 w-4 text-primary" />
+        <span className="text-xs font-semibold uppercase tracking-wider text-primary">My Referral Link</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <input
+          readOnly
+          value={referralUrl}
+          className="flex-1 text-xs bg-background border rounded px-2 py-1.5 font-mono truncate"
+          data-testid="input-referral-link"
+          onClick={(e) => (e.target as HTMLInputElement).select()}
+        />
+        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={copyLink} data-testid="button-copy-referral-link">
+          {copied ? <span className="text-green-600 text-xs font-medium">OK</span> : <Copy className="h-3.5 w-3.5" />}
+        </Button>
+      </div>
+      <p className="text-[10px] text-muted-foreground">Share this link with clients to track referrals</p>
+    </div>
+  );
+}
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
@@ -168,6 +204,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         </ScrollArea>
 
         <div className="p-4 border-t bg-muted/10 shrink-0">
+          {user?.referralCode && (
+            <ReferralLinkBox referralCode={user.referralCode} />
+          )}
           <div className="flex items-center gap-3 px-2 py-2 mb-2 bg-card rounded-lg border shadow-sm">
             <Avatar className="h-9 w-9 border">
               <AvatarImage src={user?.avatarUrl || undefined} />

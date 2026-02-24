@@ -193,6 +193,7 @@ function sanitizeUser(user: any) {
     avatarUrl: user.avatarUrl,
     organizationId: user.organizationId,
     isActive: user.isActive,
+    referralCode: user.referralCode,
   };
 }
 
