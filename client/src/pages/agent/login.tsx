@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { getApiBase } from "@/lib/queryClient";
-import { Loader2, UserCircle } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 
 export default function AgentLogin() {
@@ -40,11 +40,17 @@ export default function AgentLogin() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.message || "Login failed");
+        const msg = data.message || (res.status === 401 ? "Invalid email or password. Use the email and password set by your administrator." : "Login failed");
+        setError(msg);
         return;
       }
       if (data.redirect) {
-        window.location.href = getApiBase() ? new URL(data.redirect, getApiBase()).href : data.redirect;
+        const base = getApiBase();
+        if (base) {
+          window.location.href = new URL(data.redirect, base).href;
+        } else {
+          window.location.pathname = data.redirect.startsWith("/") ? data.redirect : "/" + data.redirect;
+        }
       } else {
         setLocation("/staff");
       }
@@ -68,9 +74,9 @@ export default function AgentLogin() {
       <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
-            <UserCircle className="w-10 h-10 text-primary" />
+            <img src="/assets/logo.png" alt="POL263" className="w-10 h-10 rounded-lg object-contain" />
           </div>
-          <CardTitle className="text-2xl font-display">Agent Login</CardTitle>
+          <CardTitle className="text-2xl font-display">POL263 — Agent Login</CardTitle>
           <CardDescription className="text-base mt-2">
             Sign in with the email and password set by your administrator. Agents cannot use Google sign-in.
           </CardDescription>

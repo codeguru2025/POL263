@@ -133,11 +133,17 @@ export function setupAuth(app: Express) {
           if (err) return next(err);
           if (!user) {
             const message = info?.message || "Authentication failed";
-            return res.redirect(`/staff/login?error=${encodeURIComponent(message)}`);
+            const baseUrl = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+            const loginPath = "/staff/login";
+            const redirectUrl = baseUrl ? `${baseUrl}${loginPath}?error=${encodeURIComponent(message)}` : `${loginPath}?error=${encodeURIComponent(message)}`;
+            return res.redirect(redirectUrl);
           }
           req.login(user, (loginErr) => {
             if (loginErr) return next(loginErr);
-            return res.redirect("/staff");
+            const baseUrl = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+            const staffPath = "/staff";
+            const redirectUrl = baseUrl ? `${baseUrl}${staffPath}` : staffPath;
+            return res.redirect(redirectUrl);
           });
         })(req, res, next);
       }

@@ -169,9 +169,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         <div className="h-16 flex items-center justify-center px-4 border-b shrink-0">
           <img
             src={currentOrg?.logoUrl || "/assets/logo.png"}
-            alt="Logo"
-            className="h-10 w-10 rounded-lg object-contain"
+            alt="POL263"
+            className="h-10 w-10 rounded-lg object-contain mr-2"
           />
+          <span className="font-display font-bold text-lg tracking-tight text-foreground">POL263</span>
         </div>
 
         <ScrollArea className="flex-1 px-4 py-6">

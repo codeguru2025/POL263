@@ -7,8 +7,9 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       <div className="mb-12 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src="/assets/logo.png" alt="Logo" className="h-24 w-24 mb-6 rounded-2xl object-contain" />
-        <p className="text-muted-foreground text-lg font-medium">Core Administration Platform</p>
+        <img src="/assets/logo.png" alt="POL263" className="h-24 w-24 mb-4 rounded-2xl object-contain" />
+        <h1 className="text-3xl font-display font-bold text-foreground tracking-tight">POL263</h1>
+        <p className="text-muted-foreground text-lg font-medium mt-1">Core Administration Platform</p>
       </div>
 
       <div className="grid md:grid-cols-3 gap-6 w-full max-w-4xl">
@@ -68,10 +69,6 @@ export default function Home() {
             </Link>
           </CardContent>
         </Card>
-      </div>
-      
-      <div className="mt-16 text-center text-sm text-muted-foreground max-w-md">
-        <p>Phase 0-1 Foundation: Multi-Tenant Architecture & RBAC</p>
       </div>
     </div>
   );

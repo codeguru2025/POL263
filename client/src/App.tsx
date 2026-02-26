@@ -31,6 +31,7 @@ import StaffTenants from "@/pages/staff/tenants";
 
 import ClientLogin from "@/pages/client/login";
 import ClientClaim from "@/pages/client/claim";
+import ClientResetPassword from "@/pages/client/reset-password";
 import ClientDashboard from "@/pages/client/dashboard";
 import ClientPayments from "@/pages/client/payments";
 import ClientDocuments from "@/pages/client/documents";
@@ -55,6 +56,7 @@ function Router() {
       <Route path="/staff/login" component={StaffLogin} />
       <Route path="/agent/login" component={AgentLogin} />
       <Route path="/staff" component={StaffDashboard} />
+      <Route path="/staff/" component={StaffDashboard} />
       <Route path="/staff/audit" component={AuditLogs} />
       <Route path="/staff/settings" component={StaffSettings} />
       <Route path="/staff/products" component={ProductBuilder} />
@@ -79,6 +81,7 @@ function Router() {
       
       <Route path="/client/login" component={ClientLogin} />
       <Route path="/client/claim" component={ClientClaim} />
+      <Route path="/client/reset-password" component={ClientResetPassword} />
       <Route path="/client" component={ClientDashboard} />
       <Route path="/client/payments" component={ClientPayments} />
       <Route path="/client/documents" component={ClientDocuments} />
