@@ -1,0 +1,39 @@
+#!/bin/bash
+# Run this on your VPS (Ubuntu/Debian) to install and configure PostgreSQL for Chibikhulu.
+# Usage: sudo CHIBIKHULU_DB_PASSWORD='your_password' ./script/setup-postgres-vps.sh
+# Or:    export CHIBIKHULU_DB_PASSWORD='your_password'; sudo -E ./script/setup-postgres-vps.sh
+
+set -e
+
+if [ -z "$CHIBIKHULU_DB_PASSWORD" ]; then
+  echo "Error: Set the database password first:"
+  echo "  export CHIBIKHULU_DB_PASSWORD='YourSecurePassword123'"
+  echo "  sudo -E ./script/setup-postgres-vps.sh"
+  echo ""
+  echo "Or in one line:"
+  echo "  sudo CHIBIKHULU_DB_PASSWORD='YourSecurePassword123' ./script/setup-postgres-vps.sh"
+  exit 1
+fi
+
+echo "Installing PostgreSQL..."
+apt-get update -qq
+apt-get install -y postgresql postgresql-contrib
+
+echo "Starting PostgreSQL..."
+systemctl start postgresql
+systemctl enable postgresql
+
+echo "Creating database and user..."
+# Escape single quotes in password for use in SQL
+SAFE_PASS=$(echo "$CHIBIKHULU_DB_PASSWORD" | sed "s/'/''/g")
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD '"$SAFE_PASS"';" 2>/dev/null || true
+sudo -u postgres psql -c "CREATE DATABASE chibikhulu;" 2>/dev/null || echo "Database chibikhulu already exists."
+
+echo ""
+echo "PostgreSQL is ready."
+echo ""
+echo "Use this in your .env on the VPS:"
+echo "  DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/chibikhulu"
+echo ""
+echo "Replace YOUR_PASSWORD with the same password you set for CHIBIKHULU_DB_PASSWORD."
+echo ""

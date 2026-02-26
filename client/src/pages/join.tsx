@@ -3,6 +3,7 @@ import { useLocation, useSearch } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { getApiBase } from "@/lib/queryClient";
 import { UserPlus, Shield, CheckCircle2, ArrowRight } from "lucide-react";
 
 export default function JoinPage() {
@@ -15,7 +16,7 @@ export default function JoinPage() {
   useEffect(() => {
     if (refCode) {
       sessionStorage.setItem("agent_referral_code", refCode);
-      fetch(`/api/agents/by-referral/${refCode}`)
+      fetch(getApiBase() + `/api/agents/by-referral/${refCode}`)
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (data?.name) setAgentName(data.name);
@@ -27,7 +28,7 @@ export default function JoinPage() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       <div className="mb-8 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src="/assets/logo.png" alt="Falakhe PMS Logo" className="h-16 w-16 mb-4 rounded-2xl shadow-md border border-border/50" />
+        <img src="/assets/logo.png" alt="Chibikhulu Logo" className="h-16 w-16 mb-4 rounded-2xl shadow-md border border-border/50" />
         <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">Join Falakhe</h1>
         <p className="text-muted-foreground mt-2 text-lg">Secure your family's future with comprehensive funeral cover</p>
       </div>

@@ -11,9 +11,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
-import { useState, useMemo } from "react";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { useState, useMemo, useEffect } from "react";
 import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download } from "lucide-react";
+import { useSearch } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -69,6 +70,7 @@ export default function StaffPolicies() {
 
   const [createForm, setCreateForm] = useState({
     clientId: "",
+    beneficiaryDependentIds: [] as string[],
     selectedProductId: "",
     productVersionId: "",
     premiumAmount: "",
@@ -77,6 +79,17 @@ export default function StaffPolicies() {
     effectiveDate: "",
     selectedAddOns: [] as string[],
   });
+  const [createStep, setCreateStep] = useState(1);
+
+  const searchString = useSearch();
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    if (params.get("create") === "1") {
+      const clientId = params.get("clientId") || "";
+      setShowCreateDialog(true);
+      setCreateForm((f) => ({ ...f, clientId }));
+    }
+  }, [searchString]);
 
   const { data: policies, isLoading: policiesLoading } = useQuery<any[]>({
     queryKey: ["/api/policies"],
@@ -94,10 +107,20 @@ export default function StaffPolicies() {
     queryKey: ["/api/add-ons"],
   });
 
+  const { data: dependents } = useQuery<any[]>({
+    queryKey: ["/api/clients", createForm.clientId, "dependents"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/clients/${createForm.clientId}/dependents`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!createForm.clientId,
+  });
+
   const { data: productVersions } = useQuery<any[]>({
     queryKey: ["/api/products", createForm.selectedProductId, "versions"],
     queryFn: async () => {
-      const res = await fetch(`/api/products/${createForm.selectedProductId}/versions`, { credentials: "include" });
+      const res = await fetch(getApiBase() + `/api/products/${createForm.selectedProductId}/versions`, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
@@ -157,7 +180,7 @@ export default function StaffPolicies() {
     queryKey: ["/api/policies", selectedPolicy?.id, "members"],
     enabled: !!selectedPolicy?.id && showDetailView,
     queryFn: async () => {
-      const res = await fetch(`/api/policies/${selectedPolicy.id}/members`, { credentials: "include" });
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/members`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load members");
       return res.json();
     },
@@ -167,7 +190,7 @@ export default function StaffPolicies() {
     queryKey: ["/api/policies", selectedPolicy?.id, "payments"],
     enabled: !!selectedPolicy?.id && showDetailView,
     queryFn: async () => {
-      const res = await fetch(`/api/policies/${selectedPolicy.id}/payments`, { credentials: "include" });
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/payments`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load payments");
       return res.json();
     },
@@ -175,6 +198,7 @@ export default function StaffPolicies() {
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
+      const members = (data.beneficiaryDependentIds || []).map((dependentId: string) => ({ dependentId, role: "beneficiary" }));
       const res = await apiRequest("POST", "/api/policies", {
         clientId: data.clientId,
         productVersionId: data.productVersionId,
@@ -182,14 +206,27 @@ export default function StaffPolicies() {
         currency: data.currency,
         paymentSchedule: data.paymentSchedule,
         effectiveDate: data.effectiveDate || undefined,
+        members,
+        addOnIds: data.selectedAddOns || [],
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (policy: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
       setShowCreateDialog(false);
-      setCreateForm({ clientId: "", productVersionId: "", premiumAmount: "", currency: "USD", paymentSchedule: "monthly", effectiveDate: "" });
-      toast({ title: "Policy created", description: "New policy has been created in draft status." });
+      setCreateStep(1);
+      setCreateForm({
+        clientId: "",
+        beneficiaryDependentIds: [],
+        selectedProductId: "",
+        productVersionId: "",
+        premiumAmount: "",
+        currency: "USD",
+        paymentSchedule: "monthly",
+        effectiveDate: "",
+        selectedAddOns: [],
+      });
+      toast({ title: "Policy created", description: `Policy ${policy.policyNumber} has been created in draft status.` });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -280,6 +317,22 @@ export default function StaffPolicies() {
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/document`, "_blank", "noopener")}
+              data-testid="btn-download-policy-doc"
+            >
+              <Download className="h-4 w-4" /> Policy document
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`, "_blank", "noopener")}
+              data-testid="btn-download-estatement"
+            >
+              <FileText className="h-4 w-4" /> E-Statement
+            </Button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -387,6 +440,53 @@ export default function StaffPolicies() {
               ) : (
                 <div className="p-6 text-center text-muted-foreground" data-testid="text-no-payments">No payments recorded for this policy.</div>
               )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm border-border/60">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5 text-primary" /> E-Statement</CardTitle>
+              <CardDescription>Download a statement PDF with policy summary and payment history (optionally filter by date range).</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">From (optional)</Label>
+                  <Input
+                    type="date"
+                    id="estatement-dateFrom"
+                    className="w-36"
+                    data-testid="input-estatement-dateFrom"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">To (optional)</Label>
+                  <Input
+                    type="date"
+                    id="estatement-dateTo"
+                    className="w-36"
+                    data-testid="input-estatement-dateTo"
+                  />
+                </div>
+                <Button
+                  variant="default"
+                  className="gap-2"
+                  onClick={() => {
+                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
+                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
+                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
+                    const params = new URLSearchParams();
+                    if (from) params.set("dateFrom", from);
+                    if (to) params.set("dateTo", to);
+                    if (params.toString()) url += "?" + params.toString();
+                    window.open(url, "_blank", "noopener");
+                  }}
+                  data-testid="btn-download-estatement-card"
+                >
+                  <Download className="h-4 w-4" /> Download e-statement
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Leave dates empty for full payment history. Uses tenant logo and signature from Settings.</p>
             </CardContent>
           </Card>
         </div>
@@ -549,99 +649,236 @@ export default function StaffPolicies() {
         </Card>
       </div>
 
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+      <Dialog open={showCreateDialog} onOpenChange={(open) => { setShowCreateDialog(open); if (!open) setCreateStep(1); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Issue New Policy</DialogTitle>
-            <DialogDescription>Create a new policy in draft status. You can transition it later.</DialogDescription>
+            <DialogDescription>
+              {createStep === 1 && "Enter policy holder and beneficiaries."}
+              {createStep === 2 && "Select product and version for this tenant."}
+              {createStep === 3 && "Select add-ons (optional)."}
+              {createStep === 4 && "Review premium and save. A unique policy number will be generated."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label>Client</Label>
-              <Select value={createForm.clientId} onValueChange={(v) => setCreateForm({ ...createForm, clientId: v })}>
-                <SelectTrigger data-testid="select-client">
-                  <SelectValue placeholder="Select a client..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {clients?.map((c: any) => (
-                    <SelectItem key={c.id} value={c.id}>{c.firstName} {c.lastName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Product</Label>
-              <Select value={createForm.productVersionId} onValueChange={(v) => setCreateForm({ ...createForm, productVersionId: v })}>
-                <SelectTrigger data-testid="select-product-version">
-                  <SelectValue placeholder="Select a product version..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {products?.map((p: any) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
+            {createStep === 1 && (
+              <>
+                <div>
+                  <Label>Policy holder (client)</Label>
+                  <Select
+                    value={createForm.clientId}
+                    onValueChange={(v) => setCreateForm({ ...createForm, clientId: v, beneficiaryDependentIds: [] })}
+                  >
+                    <SelectTrigger data-testid="select-client">
+                      <SelectValue placeholder="Select policy holder..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients?.map((c: any) => (
+                        <SelectItem key={c.id} value={c.id}>{c.firstName} {c.lastName}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedClient && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {selectedClient.firstName} {selectedClient.lastName}
+                      {clientAge != null && ` · Age: ${clientAge}`}
+                    </p>
+                  )}
+                </div>
+                {createForm.clientId && dependents && dependents.length > 0 && (
+                  <div>
+                    <Label>Beneficiaries (dependents)</Label>
+                    <div className="border rounded-md p-3 space-y-2 max-h-40 overflow-y-auto">
+                      {dependents.map((d: any) => {
+                        const depAge = d.dateOfBirth ? (() => {
+                          const dob = new Date(d.dateOfBirth);
+                          const today = new Date();
+                          let age = today.getFullYear() - dob.getFullYear();
+                          const m = today.getMonth() - dob.getMonth();
+                          if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+                          return age;
+                        })() : null;
+                        return (
+                        <div key={d.id} className="flex items-center gap-2">
+                          <Checkbox
+                            id={`dep-${d.id}`}
+                            checked={createForm.beneficiaryDependentIds.includes(d.id)}
+                            onCheckedChange={(checked) => {
+                              const next = checked
+                                ? [...createForm.beneficiaryDependentIds, d.id]
+                                : createForm.beneficiaryDependentIds.filter((id) => id !== d.id);
+                              setCreateForm({ ...createForm, beneficiaryDependentIds: next });
+                            }}
+                          />
+                          <label htmlFor={`dep-${d.id}`} className="text-sm cursor-pointer">
+                            {d.firstName} {d.lastName}
+                            {d.relationship ? ` (${d.relationship})` : ""}
+                            {depAge != null && ` · Age: ${depAge}`}
+                          </label>
+                        </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            {createStep === 2 && (
+              <>
+                <div>
+                  <Label>Product</Label>
+                  <Select
+                    value={createForm.selectedProductId}
+                    onValueChange={(v) => setCreateForm({ ...createForm, selectedProductId: v, productVersionId: "" })}
+                  >
+                    <SelectTrigger data-testid="select-product">
+                      <SelectValue placeholder="Select product..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {products?.map((p: any) => (
+                        <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {createForm.selectedProductId && (
+                  <div>
+                    <Label>Product version</Label>
+                    <Select
+                      value={createForm.productVersionId}
+                      onValueChange={(v) => setCreateForm({ ...createForm, productVersionId: v })}
+                    >
+                      <SelectTrigger data-testid="select-product-version">
+                        <SelectValue placeholder="Select version..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {productVersions?.map((v: any) => (
+                          <SelectItem key={v.id} value={v.id}>
+                            {`Version ${v.version ?? v.versionNumber ?? ""}${v.effectiveFrom ? ` (${v.effectiveFrom})` : ""}`.trim() || v.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </>
+            )}
+            {createStep === 3 && (
               <div>
-                <Label>Premium Amount</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={createForm.premiumAmount}
-                  onChange={(e) => setCreateForm({ ...createForm, premiumAmount: e.target.value })}
-                  placeholder="0.00"
-                  data-testid="input-premium-amount"
-                />
+                <Label>Add-ons (optional)</Label>
+                {addOns && addOns.length > 0 ? (
+                  <div className="border rounded-md p-3 space-y-2 max-h-48 overflow-y-auto">
+                    {addOns.filter((a: any) => a.isActive !== false).map((a: any) => (
+                      <div key={a.id} className="flex items-center gap-2">
+                        <Checkbox
+                          id={`ao-${a.id}`}
+                          checked={createForm.selectedAddOns.includes(a.id)}
+                          onCheckedChange={(checked) => {
+                            const next = checked
+                              ? [...createForm.selectedAddOns, a.id]
+                              : createForm.selectedAddOns.filter((id) => id !== a.id);
+                            setCreateForm({ ...createForm, selectedAddOns: next });
+                          }}
+                        />
+                        <label htmlFor={`ao-${a.id}`} className="text-sm cursor-pointer flex-1">
+                          {a.name} {a.priceAmount != null ? `— ${a.pricingMode === "percentage" ? `${a.priceAmount}%` : createForm.currency + " " + a.priceAmount}` : ""}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No add-ons configured for this tenant.</p>
+                )}
               </div>
-              <div>
-                <Label>Currency</Label>
-                <Select value={createForm.currency} onValueChange={(v) => setCreateForm({ ...createForm, currency: v })}>
-                  <SelectTrigger data-testid="select-currency">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="ZAR">ZAR</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>Payment Schedule</Label>
-                <Select value={createForm.paymentSchedule} onValueChange={(v) => setCreateForm({ ...createForm, paymentSchedule: v })}>
-                  <SelectTrigger data-testid="select-schedule">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="biweekly">Biweekly</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Effective Date</Label>
-                <Input
-                  type="date"
-                  value={createForm.effectiveDate}
-                  onChange={(e) => setCreateForm({ ...createForm, effectiveDate: e.target.value })}
-                  data-testid="input-effective-date"
-                />
-              </div>
-            </div>
+            )}
+            {createStep === 4 && (
+              <>
+                {calculatedPremium != null && (
+                  <div className="rounded-md bg-muted/50 p-3">
+                    <p className="text-sm font-medium">Calculated premium: {createForm.currency} {calculatedPremium}</p>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Premium Amount</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={createForm.premiumAmount || calculatedPremium || ""}
+                      onChange={(e) => setCreateForm({ ...createForm, premiumAmount: e.target.value })}
+                      placeholder="0.00"
+                      data-testid="input-premium-amount"
+                    />
+                  </div>
+                  <div>
+                    <Label>Currency</Label>
+                    <Select value={createForm.currency} onValueChange={(v) => setCreateForm({ ...createForm, currency: v })}>
+                      <SelectTrigger data-testid="select-currency">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="USD">USD</SelectItem>
+                        <SelectItem value="ZAR">ZAR</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Payment Schedule</Label>
+                    <Select value={createForm.paymentSchedule} onValueChange={(v) => setCreateForm({ ...createForm, paymentSchedule: v })}>
+                      <SelectTrigger data-testid="select-schedule">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="biweekly">Biweekly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Effective Date</Label>
+                    <Input
+                      type="date"
+                      value={createForm.effectiveDate}
+                      onChange={(e) => setCreateForm({ ...createForm, effectiveDate: e.target.value })}
+                      data-testid="input-effective-date"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
-            <Button
-              onClick={() => createMutation.mutate(createForm)}
-              disabled={createMutation.isPending || !createForm.clientId || !createForm.productVersionId || !createForm.premiumAmount}
-              data-testid="btn-submit-policy"
-            >
-              {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Policy
-            </Button>
+            {createStep > 1 ? (
+              <Button variant="outline" onClick={() => setCreateStep((s) => s - 1)}>Back</Button>
+            ) : (
+              <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
+            )}
+            {createStep < 4 ? (
+              <Button
+                onClick={() => setCreateStep((s) => s + 1)}
+                disabled={
+                  (createStep === 1 && !createForm.clientId) ||
+                  (createStep === 2 && (!createForm.selectedProductId || !createForm.productVersionId))
+                }
+              >
+                Continue
+              </Button>
+            ) : (
+              <Button
+                onClick={() => createMutation.mutate({
+                  ...createForm,
+                  premiumAmount: createForm.premiumAmount || calculatedPremium || "",
+                })}
+                disabled={createMutation.isPending || !createForm.clientId || !createForm.productVersionId || !(createForm.premiumAmount || calculatedPremium)}
+                data-testid="btn-submit-policy"
+              >
+                {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save policy
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

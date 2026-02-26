@@ -280,7 +280,7 @@ export default function ClientDashboard() {
                     )}
 
                     <div className="mt-4">
-                      <Button variant="outline" className="gap-2" data-testid="btn-pay-now" onClick={() => toast({ title: "Pay Now", description: "Online payment integration coming soon. Please visit your nearest branch to make a payment." })}>
+                      <Button variant="outline" className="gap-2" data-testid="btn-pay-now" onClick={() => setLocation(`/client/payments?policyId=${activePolicy.id}`)}>
                         <CreditCard className="h-4 w-4" />
                         Pay Now
                       </Button>

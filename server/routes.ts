@@ -8,6 +8,10 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import express from "express";
+import { registerPolicyDocumentRoute } from "./policy-document";
+import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy } from "./payment-service";
+import { getPaynowConfig } from "./paynow-config";
+import { getReceiptPdfPath } from "./receipt-pdf";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -41,10 +45,22 @@ function auditLog(req: any, action: string, entityType: string, entityId: string
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
+  const DASHBOARD_MAX_ROWS =
+    (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 20000;
+  const REPORT_EXPORT_MAX_ROWS =
+    (process.env.REPORT_EXPORT_MAX_ROWS && parseInt(process.env.REPORT_EXPORT_MAX_ROWS, 10)) || 5000;
+
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
   app.use("/uploads", express.static(uploadsDir));
+
+  // Paynow result URL (webhook) — no auth; hash verified in handler. Always return 200 to avoid Paynow retries.
+  app.post("/api/payments/paynow/result", express.urlencoded({ extended: false }), async (req, res) => {
+    const body = req.body as Record<string, string>;
+    const result = await handlePaynowResult(body);
+    return res.status(200).send(result.ok ? "OK" : "Error");
+  });
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -57,7 +73,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       const allowed = /\.(jpg|jpeg|png|gif|webp)$/i;
-      if (allowed.test(path.extname(file.originalname))) cb(null, true);
+      const hasAllowedExtension = allowed.test(path.extname(file.originalname));
+      const isImageMime = file.mimetype.startsWith("image/");
+      if (hasAllowedExtension && isImageMime) cb(null, true);
       else cb(new Error("Only image files are allowed"));
     },
   });
@@ -117,7 +135,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/users", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
     const user = req.user as any;
-    const usersList = await storage.getUsersByOrg(user.organizationId);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const usersList = await storage.getUsersByOrg(user.organizationId, limit, offset);
     const usersWithRoles = await Promise.all(usersList.map(async (u) => {
       const userRoles = await storage.getUserRoles(u.id);
       return {
@@ -272,6 +292,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     const client = await storage.createClient(parsed);
     await auditLog(req, "CREATE_CLIENT", "Client", client.id, null, client);
+    // Add client to sales pipeline as a lead
+    const lead = await storage.createLead({
+      organizationId: user.organizationId,
+      branchId: user.branchId || undefined,
+      agentId: undefined,
+      clientId: client.id,
+      firstName: client.firstName,
+      lastName: client.lastName,
+      phone: client.phone || undefined,
+      email: client.email || undefined,
+      source: "walk_in",
+      stage: "lead",
+    });
+    await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
     return res.status(201).json(client);
   });
 
@@ -359,6 +393,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/products/:id/versions", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
+    const user = req.user as any;
+    const product = await storage.getProduct(req.params.id as string);
+    if (!product || product.organizationId !== user.organizationId) return res.status(404).json({ message: "Product not found" });
     return res.json(await storage.getProductVersions(req.params.id as string));
   });
 
@@ -433,7 +470,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, limit, offset));
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
+    const filters = (fromDate || toDate || status) ? { fromDate, toDate, status } : undefined;
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, limit, offset, filters));
   });
 
   app.get("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -456,6 +497,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    const members = Array.isArray(req.body.members) ? req.body.members : [];
+    const addOnIds = Array.isArray(req.body.addOnIds) ? req.body.addOnIds : [];
+
     const parsed = insertPolicySchema.parse({
       ...req.body,
       organizationId: user.organizationId,
@@ -465,6 +509,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     const policy = await storage.createPolicy(parsed);
     await storage.createPolicyStatusHistory(policy.id, null, "draft", "Policy created", user.id);
+
+    await storage.createPolicyMember({
+      policyId: policy.id,
+      clientId: policy.clientId,
+      role: "policy_holder",
+    });
+    for (const m of members) {
+      if (m.clientId || m.dependentId) {
+        await storage.createPolicyMember({
+          policyId: policy.id,
+          clientId: m.clientId || null,
+          dependentId: m.dependentId || null,
+          role: m.role || "beneficiary",
+        });
+      }
+    }
+    if (addOnIds.length > 0) {
+      await storage.addPolicyAddOns(policy.id, addOnIds);
+    }
+
     await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
     return res.status(201).json(policy);
   });
@@ -506,7 +570,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getPaymentsByOrg(user.organizationId, limit, offset));
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
+    return res.json(await storage.getPaymentsByOrg(user.organizationId, limit, offset, filters));
   });
 
   app.get("/api/policies/:id/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -537,6 +604,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         amount: tx.amount,
         currency: tx.currency,
       });
+      await auditLog(req, "CREATE_RECEIPT", "Receipt", receipt.id, null, receipt);
     }
 
     if (tx.status === "cleared") {
@@ -559,11 +627,112 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getReceiptsByPolicy(req.params.id as string));
   });
 
+  // ─── Payment intents (Paynow) & receipts ─────────────────────
+  app.get("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 200);
+    return res.json(await storage.getPaymentIntentsByOrg(user.organizationId, limit));
+  });
+
+  app.get("/api/payment-intents/:id", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const intent = await storage.getPaymentIntentById(req.params.id);
+    if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const events = await storage.getPaymentEventsByIntentId(intent.id);
+    return res.json({ ...intent, events });
+  });
+
+  app.post("/api/payment-intents/:id/poll", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const intent = await storage.getPaymentIntentById(req.params.id);
+    if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const result = await pollPaynowStatus(intent.id);
+    return res.json(result);
+  });
+
+  app.get("/api/receipts/:id/download", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    const receipt = await storage.getPaymentReceiptById(req.params.id);
+    if (!receipt) return res.status(404).json({ message: "Not found" });
+    if (user.organizationId && receipt.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
+    const filePath = getReceiptPdfPath(receipt.pdfStorageKey);
+    if (!filePath) return res.status(404).json({ message: "Receipt PDF not available" });
+    return res.download(filePath, `receipt-${receipt.receiptNumber}.pdf`);
+  });
+
+  app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { policyId, amount, currency, notes, receivedAt } = req.body;
+    if (!policyId || amount == null) return res.status(400).json({ message: "policyId and amount required" });
+    const policy = await storage.getPolicy(policyId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    const today = new Date().toISOString().split("T")[0];
+    const tx = await storage.createPaymentTransaction({
+      organizationId: user.organizationId,
+      policyId,
+      clientId: policy.clientId,
+      amount: String(amount),
+      currency: currency || policy.currency,
+      paymentMethod: "cash",
+      status: "cleared",
+      reference: `CASH-${Date.now()}`,
+      receivedAt: receivedAt ? new Date(receivedAt) : new Date(),
+      postedDate: today,
+      valueDate: today,
+      notes: notes || null,
+      recordedBy: user.id,
+    });
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    const receipt = await storage.createPaymentReceipt({
+      organizationId: user.organizationId,
+      receiptNumber,
+      paymentIntentId: null,
+      policyId,
+      clientId: policy.clientId,
+      amount: String(amount),
+      currency: currency || policy.currency,
+      paymentChannel: "cash",
+      issuedByUserId: user.id,
+      status: "issued",
+      printFormat: "thermal_80mm",
+      metadataJson: { transactionId: tx.id, notes },
+    });
+    const { generateReceiptPdf } = await import("./receipt-pdf");
+    const pdfPath = await generateReceiptPdf(receipt.id);
+    if (pdfPath) await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath });
+    await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", receipt.id, null, receipt);
+    return res.status(201).json({ transaction: tx, receipt });
+  });
+
+  app.post("/api/admin/receipts/reprint", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { receiptId } = req.body;
+    if (!receiptId) return res.status(400).json({ message: "receiptId required" });
+    const receipt = await storage.getPaymentReceiptById(receiptId);
+    if (!receipt || receipt.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    if (receipt.paymentIntentId) {
+      await storage.createPaymentEvent({
+        paymentIntentId: receipt.paymentIntentId,
+        organizationId: user.organizationId,
+        type: "reprint",
+        payloadJson: { receiptId },
+        actorType: "admin",
+        actorId: user.id,
+      });
+    }
+    await auditLog(req, "RECEIPT_REPRINT", "PaymentReceipt", receiptId, null, { receiptId });
+    return res.json({ message: "Reprint logged" });
+  });
+
   // ─── Cashups ────────────────────────────────────────────────
 
   app.get("/api/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getCashups(user.organizationId));
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const userId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
+    const filters = (fromDate || toDate || userId) ? { fromDate, toDate, preparedBy: userId } : undefined;
+    return res.json(await storage.getCashups(user.organizationId, 100, filters));
   });
 
   app.post("/api/cashups", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -584,7 +753,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getClaimsByOrg(user.organizationId, limit, offset));
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
+    return res.json(await storage.getClaimsByOrg(user.organizationId, limit, offset, filters));
   });
 
   app.get("/api/claims/:id", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
@@ -650,7 +822,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getFuneralCasesByOrg(user.organizationId, limit, offset));
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
+    return res.json(await storage.getFuneralCasesByOrg(user.organizationId, limit, offset, filters));
   });
 
   app.get("/api/funeral-cases/:id", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
@@ -776,7 +951,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getExpenditures(user.organizationId, limit, offset));
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
+    return res.json(await storage.getExpenditures(user.organizationId, limit, offset, filters));
   });
 
   app.post("/api/expenditures", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -889,9 +1067,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const code = String(req.params.code);
     const orgs = await storage.getOrganizations();
     if (orgs.length === 0) return res.status(404).json({ error: "Not found" });
-    const allUsers = await storage.getUsersByOrg(orgs[0].id);
-    const agent = allUsers.find((u: any) => u.referralCode === code);
-    if (!agent) return res.status(404).json({ error: "Agent not found" });
+    const agent = await storage.getUserByReferralCode(code);
+    if (!agent || agent.organizationId !== orgs[0].id) return res.status(404).json({ error: "Agent not found" });
     return res.json({ name: agent.displayName || agent.email, referralCode: code });
   });
 
@@ -927,7 +1104,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = parseInt(String(req.query.limit) || "100");
     const offset = parseInt(String(req.query.offset) || "0");
-    return res.json(await storage.getChibikhuluReceivables(user.organizationId, limit, offset));
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
+    return res.json(await storage.getChibikhuluReceivables(user.organizationId, limit, offset, filters));
   });
 
   app.get("/api/chibikhulu/summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -1025,7 +1205,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, 10000, 0);
+    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const breakdown: Record<string, number> = {};
     allPolicies.forEach((p: any) => {
       breakdown[p.status] = (breakdown[p.status] || 0) + 1;
@@ -1035,7 +1215,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const allLeads = await storage.getLeadsByOrg(user.organizationId, 10000, 0);
+    const allLeads = await storage.getLeadsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const stages: Record<string, number> = {};
     allLeads.forEach((l: any) => {
       stages[l.stage] = (stages[l.stage] || 0) + 1;
@@ -1045,7 +1225,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const activePolicies = await storage.getPoliciesByOrg(user.organizationId, 100000, 0);
+    const activePolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const active = activePolicies.filter((p: any) => p.status === "active");
     let totalMembers = 0;
     for (const p of active) {
@@ -1057,8 +1237,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     const allProducts = await storage.getProductsByOrg(user.organizationId);
-    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, 100000, 0);
-    const allPayments = await storage.getPaymentsByOrg(user.organizationId, 100000, 0);
+    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const allPayments = await storage.getPaymentsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
 
     const policyByProduct: Record<string, { total: number; active: number; lapsed: number }> = {};
     allPolicies.forEach((p: any) => {
@@ -1090,7 +1270,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, 100000, 0);
+    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const total = allPolicies.length;
     const active = allPolicies.filter((p: any) => p.status === "active").length;
     const lapsed = allPolicies.filter((p: any) => p.status === "lapsed").length;
@@ -1126,201 +1306,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(204).send();
   });
 
-  // ─── Policy Document PDF ───────────────────────────────────
-
-  app.get("/api/policies/:id/document", requireAuth, requireTenantScope, async (req, res) => {
-    const user = req.user as any;
-    const policy = await storage.getPolicy(req.params.id as string);
-    if (!policy || policy.organizationId !== user.organizationId) {
-      return res.status(404).json({ message: "Policy not found" });
-    }
-
-    const org = await storage.getOrganization(policy.organizationId);
-    const client = await storage.getClient(policy.clientId);
-    const dependentsList = await storage.getDependentsByClient(policy.clientId);
-    const terms = await storage.getTermsByOrg(policy.organizationId);
-
-    let productName = "N/A";
-    let productVersion: any = null;
-    if (policy.productVersionId) {
-      const pv = await storage.getProductVersion(policy.productVersionId);
-      if (pv) {
-        productVersion = pv;
-        const prod = await storage.getProduct(pv.productId);
-        if (prod) productName = `${prod.name} (${prod.code})`;
-      }
-    }
-
-    const doc = new PDFDocument({ size: "A4", margin: 50 });
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="Policy-${policy.policyNumber}.pdf"`);
-    doc.pipe(res);
-
-    const primaryColor = org?.primaryColor || "#2563EB";
-
-    doc.rect(0, 0, doc.page.width, 100).fill(primaryColor);
-    doc.fillColor("#FFFFFF").fontSize(22).font("Helvetica-Bold")
-      .text(org?.name || "Falakhe PMS", 50, 25, { align: "left" });
-    doc.fontSize(10).font("Helvetica")
-      .text("POLICY SCHEDULE", 50, 55, { align: "left" });
-
-    const headerRight: string[] = [];
-    if (org?.address) headerRight.push(org.address);
-    if (org?.phone) headerRight.push(`Tel: ${org.phone}`);
-    if (org?.email) headerRight.push(org.email);
-    if (org?.website) headerRight.push(org.website);
-    if (headerRight.length > 0) {
-      doc.fontSize(8).text(headerRight.join(" | "), 50, 75, { align: "right", width: doc.page.width - 100 });
-    }
-
-    let y = 120;
-
-    doc.fillColor("#000000").fontSize(16).font("Helvetica-Bold")
-      .text("Policy Certificate", 50, y);
-    y += 25;
-
-    doc.fontSize(9).font("Helvetica").fillColor("#666666")
-      .text(`Date Issued: ${new Date().toLocaleDateString("en-GB")}`, 50, y);
-    y += 20;
-
-    // Policy Details
-    doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Policy Details", 50, y);
-    y += 5;
-    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
-    y += 20;
-
-    const policyFields = [
-      ["Policy Number", policy.policyNumber],
-      ["Status", (policy.status || "draft").toUpperCase()],
-      ["Product", productName],
-      ["Currency", policy.currency],
-      ["Premium Amount", `${policy.currency} ${parseFloat(policy.premiumAmount).toFixed(2)}`],
-      ["Payment Schedule", (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() + (policy.paymentSchedule || "monthly").slice(1)],
-      ["Effective Date", policy.effectiveDate || "Not set"],
-      ["Waiting Period End", policy.waitingPeriodEndDate || "N/A"],
-    ];
-
-    doc.font("Helvetica").fontSize(9).fillColor("#000000");
-    for (const [label, value] of policyFields) {
-      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-      doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-      y += 15;
-    }
-    y += 10;
-
-    // Principal Member Details
-    if (client) {
-      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Principal Member", 50, y);
-      y += 5;
-      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
-      y += 20;
-
-      const fullName = [client.title, client.firstName, client.lastName].filter(Boolean).join(" ");
-      const clientFields = [
-        ["Full Name", fullName],
-        ["National ID", client.nationalId || "—"],
-        ["Date of Birth", client.dateOfBirth || "—"],
-        ["Gender", client.gender ? client.gender.charAt(0).toUpperCase() + client.gender.slice(1) : "—"],
-        ["Marital Status", client.maritalStatus || "—"],
-        ["Phone", client.phone || "—"],
-        ["Email", client.email || "—"],
-        ["Address", client.address || "—"],
-      ];
-
-      doc.font("Helvetica").fontSize(9).fillColor("#000000");
-      for (const [label, value] of clientFields) {
-        doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-        doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-        y += 15;
-      }
-      y += 10;
-    }
-
-    // Dependents
-    if (dependentsList.length > 0) {
-      if (y > 620) { doc.addPage(); y = 50; }
-      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Dependents / Beneficiaries", 50, y);
-      y += 5;
-      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
-      y += 20;
-
-      doc.font("Helvetica-Bold").fontSize(8).fillColor("#333333");
-      doc.text("Name", 50, y, { width: 140 });
-      doc.text("Relationship", 195, y, { width: 80 });
-      doc.text("National ID", 280, y, { width: 90 });
-      doc.text("DOB", 375, y, { width: 70 });
-      doc.text("Gender", 450, y, { width: 60 });
-      y += 14;
-      doc.moveTo(50, y).lineTo(545, y).strokeColor("#CCCCCC").lineWidth(0.5).stroke();
-      y += 4;
-
-      doc.font("Helvetica").fontSize(8).fillColor("#000000");
-      for (const dep of dependentsList) {
-        if (y > 750) { doc.addPage(); y = 50; }
-        doc.text(`${dep.firstName} ${dep.lastName}`, 50, y, { width: 140 });
-        doc.text(dep.relationship, 195, y, { width: 80 });
-        doc.text(dep.nationalId || "—", 280, y, { width: 90 });
-        doc.text(dep.dateOfBirth || "—", 375, y, { width: 70 });
-        doc.text(dep.gender ? dep.gender.charAt(0).toUpperCase() + dep.gender.slice(1) : "—", 450, y, { width: 60 });
-        y += 14;
-      }
-      y += 10;
-    }
-
-    // Product Coverage Details
-    if (productVersion) {
-      if (y > 620) { doc.addPage(); y = 50; }
-      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Coverage Details", 50, y);
-      y += 5;
-      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
-      y += 20;
-
-      const covFields = [
-        ["Waiting Period", `${productVersion.waitingPeriodDays} days`],
-        ["Grace Period", `${productVersion.gracePeriodDays} days`],
-        ["Eligible Age Range", `${productVersion.eligibilityMinAge} - ${productVersion.eligibilityMaxAge} years`],
-        ["Dependent Max Age", `${productVersion.dependentMaxAge} years`],
-      ];
-
-      doc.font("Helvetica").fontSize(9).fillColor("#000000");
-      for (const [label, value] of covFields) {
-        doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-        doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-        y += 15;
-      }
-      y += 10;
-    }
-
-    // Terms and Conditions
-    if (terms.length > 0) {
-      if (y > 500) { doc.addPage(); y = 50; }
-      doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Terms and Conditions", 50, y);
-      y += 5;
-      doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
-      y += 20;
-
-      for (const term of terms) {
-        if (y > 700) { doc.addPage(); y = 50; }
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#000000").text(term.title, 50, y);
-        y += 14;
-        doc.font("Helvetica").fontSize(8).fillColor("#333333").text(term.content, 50, y, {
-          width: 495,
-          lineGap: 3,
-        });
-        y = doc.y + 12;
-      }
-    }
-
-    // Footer
-    if (y > 700) { doc.addPage(); y = 50; }
-    y = Math.max(y, 700);
-    doc.moveTo(50, y).lineTo(545, y).strokeColor("#CCCCCC").lineWidth(0.5).stroke();
-    y += 8;
-    doc.font("Helvetica").fontSize(7).fillColor("#999999")
-      .text(org?.footerText || `${org?.name || "Falakhe PMS"} — All rights reserved`, 50, y, { align: "center", width: 495 });
-
-    doc.end();
-  });
+  registerPolicyDocumentRoute(app);
 
   // ─── Add-ons by org ─────────────────────────────────────────
 
@@ -1331,9 +1317,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Reports CSV Export ────────────────────────────────────
 
+  const parseReportFilters = (q: any) => {
+    const fromDate = typeof q.fromDate === "string" && q.fromDate ? q.fromDate : undefined;
+    const toDate = typeof q.toDate === "string" && q.toDate ? q.toDate : undefined;
+    const userId = typeof q.userId === "string" && q.userId ? q.userId : undefined;
+    return { fromDate, toDate, userId };
+  };
+
+  app.get("/api/reports/reinstatements", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    const list = await storage.getReinstatementHistory(user.organizationId, filters);
+    return res.json(list);
+  });
+
+  app.get("/api/reports/activations", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getActivationHistory(user.organizationId, filters));
+  });
+  app.get("/api/reports/active-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "active" }));
+  });
+  app.get("/api/reports/awaiting-payments", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["active", "grace"] }));
+  });
+  app.get("/api/reports/overdue", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
+  });
+  app.get("/api/reports/pre-lapse", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
+  });
+  app.get("/api/reports/lapsed", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "lapsed" }));
+  });
+  app.get("/api/reports/issued-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["pending", "active", "grace", "lapsed", "reinstatement_pending", "cancelled"] }));
+  });
+  app.get("/api/reports/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...filters, preparedBy: filters.userId }));
+  });
+
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     const reportType = req.params.type as string;
+    const reportFilters = parseReportFilters(req.query);
 
     try {
       let rows: any[] = [];
@@ -1341,25 +1383,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       switch (reportType) {
         case "policies": {
-          rows = await storage.getPoliciesByOrg(user.organizationId, 5000, 0);
+          rows = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
           rows = rows.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
           break;
         }
         case "claims": {
-          rows = await storage.getClaimsByOrg(user.organizationId, 5000, 0);
+          rows = await storage.getClaimsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = ["Claim Number", "Type", "Status", "Deceased Name", "Created"];
           rows = rows.map((r: any) => [r.claimNumber, r.claimType, r.status, r.deceasedName || "", r.createdAt]);
           break;
         }
         case "payments": {
-          rows = await storage.getPaymentsByOrg(user.organizationId, 5000, 0);
+          rows = await storage.getPaymentsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = ["Reference", "Amount", "Currency", "Method", "Status", "Received At"];
           rows = rows.map((r: any) => [r.reference || "", r.amount, r.currency, r.paymentMethod, r.status, r.receivedAt]);
           break;
         }
         case "funerals": {
-          const cases = await storage.getFuneralCasesByOrg(user.organizationId);
+          const cases = await storage.getFuneralCasesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = ["Case Number", "Deceased Name", "Status", "Funeral Date"];
           rows = cases.map((r: any) => [r.caseNumber, r.deceasedName, r.status, r.funeralDate || ""]);
           break;
@@ -1371,9 +1413,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "expenditures": {
-          const exps = await storage.getExpenditures(user.organizationId, 5000, 0);
-          headers = ["Description", "Category", "Amount", "Currency", "Date", "Status"];
-          rows = exps.map((r: any) => [r.description, r.category, r.amount, r.currency, r.expenseDate, r.status]);
+          const exps = await storage.getExpenditures(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = ["Description", "Category", "Amount", "Currency", "Date", "Receipt Ref"];
+          rows = exps.map((r: any) => [r.description, r.category, r.amount, r.currency, r.spentAt || r.createdAt, r.receiptRef || ""]);
           break;
         }
         case "payroll": {
@@ -1389,9 +1431,58 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "chibikhulu": {
-          const receivables = await storage.getChibikhuluReceivables(user.organizationId, 5000, 0);
+          const receivables = await storage.getChibikhuluReceivables(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = ["Description", "Amount", "Currency", "Settled", "Created"];
           rows = receivables.map((r: any) => [r.description, r.amount, r.currency, r.isSettled ? "Yes" : "No", r.createdAt]);
+          break;
+        }
+        case "reinstatements": {
+          const reinstatements = await storage.getReinstatementHistory(user.organizationId, reportFilters);
+          headers = ["Policy Number", "Client", "Previous Status", "Reinstated At", "Reason", "Current Status"];
+          rows = reinstatements.map((r: any) => [r.policyNumber, r.clientName, r.fromStatus || "", r.reinstatedAt, r.reason || "", r.currentStatus]);
+          break;
+        }
+        case "activations": {
+          const activations = await storage.getActivationHistory(user.organizationId, reportFilters);
+          headers = ["Policy Number", "Client", "Previous Status", "Activated At", "Reason", "Current Status"];
+          rows = activations.map((r: any) => [r.policyNumber, r.clientName, r.fromStatus || "", r.activatedAt, r.reason || "", r.currentStatus]);
+          break;
+        }
+        case "active-policies": {
+          const active = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "active" });
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
+          rows = active.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "awaiting-payments": {
+          const awaiting = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
+          rows = awaiting.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "overdue":
+        case "pre-lapse": {
+          const grace = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Grace End Date", "Created"];
+          rows = grace.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.graceEndDate || "", r.createdAt]);
+          break;
+        }
+        case "lapsed": {
+          const lapsed = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "lapsed" });
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
+          rows = lapsed.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "issued-policies": {
+          const issued = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["pending", "active", "grace", "lapsed", "reinstatement_pending", "cancelled"] });
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
+          rows = issued.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "cashups": {
+          const cashupsList = await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...reportFilters, preparedBy: reportFilters.userId });
+          headers = ["Cashup Date", "Total Amount", "Transaction Count", "Locked", "Prepared By", "Created"];
+          rows = cashupsList.map((r: any) => [r.cashupDate, r.totalAmount, r.transactionCount, r.isLocked ? "Yes" : "No", r.preparedBy, r.createdAt]);
           break;
         }
         default:
@@ -1421,7 +1512,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── ADMIN DIAGNOSTICS ─────────────────────────────────────
 
-  app.get("/api/diagnostics/health", requireAuth, async (_req, res) => {
+  app.get("/api/diagnostics/health", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (_req, res) => {
     try {
       const { pool } = await import("./db");
       let dbConnected = false;
@@ -1456,7 +1547,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/diagnostics/notification-failures", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/diagnostics/notification-failures", requireAuth, requireTenantScope, requirePermission("read:notification"), async (req, res) => {
     try {
       const user = req.user as any;
       const { pool } = await import("./db");
@@ -1478,7 +1569,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/diagnostics/unallocated-payments", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/diagnostics/unallocated-payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     try {
       const user = req.user as any;
       const { pool } = await import("./db");
@@ -1499,7 +1590,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/diagnostics/recent-errors", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/diagnostics/recent-errors", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
     try {
       const user = req.user as any;
       const { pool } = await import("./db");

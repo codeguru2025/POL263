@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight } from "lucide-react";
+import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 export default function StaffFinance() {
@@ -34,6 +34,16 @@ export default function StaffFinance() {
   const [settlementMethod, setSettlementMethod] = useState("bank");
   const [settlementReference, setSettlementReference] = useState("");
 
+  const [showCashReceiptDialog, setShowCashReceiptDialog] = useState(false);
+  const [cashReceiptPolicySearch, setCashReceiptPolicySearch] = useState("");
+  const [cashReceiptSelectedPolicy, setCashReceiptSelectedPolicy] = useState<any>(null);
+  const [cashReceiptAmount, setCashReceiptAmount] = useState("");
+  const [cashReceiptCurrency, setCashReceiptCurrency] = useState("USD");
+  const [cashReceiptNotes, setCashReceiptNotes] = useState("");
+  const [cashReceiptReceivedAt, setCashReceiptReceivedAt] = useState(new Date().toISOString().slice(0, 16));
+  const [reprintReceiptId, setReprintReceiptId] = useState("");
+  const [pollingIntentId, setPollingIntentId] = useState<string | null>(null);
+
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
   const { data: cashups = [] } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
   const { data: commissionPlans = [] } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
@@ -43,6 +53,7 @@ export default function StaffFinance() {
   const { data: chibReceivables = [] } = useQuery<any[]>({ queryKey: ["/api/chibikhulu/receivables"] });
   const { data: chibSummary } = useQuery<{ totalDue: string; totalSettled: string; outstanding: string }>({ queryKey: ["/api/chibikhulu/summary"] });
   const { data: settlements = [] } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
+  const { data: paymentIntents = [], isLoading: loadingIntents, refetch: refetchIntents } = useQuery<any[]>({ queryKey: ["/api/payment-intents"] });
 
   const clientMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -62,6 +73,19 @@ export default function StaffFinance() {
       );
     }).slice(0, 8);
   }, [policySearch, policies, clientMap]);
+
+  const filteredPoliciesForCash = useMemo(() => {
+    if (!cashReceiptPolicySearch.trim()) return [];
+    const q = cashReceiptPolicySearch.toLowerCase();
+    return policies.filter((p: any) => {
+      const client = clientMap[p.clientId];
+      const clientName = client ? `${client.firstName} ${client.lastName}`.toLowerCase() : "";
+      return (
+        (p.policyNumber || "").toLowerCase().includes(q) ||
+        clientName.includes(q)
+      );
+    }).slice(0, 8);
+  }, [cashReceiptPolicySearch, policies, clientMap]);
 
   const totalCleared = useMemo(() => {
     return payments
@@ -83,6 +107,57 @@ export default function StaffFinance() {
       toast({ title: "Payment recorded & receipt generated", description: `Receipt for ${selectedPolicy?.policyNumber || "policy"}` });
     },
     onError: (err: any) => toast({ title: "Payment failed", description: err.message, variant: "destructive" }),
+  });
+
+  const cashReceiptMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/receipts/cash", {
+        policyId: cashReceiptSelectedPolicy?.id,
+        amount: cashReceiptAmount,
+        currency: cashReceiptCurrency,
+        notes: cashReceiptNotes || undefined,
+        receivedAt: cashReceiptReceivedAt ? new Date(cashReceiptReceivedAt).toISOString() : undefined,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-intents"] });
+      setShowCashReceiptDialog(false);
+      setCashReceiptSelectedPolicy(null);
+      setCashReceiptAmount("");
+      setCashReceiptNotes("");
+      setCashReceiptReceivedAt(new Date().toISOString().slice(0, 16));
+      toast({ title: "Cash receipt recorded", description: "Receipt generated." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const reprintMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/receipts/reprint", { receiptId: reprintReceiptId });
+      return res.json();
+    },
+    onSuccess: () => {
+      setReprintReceiptId("");
+      toast({ title: "Reprint logged", description: "Audit log updated." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const pollIntentMutation = useMutation({
+    mutationFn: async (intentId: string) => {
+      const res = await apiRequest("POST", `/api/payment-intents/${intentId}/poll`);
+      return res.json();
+    },
+    onMutate: (intentId) => setPollingIntentId(intentId),
+    onSettled: () => setPollingIntentId(null),
+    onSuccess: (_, intentId) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-intents"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+      toast({ title: "Status updated", description: "Payment intent status refreshed." });
+    },
+    onError: (e: any) => toast({ title: "Poll failed", description: e.message, variant: "destructive" }),
   });
 
   const resetPaymentForm = () => {
@@ -250,6 +325,7 @@ export default function StaffFinance() {
         <Tabs defaultValue="payments">
           <TabsList>
             <TabsTrigger value="payments" data-testid="tab-payments">Payments & Receipts</TabsTrigger>
+            <TabsTrigger value="paynow" data-testid="tab-paynow">Paynow & Cash</TabsTrigger>
             <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>
             <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>
             <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>
@@ -308,6 +384,70 @@ export default function StaffFinance() {
                     </TableBody>
                   </Table>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="paynow">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Payment intents (Paynow)</CardTitle>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => { setShowCashReceiptDialog(true); setCashReceiptPolicySearch(""); setCashReceiptSelectedPolicy(null); setCashReceiptAmount(""); setCashReceiptCurrency("USD"); setCashReceiptNotes(""); }}>
+                      Record cash receipt
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {loadingIntents ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                ) : paymentIntents.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No payment intents yet.</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Policy</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Reference</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead className="w-[100px]">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {paymentIntents.map((pi: any) => (
+                        <TableRow key={pi.id}>
+                          <TableCell className="font-mono text-sm">{getPolicyNumber(pi.policyId)}</TableCell>
+                          <TableCell>{pi.currency} {parseFloat(pi.amount || "0").toFixed(2)}</TableCell>
+                          <TableCell>
+                            <Badge variant={pi.status === "paid" ? "default" : pi.status === "failed" ? "destructive" : "secondary"}>{pi.status}</Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{pi.merchantReference || "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{new Date(pi.createdAt).toLocaleString()}</TableCell>
+                          <TableCell>
+                            {pi.status === "pending_paynow" && (
+                              <Button variant="ghost" size="sm" disabled={pollIntentMutation.isPending && pollingIntentId === pi.id} onClick={() => pollIntentMutation.mutate(pi.id)}>
+                                {pollingIntentId === pi.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+                <Separator />
+                <div className="flex flex-wrap items-center gap-4">
+                  <Label className="text-sm">Reprint receipt</Label>
+                  <Input placeholder="Receipt ID" className="max-w-[200px]" value={reprintReceiptId} onChange={(e) => setReprintReceiptId(e.target.value)} />
+                  <Button variant="outline" size="sm" disabled={!reprintReceiptId || reprintMutation.isPending} onClick={() => reprintMutation.mutate()}>
+                    {reprintMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                    Log reprint
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -754,6 +894,85 @@ export default function StaffFinance() {
               {createPaymentMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               <Receipt className="h-4 w-4 mr-2" />
               Record Payment & Generate Receipt
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCashReceiptDialog} onOpenChange={setShowCashReceiptDialog}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Record cash receipt</DialogTitle>
+            <p className="text-sm text-muted-foreground">Record a manual cash payment and generate a receipt (no Paynow).</p>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Policy</Label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by policy number or client..."
+                    className="pl-9"
+                    value={cashReceiptPolicySearch}
+                    onChange={(e) => { setCashReceiptPolicySearch(e.target.value); if (!e.target.value) setCashReceiptSelectedPolicy(null); }}
+                  />
+                </div>
+              </div>
+              {cashReceiptPolicySearch.trim() && (
+                <ul className="border rounded-md mt-1 max-h-40 overflow-auto">
+                  {filteredPoliciesForCash.map((p: any) => {
+                    const client = clientMap[p.clientId];
+                    return (
+                      <li key={p.id}>
+                        <button
+                          type="button"
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-muted"
+                          onClick={() => { setCashReceiptSelectedPolicy(p); setCashReceiptPolicySearch(p.policyNumber); setCashReceiptAmount(p.premiumAmount || ""); setCashReceiptCurrency(p.currency || "USD"); }}
+                        >
+                          {p.policyNumber} — {client ? `${client.firstName} ${client.lastName}` : "—"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                  {filteredPoliciesForCash.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">No matches</li>}
+                </ul>
+              )}
+              {cashReceiptSelectedPolicy && <p className="text-xs text-muted-foreground mt-1">Selected: {cashReceiptSelectedPolicy.policyNumber}</p>}
+            </div>
+            <div>
+              <Label>Amount</Label>
+              <Input type="number" step="0.01" placeholder="0.00" value={cashReceiptAmount} onChange={(e) => setCashReceiptAmount(e.target.value)} />
+            </div>
+            <div>
+              <Label>Currency</Label>
+              <Select value={cashReceiptCurrency} onValueChange={setCashReceiptCurrency}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="ZWL">ZWL</SelectItem>
+                  <SelectItem value="ZAR">ZAR</SelectItem>
+                  <SelectItem value="BWP">BWP</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Notes (optional)</Label>
+              <Input placeholder="e.g. Cash at branch" value={cashReceiptNotes} onChange={(e) => setCashReceiptNotes(e.target.value)} />
+            </div>
+            <div>
+              <Label>Received at</Label>
+              <Input type="datetime-local" value={cashReceiptReceivedAt} onChange={(e) => setCashReceiptReceivedAt(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCashReceiptDialog(false)}>Cancel</Button>
+            <Button
+              disabled={!cashReceiptSelectedPolicy || !cashReceiptAmount || parseFloat(cashReceiptAmount) <= 0 || cashReceiptMutation.isPending}
+              onClick={() => cashReceiptMutation.mutate()}
+            >
+              {cashReceiptMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Record & generate receipt
             </Button>
           </DialogFooter>
         </DialogContent>

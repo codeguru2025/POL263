@@ -162,7 +162,7 @@ export default function StaffDashboard() {
 
   const leadFunnelData = useMemo(() => {
     if (!leadFunnel) return [];
-    const order = ["captured", "contacted", "quote_generated", "application_started", "submitted", "approved", "active"];
+    const order = ["lead", "captured", "contacted", "quote_generated", "application_started", "submitted", "approved", "agreed_to_pay", "activated", "lost"];
     return order
       .filter((stage) => leadFunnel[stage] !== undefined)
       .map((stage, i) => ({

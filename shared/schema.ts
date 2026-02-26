@@ -22,7 +22,8 @@ export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   logoUrl: text("logo_url").default("/assets/logo.png"),
-  primaryColor: text("primary_color").default("#2563EB"),
+  signatureUrl: text("signature_url"),
+  primaryColor: text("primary_color").default("#D4AF37"),
   footerText: text("footer_text"),
   address: text("address"),
   phone: text("phone"),
@@ -160,6 +161,11 @@ export const clients = pgTable(
     email: text("email"),
     address: text("address"),
     preferredCommMethod: text("preferred_comm_method"),
+    location: text("location"),
+    sellingPoint: text("selling_point"),
+    objectionsFaced: text("objections_faced"),
+    responseToObjections: text("response_to_objections"),
+    clientFeedback: text("client_feedback"),
     passwordHash: text("password_hash"),
     securityQuestionId: uuid("security_question_id").references(() => securityQuestions.id),
     securityAnswerHash: text("security_answer_hash"),
@@ -450,6 +456,24 @@ export const policyStatusHistory = pgTable(
   (t) => [index("psh_policy_idx").on(t.policyId)]
 );
 
+export const policyAddOns = pgTable(
+  "policy_add_ons",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id, { onDelete: "cascade" }),
+    addOnId: uuid("add_on_id")
+      .notNull()
+      .references(() => addOns.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pao_policy_idx").on(t.policyId),
+    uniqueIndex("policy_add_on_unique_idx").on(t.policyId, t.addOnId),
+  ]
+);
+
 // ─── PAYMENTS & FINANCE (IMMUTABLE LEDGER) ──────────────────
 
 export const paymentTransactions = pgTable(
@@ -505,6 +529,110 @@ export const receipts = pgTable(
   (t) => [
     index("receipts_org_idx").on(t.organizationId),
     uniqueIndex("receipt_number_org_idx").on(t.receiptNumber, t.organizationId),
+  ]
+);
+
+// ─── PAYNOW PAYMENT INTENTS & EVENTS ─────────────────────────
+
+export const PAYMENT_INTENT_STATUSES = ["created", "pending_user", "pending_paynow", "paid", "failed", "cancelled", "expired"] as const;
+export const PAYMENT_PURPOSES = ["premium", "arrears", "reinstatement", "topup", "other"] as const;
+export const PAYNOW_METHODS = ["ecocash", "onemoney", "innbucks", "omari", "visa_mastercard", "unknown"] as const;
+
+export const paymentIntents = pgTable(
+  "payment_intents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id),
+    currency: text("currency").default("USD").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    purpose: text("purpose").default("premium").notNull(),
+    status: text("status").default("created").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    merchantReference: varchar("merchant_reference", { length: 255 }).notNull(),
+    paynowReference: varchar("paynow_reference", { length: 255 }),
+    paynowPollUrl: text("paynow_poll_url"),
+    paynowRedirectUrl: text("paynow_redirect_url"),
+    methodSelected: text("method_selected").default("unknown"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pi_org_idx").on(t.organizationId),
+    index("pi_client_idx").on(t.clientId),
+    index("pi_policy_idx").on(t.policyId),
+    index("pi_status_idx").on(t.status),
+    uniqueIndex("pi_idempotency_org_idx").on(t.organizationId, t.idempotencyKey),
+    uniqueIndex("pi_merchant_ref_org_idx").on(t.organizationId, t.merchantReference),
+  ]
+);
+
+export const PAYMENT_EVENT_TYPES = [
+  "initiated", "redirect_issued", "ussd_push_sent", "status_update_received", "polled",
+  "marked_paid", "marked_failed", "receipt_issued", "manual_cash_receipted", "reprint", "reconciled",
+] as const;
+
+export const paymentEvents = pgTable(
+  "payment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    paymentIntentId: uuid("payment_intent_id")
+      .notNull()
+      .references(() => paymentIntents.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    type: text("type").notNull(),
+    payloadJson: jsonb("payload_json"),
+    actorType: text("actor_type").notNull(), // client | admin | system
+    actorId: uuid("actor_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pe_intent_idx").on(t.paymentIntentId),
+    index("pe_org_idx").on(t.organizationId),
+    index("pe_created_idx").on(t.createdAt),
+  ]
+);
+
+export const paymentReceipts = pgTable(
+  "payment_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    receiptNumber: text("receipt_number").notNull(),
+    paymentIntentId: uuid("payment_intent_id").references(() => paymentIntents.id),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    paymentChannel: text("payment_channel").notNull(), // paynow_ecocash | paynow_card | cash | other
+    issuedByUserId: uuid("issued_by_user_id").references(() => users.id),
+    issuedAt: timestamp("issued_at").defaultNow().notNull(),
+    pdfStorageKey: text("pdf_storage_key"),
+    printFormat: text("print_format").default("thermal_80mm"),
+    status: text("status").default("issued").notNull(), // issued | voided
+    metadataJson: jsonb("metadata_json"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pr_org_idx").on(t.organizationId),
+    index("pr_intent_idx").on(t.paymentIntentId),
+    index("pr_policy_idx").on(t.policyId),
+    uniqueIndex("pr_receipt_org_idx").on(t.receiptNumber, t.organizationId),
   ]
 );
 
@@ -1025,6 +1153,7 @@ export const leads = pgTable(
       .references(() => organizations.id),
     branchId: uuid("branch_id").references(() => branches.id),
     agentId: uuid("agent_id").references(() => users.id),
+    clientId: uuid("client_id").references(() => clients.id),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
     phone: text("phone"),
@@ -1039,6 +1168,7 @@ export const leads = pgTable(
     index("leads_org_idx").on(t.organizationId),
     index("leads_agent_idx").on(t.agentId),
     index("leads_stage_idx").on(t.stage),
+    index("leads_client_idx").on(t.clientId),
   ]
 );
 
@@ -1181,8 +1311,12 @@ export const insertAddOnSchema = createInsertSchema(addOns).omit({ id: true, cre
 export const insertAgeBandConfigSchema = createInsertSchema(ageBandConfigs).omit({ id: true, createdAt: true });
 export const insertPolicySchema = createInsertSchema(policies).omit({ id: true, createdAt: true });
 export const insertPolicyMemberSchema = createInsertSchema(policyMembers).omit({ id: true, createdAt: true });
+export const insertPolicyAddOnSchema = createInsertSchema(policyAddOns).omit({ id: true, createdAt: true });
 export const insertPaymentTransactionSchema = createInsertSchema(paymentTransactions).omit({ id: true, createdAt: true });
 export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true });
+export const insertPaymentIntentSchema = createInsertSchema(paymentIntents).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPaymentEventSchema = createInsertSchema(paymentEvents).omit({ id: true, createdAt: true });
+export const insertPaymentReceiptSchema = createInsertSchema(paymentReceipts).omit({ id: true, createdAt: true });
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
 export const insertClaimDocumentSchema = createInsertSchema(claimDocuments).omit({ id: true, uploadedAt: true });
 export const insertFuneralCaseSchema = createInsertSchema(funeralCases).omit({ id: true, createdAt: true });
@@ -1234,10 +1368,18 @@ export type InsertPolicy = z.infer<typeof insertPolicySchema>;
 export type PolicyMember = typeof policyMembers.$inferSelect;
 export type InsertPolicyMember = z.infer<typeof insertPolicyMemberSchema>;
 export type PolicyStatusHistoryEntry = typeof policyStatusHistory.$inferSelect;
+export type PolicyAddOn = typeof policyAddOns.$inferSelect;
+export type InsertPolicyAddOn = z.infer<typeof insertPolicyAddOnSchema>;
 export type PaymentTransaction = typeof paymentTransactions.$inferSelect;
 export type InsertPaymentTransaction = z.infer<typeof insertPaymentTransactionSchema>;
 export type Receipt = typeof receipts.$inferSelect;
 export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
+export type PaymentIntent = typeof paymentIntents.$inferSelect;
+export type InsertPaymentIntent = z.infer<typeof insertPaymentIntentSchema>;
+export type PaymentEvent = typeof paymentEvents.$inferSelect;
+export type InsertPaymentEvent = z.infer<typeof insertPaymentEventSchema>;
+export type PaymentReceipt = typeof paymentReceipts.$inferSelect;
+export type InsertPaymentReceipt = z.infer<typeof insertPaymentReceiptSchema>;
 export type Claim = typeof claims.$inferSelect;
 export type InsertClaim = z.infer<typeof insertClaimSchema>;
 export type ClaimDocument = typeof claimDocuments.$inferSelect;

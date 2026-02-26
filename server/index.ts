@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -9,6 +10,8 @@ import { requestIdMiddleware, structuredLog } from "./logger";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
+import { pool } from "./db";
+import csurf from "csurf";
 
 const app = express();
 const httpServer = createServer(app);
@@ -40,12 +43,41 @@ app.use(requestIdMiddleware);
 
 app.use(
   express.json({
+    limit: process.env.JSON_BODY_LIMIT || "1mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   })
 );
 app.use(express.urlencoded({ extended: false }));
+
+if (process.env.ENABLE_CSRF_PROTECTION === "true") {
+  const csrfProtection = csurf({
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    },
+  });
+
+  app.use(csrfProtection);
+
+  app.use((req, res, next) => {
+    try {
+      const token = (req as any).csrfToken?.();
+      if (token) {
+        res.cookie("XSRF-TOKEN", token, {
+          httpOnly: false,
+          sameSite: "lax",
+          secure: process.env.NODE_ENV === "production",
+        });
+      }
+    } catch {
+      // ignore token generation errors; csurf middleware will handle invalid/missing tokens
+    }
+    next();
+  });
+}
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -56,11 +88,17 @@ const authLimiter = rateLimit({
 });
 app.use("/api/auth", authLimiter);
 app.use("/api/client-auth", authLimiter);
+app.use("/api/security-questions", authLimiter);
+app.use("/api/agents/by-referral", authLimiter);
 
-let dbReady = false;
-
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", dbReady });
+app.get("/api/health", async (_req, res) => {
+  try {
+    const result = await pool.query("SELECT 1");
+    const dbConnected = result.rowCount === 1;
+    return res.json({ status: "ok", dbConnected });
+  } catch {
+    return res.status(503).json({ status: "degraded", dbConnected: false });
+  }
 });
 
 setupAuth(app);
@@ -130,24 +168,39 @@ app.use((req, res, next) => {
   httpServer.listen(
     {
       port,
-      host: "0.0.0.0",
-      reusePort: true,
+      host: process.env.HOST || "127.0.0.1",
     },
     async () => {
       structuredLog("info", `Falakhe PMS serving on port ${port}`);
 
-      try {
-        structuredLog("info", "Pushing database schema...");
-        const { execSync } = await import("child_process");
-        execSync("yes '' | npx drizzle-kit push", { stdio: ["pipe", "inherit", "inherit"], timeout: 60000 });
-        structuredLog("info", "Database schema pushed successfully.");
+      if (process.env.RUN_DB_BOOTSTRAP === "true") {
+        try {
+          structuredLog("info", "Pushing database schema (RUN_DB_BOOTSTRAP=true)...");
+          const { spawn } = await import("child_process");
+          const push = spawn("npx", ["drizzle-kit", "push"], {
+            stdio: ["pipe", "inherit", "inherit"],
+            shell: true,
+            env: { ...process.env },
+          });
+          push.stdin?.write("y\n");
+          push.stdin?.end();
+          await new Promise<void>((resolve, reject) => {
+            push.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`drizzle-kit push exited ${code}`))));
+            push.on("error", reject);
+          });
+          structuredLog("info", "Database schema pushed successfully.");
 
-        structuredLog("info", "Starting database seed...");
-        await seedDatabase();
-        structuredLog("info", "Database seed completed successfully.");
-        dbReady = true;
-      } catch (err) {
-        structuredLog("error", "Database initialization failed", { error: String(err) });
+          structuredLog("info", "Starting database seed...");
+          await seedDatabase();
+          structuredLog("info", "Database seed completed successfully.");
+        } catch (err) {
+          structuredLog("error", "Database initialization failed", { error: String(err) });
+        }
+      } else {
+        structuredLog(
+          "info",
+          "Skipping automatic database migrations/seed. Set RUN_DB_BOOTSTRAP=true to enable on startup.",
+        );
       }
     }
   );

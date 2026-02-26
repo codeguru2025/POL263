@@ -30,7 +30,16 @@ import StaffUsers from "@/pages/staff/users";
 import ClientLogin from "@/pages/client/login";
 import ClientClaim from "@/pages/client/claim";
 import ClientDashboard from "@/pages/client/dashboard";
+import ClientPayments from "@/pages/client/payments";
 import JoinPage from "@/pages/join";
+import { useLocation } from "wouter";
+import { useEffect } from "react";
+
+function PaynowReturnRedirect() {
+  const [, setLocation] = useLocation();
+  useEffect(() => { setLocation("/client/payments?returned=1"); }, [setLocation]);
+  return null;
+}
 
 function Router() {
   return (
@@ -62,6 +71,10 @@ function Router() {
       <Route path="/client/login" component={ClientLogin} />
       <Route path="/client/claim" component={ClientClaim} />
       <Route path="/client" component={ClientDashboard} />
+      <Route path="/client/payments" component={ClientPayments} />
+      <Route path="/client/payments/return">
+        <PaynowReturnRedirect />
+      </Route>
       
       <Route component={NotFound} />
     </Switch>

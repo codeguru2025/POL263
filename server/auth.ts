@@ -10,7 +10,17 @@ import { structuredLog } from "./logger";
 const PgSession = connectPgSimple(session);
 
 export function setupAuth(app: Express) {
-  const sessionSecret = process.env.SESSION_SECRET || "falakhe-pms-session-secret-change-in-prod";
+  const rawSessionSecret = process.env.SESSION_SECRET;
+
+  if (!rawSessionSecret && process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET must be set in production for secure session handling.");
+  }
+
+  if (!rawSessionSecret && process.env.NODE_ENV !== "production") {
+    structuredLog("warn", "SESSION_SECRET is not set. Using a weak default; set SESSION_SECRET in your environment for better security.");
+  }
+
+  const sessionSecret = rawSessionSecret || "falakhe-pms-session-secret-change-in-dev-only";
 
   if (process.env.NODE_ENV === "production") {
     app.set("trust proxy", 1);
@@ -121,48 +131,54 @@ export function setupAuth(app: Express) {
       }
     );
   } else {
-    structuredLog("warn", "Google OAuth credentials not configured. Using demo auth mode.");
+    structuredLog("warn", "Google OAuth credentials not configured.");
   }
 
-  // Demo login for development (when Google OAuth is not configured)
-  app.post("/api/auth/demo-login", async (req: Request, res: Response) => {
-    if (googleClientId && googleClientSecret) {
-      return res.status(403).json({ message: "Demo login disabled when Google OAuth is configured" });
-    }
+  const demoLoginEnabled =
+    process.env.ENABLE_DEMO_LOGIN === "true" && process.env.NODE_ENV !== "production";
 
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: "Email is required" });
-    }
-
-    try {
-      let user = await storage.getUserByEmail(email);
-      if (!user) {
-        user = await storage.createUser({
-          email,
-          displayName: email.split("@")[0],
-          isActive: true,
-        });
+  if (demoLoginEnabled) {
+    app.post("/api/auth/demo-login", async (req: Request, res: Response) => {
+      if (googleClientId && googleClientSecret) {
+        return res.status(403).json({ message: "Demo login disabled when Google OAuth is configured" });
       }
 
-      if (!user.isActive) {
-        return res.status(403).json({ message: "Account is disabled" });
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
       }
 
-      req.login(user, (err) => {
-        if (err) {
-          return res.status(500).json({ message: "Login failed" });
+      try {
+        let user = await storage.getUserByEmail(email);
+        if (!user) {
+          user = await storage.createUser({
+            email,
+            displayName: email.split("@")[0],
+            isActive: true,
+          });
         }
-        structuredLog("info", "Demo login successful", {
-          userId: user.id,
-          email: user.email,
+
+        if (!user.isActive) {
+          return res.status(403).json({ message: "Account is disabled" });
+        }
+
+        req.login(user, (err) => {
+          if (err) {
+            return res.status(500).json({ message: "Login failed" });
+          }
+          structuredLog("info", "Demo login successful", {
+            userId: user.id,
+            email: user.email,
+          });
+          return res.json({ user: sanitizeUser(user) });
         });
-        return res.json({ user: sanitizeUser(user) });
-      });
-    } catch (err) {
-      return res.status(500).json({ message: "Internal server error" });
-    }
-  });
+      } catch (err) {
+        return res.status(500).json({ message: "Internal server error" });
+      }
+    });
+  } else if (process.env.NODE_ENV !== "production") {
+    structuredLog("info", "Demo login endpoint disabled. Set ENABLE_DEMO_LOGIN=true to enable in non-production environments.");
+  }
 
   app.post("/api/auth/logout", (req, res) => {
     req.logout((err) => {

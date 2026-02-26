@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
+import { getApiBase } from "@/lib/queryClient";
 import { Loader2 } from "lucide-react";
 
 export default function StaffLogin() {
@@ -27,7 +28,7 @@ export default function StaffLogin() {
   const authError = params.get("error");
 
   const handleGoogleLogin = () => {
-    window.location.href = "/api/auth/google";
+    window.location.href = getApiBase() + "/api/auth/google";
   };
 
   return (
@@ -35,7 +36,7 @@ export default function StaffLogin() {
       <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-8">
           <div className="mx-auto bg-primary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6">
-            <img src="/assets/logo.png" alt="Logo" className="w-10 h-10 rounded-lg" />
+            <img src="/assets/logo.png" alt="Chibikhulu Logo" className="w-10 h-10 rounded-lg" />
           </div>
           <CardTitle className="text-3xl font-display">Staff Portal</CardTitle>
           <CardDescription className="text-base mt-2">

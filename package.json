@@ -5,13 +5,30 @@
   "license": "MIT",
   "scripts": {
     "dev:client": "vite dev --port 5000",
-    "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev": "cross-env NODE_ENV=development tsx server/index.ts",
+    "dev:insecure": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 NODE_ENV=development tsx server/index.ts",
     "build": "tsx script/build.ts",
-    "start": "NODE_ENV=production node dist/index.cjs",
+    "build:web": "tsx script/build.ts",
+    "build:client": "vite build",
+    "start": "cross-env NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "db:seed": "tsx script/run-seed.ts",
+    "db:setup": "npm run db:push && npm run db:seed",
+    "db:setup:supabase": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 npm run db:setup",
+    "setup": "npm install && npm run build && npx cap sync",
+    "cap:sync": "npm run build && npx cap sync",
+    "cap:ios": "npx cap open ios",
+    "cap:android": "npx cap open android",
+    "generate-secret": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/cli": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@radix-ui/react-accordion": "^1.2.12",
@@ -54,6 +71,7 @@
     "cookie-parser": "^1.4.7",
     "csurf": "^1.11.0",
     "date-fns": "^3.6.0",
+    "dotenv": "^17.3.1",
     "drizzle-orm": "^0.39.3",
     "drizzle-zod": "^0.7.0",
     "embla-carousel-react": "^8.6.0",
@@ -105,13 +123,15 @@
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^10.1.0",
     "drizzle-kit": "^0.31.4",
     "esbuild": "^0.25.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",
-    "vite": "^7.1.9"
+    "vite": "^7.1.9",
+    "vitest": "^2.1.0"
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"

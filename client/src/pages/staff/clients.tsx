@@ -9,10 +9,11 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 import {
   Plus,
   Search,
@@ -46,6 +47,11 @@ interface Client {
   email: string | null;
   address: string | null;
   preferredCommMethod: string | null;
+  location: string | null;
+  sellingPoint: string | null;
+  objectionsFaced: string | null;
+  responseToObjections: string | null;
+  clientFeedback: string | null;
   activationCode: string | null;
   isEnrolled: boolean;
   isActive: boolean;
@@ -90,6 +96,11 @@ interface ClientFormData {
   email: string;
   address: string;
   preferredCommMethod: string;
+  location: string;
+  sellingPoint: string;
+  objectionsFaced: string;
+  responseToObjections: string;
+  clientFeedback: string;
 }
 
 interface DependentFormData {
@@ -113,6 +124,11 @@ const emptyForm: ClientFormData = {
   email: "",
   address: "",
   preferredCommMethod: "",
+  location: "",
+  sellingPoint: "",
+  objectionsFaced: "",
+  responseToObjections: "",
+  clientFeedback: "",
 };
 
 const TITLES = ["Mr", "Mrs", "Ms", "Miss", "Dr", "Prof", "Rev", "Chief"];
@@ -176,7 +192,7 @@ export default function StaffClients() {
   const { data: selectedClient, isLoading: isLoadingDetail } = useQuery<Client>({
     queryKey: ["/api/clients", selectedClientId],
     queryFn: async () => {
-      const res = await fetch(`/api/clients/${selectedClientId}`, { credentials: "include" });
+      const res = await fetch(getApiBase() + `/api/clients/${selectedClientId}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch client");
       return res.json();
     },
@@ -191,7 +207,7 @@ export default function StaffClients() {
   const { data: clientDependents, isLoading: isLoadingDeps } = useQuery<Dependent[]>({
     queryKey: ["/api/clients", selectedClientId, "dependents"],
     queryFn: async () => {
-      const res = await fetch(`/api/clients/${selectedClientId}/dependents`, { credentials: "include" });
+      const res = await fetch(getApiBase() + `/api/clients/${selectedClientId}/dependents`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch dependents");
       return res.json();
     },
@@ -326,6 +342,11 @@ export default function StaffClients() {
       email: client.email || "",
       address: client.address || "",
       preferredCommMethod: client.preferredCommMethod || "",
+      location: client.location ?? "",
+      sellingPoint: client.sellingPoint ?? "",
+      objectionsFaced: client.objectionsFaced ?? "",
+      responseToObjections: client.responseToObjections ?? "",
+      clientFeedback: client.clientFeedback ?? "",
     });
     setShowEditDialog(true);
   };
@@ -439,6 +460,36 @@ export default function StaffClients() {
                       <p className="text-muted-foreground">Address</p>
                       <p className="font-medium" data-testid="text-detail-address">{selectedClient.address || "—"}</p>
                     </div>
+                    {selectedClient.location && (
+                      <div className="col-span-2">
+                        <p className="text-muted-foreground">Location</p>
+                        <p className="font-medium">{selectedClient.location}</p>
+                      </div>
+                    )}
+                    {selectedClient.sellingPoint && (
+                      <div className="col-span-2">
+                        <p className="text-muted-foreground">Selling point</p>
+                        <p className="font-medium whitespace-pre-wrap">{selectedClient.sellingPoint}</p>
+                      </div>
+                    )}
+                    {selectedClient.objectionsFaced && (
+                      <div className="col-span-2">
+                        <p className="text-muted-foreground">Objections faced</p>
+                        <p className="font-medium whitespace-pre-wrap">{selectedClient.objectionsFaced}</p>
+                      </div>
+                    )}
+                    {selectedClient.responseToObjections && (
+                      <div className="col-span-2">
+                        <p className="text-muted-foreground">Response to objections</p>
+                        <p className="font-medium whitespace-pre-wrap">{selectedClient.responseToObjections}</p>
+                      </div>
+                    )}
+                    {selectedClient.clientFeedback && (
+                      <div className="col-span-2">
+                        <p className="text-muted-foreground">Client feedback</p>
+                        <p className="font-medium whitespace-pre-wrap">{selectedClient.clientFeedback}</p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -1302,6 +1353,60 @@ function ClientForm({
           onChange={(e) => update("address", e.target.value)}
           placeholder="Street address"
           data-testid="input-address"
+        />
+      </div>
+      <div className="space-y-2 col-span-3">
+        <Label htmlFor="location">Location</Label>
+        <Input
+          id="location"
+          value={formData.location}
+          onChange={(e) => update("location", e.target.value)}
+          placeholder="Area, city or region"
+          data-testid="input-location"
+        />
+      </div>
+      <div className="space-y-2 col-span-3">
+        <Label htmlFor="sellingPoint">Selling point (what was sold to the client)</Label>
+        <Textarea
+          id="sellingPoint"
+          value={formData.sellingPoint}
+          onChange={(e) => update("sellingPoint", e.target.value)}
+          placeholder="What product/benefits were sold to the client"
+          rows={2}
+          data-testid="input-selling-point"
+        />
+      </div>
+      <div className="space-y-2 col-span-3">
+        <Label htmlFor="objectionsFaced">Objections faced</Label>
+        <Textarea
+          id="objectionsFaced"
+          value={formData.objectionsFaced}
+          onChange={(e) => update("objectionsFaced", e.target.value)}
+          placeholder="Objections or concerns the client raised"
+          rows={2}
+          data-testid="input-objections"
+        />
+      </div>
+      <div className="space-y-2 col-span-3">
+        <Label htmlFor="responseToObjections">Response to objections</Label>
+        <Textarea
+          id="responseToObjections"
+          value={formData.responseToObjections}
+          onChange={(e) => update("responseToObjections", e.target.value)}
+          placeholder="How the agent responded to the objections"
+          rows={2}
+          data-testid="input-response-to-objections"
+        />
+      </div>
+      <div className="space-y-2 col-span-3">
+        <Label htmlFor="clientFeedback">Client feedback (other notes)</Label>
+        <Textarea
+          id="clientFeedback"
+          value={formData.clientFeedback}
+          onChange={(e) => update("clientFeedback", e.target.value)}
+          placeholder="Any other feedback or notes from the client"
+          rows={2}
+          data-testid="input-client-feedback"
         />
       </div>
     </div>

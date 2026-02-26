@@ -134,9 +134,9 @@ export async function seedDatabase() {
   let defaultOrg = (await storage.getOrganizations())[0];
   if (!defaultOrg) {
     defaultOrg = await storage.createOrganization({
-      name: "Falakhe Funeral Parlour",
+      name: "Chibikhulu",
       logoUrl: "/assets/logo.png",
-      primaryColor: "#2563EB",
+      primaryColor: "#D4AF37",
       footerText: "For a service beyond Ubuntu",
     });
     structuredLog("info", `Created default organization: ${defaultOrg.name}`);

@@ -2,14 +2,33 @@ import type { Express, Request, Response } from "express";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { z } from "zod";
+import argon2 from "argon2";
+import { createPaymentIntent, initiatePaynowPayment, pollPaynowStatus } from "../payment-service";
+import { getPaynowConfig } from "../paynow-config";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const CONSTANT_DELAY_MS = 200;
 
 async function constantTimeResponse(res: Response, status: number, body: any) {
-  await new Promise(resolve => setTimeout(resolve, CONSTANT_DELAY_MS));
+  await new Promise((resolve) => setTimeout(resolve, CONSTANT_DELAY_MS));
   return res.status(status).json(body);
+}
+
+const isLegacySha256Hash = (hash: string | null | undefined) =>
+  !!hash && /^[a-f0-9]{64}$/i.test(hash);
+
+async function hashSecret(value: string) {
+  return argon2.hash(value, { type: argon2.argon2id });
+}
+
+async function verifySecret(input: string, storedHash: string) {
+  if (isLegacySha256Hash(storedHash)) {
+    const crypto = await import("crypto");
+    const legacyHash = crypto.createHash("sha256").update(input).digest("hex");
+    return legacyHash === storedHash;
+  }
+  return argon2.verify(storedHash, input);
 }
 
 export function setupClientAuth(app: Express) {
@@ -68,10 +87,9 @@ export function setupClientAuth(app: Express) {
         return res.status(400).json({ message: "Invalid enrollment request" });
       }
 
-      const crypto = await import("crypto");
-      const passwordHash = crypto.createHash("sha256").update(password).digest("hex");
       const normalizedAnswer = securityAnswer.trim().toLowerCase();
-      const answerHash = crypto.createHash("sha256").update(normalizedAnswer).digest("hex");
+      const passwordHash = await hashSecret(password);
+      const answerHash = await hashSecret(normalizedAnswer);
 
       await storage.updateClient(clientId, {
         passwordHash,
@@ -132,10 +150,9 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 429, { message: "Account temporarily locked. Try again later." });
       }
 
-      const crypto = await import("crypto");
-      const hash = crypto.createHash("sha256").update(password).digest("hex");
+      const passwordMatches = await verifySecret(password, client.passwordHash);
 
-      if (hash !== client.passwordHash) {
+      if (!passwordMatches) {
         const attempts = (client.failedLoginAttempts || 0) + 1;
         const updateData: any = { failedLoginAttempts: attempts };
         if (attempts >= LOCKOUT_THRESHOLD) {
@@ -241,16 +258,19 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 
-      const crypto = await import("crypto");
       const normalizedAnswer = securityAnswer.trim().toLowerCase();
-      const answerHash = crypto.createHash("sha256").update(normalizedAnswer).digest("hex");
+      const answerOk = await verifySecret(normalizedAnswer, client.securityAnswerHash);
 
-      if (answerHash !== client.securityAnswerHash) {
+      if (!answerOk) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 
-      const newHash = crypto.createHash("sha256").update(newPassword).digest("hex");
-      await storage.updateClient(client.id, { passwordHash: newHash, failedLoginAttempts: 0, lockedUntil: null });
+      const newHash = await hashSecret(newPassword);
+      await storage.updateClient(client.id, {
+        passwordHash: newHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
 
       return constantTimeResponse(res, 200, { message: "Password reset successful" });
     } catch (err) {
@@ -262,5 +282,91 @@ export function setupClientAuth(app: Express) {
     (req.session as any).clientId = null;
     (req.session as any).clientOrgId = null;
     res.json({ message: "Logged out" });
+  });
+
+  // ─── Client payment intents (Paynow) ────────────────────────
+  app.post("/api/client-auth/payment-intents", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { policyId, amount, purpose, idempotencyKey } = req.body;
+    if (!policyId || amount == null || !idempotencyKey) {
+      return res.status(400).json({ message: "policyId, amount, and idempotencyKey are required" });
+    }
+    const policy = await storage.getPolicy(policyId);
+    if (!policy || policy.clientId !== clientId || policy.organizationId !== clientOrgId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const result = await createPaymentIntent({
+      organizationId: clientOrgId,
+      clientId,
+      policyId,
+      amount: String(amount),
+      purpose: purpose || "premium",
+      idempotencyKey,
+    });
+    if (result.error) return res.status(400).json({ message: result.error });
+    return res.json({ intent: result.intent, created: result.created });
+  });
+
+  app.post("/api/client-auth/payment-intents/:id/initiate", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
+    const intent = await storage.getPaymentIntentById(req.params.id);
+    if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+    const { method, payerPhone, payerEmail } = req.body;
+    const result = await initiatePaynowPayment({
+      intentId: intent.id,
+      method: method || "visa_mastercard",
+      payerPhone,
+      payerEmail,
+      actorType: "client",
+      actorId: clientId,
+    });
+    if (!result.ok) return res.status(400).json({ message: result.error });
+    return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
+  });
+
+  app.get("/api/client-auth/payment-intents/:id/status", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
+    const intent = await storage.getPaymentIntentById(req.params.id);
+    if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+    const result = await pollPaynowStatus(intent.id);
+    return res.json({ status: result.status, paid: result.paid, error: result.error });
+  });
+
+  app.get("/api/client-auth/payment-intents", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
+    const intents = await storage.getPaymentIntentsByClient(clientId);
+    return res.json(intents);
+  });
+
+  app.get("/api/client-auth/receipts", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
+    const receipts = await storage.getPaymentReceiptsByClient(clientId);
+    return res.json(receipts);
+  });
+
+  app.get("/api/client-auth/receipts/:id/download", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
+    const receipt = await storage.getPaymentReceiptById(req.params.id);
+    if (!receipt || receipt.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+    const { getReceiptPdfPath } = await import("../receipt-pdf");
+    const filePath = getReceiptPdfPath(receipt.pdfStorageKey);
+    if (!filePath) return res.status(404).json({ message: "Receipt PDF not available" });
+    return res.download(filePath, `receipt-${receipt.receiptNumber}.pdf`);
+  });
+
+  app.get("/api/client-auth/paynow-config", (_req: Request, res: Response) => {
+    const config = getPaynowConfig();
+    return res.json({
+      enabled: config.enabled,
+      mode: config.mode,
+      returnUrl: config.returnUrl,
+    });
   });
 }

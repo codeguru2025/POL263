@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,26 @@ export default function StaffSettings() {
   const [orgName, setOrgName] = useState("");
   const [primaryColor, setPrimaryColor] = useState("");
   const [footerText, setFooterText] = useState("");
+  const [address, setAddress] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [website, setWebsite] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [signatureUrl, setSignatureUrl] = useState("");
+
+  useEffect(() => {
+    if (currentOrg) {
+      setOrgName(currentOrg.name || "");
+      setPrimaryColor(currentOrg.primaryColor || "");
+      setFooterText(currentOrg.footerText || "");
+      setAddress(currentOrg.address || "");
+      setPhone(currentOrg.phone || "");
+      setEmail(currentOrg.email || "");
+      setWebsite(currentOrg.website || "");
+      setLogoUrl(currentOrg.logoUrl || "");
+      setSignatureUrl(currentOrg.signatureUrl || "");
+    }
+  }, [currentOrg]);
 
   const updateOrgMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -47,8 +67,51 @@ export default function StaffSettings() {
     const updates: any = {};
     if (orgName) updates.name = orgName;
     if (primaryColor) updates.primaryColor = primaryColor;
-    if (footerText) updates.footerText = footerText;
+    if (footerText !== undefined) updates.footerText = footerText;
+    if (address !== undefined) updates.address = address;
+    if (phone !== undefined) updates.phone = phone;
+    if (email !== undefined) updates.email = email;
+    if (website !== undefined) updates.website = website;
+    if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
+    if (signatureUrl !== undefined) updates.signatureUrl = signatureUrl || null;
     updateOrgMutation.mutate(updates);
+  };
+
+  const getApiBase = () => {
+    const u = typeof window !== "undefined" ? window.location.origin : "";
+    return u;
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentOrg) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(getApiBase() + "/api/upload", {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    setLogoUrl(data.url);
+    updateOrgMutation.mutate({ ...currentOrg, logoUrl: data.url });
+  };
+
+  const handleSignatureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentOrg) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(getApiBase() + "/api/upload", {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    setSignatureUrl(data.url);
+    updateOrgMutation.mutate({ ...currentOrg, signatureUrl: data.url });
   };
 
   return (
@@ -77,12 +140,36 @@ export default function StaffSettings() {
                   <div className="flex items-end gap-6">
                     <div className="h-24 w-24 rounded-xl border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden">
                       <img
-                        src={currentOrg?.logoUrl || "/assets/logo.png"}
+                        src={logoUrl || currentOrg?.logoUrl || "/assets/logo.png"}
                         alt="Current Logo"
-                        className="object-contain"
+                        className="object-contain max-h-full max-w-full"
                       />
                     </div>
-                    <Button variant="outline">Upload New Logo</Button>
+                    <label className="cursor-pointer">
+                      <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                      <Button type="button" variant="outline">Upload Logo</Button>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <Label>Authorized Signature (for receipts & policy documents)</Label>
+                  <div className="flex items-end gap-6">
+                    <div className="h-16 w-40 rounded border flex items-center justify-center bg-muted/20 overflow-hidden">
+                      {signatureUrl || currentOrg?.signatureUrl ? (
+                        <img
+                          src={signatureUrl || currentOrg?.signatureUrl}
+                          alt="Signature"
+                          className="object-contain max-h-full max-w-full"
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No signature</span>
+                      )}
+                    </div>
+                    <label className="cursor-pointer">
+                      <input type="file" accept="image/*" className="hidden" onChange={handleSignatureUpload} />
+                      <Button type="button" variant="outline">Upload Signature</Button>
+                    </label>
                   </div>
                 </div>
 
@@ -91,8 +178,47 @@ export default function StaffSettings() {
                     <Label htmlFor="orgName">Organization Name</Label>
                     <Input
                       id="orgName"
-                      defaultValue={currentOrg?.name || ""}
+                      value={orgName}
                       onChange={(e) => setOrgName(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="address">Address</Label>
+                    <Input
+                      id="address"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      placeholder="Street, city, country"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="phone">Phone</Label>
+                      <Input
+                        id="phone"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="+263 ..."
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="email">Email</Label>
+                      <Input
+                        id="email"
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="contact@example.com"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="website">Website</Label>
+                    <Input
+                      id="website"
+                      value={website}
+                      onChange={(e) => setWebsite(e.target.value)}
+                      placeholder="https://..."
                     />
                   </div>
                   <div className="grid gap-2">
@@ -100,21 +226,21 @@ export default function StaffSettings() {
                     <div className="flex gap-2">
                       <div
                         className="h-10 w-10 rounded border"
-                        style={{ backgroundColor: primaryColor || currentOrg?.primaryColor || "#2563EB" }}
+                        style={{ backgroundColor: primaryColor || currentOrg?.primaryColor || "#D4AF37" }}
                       ></div>
                       <Input
                         id="primaryColor"
-                        defaultValue={currentOrg?.primaryColor || "#2563EB"}
+                        value={primaryColor || currentOrg?.primaryColor || "#D4AF37"}
                         className="font-mono flex-1"
                         onChange={(e) => setPrimaryColor(e.target.value)}
                       />
                     </div>
                   </div>
                   <div className="grid gap-2">
-                    <Label htmlFor="footerText">Footer Text</Label>
+                    <Label htmlFor="footerText">Footer Text (on documents)</Label>
                     <Input
                       id="footerText"
-                      defaultValue={currentOrg?.footerText || ""}
+                      value={footerText}
                       onChange={(e) => setFooterText(e.target.value)}
                     />
                   </div>

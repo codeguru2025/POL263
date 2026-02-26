@@ -9,16 +9,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Users, Loader2, ArrowRight } from "lucide-react";
+import { Plus, Users, Loader2, ArrowRight, FileText } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { useLocation } from "wouter";
 
 const STAGES = [
-  { key: "captured", label: "Captured", color: "bg-gray-100" },
+  { key: "lead", label: "Lead", color: "bg-gray-100" },
+  { key: "captured", label: "Captured", color: "bg-slate-100" },
   { key: "contacted", label: "Contacted", color: "bg-blue-50" },
   { key: "quote_generated", label: "Quote", color: "bg-indigo-50" },
   { key: "application_started", label: "Application", color: "bg-purple-50" },
   { key: "submitted", label: "Submitted", color: "bg-yellow-50" },
   { key: "approved", label: "Approved", color: "bg-green-50" },
+  { key: "agreed_to_pay", label: "Agreed to pay", color: "bg-emerald-100" },
   { key: "activated", label: "Activated", color: "bg-green-100" },
   { key: "lost", label: "Lost", color: "bg-red-50" },
 ];
@@ -26,6 +29,7 @@ const STAGES = [
 export default function StaffLeads() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const [showDialog, setShowDialog] = useState(false);
 
   const { data: leads = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/leads"] });
@@ -68,7 +72,7 @@ export default function StaffLeads() {
 
   const advanceStage = (lead: any) => {
     const idx = STAGES.findIndex(s => s.key === lead.stage);
-    if (idx < STAGES.length - 2) {
+    if (idx >= 0 && idx < STAGES.length - 2) {
       updateLeadMutation.mutate({ id: lead.id, data: { stage: STAGES[idx + 1].key } });
     }
   };
@@ -153,7 +157,21 @@ export default function StaffLeads() {
                         <div key={lead.id} className="p-3 rounded-lg border bg-card" data-testid={`card-lead-${lead.id}`}>
                           <p className="font-medium text-sm">{lead.firstName} {lead.lastName}</p>
                           {lead.phone && <p className="text-xs text-muted-foreground">{lead.phone}</p>}
-                          <div className="flex gap-1 mt-2">
+                          {lead.clientId && (
+                            <p className="text-[10px] text-primary mt-0.5">Client linked</p>
+                          )}
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {lead.clientId && (lead.stage === "approved" || lead.stage === "agreed_to_pay") && (
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-6 text-xs"
+                                onClick={() => setLocation(`/staff/policies?create=1&clientId=${lead.clientId}`)}
+                                data-testid={`btn-issue-policy-${lead.id}`}
+                              >
+                                <FileText className="h-3 w-3 mr-1" /> Issue policy
+                              </Button>
+                            )}
                             {stage.key !== "activated" && stage.key !== "lost" && (
                               <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => advanceStage(lead)}>
                                 <ArrowRight className="h-3 w-3 mr-1" />Next
