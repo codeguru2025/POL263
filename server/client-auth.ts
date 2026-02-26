@@ -3,8 +3,10 @@ import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { z } from "zod";
 import argon2 from "argon2";
-import { createPaymentIntent, initiatePaynowPayment, pollPaynowStatus } from "../payment-service";
-import { getPaynowConfig } from "../paynow-config";
+import { createPaymentIntent, initiatePaynowPayment, pollPaynowStatus } from "./payment-service";
+import { getPaynowConfig } from "./paynow-config";
+import { streamPolicyDocumentToResponse } from "./policy-document";
+import { insertClaimSchema, insertClientFeedbackSchema } from "@shared/schema";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -82,10 +84,16 @@ export function setupClientAuth(app: Express) {
     }
 
     try {
-      const client = await storage.getClient(clientId);
+      const orgs = await storage.getOrganizations();
+      let client = null;
+      for (const org of orgs) {
+        client = await storage.getClient(clientId, org.id);
+        if (client) break;
+      }
       if (!client || client.isEnrolled) {
         return res.status(400).json({ message: "Invalid enrollment request" });
       }
+      const orgId = client.organizationId;
 
       const normalizedAnswer = securityAnswer.trim().toLowerCase();
       const passwordHash = await hashSecret(password);
@@ -97,15 +105,15 @@ export function setupClientAuth(app: Express) {
         securityAnswerHash: answerHash,
         isEnrolled: true,
         activationCode: null,
-      });
+      }, orgId);
 
       if (referralCode) {
         const agent = await storage.getUserByReferralCode(referralCode);
         if (agent) {
-          const clientPolicies = await storage.getPoliciesByClient(clientId);
+          const clientPolicies = await storage.getPoliciesByClient(clientId, orgId);
           for (const policy of clientPolicies) {
             if (!policy.agentId) {
-              await storage.updatePolicy(policy.id, { agentId: agent.id });
+              await storage.updatePolicy(policy.id, { agentId: agent.id }, orgId);
               structuredLog("info", "Agent auto-assigned to policy via referral", {
                 policyId: policy.id,
                 agentId: agent.id,
@@ -141,7 +149,7 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 401, { message: "Invalid credentials" });
       }
 
-      const client = await storage.getClient(policy.clientId);
+      const client = await storage.getClient(policy.clientId, policy.organizationId);
       if (!client || !client.isEnrolled || !client.passwordHash) {
         return constantTimeResponse(res, 401, { message: "Invalid credentials" });
       }
@@ -158,11 +166,11 @@ export function setupClientAuth(app: Express) {
         if (attempts >= LOCKOUT_THRESHOLD) {
           updateData.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
         }
-        await storage.updateClient(client.id, updateData);
+        await storage.updateClient(client.id, updateData, client.organizationId);
         return constantTimeResponse(res, 401, { message: "Invalid credentials" });
       }
 
-      await storage.updateClient(client.id, { failedLoginAttempts: 0, lockedUntil: null });
+      await storage.updateClient(client.id, { failedLoginAttempts: 0, lockedUntil: null }, client.organizationId);
 
       (req.session as any).clientId = client.id;
       (req.session as any).clientOrgId = client.organizationId;
@@ -183,11 +191,21 @@ export function setupClientAuth(app: Express) {
 
   app.get("/api/client-auth/me", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    const client = await storage.getClient(clientId);
+    const client = clientOrgId
+      ? await storage.getClient(clientId, clientOrgId)
+      : await (async () => {
+          const orgs = await storage.getOrganizations();
+          for (const org of orgs) {
+            const c = await storage.getClient(clientId, org.id);
+            if (c) return c;
+          }
+          return undefined;
+        })();
     if (!client) {
       return res.status(401).json({ message: "Not authenticated" });
     }
@@ -205,35 +223,131 @@ export function setupClientAuth(app: Express) {
 
   app.get("/api/client-auth/policies", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
-    const clientPolicies = await storage.getPoliciesByClient(clientId);
+    if (!clientOrgId) {
+      const orgs = await storage.getOrganizations();
+      for (const org of orgs) {
+        const c = await storage.getClient(clientId, org.id);
+        if (c) {
+          return res.json(await storage.getPoliciesByClient(clientId, c.organizationId));
+        }
+      }
+      return res.json([]);
+    }
+    const clientPolicies = await storage.getPoliciesByClient(clientId, clientOrgId);
     return res.json(clientPolicies);
   });
 
   app.get("/api/client-auth/policies/:id/payments", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
-    const policy = await storage.getPolicy(req.params.id as string);
+    if (!clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) {
       return res.status(403).json({ message: "Access denied" });
     }
-    return res.json(await storage.getPaymentsByPolicy(policy.id));
+    return res.json(await storage.getPaymentsByPolicy(policy.id, clientOrgId));
   });
 
   app.get("/api/client-auth/policies/:id/members", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
-    const policy = await storage.getPolicy(req.params.id as string);
+    if (!clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) {
       return res.status(403).json({ message: "Access denied" });
     }
-    return res.json(await storage.getPolicyMembers(policy.id));
+    return res.json(await storage.getPolicyMembers(policy.id, clientOrgId));
+  });
+
+  app.get("/api/client-auth/policies/:id/document", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
+    if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
+    await streamPolicyDocumentToResponse(policy.id, clientOrgId, res);
+  });
+
+  app.get("/api/client-auth/claims", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const list = await storage.getClaimsByClient(clientId, clientOrgId);
+    return res.json(list);
+  });
+
+  app.post("/api/client-auth/claims", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { policyId, claimType, deceasedName, deceasedRelationship, dateOfDeath, causeOfDeath } = req.body;
+    if (!policyId || !claimType) return res.status(400).json({ message: "Policy and claim type are required" });
+    const policy = await storage.getPolicy(policyId, clientOrgId);
+    if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
+    try {
+      const claimNumber = await storage.generateClaimNumber(clientOrgId);
+      const parsed = insertClaimSchema.parse({
+        organizationId: clientOrgId,
+        claimNumber,
+        policyId,
+        clientId,
+        claimType,
+        status: "submitted",
+        deceasedName: deceasedName || null,
+        deceasedRelationship: deceasedRelationship || null,
+        dateOfDeath: dateOfDeath || null,
+        causeOfDeath: causeOfDeath || null,
+      });
+      const claim = await storage.createClaim(parsed);
+      await storage.createClaimStatusHistory(claim.id, null, "submitted", "Submitted via client portal");
+      return res.status(201).json(claim);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors?.[0]?.message || "Validation failed" });
+      structuredLog("error", "Client claim submit error", { error: (err as Error).message });
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/client-auth/feedback", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const list = await storage.getFeedbackByClient(clientId, clientOrgId);
+    return res.json(list);
+  });
+
+  app.post("/api/client-auth/feedback", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { type, subject, message } = req.body;
+    if (!type || !subject || !message) return res.status(400).json({ message: "Type, subject, and message are required" });
+    if (type !== "complaint" && type !== "feedback") return res.status(400).json({ message: "Type must be complaint or feedback" });
+    try {
+      const parsed = insertClientFeedbackSchema.parse({
+        organizationId: clientOrgId,
+        clientId,
+        type,
+        subject: String(subject).trim().slice(0, 500),
+        message: String(message).trim().slice(0, 5000),
+        status: "open",
+      });
+      const feedback = await storage.createFeedback(parsed);
+      return res.status(201).json(feedback);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors?.[0]?.message || "Validation failed" });
+      return res.status(500).json({ message: "Internal server error" });
+    }
   });
 
   app.post("/api/client-auth/reset-password", async (req: Request, res: Response) => {
@@ -253,7 +367,7 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 
-      const client = await storage.getClient(policy.clientId);
+      const client = await storage.getClient(policy.clientId, policy.organizationId);
       if (!client || !client.securityAnswerHash) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
@@ -270,7 +384,7 @@ export function setupClientAuth(app: Express) {
         passwordHash: newHash,
         failedLoginAttempts: 0,
         lockedUntil: null,
-      });
+      }, client.organizationId);
 
       return constantTimeResponse(res, 200, { message: "Password reset successful" });
     } catch (err) {
@@ -293,7 +407,7 @@ export function setupClientAuth(app: Express) {
     if (!policyId || amount == null || !idempotencyKey) {
       return res.status(400).json({ message: "policyId, amount, and idempotencyKey are required" });
     }
-    const policy = await storage.getPolicy(policyId);
+    const policy = await storage.getPolicy(policyId, clientOrgId);
     if (!policy || policy.clientId !== clientId || policy.organizationId !== clientOrgId) {
       return res.status(403).json({ message: "Access denied" });
     }
@@ -311,12 +425,14 @@ export function setupClientAuth(app: Express) {
 
   app.post("/api/client-auth/payment-intents/:id/initiate", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
-    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
-    const intent = await storage.getPaymentIntentById(req.params.id);
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const intent = await storage.getPaymentIntentById(req.params.id, clientOrgId);
     if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
     const { method, payerPhone, payerEmail } = req.body;
     const result = await initiatePaynowPayment({
       intentId: intent.id,
+      organizationId: clientOrgId,
       method: method || "visa_mastercard",
       payerPhone,
       payerEmail,
@@ -329,33 +445,37 @@ export function setupClientAuth(app: Express) {
 
   app.get("/api/client-auth/payment-intents/:id/status", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
-    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
-    const intent = await storage.getPaymentIntentById(req.params.id);
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const intent = await storage.getPaymentIntentById(req.params.id, clientOrgId);
     if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
-    const result = await pollPaynowStatus(intent.id);
+    const result = await pollPaynowStatus(intent.id, clientOrgId);
     return res.json({ status: result.status, paid: result.paid, error: result.error });
   });
 
   app.get("/api/client-auth/payment-intents", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
-    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
-    const intents = await storage.getPaymentIntentsByClient(clientId);
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const intents = await storage.getPaymentIntentsByClient(clientId, clientOrgId);
     return res.json(intents);
   });
 
   app.get("/api/client-auth/receipts", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
-    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
-    const receipts = await storage.getPaymentReceiptsByClient(clientId);
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const receipts = await storage.getPaymentReceiptsByClient(clientId, clientOrgId);
     return res.json(receipts);
   });
 
   app.get("/api/client-auth/receipts/:id/download", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
-    if (!clientId) return res.status(401).json({ message: "Not authenticated" });
-    const receipt = await storage.getPaymentReceiptById(req.params.id);
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const receipt = await storage.getPaymentReceiptById(req.params.id, clientOrgId);
     if (!receipt || receipt.clientId !== clientId) return res.status(404).json({ message: "Not found" });
-    const { getReceiptPdfPath } = await import("../receipt-pdf");
+    const { getReceiptPdfPath } = await import("./receipt-pdf");
     const filePath = getReceiptPdfPath(receipt.pdfStorageKey);
     if (!filePath) return res.status(404).json({ message: "Receipt PDF not available" });
     return res.download(filePath, `receipt-${receipt.receiptNumber}.pdf`);

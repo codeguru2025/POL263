@@ -6,7 +6,26 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Check, Loader2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Check, Loader2, Plus, Pencil, Trash2 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -27,6 +46,10 @@ export default function StaffSettings() {
     queryKey: ["/api/permissions"],
   });
 
+  const { data: termsList } = useQuery<any[]>({
+    queryKey: ["/api/terms?all=true"],
+  });
+
   const currentOrg = orgs?.[0];
 
   const [orgName, setOrgName] = useState("");
@@ -38,6 +61,18 @@ export default function StaffSettings() {
   const [website, setWebsite] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [signatureUrl, setSignatureUrl] = useState("");
+  const [policyNumberPrefix, setPolicyNumberPrefix] = useState("");
+  const [policyNumberPadding, setPolicyNumberPadding] = useState(5);
+  const [databaseUrl, setDatabaseUrl] = useState("");
+
+  const [termDialogOpen, setTermDialogOpen] = useState(false);
+  const [editingTermId, setEditingTermId] = useState<string | null>(null);
+  const [termTitle, setTermTitle] = useState("");
+  const [termContent, setTermContent] = useState("");
+  const [termCategory, setTermCategory] = useState("general");
+  const [termSortOrder, setTermSortOrder] = useState(0);
+  const [termIsActive, setTermIsActive] = useState(true);
+  const [termToDeleteId, setTermToDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     if (currentOrg) {
@@ -50,6 +85,9 @@ export default function StaffSettings() {
       setWebsite(currentOrg.website || "");
       setLogoUrl(currentOrg.logoUrl || "");
       setSignatureUrl(currentOrg.signatureUrl || "");
+      setPolicyNumberPrefix(currentOrg.policyNumberPrefix ?? "");
+      setPolicyNumberPadding(typeof currentOrg.policyNumberPadding === "number" ? currentOrg.policyNumberPadding : 5);
+      setDatabaseUrl(currentOrg.databaseUrl ?? "");
     }
   }, [currentOrg]);
 
@@ -74,6 +112,9 @@ export default function StaffSettings() {
     if (website !== undefined) updates.website = website;
     if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
     if (signatureUrl !== undefined) updates.signatureUrl = signatureUrl || null;
+    if (policyNumberPrefix !== undefined) updates.policyNumberPrefix = policyNumberPrefix || null;
+    if (policyNumberPadding !== undefined) updates.policyNumberPadding = Math.max(1, Math.min(20, policyNumberPadding));
+    if (databaseUrl !== undefined) updates.databaseUrl = databaseUrl.trim() || null;
     updateOrgMutation.mutate(updates);
   };
 
@@ -114,6 +155,74 @@ export default function StaffSettings() {
     updateOrgMutation.mutate({ ...currentOrg, signatureUrl: data.url });
   };
 
+  const openNewTermDialog = () => {
+    setEditingTermId(null);
+    setTermTitle("");
+    setTermContent("");
+    setTermCategory("general");
+    setTermSortOrder(termsList?.length ?? 0);
+    setTermIsActive(true);
+    setTermDialogOpen(true);
+  };
+
+  const openEditTermDialog = (term: any) => {
+    setEditingTermId(term.id);
+    setTermTitle(term.title);
+    setTermContent(term.content);
+    setTermCategory(term.category || "general");
+    setTermSortOrder(term.sortOrder ?? 0);
+    setTermIsActive(term.isActive ?? true);
+    setTermDialogOpen(true);
+  };
+
+  const createTermMutation = useMutation({
+    mutationFn: async (data: { title: string; content: string; category: string; sortOrder: number; isActive: boolean }) => {
+      const res = await apiRequest("POST", "/api/terms", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/terms?all=true"] });
+      setTermDialogOpen(false);
+    },
+  });
+
+  const updateTermMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<{ title: string; content: string; category: string; sortOrder: number; isActive: boolean }> }) => {
+      const res = await apiRequest("PATCH", `/api/terms/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/terms?all=true"] });
+      setTermDialogOpen(false);
+    },
+  });
+
+  const deleteTermMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/terms/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/terms?all=true"] });
+      setTermToDeleteId(null);
+    },
+  });
+
+  const handleSaveTerm = () => {
+    if (!termTitle.trim() || !termContent.trim()) return;
+    const payload = {
+      title: termTitle.trim(),
+      content: termContent.trim(),
+      category: termCategory.trim() || "general",
+      sortOrder: termSortOrder,
+      isActive: termIsActive,
+    };
+    if (editingTermId) {
+      updateTermMutation.mutate({ id: editingTermId, data: payload });
+    } else {
+      createTermMutation.mutate(payload);
+    }
+  };
+
   return (
     <StaffLayout>
       <div className="space-y-6">
@@ -123,8 +232,9 @@ export default function StaffSettings() {
         </div>
 
         <Tabs defaultValue="branding" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 max-w-md">
+          <TabsList className="grid w-full grid-cols-3 max-w-2xl">
             <TabsTrigger value="branding">Tenant Branding</TabsTrigger>
+            <TabsTrigger value="terms">Terms & Conditions</TabsTrigger>
             <TabsTrigger value="rbac">RBAC Configuration</TabsTrigger>
           </TabsList>
 
@@ -244,6 +354,43 @@ export default function StaffSettings() {
                       onChange={(e) => setFooterText(e.target.value)}
                     />
                   </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="policyNumberPrefix">Policy Number Prefix (optional)</Label>
+                      <Input
+                        id="policyNumberPrefix"
+                        value={policyNumberPrefix}
+                        onChange={(e) => setPolicyNumberPrefix(e.target.value)}
+                        placeholder="e.g. POL- or leave empty"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="policyNumberPadding">Policy Number Padding (digits)</Label>
+                      <Input
+                        id="policyNumberPadding"
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={policyNumberPadding}
+                        onChange={(e) => setPolicyNumberPadding(parseInt(e.target.value, 10) || 5)}
+                      />
+                      <p className="text-xs text-muted-foreground">e.g. 5 → 00001, 00002 (per tenant)</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="databaseUrl">Tenant database URL (optional)</Label>
+                    <Input
+                      id="databaseUrl"
+                      type="password"
+                      autoComplete="off"
+                      value={databaseUrl}
+                      onChange={(e) => setDatabaseUrl(e.target.value)}
+                      placeholder="postgresql://... (leave empty to use default)"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      When set, this tenant can use a dedicated database. Requires storage to use getDbForOrg(orgId) for tenant data.
+                    </p>
+                  </div>
                 </div>
 
                 <Button onClick={handleSaveBranding} disabled={updateOrgMutation.isPending}>
@@ -262,6 +409,154 @@ export default function StaffSettings() {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="terms" className="mt-6">
+            <Card className="shadow-sm">
+              <CardHeader>
+                <CardTitle>Terms and Conditions</CardTitle>
+                <CardDescription>
+                  Manage terms shown on policy documents and e-statements. Only active terms appear on PDFs. Order by sort order.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex justify-end mb-4">
+                  <Button onClick={openNewTermDialog}>
+                    <Plus className="h-4 w-4 mr-2" /> Add term
+                  </Button>
+                </div>
+                {termsList === undefined ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  </div>
+                ) : termsList.length === 0 ? (
+                  <p className="text-muted-foreground text-sm py-6">No terms yet. Add one to show on policy documents.</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Title</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead className="w-20">Order</TableHead>
+                        <TableHead className="w-24">Active</TableHead>
+                        <TableHead className="w-28">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {termsList.map((term: any) => (
+                        <TableRow key={term.id}>
+                          <TableCell className="font-medium">{term.title}</TableCell>
+                          <TableCell className="text-muted-foreground">{term.category || "general"}</TableCell>
+                          <TableCell>{term.sortOrder}</TableCell>
+                          <TableCell>{term.isActive ? "Yes" : "No"}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-2">
+                              <Button variant="ghost" size="icon" onClick={() => openEditTermDialog(term)} aria-label="Edit">
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => setTermToDeleteId(term.id)} aria-label="Delete">
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
+            <Dialog open={termDialogOpen} onOpenChange={setTermDialogOpen}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>{editingTermId ? "Edit term" : "Add term"}</DialogTitle>
+                  <DialogDescription>This text will appear in the Terms and Conditions section of policy documents when active.</DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="termTitle">Title</Label>
+                    <Input
+                      id="termTitle"
+                      value={termTitle}
+                      onChange={(e) => setTermTitle(e.target.value)}
+                      placeholder="e.g. Premium Payment"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="termContent">Content</Label>
+                    <Textarea
+                      id="termContent"
+                      value={termContent}
+                      onChange={(e) => setTermContent(e.target.value)}
+                      placeholder="Full terms text..."
+                      rows={5}
+                      className="resize-y"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="termCategory">Category</Label>
+                      <Input
+                        id="termCategory"
+                        value={termCategory}
+                        onChange={(e) => setTermCategory(e.target.value)}
+                        placeholder="general"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="termSortOrder">Sort order</Label>
+                      <Input
+                        id="termSortOrder"
+                        type="number"
+                        value={termSortOrder}
+                        onChange={(e) => setTermSortOrder(parseInt(e.target.value, 10) || 0)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="termIsActive"
+                      checked={termIsActive}
+                      onChange={(e) => setTermIsActive(e.target.checked)}
+                      className="rounded border-input"
+                    />
+                    <Label htmlFor="termIsActive">Active (show on policy documents)</Label>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setTermDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleSaveTerm}
+                    disabled={!termTitle.trim() || !termContent.trim() || createTermMutation.isPending || updateTermMutation.isPending}
+                  >
+                    {(createTermMutation.isPending || updateTermMutation.isPending) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    {editingTermId ? "Save changes" : "Add term"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <AlertDialog open={!!termToDeleteId} onOpenChange={(open) => !open && setTermToDeleteId(null)}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete term?</AlertDialogTitle>
+                  <AlertDialogDescription>This term will be removed. It will no longer appear on policy documents.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={() => termToDeleteId && deleteTermMutation.mutate(termToDeleteId)}
+                  >
+                    {deleteTermMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Delete"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </TabsContent>
 
           <TabsContent value="rbac" className="mt-6">

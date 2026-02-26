@@ -28,8 +28,8 @@ export default function JoinPage() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       <div className="mb-8 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src="/assets/logo.png" alt="Chibikhulu Logo" className="h-16 w-16 mb-4 rounded-2xl shadow-md border border-border/50" />
-        <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">Join Falakhe</h1>
+        <img src="/assets/logo.png" alt="POL263 Logo" className="h-16 w-16 mb-4 rounded-2xl shadow-md border border-border/50" />
+        <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">Join POL263</h1>
         <p className="text-muted-foreground mt-2 text-lg">Secure your family's future with comprehensive funeral cover</p>
       </div>
 
@@ -73,10 +73,21 @@ export default function JoinPage() {
                 Claim Policy
               </Button>
             </div>
+            {refCode && (
+              <Button
+                variant="secondary"
+                className="w-full gap-2"
+                onClick={() => setLocation(`/join/register?ref=${encodeURIComponent(refCode)}`)}
+                data-testid="btn-register-policy"
+              >
+                <UserPlus className="h-4 w-4" />
+                Register for a new policy
+              </Button>
+            )}
           </div>
 
           <p className="text-xs text-center text-muted-foreground">
-            Visit your nearest Falakhe branch or contact your agent to begin your application.
+            Visit your nearest POL263 branch or contact your agent to begin your application.
           </p>
         </CardContent>
       </Card>

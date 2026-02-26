@@ -1,4 +1,4 @@
-# Deploy Chibikhulu on InterServer VPS
+# Deploy POL263 on InterServer VPS
 
 Follow these steps on your InterServer VPS to run the app 24/7.
 
@@ -117,7 +117,7 @@ You should see version numbers. That’s enough to continue.
 Run these on the VPS:
 
 ```bash
-sudo -u postgres psql -c "CREATE DATABASE chibikhulu;"
+sudo -u postgres psql -c "CREATE DATABASE pol263;"
 sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'CHOOSE_A_STRONG_PASSWORD';"
 ```
 
@@ -143,29 +143,29 @@ You have two options.
 
    ```bash
    cd /opt
-   git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git chibikhulu
-   cd chibikhulu
+   git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git pol263
+   cd pol263
    ```
 
 ### Option B: Upload with SCP (if you don’t use GitHub)
 
-**On your Windows PC** (in PowerShell, in your project folder, e.g. `Falakhe-PMS`):
+**On your Windows PC** (in PowerShell, in your project folder, e.g. `POL263`):
 
 ```powershell
-scp -r . root@YOUR_VPS_IP:/opt/chibikhulu
+scp -r . root@YOUR_VPS_IP:/opt/pol263
 ```
 
 Then on the VPS:
 
 ```bash
-cd /opt/chibikhulu
+cd /opt/pol263
 ```
 
 ### Optional: automatic PostgreSQL setup
 
 If you skipped installing PostgreSQL in Step 2 or want to set the database up in one go:
 
-1. Make sure you’re in the app folder: `cd /opt/chibikhulu`
+1. Make sure you’re in the app folder: `cd /opt/pol263`
 2. Run (replace `YourSecurePassword123` with the password you want for the database):
 
    ```bash
@@ -184,7 +184,7 @@ If you use this, you can skip **Step 3** (Create the database). If you haven’t
 On the VPS:
 
 ```bash
-cd /opt/chibikhulu
+cd /opt/pol263
 nano .env
 ```
 
@@ -198,7 +198,7 @@ In the editor:
 NODE_ENV=production
 PORT=5000
 HOST=0.0.0.0
-DATABASE_URL=postgresql://postgres:YOUR_POSTGRES_PASSWORD@localhost:5432/chibikhulu
+DATABASE_URL=postgresql://postgres:YOUR_POSTGRES_PASSWORD@localhost:5432/pol263
 SESSION_SECRET=your-random-session-secret-here
 ```
 
@@ -211,7 +211,7 @@ Save and exit: **Ctrl+O**, Enter, then **Ctrl+X**.
 On the VPS:
 
 ```bash
-cd /opt/chibikhulu
+cd /opt/pol263
 npm install
 npm run build
 npm run db:setup
@@ -232,14 +232,14 @@ npm install -g pm2
 **Start the app:**
 
 ```bash
-cd /opt/chibikhulu
-pm2 start dist/index.cjs --name chibikhulu --node-args="--env-file=.env"
+cd /opt/pol263
+pm2 start dist/index.cjs --name pol263 --node-args="--env-file=.env"
 ```
 
 Or if the above fails, try:
 
 ```bash
-pm2 start npm --name chibikhulu -- start
+pm2 start npm --name pol263 -- start
 ```
 
 **Make it start on reboot:**
@@ -255,7 +255,7 @@ pm2 save
 
 ```bash
 pm2 status
-pm2 logs chibikhulu
+pm2 logs pol263
 ```
 
 Press **Ctrl+C** to stop viewing logs. The app keeps running.
@@ -279,7 +279,7 @@ Press **Ctrl+C** to stop viewing logs. The app keeps running.
 
    Replace `YOUR_VPS_IP` with the VPS IP from InterServer.
 
-You should see the Chibikhulu landing page.
+You should see the POL263 landing page.
 
 ---
 
@@ -296,7 +296,7 @@ apt install -y nginx
 **Create a config:**
 
 ```bash
-nano /etc/nginx/sites-available/chibikhulu
+nano /etc/nginx/sites-available/pol263
 ```
 
 Paste this (replace `YOUR_VPS_IP` if you want to use a domain later):
@@ -322,7 +322,7 @@ server {
 Save and exit (Ctrl+O, Enter, Ctrl+X). Then:
 
 ```bash
-ln -s /etc/nginx/sites-available/chibikhulu /etc/nginx/sites-enabled/
+ln -s /etc/nginx/sites-available/pol263 /etc/nginx/sites-enabled/
 rm /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
@@ -338,30 +338,30 @@ Open **http://YOUR_VPS_IP** in your browser (no `:5000`).
 | Task              | Command |
 |-------------------|--------|
 | See app status    | `pm2 status` |
-| View logs         | `pm2 logs chibikhulu` |
-| Restart app       | `pm2 restart chibikhulu` |
-| Stop app          | `pm2 stop chibikhulu` |
-| Start app         | `pm2 start chibikhulu` |
+| View logs         | `pm2 logs pol263` |
+| Restart app       | `pm2 restart pol263` |
+| Stop app          | `pm2 stop pol263` |
+| Start app         | `pm2 start pol263` |
 
 ---
 
 ## If something goes wrong
 
 - **"Connection refused" in browser**  
-  - Check: `pm2 status` shows `chibikhulu` as **online**.  
+  - Check: `pm2 status` shows `pol263` as **online**.  
   - Check: `ufw allow 5000` (and `ufw allow 80` if using Nginx).
 
 - **"DATABASE_URL must be set" or DB errors**  
-  - Check `.env` exists in `/opt/chibikhulu` and has the correct `DATABASE_URL` and password.  
+  - Check `.env` exists in `/opt/pol263` and has the correct `DATABASE_URL` and password.  
   - Run again: `npm run db:setup`.
 
 - **App crashes**  
-  - Run `pm2 logs chibikhulu` and read the last lines for the error.  
-  - Fix the cause (e.g. wrong `.env`), then `pm2 restart chibikhulu`.
+  - Run `pm2 logs pol263` and read the last lines for the error.  
+  - Fix the cause (e.g. wrong `.env`), then `pm2 restart pol263`.
 
 - **Updates from your PC**  
   - Push to GitHub, then on the VPS:  
-    `cd /opt/chibikhulu && git pull && npm install && npm run build && pm2 restart chibikhulu`
+    `cd /opt/pol263 && git pull && npm install && npm run build && pm2 restart pol263`
 
 ---
 
@@ -369,11 +369,11 @@ Open **http://YOUR_VPS_IP** in your browser (no `:5000`).
 
 1. SSH into the VPS.
 2. Install Node.js 20, PostgreSQL, Git.
-3. Create database `chibikhulu` and set postgres password.
-4. Clone or upload the app to `/opt/chibikhulu`.
+3. Create database `pol263` and set postgres password.
+4. Clone or upload the app to `/opt/pol263`.
 5. Create `.env` with `DATABASE_URL`, `SESSION_SECRET`, `PORT`, `HOST`.
 6. Run `npm install`, `npm run build`, `npm run db:setup`.
 7. Start with PM2 and enable startup.
 8. Open **http://YOUR_VPS_IP:5000** (or set up Nginx and use port 80).
 
-After this, your Chibikhulu app will be running on your InterServer VPS.
+After this, your POL263 app will be running on your InterServer VPS.

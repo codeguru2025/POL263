@@ -1,4 +1,4 @@
-# Falakhe PMS - Phase 0-1 Foundation
+# POL263 - Phase 0-1 Foundation
 
 ## How to run (no coding required)
 
@@ -8,12 +8,13 @@
 
 Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**  
 **Database setup (PostgreSQL):** **[docs/DATABASE-SETUP.md](docs/DATABASE-SETUP.md)**  
+**Deploy on DigitalOcean App Platform (from GitHub):** **[docs/DEPLOY-DIGITALOCEAN-APP.md](docs/DEPLOY-DIGITALOCEAN-APP.md)**  
 **Deploy on InterServer VPS:** **[docs/DEPLOY-INTERSERVER-VPS.md](docs/DEPLOY-INTERSERVER-VPS.md)**
 
 ---
 
 ## Overview
-Falakhe PMS is a modern, multi-tenant Property Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
+POL263 is a modern, multi-tenant Property Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
 
 ## Architecture & Tech Stack
 *   **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + Wouter

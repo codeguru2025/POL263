@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
+import argon2 from "argon2";
+import { storage, findPaymentReceiptById } from "./storage";
 import { requireAuth, requirePermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { z } from "zod";
@@ -90,6 +91,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/organizations", requireAuth, async (req, res) => {
     const user = req.user as any;
+    const perms = await storage.getUserEffectivePermissions(user.id);
+    const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
+    if (canManageTenants) {
+      const allOrgs = await storage.getOrganizations();
+      const active = allOrgs.filter((o) => !o.name?.endsWith(" (deleted)"));
+      return res.json(active);
+    }
     if (user.organizationId) {
       const org = await storage.getOrganization(user.organizationId);
       return res.json(org ? [org] : []);
@@ -97,23 +105,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json([]);
   });
 
-  app.get("/api/organizations/:id", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/organizations/:id", requireAuth, async (req, res) => {
     const user = req.user as any;
     const id = req.params.id as string;
-    if (id !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
+    const perms = await storage.getUserEffectivePermissions(user.id);
+    const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
+    if (!canManageTenants && id !== user.organizationId) {
+      return res.status(403).json({ message: "Cross-tenant access denied" });
+    }
     const org = await storage.getOrganization(id);
     if (!org) return res.status(404).json({ message: "Not found" });
     return res.json(org);
   });
 
-  app.patch("/api/organizations/:id", requireAuth, requireTenantScope, requirePermission("write:organization"), async (req, res) => {
+  app.patch("/api/organizations/:id", requireAuth, async (req, res) => {
     const user = req.user as any;
     const id = req.params.id as string;
-    if (id !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
+    const perms = await storage.getUserEffectivePermissions(user.id);
+    const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
+    const canWriteOrg = perms.includes("write:organization");
+    if (!canManageTenants && (id !== user.organizationId || !canWriteOrg)) {
+      return res.status(403).json({ message: "Cross-tenant access denied or insufficient permissions" });
+    }
     const before = await storage.getOrganization(id);
+    if (!before) return res.status(404).json({ message: "Not found" });
     const updated = await storage.updateOrganization(id, req.body);
     await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, updated);
     return res.json(updated);
+  });
+
+  app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
+    const parsed = insertOrganizationSchema.parse(req.body);
+    const org = await storage.createOrganization(parsed);
+    const defaultBranch = await storage.createBranch({
+      organizationId: org.id,
+      name: "Head Office",
+      isActive: true,
+    });
+    await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, { ...org, defaultBranchId: defaultBranch.id });
+    return res.status(201).json(org);
+  });
+
+  app.delete("/api/organizations/:id", requireAuth, requirePermission("delete:tenant"), async (req, res) => {
+    const id = req.params.id as string;
+    const org = await storage.getOrganization(id);
+    if (!org) return res.status(404).json({ message: "Not found" });
+    const usersInOrg = await storage.getUsersByOrg(id, 1, 0);
+    if (usersInOrg.length > 0) {
+      return res.status(400).json({
+        message: "Cannot delete tenant that has users. Remove or reassign users first.",
+      });
+    }
+    await storage.updateOrganization(id, { name: org.name + " (deleted)" });
+    await auditLog(req, "DELETE_ORGANIZATION", "Organization", id, org, null);
+    return res.status(204).send();
   });
 
   // ─── Branches ───────────────────────────────────────────────
@@ -139,7 +184,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const offset = parseInt(req.query.offset as string) || 0;
     const usersList = await storage.getUsersByOrg(user.organizationId, limit, offset);
     const usersWithRoles = await Promise.all(usersList.map(async (u) => {
-      const userRoles = await storage.getUserRoles(u.id);
+      const userRoles = await storage.getUserRoles(u.id, user.organizationId);
       return {
         id: u.id, email: u.email, displayName: u.displayName,
         avatarUrl: u.avatarUrl, isActive: u.isActive, createdAt: u.createdAt,
@@ -155,7 +200,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!targetUser) return res.status(404).json({ message: "User not found" });
     const currentUser = req.user as any;
     if (targetUser.organizationId !== currentUser.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
-    const userRoles = await storage.getUserRoles(targetUser.id);
+    const userRoles = await storage.getUserRoles(targetUser.id, currentUser.organizationId);
     return res.json({
       ...targetUser,
       roles: userRoles.map(r => ({ id: r.id, name: r.name })),
@@ -164,11 +209,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/users", requireAuth, requireTenantScope, requirePermission("write:user"), async (req, res) => {
     const currentUser = req.user as any;
-    const { email, displayName, roleIds, branchId } = req.body;
+    const { email, displayName, roleIds, branchId, password } = req.body;
     if (!email) return res.status(400).json({ message: "Email is required" });
 
     const existing = await storage.getUserByEmail(email);
     if (existing) return res.status(409).json({ message: "A user with this email already exists" });
+
+    const roles = roleIds && Array.isArray(roleIds) ? await Promise.all(roleIds.map((id: string) => storage.getRole(id, currentUser.organizationId))) : [];
+    const isAgent = roles.some((r) => r?.name === "agent");
+    if (isAgent && (!password || String(password).length < 8)) {
+      return res.status(400).json({ message: "Agents require a password of at least 8 characters" });
+    }
+
+    let passwordHash: string | undefined;
+    if (password && String(password).length >= 8) {
+      passwordHash = await argon2.hash(String(password), { type: argon2.argon2id });
+    }
 
     const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const newUser = await storage.createUser({
@@ -178,6 +234,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       branchId: branchId || currentUser.branchId,
       referralCode: refCode,
       isActive: true,
+      passwordHash,
     });
 
     if (roleIds && Array.isArray(roleIds)) {
@@ -186,7 +243,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
-    const userRoles = await storage.getUserRoles(newUser.id);
+    const userRoles = await storage.getUserRoles(newUser.id, currentUser.organizationId);
     await auditLog(req, "CREATE_USER", "User", newUser.id, null, { ...newUser, roles: userRoles.map(r => r.name) });
     return res.status(201).json({ ...newUser, roles: userRoles.map(r => ({ id: r.id, name: r.name })) });
   });
@@ -198,11 +255,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(404).json({ message: "User not found" });
     }
     const before = { ...targetUser };
-    const { displayName, isActive, branchId, roleIds } = req.body;
+    const { displayName, isActive, branchId, roleIds, password } = req.body;
     const updates: any = {};
     if (displayName !== undefined) updates.displayName = displayName;
     if (isActive !== undefined) updates.isActive = isActive;
     if (branchId !== undefined) updates.branchId = branchId;
+    if (password !== undefined && String(password).length >= 8) {
+      updates.passwordHash = await argon2.hash(String(password), { type: argon2.argon2id });
+    }
     const updated = await storage.updateUser(req.params.id as string, updates);
 
     if (roleIds && Array.isArray(roleIds)) {
@@ -212,7 +272,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
-    const userRoles = await storage.getUserRoles(req.params.id as string);
+    const userRoles = await storage.getUserRoles(req.params.id as string, currentUser.organizationId);
     await auditLog(req, "UPDATE_USER", "User", req.params.id as string, before, { ...updated, roles: userRoles.map(r => r.name) });
     return res.json({ ...updated, roles: userRoles.map(r => ({ id: r.id, name: r.name })) });
   });
@@ -239,7 +299,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/roles/:id/permissions", requireAuth, requireTenantScope, requirePermission("read:role"), async (req, res) => {
-    return res.json(await storage.getRolePermissions(req.params.id as string));
+    const user = req.user as any;
+    return res.json(await storage.getRolePermissions(req.params.id as string, user.organizationId));
   });
 
   // ─── Permissions ────────────────────────────────────────────
@@ -270,13 +331,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getClientsByOrg(user.organizationId, limit, offset));
+    const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
+    return res.json(await storage.getClientsByOrg(user.organizationId, limit, offset, search));
   });
 
   app.get("/api/clients/:id", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
-    const client = await storage.getClient(req.params.id as string);
-    if (!client) return res.status(404).json({ message: "Not found" });
     const user = req.user as any;
+    const client = await storage.getClient(req.params.id as string, user.organizationId);
+    if (!client) return res.status(404).json({ message: "Not found" });
     if (client.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     return res.json(client);
   });
@@ -311,9 +373,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/clients/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
-    const before = await storage.getClient(req.params.id as string);
+    const before = await storage.getClient(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updateClient(req.params.id as string, req.body);
+    const updated = await storage.updateClient(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_CLIENT", "Client", req.params.id as string, before, updated);
     return res.json(updated);
   });
@@ -322,14 +384,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/clients/:clientId/dependents", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
     const user = req.user as any;
-    const client = await storage.getClient(req.params.clientId as string);
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
-    return res.json(await storage.getDependentsByClient(req.params.clientId as string));
+    return res.json(await storage.getDependentsByClient(req.params.clientId as string, user.organizationId));
   });
 
   app.post("/api/clients/:clientId/dependents", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
-    const client = await storage.getClient(req.params.clientId as string);
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
     const parsed = insertDependentSchema.parse({
       ...req.body,
@@ -343,9 +405,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/clients/:clientId/dependents/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
-    const client = await storage.getClient(req.params.clientId as string);
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
-    const updated = await storage.updateDependent(req.params.id as string, req.body);
+    const updated = await storage.updateDependent(req.params.id as string, req.body, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Dependent not found" });
     await auditLog(req, "UPDATE_DEPENDENT", "Dependent", req.params.id as string, null, updated);
     return res.json(updated);
@@ -353,9 +415,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/clients/:clientId/dependents/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
-    const client = await storage.getClient(req.params.clientId as string);
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
-    await storage.deleteDependent(req.params.id as string);
+    await storage.deleteDependent(req.params.id as string, user.organizationId);
     await auditLog(req, "DELETE_DEPENDENT", "Dependent", req.params.id as string, null, null);
     return res.status(204).send();
   });
@@ -368,9 +430,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/products/:id", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
-    const product = await storage.getProduct(req.params.id as string);
-    if (!product) return res.status(404).json({ message: "Not found" });
     const user = req.user as any;
+    const product = await storage.getProduct(req.params.id as string, user.organizationId);
+    if (!product) return res.status(404).json({ message: "Not found" });
     if (product.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     return res.json(product);
   });
@@ -385,23 +447,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/products/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const before = await storage.getProduct(req.params.id as string);
+    const before = await storage.getProduct(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updateProduct(req.params.id as string, req.body);
+    const updated = await storage.updateProduct(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_PRODUCT", "Product", req.params.id as string, before, updated);
     return res.json(updated);
   });
 
   app.get("/api/products/:id/versions", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
     const user = req.user as any;
-    const product = await storage.getProduct(req.params.id as string);
+    const product = await storage.getProduct(req.params.id as string, user.organizationId);
     if (!product || product.organizationId !== user.organizationId) return res.status(404).json({ message: "Product not found" });
-    return res.json(await storage.getProductVersions(req.params.id as string));
+    return res.json(await storage.getProductVersions(req.params.id as string, user.organizationId));
   });
 
   app.post("/api/products/:id/versions", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const versions = await storage.getProductVersions(req.params.id as string);
+    const versions = await storage.getProductVersions(req.params.id as string, user.organizationId);
     const nextVersion = versions.length > 0 ? Math.max(...versions.map(v => v.version)) + 1 : 1;
     const parsed = insertProductVersionSchema.parse({
       ...req.body,
@@ -473,16 +535,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
-    const filters = (fromDate || toDate || status) ? { fromDate, toDate, status } : undefined;
+    const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
+    const filters = (fromDate || toDate || status || search) ? { fromDate, toDate, status, search } : undefined;
     return res.json(await storage.getPoliciesByOrg(user.organizationId, limit, offset, filters));
   });
 
   app.get("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
-    const policy = await storage.getPolicy(req.params.id as string);
-    if (!policy) return res.status(404).json({ message: "Not found" });
     const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy) return res.status(404).json({ message: "Not found" });
     if (policy.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
-    return res.json(policy);
+    const today = new Date().toISOString().split("T")[0];
+    const statusOk = policy.status === "active" || policy.status === "grace";
+    const waitingOver = !policy.waitingPeriodEndDate || policy.waitingPeriodEndDate <= today;
+    const claimable = !!(statusOk && waitingOver);
+    const claimableReason = !statusOk
+      ? `Policy status is ${policy.status}; must be active or in grace to lodge a claim.`
+      : !waitingOver
+        ? `Waiting period ends ${policy.waitingPeriodEndDate}. Claims allowed after that date.`
+        : "Policy and covered members are eligible for claims.";
+    return res.json({ ...policy, claimable, claimableReason });
   });
 
   app.post("/api/policies", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -526,7 +598,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
     if (addOnIds.length > 0) {
-      await storage.addPolicyAddOns(policy.id, addOnIds);
+      await storage.addPolicyAddOns(policy.id, addOnIds, user.organizationId);
     }
 
     await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
@@ -535,16 +607,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
-    const before = await storage.getPolicy(req.params.id as string);
+    const before = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updatePolicy(req.params.id as string, req.body);
+    const updated = await storage.updatePolicy(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);
     return res.json(updated);
   });
 
   app.post("/api/policies/:id/transition", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
-    const policy = await storage.getPolicy(req.params.id as string);
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
 
     const { toStatus, reason } = req.body;
@@ -554,14 +626,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const before = { ...policy };
-    const updated = await storage.updatePolicy(policy.id, { status: toStatus });
+    const updated = await storage.updatePolicy(policy.id, { status: toStatus }, user.organizationId);
     await storage.createPolicyStatusHistory(policy.id, policy.status, toStatus, reason, user.id);
     await auditLog(req, "TRANSITION_POLICY", "Policy", policy.id, before, updated);
     return res.json(updated);
   });
 
   app.get("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
-    return res.json(await storage.getPolicyMembers(req.params.id as string));
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
+    const today = new Date().toISOString().split("T")[0];
+    const policyClaimable = (policy.status === "active" || policy.status === "grace") && (!policy.waitingPeriodEndDate || policy.waitingPeriodEndDate <= today);
+    const withClaimable = members.map((m: any) => ({
+      ...m,
+      claimable: policyClaimable,
+      claimableReason: policyClaimable ? "Eligible for claim (policy in force and waiting period ended)." : "Policy not yet claimable (check status or waiting period).",
+    }));
+    return res.json(withClaimable);
   });
 
   // ─── Payments ───────────────────────────────────────────────
@@ -577,7 +660,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/policies/:id/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
-    return res.json(await storage.getPaymentsByPolicy(req.params.id as string));
+    const user = req.user as any;
+    return res.json(await storage.getPaymentsByPolicy(req.params.id as string, user.organizationId));
   });
 
   app.post("/api/payments", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -624,7 +708,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
-    return res.json(await storage.getReceiptsByPolicy(req.params.id as string));
+    const user = req.user as any;
+    return res.json(await storage.getReceiptsByPolicy(req.params.id as string, user.organizationId));
   });
 
   // ─── Payment intents (Paynow) & receipts ─────────────────────
@@ -636,23 +721,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/payment-intents/:id", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const intent = await storage.getPaymentIntentById(req.params.id);
+    const intent = await storage.getPaymentIntentById(req.params.id, user.organizationId);
     if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const events = await storage.getPaymentEventsByIntentId(intent.id);
+    const events = await storage.getPaymentEventsByIntentId(intent.id, user.organizationId);
     return res.json({ ...intent, events });
   });
 
   app.post("/api/payment-intents/:id/poll", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const intent = await storage.getPaymentIntentById(req.params.id);
+    const intent = await storage.getPaymentIntentById(req.params.id, user.organizationId);
     if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const result = await pollPaynowStatus(intent.id);
+    const result = await pollPaynowStatus(intent.id, intent.organizationId);
     return res.json(result);
   });
 
   app.get("/api/receipts/:id/download", requireAuth, async (req, res) => {
     const user = req.user as any;
-    const receipt = await storage.getPaymentReceiptById(req.params.id);
+    const receipt = user.organizationId
+      ? await storage.getPaymentReceiptById(req.params.id, user.organizationId)
+      : await findPaymentReceiptById(req.params.id);
     if (!receipt) return res.status(404).json({ message: "Not found" });
     if (user.organizationId && receipt.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
     const filePath = getReceiptPdfPath(receipt.pdfStorageKey);
@@ -664,7 +751,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const { policyId, amount, currency, notes, receivedAt } = req.body;
     if (!policyId || amount == null) return res.status(400).json({ message: "policyId and amount required" });
-    const policy = await storage.getPolicy(policyId);
+    const policy = await storage.getPolicy(policyId, user.organizationId);
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
     const today = new Date().toISOString().split("T")[0];
     const tx = await storage.createPaymentTransaction({
@@ -685,6 +772,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
     const receipt = await storage.createPaymentReceipt({
       organizationId: user.organizationId,
+      branchId: policy.branchId || user.branchId || undefined,
       receiptNumber,
       paymentIntentId: null,
       policyId,
@@ -699,7 +787,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     const { generateReceiptPdf } = await import("./receipt-pdf");
     const pdfPath = await generateReceiptPdf(receipt.id);
-    if (pdfPath) await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath });
+    if (pdfPath) await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath }, receipt.organizationId);
     await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", receipt.id, null, receipt);
     return res.status(201).json({ transaction: tx, receipt });
   });
@@ -708,7 +796,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const { receiptId } = req.body;
     if (!receiptId) return res.status(400).json({ message: "receiptId required" });
-    const receipt = await storage.getPaymentReceiptById(receiptId);
+    const receipt = await storage.getPaymentReceiptById(receiptId, user.organizationId);
     if (!receipt || receipt.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     if (receipt.paymentIntentId) {
       await storage.createPaymentEvent({
@@ -760,9 +848,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/claims/:id", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
-    const claim = await storage.getClaim(req.params.id as string);
-    if (!claim) return res.status(404).json({ message: "Not found" });
     const user = req.user as any;
+    const claim = await storage.getClaim(req.params.id as string, user.organizationId);
+    if (!claim) return res.status(404).json({ message: "Not found" });
     if (claim.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     return res.json(claim);
   });
@@ -785,7 +873,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/claims/:id/transition", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
     const user = req.user as any;
-    const claim = await storage.getClaim(req.params.id as string);
+    const claim = await storage.getClaim(req.params.id as string, user.organizationId);
     if (!claim || claim.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
 
     const { toStatus, reason } = req.body;
@@ -806,14 +894,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (toStatus === "verified") updateData.verifiedBy = user.id;
     if (toStatus === "approved") updateData.approvedBy = user.id;
 
-    const updated = await storage.updateClaim(claim.id, updateData);
+    const updated = await storage.updateClaim(claim.id, updateData, claim.organizationId);
     await storage.createClaimStatusHistory(claim.id, claim.status, toStatus, reason, user.id);
     await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, updated);
     return res.json(updated);
   });
 
   app.get("/api/claims/:id/documents", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
-    return res.json(await storage.getClaimDocuments(req.params.id as string));
+    const user = req.user as any;
+    return res.json(await storage.getClaimDocuments(req.params.id as string, user.organizationId));
   });
 
   // ─── Funeral Cases ──────────────────────────────────────────
@@ -829,9 +918,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/funeral-cases/:id", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
-    const fc = await storage.getFuneralCase(req.params.id as string);
-    if (!fc) return res.status(404).json({ message: "Not found" });
     const user = req.user as any;
+    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+    if (!fc) return res.status(404).json({ message: "Not found" });
     if (fc.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     return res.json(fc);
   });
@@ -852,15 +941,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/funeral-cases/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const before = await storage.getFuneralCase(req.params.id as string);
+    const before = await storage.getFuneralCase(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updateFuneralCase(req.params.id as string, req.body);
+    const updated = await storage.updateFuneralCase(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_FUNERAL_CASE", "FuneralCase", req.params.id as string, before, updated);
     return res.json(updated);
   });
 
   app.get("/api/funeral-cases/:id/tasks", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
-    return res.json(await storage.getFuneralTasks(req.params.id as string));
+    const user = req.user as any;
+    return res.json(await storage.getFuneralTasks(req.params.id as string, user.organizationId));
   });
 
   app.post("/api/funeral-cases/:id/tasks", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
@@ -870,7 +960,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.patch("/api/funeral-tasks/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
-    const updated = await storage.updateFuneralTask(req.params.id as string, req.body);
+    const updated = await storage.updateFuneralTask(req.params.id as string, req.body, user.organizationId);
     return res.json(updated);
   });
 
@@ -923,9 +1013,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/leads/:id", requireAuth, requireTenantScope, requirePermission("write:lead"), async (req, res) => {
     const user = req.user as any;
-    const before = await storage.getLead(req.params.id as string);
+    const before = await storage.getLead(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updateLead(req.params.id as string, req.body);
+    const updated = await storage.updateLead(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_LEAD", "Lead", req.params.id as string, before, updated);
     return res.json(updated);
   });
@@ -1014,7 +1104,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: action === "approve" ? "approved" : "rejected",
       approvedBy: user.id,
       rejectionReason: rejectionReason || null,
-    });
+    }, user.organizationId);
     await auditLog(req, `RESOLVE_APPROVAL_${action.toUpperCase()}`, "ApprovalRequest", approval.id, approval, updated);
     return res.json(updated);
   });
@@ -1072,6 +1162,106 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ name: agent.displayName || agent.email, referralCode: code });
   });
 
+  // ─── Public policy registration (from agent referral link) ──
+  app.get("/api/public/registration-options", async (req, res) => {
+    const ref = typeof req.query.ref === "string" ? req.query.ref.trim() : "";
+    if (!ref) return res.status(400).json({ error: "Referral code (ref) required" });
+    const orgs = await storage.getOrganizations();
+    if (orgs.length === 0) return res.status(404).json({ error: "Not found" });
+    const agent = await storage.getUserByReferralCode(ref);
+    if (!agent || agent.organizationId !== orgs[0].id) return res.status(404).json({ error: "Agent not found" });
+    const products = await storage.getProductsByOrg(orgs[0].id);
+    const withVersions = await Promise.all(
+      products.filter((p) => p.isActive).map(async (p) => {
+        const versions = await storage.getProductVersions(p.id, orgs[0].id);
+        return { ...p, versions: versions.filter((v) => v.isActive !== false) };
+      })
+    );
+    const branches = await storage.getBranchesByOrg(orgs[0].id);
+    return res.json({
+      agentName: agent.displayName || agent.email,
+      referralCode: ref,
+      products: withVersions,
+      branches: branches.filter((b) => b.isActive),
+    });
+  });
+
+  app.post("/api/public/register-policy", express.json(), async (req, res) => {
+    const { referralCode, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, premiumAmount, currency, paymentSchedule } = req.body;
+    if (!referralCode || !firstName || !lastName || !productVersionId) {
+      return res.status(400).json({ error: "referralCode, firstName, lastName, and productVersionId are required" });
+    }
+    const orgs = await storage.getOrganizations();
+    if (orgs.length === 0) return res.status(503).json({ error: "System not configured" });
+    const agent = await storage.getUserByReferralCode(referralCode);
+    if (!agent || agent.organizationId !== orgs[0].id) return res.status(400).json({ error: "Invalid referral code" });
+    const orgId = orgs[0].id;
+    const pv = await storage.getProductVersion(productVersionId, orgId);
+    if (!pv) return res.status(400).json({ error: "Invalid product version" });
+    const product = await storage.getProduct(pv.productId, orgId);
+    if (!product) return res.status(400).json({ error: "Product not found" });
+    const effectiveBranchId = branchId || agent.branchId || null;
+    const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    try {
+      const clientParsed = insertClientSchema.parse({
+        organizationId: orgId,
+        branchId: effectiveBranchId,
+        firstName: String(firstName).trim(),
+        lastName: String(lastName).trim(),
+        email: email ? String(email).trim() : null,
+        phone: phone ? String(phone).trim() : null,
+        dateOfBirth: dateOfBirth || null,
+        nationalId: nationalId ? String(nationalId).trim() : null,
+        activationCode,
+        isEnrolled: false,
+      });
+      const client = await storage.createClient(clientParsed);
+      const policyNumber = await storage.generatePolicyNumber(orgId);
+      const premium = premiumAmount != null ? String(premiumAmount) : (pv.premiumMonthlyUsd ?? "0");
+      const policyParsed = insertPolicySchema.parse({
+        organizationId: orgId,
+        branchId: effectiveBranchId,
+        policyNumber,
+        clientId: client.id,
+        productVersionId: pv.id,
+        agentId: agent.id,
+        status: "draft",
+        premiumAmount: premium,
+        currency: currency || pv.currency || "USD",
+        paymentSchedule: paymentSchedule || pv.paymentSchedule || "monthly",
+        effectiveDate: null,
+      });
+      const policy = await storage.createPolicy(policyParsed);
+      await storage.createPolicyStatusHistory(policy.id, null, "draft", "Registered via agent link");
+      await storage.createPolicyMember({
+        policyId: policy.id,
+        clientId: client.id,
+        role: "policy_holder",
+      });
+      const lead = await storage.createLead({
+        organizationId: orgId,
+        branchId: effectiveBranchId || undefined,
+        agentId: agent.id,
+        clientId: client.id,
+        firstName: client.firstName,
+        lastName: client.lastName,
+        phone: client.phone || undefined,
+        email: client.email || undefined,
+        source: "agent_link",
+        stage: "lead",
+      });
+      return res.status(201).json({
+        policyNumber: policy.policyNumber,
+        activationCode: client.activationCode,
+        clientId: client.id,
+        message: "Policy registered. Use your policy number and activation code to claim your account, then sign in.",
+      });
+    } catch (e) {
+      if (e instanceof z.ZodError) return res.status(400).json({ error: "Validation failed", details: e.errors });
+      throw e;
+    }
+  });
+
   // ─── Groups ──────────────────────────────────────────────
 
   app.get("/api/groups", requireAuth, requireTenantScope, async (req, res) => {
@@ -1089,11 +1279,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/groups/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const id = String(req.params.id);
-    const existing = await storage.getGroup(id);
-    if (!existing) return res.status(404).json({ error: "Group not found" });
     const user = req.user as any;
+    const existing = await storage.getGroup(id, user.organizationId);
+    if (!existing) return res.status(404).json({ error: "Group not found" });
     if (existing.organizationId !== user.organizationId) return res.status(403).json({ error: "Forbidden" });
-    const updated = await storage.updateGroup(id, req.body);
+    const updated = await storage.updateGroup(id, req.body, user.organizationId);
     await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
     return res.json(updated);
   });
@@ -1140,7 +1330,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const settlement = existing.find(s => s.id === id);
     if (!settlement) return res.status(404).json({ error: "Settlement not found" });
     if (settlement.initiatedBy === user.id) return res.status(400).json({ error: "Cannot approve own settlement" });
-    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: user.id });
+    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: user.id }, user.organizationId);
     await auditLog(req, "APPROVE_SETTLEMENT", "Settlement", id, settlement, updated);
     return res.json(updated);
   });
@@ -1161,8 +1351,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/cost-sheets/:id/items", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
     const id = String(req.params.id);
-    return res.json(await storage.getCostLineItems(id));
+    return res.json(await storage.getCostLineItems(id, user.organizationId));
   });
 
   app.post("/api/cost-sheets/:id/items", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -1285,7 +1476,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/terms", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getTermsByOrg(user.organizationId));
+    const all = req.query.all === "true";
+    const terms = all
+      ? await storage.getTermsByOrgAll(user.organizationId)
+      : await storage.getTermsByOrg(user.organizationId);
+    return res.json(terms);
   });
 
   app.post("/api/terms", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
@@ -1296,13 +1491,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.patch("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
-    const updated = await storage.updateTerms(req.params.id as string, req.body);
+    const user = req.user as any;
+    const updated = await storage.updateTerms(req.params.id as string, req.body, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Not found" });
     return res.json(updated);
   });
 
   app.delete("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
-    await storage.deleteTerms(req.params.id as string);
+    const user = req.user as any;
+    await storage.deleteTerms(req.params.id as string, user.organizationId);
     return res.status(204).send();
   });
 

@@ -19,7 +19,7 @@ export default function StaffUsers() {
   const [searchTerm, setSearchTerm] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
-  const [newUser, setNewUser] = useState({ email: "", displayName: "", roleIds: [] as string[], branchId: "" });
+  const [newUser, setNewUser] = useState({ email: "", displayName: "", roleIds: [] as string[], branchId: "", password: "" });
 
   const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/users"] });
   const { data: roles = [] } = useQuery<any[]>({ queryKey: ["/api/roles"] });
@@ -33,7 +33,7 @@ export default function StaffUsers() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       setShowCreateDialog(false);
-      setNewUser({ email: "", displayName: "", roleIds: [], branchId: "" });
+      setNewUser({ email: "", displayName: "", roleIds: [], branchId: "", password: "" });
       toast({ title: "User created", description: "The new user has been added successfully." });
     },
     onError: (err: any) => {
@@ -117,7 +117,9 @@ export default function StaffUsers() {
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Add New User</DialogTitle>
-                <DialogDescription>Create a staff member or agent account. They'll sign in via Google OAuth using this email.</DialogDescription>
+                <DialogDescription>
+                  Staff: add email and they sign in with Google (must be added first). Agents: add email, assign the Agent role, and set a password—they sign in at the agent login page.
+                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
@@ -155,10 +157,16 @@ export default function StaffUsers() {
                     })}
                   </div>
                 </div>
+                {newUser.roleIds.some(rid => roles.find((r: any) => r.id === rid)?.name === "agent") && (
+                  <div className="space-y-2">
+                    <Label htmlFor="new-user-password">Agent password (min 8 characters)</Label>
+                    <Input id="new-user-password" type="password" placeholder="••••••••" value={newUser.password} onChange={e => setNewUser(p => ({ ...p, password: e.target.value }))} data-testid="input-agent-password" />
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
-                <Button onClick={() => createMutation.mutate(newUser)} disabled={!newUser.email || createMutation.isPending} data-testid="button-submit-create-user">
+                <Button onClick={() => createMutation.mutate(newUser)} disabled={!newUser.email || createMutation.isPending || (newUser.roleIds.some(rid => roles.find((r: any) => r.id === rid)?.name === "agent") && newUser.password.length < 8)} data-testid="button-submit-create-user">
                   {createMutation.isPending ? "Creating..." : "Create User"}
                 </Button>
               </DialogFooter>
@@ -283,6 +291,12 @@ export default function StaffUsers() {
                     </SelectContent>
                   </Select>
                 </div>
+                {editingUser.roleIds?.some((rid: string) => roles.find((r: any) => r.id === rid)?.name === "agent") && (
+                  <div className="space-y-2">
+                    <Label>New password (optional, min 8 characters)</Label>
+                    <Input type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" />
+                  </div>
+                )}
                 {branches.length > 0 && (
                   <div className="space-y-2">
                     <Label>Branch</Label>
@@ -315,7 +329,7 @@ export default function StaffUsers() {
             )}
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
-              <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds } })} disabled={updateMutation.isPending} data-testid="button-submit-edit-user">
+              <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined } })} disabled={updateMutation.isPending} data-testid="button-submit-edit-user">
                 {updateMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>
             </DialogFooter>

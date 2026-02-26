@@ -1,4 +1,4 @@
-# Security Policy - Falakhe PMS
+# Security Policy - POL263
 
 ## Authentication
 *   **Staff Portal**: Access is strictly limited to corporate Google Workspace accounts via OIDC. No local passwords are stored or accepted.

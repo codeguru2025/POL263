@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 
 import StaffLogin from "@/pages/staff/login";
+import AgentLogin from "@/pages/agent/login";
 import StaffDashboard from "@/pages/staff/dashboard";
 import AuditLogs from "@/pages/staff/audit";
 import StaffSettings from "@/pages/staff/settings";
@@ -26,12 +27,17 @@ import StaffDiagnostics from "@/pages/staff/diagnostics";
 import StaffPriceBook from "@/pages/staff/pricebook";
 import StaffPayroll from "@/pages/staff/payroll";
 import StaffUsers from "@/pages/staff/users";
+import StaffTenants from "@/pages/staff/tenants";
 
 import ClientLogin from "@/pages/client/login";
 import ClientClaim from "@/pages/client/claim";
 import ClientDashboard from "@/pages/client/dashboard";
 import ClientPayments from "@/pages/client/payments";
+import ClientDocuments from "@/pages/client/documents";
+import ClientClaims from "@/pages/client/claims";
+import ClientFeedback from "@/pages/client/feedback";
 import JoinPage from "@/pages/join";
+import JoinRegisterPage from "@/pages/join/register";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
 
@@ -47,6 +53,7 @@ function Router() {
       <Route path="/" component={Home} />
       
       <Route path="/staff/login" component={StaffLogin} />
+      <Route path="/agent/login" component={AgentLogin} />
       <Route path="/staff" component={StaffDashboard} />
       <Route path="/staff/audit" component={AuditLogs} />
       <Route path="/staff/settings" component={StaffSettings} />
@@ -65,13 +72,18 @@ function Router() {
       <Route path="/staff/pricebook" component={StaffPriceBook} />
       <Route path="/staff/payroll" component={StaffPayroll} />
       <Route path="/staff/users" component={StaffUsers} />
+      <Route path="/staff/tenants" component={StaffTenants} />
       
       <Route path="/join" component={JoinPage} />
+      <Route path="/join/register" component={JoinRegisterPage} />
       
       <Route path="/client/login" component={ClientLogin} />
       <Route path="/client/claim" component={ClientClaim} />
       <Route path="/client" component={ClientDashboard} />
       <Route path="/client/payments" component={ClientPayments} />
+      <Route path="/client/documents" component={ClientDocuments} />
+      <Route path="/client/claims" component={ClientClaims} />
+      <Route path="/client/feedback" component={ClientFeedback} />
       <Route path="/client/payments/return">
         <PaynowReturnRedirect />
       </Route>

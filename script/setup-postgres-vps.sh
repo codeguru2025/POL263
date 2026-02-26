@@ -27,13 +27,13 @@ echo "Creating database and user..."
 # Escape single quotes in password for use in SQL
 SAFE_PASS=$(echo "$CHIBIKHULU_DB_PASSWORD" | sed "s/'/''/g")
 sudo -u postgres psql -c "ALTER USER postgres PASSWORD '"$SAFE_PASS"';" 2>/dev/null || true
-sudo -u postgres psql -c "CREATE DATABASE chibikhulu;" 2>/dev/null || echo "Database chibikhulu already exists."
+sudo -u postgres psql -c "CREATE DATABASE pol263;" 2>/dev/null || echo "Database pol263 already exists."
 
 echo ""
 echo "PostgreSQL is ready."
 echo ""
 echo "Use this in your .env on the VPS:"
-echo "  DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/chibikhulu"
+echo "  DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/pol263"
 echo ""
 echo "Replace YOUR_PASSWORD with the same password you set for CHIBIKHULU_DB_PASSWORD."
 echo ""

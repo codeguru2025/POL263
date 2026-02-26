@@ -3,7 +3,7 @@
  * All Paynow secrets stay server-side. Hash verification is mandatory on result/poll.
  */
 
-import { storage } from "./storage";
+import { storage, findPaymentIntentById } from "./storage";
 import { getPaynowConfig, getPaynowIntegrationId } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaymentReceipt } from "@shared/schema";
@@ -28,6 +28,7 @@ export interface CreateIntentInput {
 
 export interface InitiatePaynowInput {
   intentId: string;
+  organizationId: string;
   method: string; // ecocash | onemoney | innbucks | omari | visa_mastercard
   payerPhone?: string;
   payerEmail?: string;
@@ -70,7 +71,7 @@ export async function createPaymentIntent(input: CreateIntentInput): Promise<{
     return { intent: existing, created: false };
   }
 
-  const policy = await storage.getPolicy(policyId);
+  const policy = await storage.getPolicy(policyId, organizationId);
   const validation = validatePolicyPayable(policy!, purpose);
   if (!validation.ok) {
     return { intent: null as any, created: false, error: validation.message };
@@ -166,7 +167,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
     return { ok: false, error: "Paynow is not configured" };
   }
 
-  const intent = await storage.getPaymentIntentById(input.intentId);
+  const intent = await storage.getPaymentIntentById(input.intentId, input.organizationId);
   if (!intent) return { ok: false, error: "Payment intent not found" };
   if (intent.status === "paid") return { ok: false, error: "Payment already completed" };
   if (intent.status === "failed" || intent.status === "cancelled" || intent.status === "expired") {
@@ -220,7 +221,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
   if (status.toLowerCase() !== "ok") {
     const errMsg = parsed.get("error") ?? text.slice(0, 200);
     structuredLog("warn", "Paynow init non-OK", { status, error: errMsg });
-    await storage.updatePaymentIntent(intent.id, { status: "failed" });
+    await storage.updatePaymentIntent(intent.id, { status: "failed" }, intent.organizationId);
     await storage.createPaymentEvent({
       paymentIntentId: intent.id,
       organizationId: intent.organizationId,
@@ -238,7 +239,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
     paynowRedirectUrl: redirectUrl ?? undefined,
     paynowReference: paynowRef ?? undefined,
     methodSelected: method,
-  });
+  }, intent.organizationId);
   await storage.createPaymentEvent({
     paymentIntentId: intent.id,
     organizationId: intent.organizationId,
@@ -296,7 +297,7 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
     return { ok: true };
   }
   if (status === "cancelled" || status === "failed" || status === "disputed") {
-    await storage.updatePaymentIntent(intent.id, { status: "failed" });
+    await storage.updatePaymentIntent(intent.id, { status: "failed" }, intent.organizationId);
     await storage.createPaymentEvent({
       paymentIntentId: intent.id,
       organizationId: intent.organizationId,
@@ -310,8 +311,8 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
 }
 
 /** Poll Paynow status; update intent and apply payment if paid. */
-export async function pollPaynowStatus(intentId: string): Promise<{ status: string; paid?: boolean; error?: string }> {
-  const intent = await storage.getPaymentIntentById(intentId);
+export async function pollPaynowStatus(intentId: string, orgId: string): Promise<{ status: string; paid?: boolean; error?: string }> {
+  const intent = await storage.getPaymentIntentById(intentId, orgId);
   if (!intent) return { status: "unknown", error: "Intent not found" };
   if (intent.status === "paid") return { status: "paid", paid: true };
   if (intent.status === "failed" || intent.status === "cancelled" || intent.status === "expired") {
@@ -341,7 +342,7 @@ export async function pollPaynowStatus(intentId: string): Promise<{ status: stri
       return { status: "paid", paid: true };
     }
     if (status === "cancelled" || status === "failed") {
-      await storage.updatePaymentIntent(intent.id, { status: "failed" });
+      await storage.updatePaymentIntent(intent.id, { status: "failed" }, orgId);
       return { status: "failed" };
     }
     return { status: intent.status };
@@ -356,15 +357,16 @@ export async function applyPaymentToPolicy(
   actorType: "client" | "admin" | "system",
   actorId: string | null
 ): Promise<{ ok: boolean; transactionId?: string; receiptId?: string; error?: string }> {
-  const intent = await storage.getPaymentIntentById(intentId);
+  const intent = await findPaymentIntentById(intentId);
   if (!intent) return { ok: false, error: "Intent not found" };
+  const orgId = intent.organizationId;
   if (intent.status === "paid") {
-    const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId);
+    const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId, orgId);
     const existing = receipts.find((r) => r.paymentIntentId === intentId);
     return { ok: true, receiptId: existing?.id };
   }
 
-  const policy = await storage.getPolicy(intent.policyId);
+  const policy = await storage.getPolicy(intent.policyId, orgId);
   if (!policy) return { ok: false, error: "Policy not found" };
 
   const today = new Date().toISOString().split("T")[0];
@@ -397,6 +399,7 @@ export async function applyPaymentToPolicy(
   const paymentChannel = channelMap[intent.methodSelected ?? ""] ?? "paynow_ecocash";
   const receiptData: InsertPaymentReceipt = {
     organizationId: intent.organizationId,
+    branchId: policy.branchId ?? undefined,
     receiptNumber,
     paymentIntentId: intent.id,
     policyId: intent.policyId,
@@ -411,10 +414,10 @@ export async function applyPaymentToPolicy(
   };
   const receipt = await storage.createPaymentReceipt(receiptData);
 
-  await storage.updatePaymentIntent(intent.id, { status: "paid" });
+  await storage.updatePaymentIntent(intent.id, { status: "paid" }, orgId);
   await storage.createPaymentEvent({
     paymentIntentId: intent.id,
-    organizationId: intent.organizationId,
+    organizationId: orgId,
     type: "marked_paid",
     payloadJson: { transactionId: transaction.id, receiptId: receipt.id },
     actorType,
@@ -422,17 +425,17 @@ export async function applyPaymentToPolicy(
   });
 
   if (policy.status === "grace") {
-    await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null });
+    await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null }, orgId);
     await storage.createPolicyStatusHistory(intent.policyId, "grace", "active", "Payment received", actorId ?? undefined);
   } else if (policy.status === "reinstatement_pending" && intent.purpose === REINSTATEMENT_PURPOSE) {
-    await storage.updatePolicy(intent.policyId, { status: "active" });
+    await storage.updatePolicy(intent.policyId, { status: "active" }, orgId);
     await storage.createPolicyStatusHistory(intent.policyId, "reinstatement_pending", "active", "Reinstatement payment received", actorId ?? undefined);
   }
 
   const { generateReceiptPdf } = await import("./receipt-pdf");
   const pdfPath = await generateReceiptPdf(receipt.id);
   if (pdfPath) {
-    await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath });
+    await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath }, orgId);
   }
 
   await storage.createPaymentEvent({

@@ -7,8 +7,8 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       <div className="mb-12 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src="/assets/logo.png" alt="Chibikhulu Logo" className="h-20 w-20 mb-6 rounded-2xl shadow-md border border-border/50" />
-        <h1 className="text-5xl font-display font-bold text-foreground tracking-tight">Chibikhulu</h1>
+          <img src="/assets/logo.png" alt="POL263 Logo" className="h-20 w-20 mb-6 rounded-2xl shadow-md border border-border/50" />
+        <h1 className="text-5xl font-display font-bold text-foreground tracking-tight">POL263</h1>
         <p className="text-muted-foreground mt-3 text-xl font-medium">Core Administration Platform</p>
       </div>
 

@@ -1,4 +1,4 @@
-# ERD Summary - Falakhe PMS (Phase 0-1)
+# ERD Summary - POL263 (Phase 0-1)
 
 This outlines the core tables required for multi-tenancy, authentication, and RBAC before specific product features (properties, leases, payments) are fully modeled.
 

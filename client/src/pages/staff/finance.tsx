@@ -13,12 +13,14 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { PolicySearchInput } from "@/components/policy-search-input";
 
 export default function StaffFinance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
   const [policySearch, setPolicySearch] = useState("");
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -35,6 +37,7 @@ export default function StaffFinance() {
   const [settlementReference, setSettlementReference] = useState("");
 
   const [showCashReceiptDialog, setShowCashReceiptDialog] = useState(false);
+  const [cashReceiptSelectedPolicyId, setCashReceiptSelectedPolicyId] = useState<string>("");
   const [cashReceiptPolicySearch, setCashReceiptPolicySearch] = useState("");
   const [cashReceiptSelectedPolicy, setCashReceiptSelectedPolicy] = useState<any>(null);
   const [cashReceiptAmount, setCashReceiptAmount] = useState("");
@@ -50,6 +53,24 @@ export default function StaffFinance() {
   const { data: expenditures = [] } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
   const { data: policies = [] } = useQuery<any[]>({ queryKey: ["/api/policies"] });
   const { data: clients = [] } = useQuery<any[]>({ queryKey: ["/api/clients"] });
+  const { data: selectedPolicyData } = useQuery<any>({
+    queryKey: ["/api/policies", selectedPolicyId],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicyId}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!selectedPolicyId,
+  });
+  const { data: cashReceiptPolicyData } = useQuery<any>({
+    queryKey: ["/api/policies", cashReceiptSelectedPolicyId],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/policies/${cashReceiptSelectedPolicyId}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!cashReceiptSelectedPolicyId,
+  });
   const { data: chibReceivables = [] } = useQuery<any[]>({ queryKey: ["/api/chibikhulu/receivables"] });
   const { data: chibSummary } = useQuery<{ totalDue: string; totalSettled: string; outstanding: string }>({ queryKey: ["/api/chibikhulu/summary"] });
   const { data: settlements = [] } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
@@ -73,6 +94,9 @@ export default function StaffFinance() {
       );
     }).slice(0, 8);
   }, [policySearch, policies, clientMap]);
+
+  const receiptDialogPolicy = selectedPolicyData ?? selectedPolicy;
+  const cashReceiptDialogPolicy = cashReceiptPolicyData ?? cashReceiptSelectedPolicy;
 
   const filteredPoliciesForCash = useMemo(() => {
     if (!cashReceiptPolicySearch.trim()) return [];
@@ -104,7 +128,7 @@ export default function StaffFinance() {
       resetPaymentForm();
       setReceiptResult(result);
       setShowReceiptDialog(true);
-      toast({ title: "Payment recorded & receipt generated", description: `Receipt for ${selectedPolicy?.policyNumber || "policy"}` });
+      toast({ title: "Payment recorded & receipt generated", description: `Receipt for ${receiptDialogPolicy?.policyNumber || "policy"}` });
     },
     onError: (err: any) => toast({ title: "Payment failed", description: err.message, variant: "destructive" }),
   });
@@ -112,7 +136,7 @@ export default function StaffFinance() {
   const cashReceiptMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/admin/receipts/cash", {
-        policyId: cashReceiptSelectedPolicy?.id,
+        policyId: cashReceiptDialogPolicy?.id,
         amount: cashReceiptAmount,
         currency: cashReceiptCurrency,
         notes: cashReceiptNotes || undefined,
@@ -124,6 +148,7 @@ export default function StaffFinance() {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/payment-intents"] });
       setShowCashReceiptDialog(false);
+      setCashReceiptSelectedPolicyId("");
       setCashReceiptSelectedPolicy(null);
       setCashReceiptAmount("");
       setCashReceiptNotes("");
@@ -161,6 +186,7 @@ export default function StaffFinance() {
   });
 
   const resetPaymentForm = () => {
+    setSelectedPolicyId("");
     setPolicySearch("");
     setSelectedPolicy(null);
     setPaymentAmount("");
@@ -236,7 +262,7 @@ export default function StaffFinance() {
   };
 
   const handleSubmitPayment = () => {
-    if (!selectedPolicy) {
+    if (!receiptDialogPolicy) {
       toast({ title: "Select a policy", description: "Search and select the policy you're receipting.", variant: "destructive" });
       return;
     }
@@ -245,8 +271,8 @@ export default function StaffFinance() {
       return;
     }
     createPaymentMutation.mutate({
-      policyId: selectedPolicy.id,
-      clientId: selectedPolicy.clientId,
+      policyId: receiptDialogPolicy.id,
+      clientId: receiptDialogPolicy.clientId,
       amount: paymentAmount,
       currency: paymentCurrency,
       paymentMethod: paymentMethod,
@@ -329,7 +355,7 @@ export default function StaffFinance() {
             <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>
             <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>
             <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>
-            <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu">Chibikhulu</TabsTrigger>
+            <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu">POL263</TabsTrigger>
           </TabsList>
 
           <TabsContent value="payments">
@@ -554,7 +580,7 @@ export default function StaffFinance() {
                 <div>
                   <h2 className="text-lg font-semibold flex items-center gap-2">
                     <Landmark className="h-5 w-5" />
-                    Chibikhulu Revenue Share (2.5%)
+                    POL263 Revenue Share (2.5%)
                   </h2>
                   <p className="text-sm text-muted-foreground">Auto-calculated on every cleared payment</p>
                 </div>
@@ -737,70 +763,34 @@ export default function StaffFinance() {
           <div className="space-y-5">
             <div>
               <Label className="text-sm font-medium">Search Policy</Label>
-              <div className="relative mt-1.5">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Type policy number or client name..."
-                  value={policySearch}
-                  onChange={(e) => { setPolicySearch(e.target.value); setSelectedPolicy(null); }}
-                  className="pl-10"
-                  data-testid="input-policy-search"
-                />
-              </div>
-
-              {policySearch && !selectedPolicy && filteredPolicies.length > 0 && (
-                <div className="mt-1 border rounded-md shadow-sm max-h-48 overflow-y-auto bg-popover">
-                  {filteredPolicies.map((p: any) => {
-                    const client = getClient(p.clientId);
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className="w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between"
-                        onClick={() => { setSelectedPolicy(p); setPolicySearch(p.policyNumber); }}
-                        data-testid={`option-policy-${p.id}`}
-                      >
-                        <div>
-                          <span className="font-mono text-sm font-medium">{p.policyNumber}</span>
-                          {client && (
-                            <span className="text-sm text-muted-foreground ml-2">
-                              — {client.firstName} {client.lastName}
-                            </span>
-                          )}
-                        </div>
-                        <Badge variant={p.status === "active" ? "default" : "secondary"} className="text-xs">
-                          {p.status}
-                        </Badge>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {policySearch && !selectedPolicy && filteredPolicies.length === 0 && (
-                <p className="mt-2 text-sm text-muted-foreground flex items-center gap-1">
-                  <AlertCircle className="h-3.5 w-3.5" /> No matching policies found
-                </p>
-              )}
+              <PolicySearchInput
+                value={selectedPolicyId}
+                onChange={(id, p) => {
+                  setSelectedPolicyId(id);
+                  setSelectedPolicy(p ? { id: p.id, policyNumber: p.policyNumber, clientId: p.clientId, status: p.status } : null);
+                }}
+                placeholder="Type policy number or client name..."
+                data-testid="input-policy-search"
+              />
             </div>
 
-            {selectedPolicy && (
+            {receiptDialogPolicy && (
               <Card className="bg-muted/40 border-dashed">
                 <CardContent className="pt-4 pb-3">
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="font-mono font-semibold text-sm" data-testid="text-selected-policy">{selectedPolicy.policyNumber}</p>
-                      {getClient(selectedPolicy.clientId) && (
+                      <p className="font-mono font-semibold text-sm" data-testid="text-selected-policy">{receiptDialogPolicy.policyNumber}</p>
+                      {getClient(receiptDialogPolicy.clientId) && (
                         <p className="text-sm text-muted-foreground">
-                          {getClient(selectedPolicy.clientId).firstName} {getClient(selectedPolicy.clientId).lastName}
+                          {getClient(receiptDialogPolicy.clientId).firstName} {getClient(receiptDialogPolicy.clientId).lastName}
                         </p>
                       )}
                     </div>
                     <div className="text-right">
-                      <Badge variant={selectedPolicy.status === "active" ? "default" : "secondary"}>{selectedPolicy.status}</Badge>
-                      {selectedPolicy.premiumAmount && (
+                      <Badge variant={receiptDialogPolicy.status === "active" ? "default" : "secondary"}>{receiptDialogPolicy.status}</Badge>
+                      {receiptDialogPolicy.premiumAmount && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          Premium: {selectedPolicy.premiumCurrency || "USD"} {parseFloat(selectedPolicy.premiumAmount).toFixed(2)}
+                          Premium: {receiptDialogPolicy.premiumCurrency || "USD"} {parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2)}
                         </p>
                       )}
                     </div>
@@ -818,7 +808,7 @@ export default function StaffFinance() {
                   type="number"
                   step="0.01"
                   min="0.01"
-                  placeholder={selectedPolicy?.premiumAmount ? parseFloat(selectedPolicy.premiumAmount).toFixed(2) : "0.00"}
+                  placeholder={receiptDialogPolicy?.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : "0.00"}
                   value={paymentAmount}
                   onChange={(e) => setPaymentAmount(e.target.value)}
                   data-testid="input-payment-amount"
@@ -827,10 +817,10 @@ export default function StaffFinance() {
                   <button
                     type="button"
                     className="text-xs text-primary mt-1 hover:underline"
-                    onClick={() => setPaymentAmount(parseFloat(selectedPolicy.premiumAmount).toFixed(2))}
+                    onClick={() => setPaymentAmount(parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2))}
                     data-testid="button-use-premium"
                   >
-                    Use premium amount ({parseFloat(selectedPolicy.premiumAmount).toFixed(2)})
+                    Use premium amount ({parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2)})
                   </button>
                 )}
               </div>
@@ -888,7 +878,7 @@ export default function StaffFinance() {
             <Button variant="outline" onClick={() => setShowPaymentDialog(false)}>Cancel</Button>
             <Button
               onClick={handleSubmitPayment}
-              disabled={!selectedPolicy || !paymentAmount || createPaymentMutation.isPending}
+              disabled={!receiptDialogPolicy || !paymentAmount || createPaymentMutation.isPending}
               data-testid="button-submit-payment"
             >
               {createPaymentMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
@@ -908,37 +898,15 @@ export default function StaffFinance() {
           <div className="space-y-4">
             <div>
               <Label>Policy</Label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search by policy number or client..."
-                    className="pl-9"
-                    value={cashReceiptPolicySearch}
-                    onChange={(e) => { setCashReceiptPolicySearch(e.target.value); if (!e.target.value) setCashReceiptSelectedPolicy(null); }}
-                  />
-                </div>
-              </div>
-              {cashReceiptPolicySearch.trim() && (
-                <ul className="border rounded-md mt-1 max-h-40 overflow-auto">
-                  {filteredPoliciesForCash.map((p: any) => {
-                    const client = clientMap[p.clientId];
-                    return (
-                      <li key={p.id}>
-                        <button
-                          type="button"
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-muted"
-                          onClick={() => { setCashReceiptSelectedPolicy(p); setCashReceiptPolicySearch(p.policyNumber); setCashReceiptAmount(p.premiumAmount || ""); setCashReceiptCurrency(p.currency || "USD"); }}
-                        >
-                          {p.policyNumber} — {client ? `${client.firstName} ${client.lastName}` : "—"}
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {filteredPoliciesForCash.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">No matches</li>}
-                </ul>
-              )}
-              {cashReceiptSelectedPolicy && <p className="text-xs text-muted-foreground mt-1">Selected: {cashReceiptSelectedPolicy.policyNumber}</p>}
+              <PolicySearchInput
+                value={cashReceiptSelectedPolicyId}
+                onChange={(id) => {
+                  setCashReceiptSelectedPolicyId(id);
+                  setCashReceiptSelectedPolicy(id ? { id } : null);
+                }}
+                placeholder="Search by policy number or client..."
+              />
+              {cashReceiptDialogPolicy && <p className="text-xs text-muted-foreground mt-1">Selected: {cashReceiptDialogPolicy.policyNumber}</p>}
             </div>
             <div>
               <Label>Amount</Label>
@@ -968,7 +936,7 @@ export default function StaffFinance() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCashReceiptDialog(false)}>Cancel</Button>
             <Button
-              disabled={!cashReceiptSelectedPolicy || !cashReceiptAmount || parseFloat(cashReceiptAmount) <= 0 || cashReceiptMutation.isPending}
+              disabled={!cashReceiptDialogPolicy || !cashReceiptAmount || parseFloat(cashReceiptAmount) <= 0 || cashReceiptMutation.isPending}
               onClick={() => cashReceiptMutation.mutate()}
             >
               {cashReceiptMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
@@ -981,7 +949,7 @@ export default function StaffFinance() {
       <Dialog open={showSettlementDialog} onOpenChange={setShowSettlementDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Record Chibikhulu Settlement</DialogTitle>
+            <DialogTitle>Record POL263 Settlement</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>

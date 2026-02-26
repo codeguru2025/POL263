@@ -1,4 +1,4 @@
-# How to Run Falakhe PMS
+# How to Run POL263
 
 Everything is already set up in this project. Use these steps — no coding required.
 

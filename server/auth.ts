@@ -3,6 +3,7 @@ import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import type { Express, Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
+import argon2 from "argon2";
 import { pool } from "./db";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
@@ -20,7 +21,7 @@ export function setupAuth(app: Express) {
     structuredLog("warn", "SESSION_SECRET is not set. Using a weak default; set SESSION_SECRET in your environment for better security.");
   }
 
-  const sessionSecret = rawSessionSecret || "falakhe-pms-session-secret-change-in-dev-only";
+  const sessionSecret = rawSessionSecret || "pol263-session-secret-change-in-dev-only";
 
   if (process.env.NODE_ENV === "production") {
     app.set("trust proxy", 1);
@@ -88,21 +89,23 @@ export function setupAuth(app: Express) {
 
             if (!user) {
               user = await storage.getUserByEmail(email);
-              if (user) {
-                user = await storage.updateUser(user.id, {
-                  googleId: profile.id,
-                  displayName: profile.displayName,
-                  avatarUrl: profile.photos?.[0]?.value,
-                });
-              } else {
-                user = await storage.createUser({
-                  email,
-                  googleId: profile.id,
-                  displayName: profile.displayName,
-                  avatarUrl: profile.photos?.[0]?.value,
-                  isActive: true,
-                });
+              if (!user) {
+                return done(null, false, { message: "Not authorized. Ask your administrator to add your email to the system." });
               }
+              const roles = await storage.getUserRoles(user.id, user.organizationId ?? "");
+              const isAgent = roles.some((r) => r.name === "agent");
+              if (isAgent) {
+                return done(null, false, { message: "Agents must use the agent login page with email and password." });
+              }
+              user = await storage.updateUser(user.id, {
+                googleId: profile.id,
+                displayName: profile.displayName,
+                avatarUrl: profile.photos?.[0]?.value,
+              });
+            }
+
+            if (!user!.isActive) {
+              return done(null, false, { message: "Account is disabled" });
             }
 
             structuredLog("info", "Google OAuth login", {
@@ -125,9 +128,18 @@ export function setupAuth(app: Express) {
 
     app.get(
       "/api/auth/google/callback",
-      passport.authenticate("google", { failureRedirect: "/staff/login?error=auth_failed" }),
-      (_req, res) => {
-        res.redirect("/staff");
+      (req, res, next) => {
+        passport.authenticate("google", (err: Error | null, user: any, info?: { message?: string }) => {
+          if (err) return next(err);
+          if (!user) {
+            const message = info?.message || "Authentication failed";
+            return res.redirect(`/staff/login?error=${encodeURIComponent(message)}`);
+          }
+          req.login(user, (loginErr) => {
+            if (loginErr) return next(loginErr);
+            return res.redirect("/staff");
+          });
+        })(req, res, next);
       }
     );
   } else {
@@ -180,6 +192,45 @@ export function setupAuth(app: Express) {
     structuredLog("info", "Demo login endpoint disabled. Set ENABLE_DEMO_LOGIN=true to enable in non-production environments.");
   }
 
+  app.post("/api/agent-auth/login", async (req: Request, res: Response) => {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+    try {
+      const user = await storage.getUserByEmail(email.toLowerCase().trim());
+      if (!user) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+      if (!user.isActive) {
+        return res.status(403).json({ message: "Account is disabled" });
+      }
+      if (!user.passwordHash) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+      const orgId = user.organizationId ?? "";
+      const roles = await storage.getUserRoles(user.id, orgId);
+      const isAgent = roles.some((r) => r.name === "agent");
+      if (!isAgent) {
+        return res.status(403).json({ message: "Use the staff login (Google) for this account." });
+      }
+      const valid = await argon2.verify(user.passwordHash, password);
+      if (!valid) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+      req.login(user, (err) => {
+        if (err) {
+          return res.status(500).json({ message: "Login failed" });
+        }
+        structuredLog("info", "Agent login successful", { userId: user.id, email: user.email });
+        return res.json({ user: sanitizeUser(user), redirect: "/staff" });
+      });
+    } catch (err) {
+      structuredLog("error", "Agent login error", { error: (err as Error).message });
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.post("/api/auth/logout", (req, res) => {
     req.logout((err) => {
       if (err) {
@@ -195,7 +246,7 @@ export function setupAuth(app: Express) {
     }
 
     const user = req.user as any;
-    const userRoles = await storage.getUserRoles(user.id);
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const effectivePermissions = await storage.getUserEffectivePermissions(user.id);
 
     return res.json({

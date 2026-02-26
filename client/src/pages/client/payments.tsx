@@ -212,9 +212,9 @@ export default function ClientPayments() {
                         <SelectContent>
                           <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                           <SelectItem value="ecocash">EcoCash</SelectItem>
-                          <SelectItem value="onemoney">OneMoney</SelectItem>
+                          <SelectItem value="onemoney">One Money</SelectItem>
                           <SelectItem value="innbucks">InnBucks</SelectItem>
-                          <SelectItem value="omari">O'mari</SelectItem>
+                          <SelectItem value="omari">O Mari</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>

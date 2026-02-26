@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ClientSearchInput } from "@/components/client-search-input";
+import { PolicySearchInput } from "@/components/policy-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye } from "lucide-react";
@@ -52,14 +54,6 @@ export default function StaffClaims() {
 
   const { data: claims = [], isLoading } = useQuery<Claim[]>({
     queryKey: ["/api/claims"],
-  });
-
-  const { data: policies = [] } = useQuery<any[]>({
-    queryKey: ["/api/policies"],
-  });
-
-  const { data: clientsList = [] } = useQuery<any[]>({
-    queryKey: ["/api/clients"],
   });
 
   const createMutation = useMutation({
@@ -291,33 +285,21 @@ export default function StaffClaims() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="claim-policy">Policy</Label>
-              <Select value={newClaim.policyId} onValueChange={(v) => setNewClaim((p) => ({ ...p, policyId: v }))}>
-                <SelectTrigger data-testid="select-claim-policy">
-                  <SelectValue placeholder="Select policy..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {policies.map((pol: any) => (
-                    <SelectItem key={pol.id} value={pol.id}>
-                      {pol.policyNumber} — {pol.status}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <PolicySearchInput
+                value={newClaim.policyId}
+                onChange={(id) => setNewClaim((p) => ({ ...p, policyId: id }))}
+                placeholder="Search policy number or client..."
+                data-testid="select-claim-policy"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="claim-client">Client</Label>
-              <Select value={newClaim.clientId} onValueChange={(v) => setNewClaim((p) => ({ ...p, clientId: v }))}>
-                <SelectTrigger data-testid="select-claim-client">
-                  <SelectValue placeholder="Select client..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {clientsList.map((c: any) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.firstName} {c.lastName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ClientSearchInput
+                value={newClaim.clientId}
+                onChange={(id) => setNewClaim((p) => ({ ...p, clientId: id }))}
+                placeholder="Search client by name, email, or phone..."
+                data-testid="select-claim-client"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="claim-type">Claim Type</Label>

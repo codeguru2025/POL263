@@ -1,4 +1,4 @@
-package com.falakhe.pms;
+package com.pol263.app;
 
 import com.getcapacitor.BridgeActivity;
 

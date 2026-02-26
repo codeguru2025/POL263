@@ -267,7 +267,7 @@ export default function StaffReports() {
             <TabsTrigger value="cashups" data-testid="tab-cashups-report">Cashups by user</TabsTrigger>
             <TabsTrigger value="payroll" data-testid="tab-payroll-report">Payroll</TabsTrigger>
             <TabsTrigger value="commissions" data-testid="tab-commissions-report">Commissions</TabsTrigger>
-            <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu-report">Chibikhulu</TabsTrigger>
+            <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu-report">POL263</TabsTrigger>
           </TabsList>
 
           <TabsContent value="policies">
@@ -847,7 +847,7 @@ export default function StaffReports() {
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Building className="h-5 w-5" />Chibikhulu Revenue Share</CardTitle>
+                  <CardTitle className="flex items-center gap-2"><Building className="h-5 w-5" />POL263 Revenue Share</CardTitle>
                   <ExportButton reportType="chibikhulu" filters={filters} />
                 </div>
               </CardHeader>
@@ -855,7 +855,7 @@ export default function StaffReports() {
                 {loadingChibikhulu ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : chibikhuluReceivables.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-chibikhulu">No Chibikhulu receivables recorded</p>
+                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-chibikhulu">No POL263 receivables recorded</p>
                 ) : (
                   <Table>
                     <TableHeader>

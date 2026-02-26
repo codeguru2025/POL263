@@ -8,7 +8,7 @@ This guide helps you set **NODE_ENV**, **SESSION_SECRET**, **DATABASE_URL**, **G
 
 On the server, the app must run with **NODE_ENV=production**. The `npm start` script already sets this.
 
-Create a **.env** file on the server (e.g. in `/opt/chibikhulu`) with your production values. Use the template in the repo:
+Create a **.env** file on the server (e.g. in `/opt/pol263`) with your production values. Use the template in the repo:
 
 ```bash
 cp .env.production.example .env
@@ -46,7 +46,7 @@ Point this at your **production** PostgreSQL instance.
 **If PostgreSQL is on the same VPS:**
 
 ```env
-DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/chibikhulu
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/pol263
 ```
 
 Replace `YOUR_PASSWORD` with the password you set (e.g. when you ran `script/setup-postgres-vps.sh` with `CHIBIKHULU_DB_PASSWORD`).
@@ -76,11 +76,11 @@ Without Google OAuth, staff cannot log in with Google. You can enable **demo log
 ### Get credentials
 
 1. Go to **[Google Cloud Console](https://console.cloud.google.com/)** and sign in.
-2. Create a project or select one (e.g. "Chibikhulu").
+2. Create a project or select one (e.g. "POL263").
 3. Open **APIs & Services** → **Credentials** → **Create credentials** → **OAuth client ID**.
 4. If asked, set the **OAuth consent screen** (User type: External, add your email as test user if in testing).
 5. Application type: **Web application**.
-6. Name: e.g. "Chibikhulu PMS".
+6. Name: e.g. "POL263 PMS".
 7. Under **Authorized redirect URIs** add:
    - **Production:** `https://yourdomain.com/api/auth/google/callback`
    - Replace `yourdomain.com` with your real domain or VPS IP for testing, e.g. `http://YOUR_VPS_IP:5000/api/auth/google/callback` (Google often requires HTTPS for redirects; use a domain + HTTPS for production.)
@@ -114,7 +114,7 @@ Running the app over **HTTP** is fine for a quick test, but for production you s
 
 ### Prerequisites
 
-- A **domain name** pointing to your VPS IP (e.g. `app.chibikhulu.com` → your VPS IP).
+- A **domain name** pointing to your VPS IP (e.g. `app.pol263.com` → your VPS IP).
 - The app running behind Nginx on port 80 (see [DEPLOY-INTERSERVER-VPS.md](DEPLOY-INTERSERVER-VPS.md) “Optional: Use port 80”).
 
 ### Install Certbot and get a certificate
@@ -166,7 +166,7 @@ certbot renew --dry-run
 NODE_ENV=production
 PORT=5000
 HOST=0.0.0.0
-DATABASE_URL=postgresql://postgres:YourDbPassword@localhost:5432/chibikhulu
+DATABASE_URL=postgresql://postgres:YourDbPassword@localhost:5432/pol263
 SESSION_SECRET=your_64_char_hex_from_npm_run_generate_secret
 ```
 

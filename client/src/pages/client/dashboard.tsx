@@ -106,6 +106,13 @@ function formatCurrency(amount: string, currency: string) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(num);
 }
 
+function isPolicyClaimable(policy: { status: string; waitingPeriodEndDate: string | null }): boolean {
+  const today = new Date().toISOString().split("T")[0];
+  const statusOk = policy.status === "active" || policy.status === "grace";
+  const waitingOver = !policy.waitingPeriodEndDate || policy.waitingPeriodEndDate <= today;
+  return !!(statusOk && waitingOver);
+}
+
 function daysUntil(dateStr: string | null): number | null {
   if (!dateStr) return null;
   const diff = new Date(dateStr).getTime() - Date.now();
@@ -284,6 +291,13 @@ export default function ClientDashboard() {
                         <CreditCard className="h-4 w-4" />
                         Pay Now
                       </Button>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Claimability: {isPolicyClaimable(activePolicy) ? (
+                          <span className="text-emerald-600 font-medium">Eligible for claims</span>
+                        ) : (
+                          <span>Not yet eligible (check status or waiting period)</span>
+                        )}
+                      </p>
                     </div>
                   </CardContent>
                 </Card>

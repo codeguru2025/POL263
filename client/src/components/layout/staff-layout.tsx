@@ -27,6 +27,7 @@ import {
   UserCog,
   Copy,
   Link2,
+  Building2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -68,7 +69,9 @@ function ReferralLinkBox({ referralCode }: { referralCode: string }) {
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
-  const { user, roles, isAuthenticated, isLoading, logout } = useAuth();
+  const { user, roles, permissions, isAuthenticated, isLoading, logout } = useAuth();
+
+  const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
 
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
@@ -145,12 +148,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     {
       title: "System & Audit",
       items: [
+        ...(canManageTenants ? [{ href: "/staff/tenants", label: "Tenants", icon: Building2 }] : []),
         { href: "/staff/users", label: "User Management", icon: UserCog },
         { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, badge: pendingApprovalsCount },
         { href: "/staff/audit", label: "Audit Logs", icon: History },
         { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope },
         { href: "/staff/settings", label: "Tenant Settings", icon: Settings },
-      ],
+      ].filter(Boolean) as { href: string; label: string; icon: any; badge?: number }[],
     },
   ];
 
@@ -168,7 +172,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             alt="Logo"
             className="h-8 w-8 rounded mr-3 shadow-sm border border-border/50"
           />
-          <span className="font-display font-bold text-lg tracking-tight">Falakhe Staff</span>
+          <span className="font-display font-bold text-lg tracking-tight">POL263 Staff</span>
         </div>
 
         <ScrollArea className="flex-1 px-4 py-6">

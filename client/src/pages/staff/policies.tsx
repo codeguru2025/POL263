@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ClientSearchInput } from "@/components/client-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -70,6 +71,7 @@ export default function StaffPolicies() {
 
   const [createForm, setCreateForm] = useState({
     clientId: "",
+    agentId: "",
     beneficiaryDependentIds: [] as string[],
     selectedProductId: "",
     productVersionId: "",
@@ -95,8 +97,19 @@ export default function StaffPolicies() {
     queryKey: ["/api/policies"],
   });
 
-  const { data: clients } = useQuery<any[]>({
-    queryKey: ["/api/clients"],
+  const { data: usersList } = useQuery<any[]>({
+    queryKey: ["/api/users"],
+  });
+  const agents = usersList?.filter((u: any) => u.referralCode) || [];
+
+  const { data: selectedClient } = useQuery<any>({
+    queryKey: ["/api/clients", createForm.clientId],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/clients/${createForm.clientId}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!createForm.clientId,
   });
 
   const { data: products } = useQuery<any[]>({
@@ -126,11 +139,6 @@ export default function StaffPolicies() {
     },
     enabled: !!createForm.selectedProductId,
   });
-
-  const selectedClient = useMemo(() => {
-    if (!createForm.clientId || !clients) return null;
-    return clients.find((c: any) => c.id === createForm.clientId);
-  }, [createForm.clientId, clients]);
 
   const clientAge = useMemo(() => {
     if (!selectedClient?.dateOfBirth) return null;
@@ -201,6 +209,7 @@ export default function StaffPolicies() {
       const members = (data.beneficiaryDependentIds || []).map((dependentId: string) => ({ dependentId, role: "beneficiary" }));
       const res = await apiRequest("POST", "/api/policies", {
         clientId: data.clientId,
+        agentId: data.agentId || undefined,
         productVersionId: data.productVersionId,
         premiumAmount: data.premiumAmount,
         currency: data.currency,
@@ -217,6 +226,7 @@ export default function StaffPolicies() {
       setCreateStep(1);
       setCreateForm({
         clientId: "",
+        agentId: "",
         beneficiaryDependentIds: [],
         selectedProductId: "",
         productVersionId: "",
@@ -335,7 +345,7 @@ export default function StaffPolicies() {
             </Button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="shadow-sm">
               <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Premium</CardTitle></CardHeader>
               <CardContent>
@@ -355,6 +365,15 @@ export default function StaffPolicies() {
                 <p className="text-lg font-semibold" data-testid="text-effective-date">{selectedPolicy.effectiveDate || "Not set"}</p>
               </CardContent>
             </Card>
+            <Card className="shadow-sm">
+              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Claimability</CardTitle></CardHeader>
+              <CardContent>
+                <Badge variant="outline" className={selectedPolicy.claimable ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}>
+                  {selectedPolicy.claimable ? "Claimable" : "Not claimable"}
+                </Badge>
+                {selectedPolicy.claimableReason && <p className="text-xs text-muted-foreground mt-1">{selectedPolicy.claimableReason}</p>}
+              </CardContent>
+            </Card>
           </div>
 
           <Card className="shadow-sm border-border/60">
@@ -372,14 +391,17 @@ export default function StaffPolicies() {
                 <Table>
                   <TableHeader className="bg-muted/50">
                     <TableRow>
+                      <TableHead className="pl-6">Member ID</TableHead>
                       <TableHead className="pl-6">Member</TableHead>
                       <TableHead>Role</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Claimable</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {policyMembers.map((m: any) => (
                       <TableRow key={m.id} data-testid={`row-member-${m.id}`}>
+                        <TableCell className="pl-6 font-mono text-sm">{m.memberNumber || "—"}</TableCell>
                         <TableCell className="pl-6 font-medium">
                           {m.clientId ? getClientName(m.clientId) : m.dependentId?.slice(0, 8) + "..."}
                         </TableCell>
@@ -387,6 +409,11 @@ export default function StaffPolicies() {
                         <TableCell>
                           <Badge variant="outline" className={m.isActive ? "bg-emerald-500/15 text-emerald-700" : "bg-gray-500/15 text-gray-600"}>
                             {m.isActive ? "Active" : "Inactive"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={m.claimable ? "bg-emerald-500/15 text-emerald-700" : "bg-muted text-muted-foreground"}>
+                            {m.claimable ? "Yes" : "No"}
                           </Badge>
                         </TableCell>
                       </TableRow>
@@ -665,25 +692,38 @@ export default function StaffPolicies() {
               <>
                 <div>
                   <Label>Policy holder (client)</Label>
-                  <Select
+                  <ClientSearchInput
                     value={createForm.clientId}
-                    onValueChange={(v) => setCreateForm({ ...createForm, clientId: v, beneficiaryDependentIds: [] })}
-                  >
-                    <SelectTrigger data-testid="select-client">
-                      <SelectValue placeholder="Select policy holder..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {clients?.map((c: any) => (
-                        <SelectItem key={c.id} value={c.id}>{c.firstName} {c.lastName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={(id) => setCreateForm({ ...createForm, clientId: id, beneficiaryDependentIds: [] })}
+                    placeholder="Search client by name, email, or phone..."
+                    data-testid="select-client"
+                  />
                   {selectedClient && (
                     <p className="text-xs text-muted-foreground mt-1">
                       {selectedClient.firstName} {selectedClient.lastName}
                       {clientAge != null && ` · Age: ${clientAge}`}
                     </p>
                   )}
+                </div>
+                <div>
+                  <Label>Agent (optional)</Label>
+                  <Select
+                    value={createForm.agentId || "walk-in"}
+                    onValueChange={(v) => setCreateForm({ ...createForm, agentId: v === "walk-in" ? "" : v })}
+                  >
+                    <SelectTrigger data-testid="select-agent">
+                      <SelectValue placeholder="Walk-in" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="walk-in">Walk-in</SelectItem>
+                      {agents.map((a: any) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.displayName || a.email} {a.referralCode ? `(${a.referralCode})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">Default: Walk-in. Select an agent to attribute this policy.</p>
                 </div>
                 {createForm.clientId && dependents && dependents.length > 0 && (
                   <div>

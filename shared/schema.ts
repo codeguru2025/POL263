@@ -29,7 +29,11 @@ export const organizations = pgTable("organizations", {
   phone: text("phone"),
   email: text("email"),
   website: text("website"),
+  policyNumberPrefix: text("policy_number_prefix"),
+  policyNumberPadding: integer("policy_number_padding").default(5).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  /** Optional: when set, this tenant's data can use a dedicated database (see server/tenant-db). */
+  databaseUrl: text("database_url"),
 });
 
 export const branches = pgTable(
@@ -48,6 +52,18 @@ export const branches = pgTable(
   (t) => [index("branches_org_idx").on(t.organizationId)]
 );
 
+/** Per-org sequence for unique member numbers (MEM-000001, etc.). */
+export const orgMemberSequences = pgTable("org_member_sequences", {
+  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  memberNext: integer("member_next").default(1).notNull(),
+});
+
+/** Per-org sequence for policy numbers (atomic under concurrency). */
+export const orgPolicySequences = pgTable("org_policy_sequences", {
+  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  policyNext: integer("policy_next").default(1).notNull(),
+});
+
 // ─── IDENTITY ───────────────────────────────────────────────
 
 export const users = pgTable(
@@ -56,6 +72,7 @@ export const users = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     email: text("email").notNull().unique(),
     googleId: text("google_id").unique(),
+    passwordHash: text("password_hash"),
     displayName: text("display_name"),
     avatarUrl: text("avatar_url"),
     referralCode: text("referral_code").unique(),
@@ -194,6 +211,7 @@ export const dependents = pgTable(
     clientId: uuid("client_id")
       .notNull()
       .references(() => clients.id),
+    memberNumber: text("member_number"),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
     nationalId: text("national_id"),
@@ -206,6 +224,7 @@ export const dependents = pgTable(
   (t) => [
     index("deps_client_idx").on(t.clientId),
     index("deps_org_idx").on(t.organizationId),
+    uniqueIndex("deps_member_number_org_idx").on(t.organizationId, t.memberNumber),
   ]
 );
 
@@ -428,16 +447,22 @@ export const policyMembers = pgTable(
   "policy_members",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").references(() => organizations.id),
     policyId: uuid("policy_id")
       .notNull()
       .references(() => policies.id),
     clientId: uuid("client_id").references(() => clients.id),
     dependentId: uuid("dependent_id").references(() => dependents.id),
+    memberNumber: text("member_number"),
     role: text("role").notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("pm_policy_idx").on(t.policyId)]
+  (t) => [
+    index("pm_policy_idx").on(t.policyId),
+    index("pm_org_idx").on(t.organizationId),
+    uniqueIndex("pm_member_number_org_idx").on(t.organizationId, t.memberNumber),
+  ]
 );
 
 export const policyStatusHistory = pgTable(
@@ -609,6 +634,7 @@ export const paymentReceipts = pgTable(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
     receiptNumber: text("receipt_number").notNull(),
     paymentIntentId: uuid("payment_intent_id").references(() => paymentIntents.id),
     policyId: uuid("policy_id")
@@ -630,6 +656,7 @@ export const paymentReceipts = pgTable(
   },
   (t) => [
     index("pr_org_idx").on(t.organizationId),
+    index("pr_branch_idx").on(t.branchId),
     index("pr_intent_idx").on(t.paymentIntentId),
     index("pr_policy_idx").on(t.policyId),
     uniqueIndex("pr_receipt_org_idx").on(t.receiptNumber, t.organizationId),
@@ -1052,7 +1079,7 @@ export const payrollEmployees = pgTable(
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("pe_org_idx").on(t.organizationId)]
+  (t) => [index("payroll_employees_org_idx").on(t.organizationId)]
 );
 
 export const payrollRuns = pgTable(
@@ -1072,7 +1099,7 @@ export const payrollRuns = pgTable(
     approvedBy: uuid("approved_by").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("pr_org_idx").on(t.organizationId)]
+  (t) => [index("payroll_runs_org_idx").on(t.organizationId)]
 );
 
 export const payslips = pgTable(
@@ -1169,6 +1196,31 @@ export const leads = pgTable(
     index("leads_agent_idx").on(t.agentId),
     index("leads_stage_idx").on(t.stage),
     index("leads_client_idx").on(t.clientId),
+  ]
+);
+
+// ─── CLIENT FEEDBACK & COMPLAINTS ─────────────────────────────
+
+export const clientFeedback = pgTable(
+  "client_feedback",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    type: text("type").notNull(), // 'complaint' | 'feedback'
+    subject: text("subject").notNull(),
+    message: text("message").notNull(),
+    status: text("status").default("open").notNull(), // open | acknowledged | closed
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("client_feedback_org_idx").on(t.organizationId),
+    index("client_feedback_client_idx").on(t.clientId),
   ]
 );
 
@@ -1326,6 +1378,7 @@ export const insertCommissionPlanSchema = createInsertSchema(commissionPlans).om
 export const insertCommissionLedgerEntrySchema = createInsertSchema(commissionLedgerEntries).omit({ id: true, createdAt: true });
 export const insertNotificationTemplateSchema = createInsertSchema(notificationTemplates).omit({ id: true, createdAt: true });
 export const insertLeadSchema = createInsertSchema(leads).omit({ id: true, createdAt: true });
+export const insertClientFeedbackSchema = createInsertSchema(clientFeedback).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertExpenditureSchema = createInsertSchema(expenditures).omit({ id: true, createdAt: true });
 export const insertPriceBookItemSchema = createInsertSchema(priceBookItems).omit({ id: true, createdAt: true });
 export const insertApprovalRequestSchema = createInsertSchema(approvalRequests).omit({ id: true, createdAt: true });
@@ -1399,6 +1452,8 @@ export type InsertNotificationTemplate = z.infer<typeof insertNotificationTempla
 export type NotificationLog = typeof notificationLogs.$inferSelect;
 export type Lead = typeof leads.$inferSelect;
 export type InsertLead = z.infer<typeof insertLeadSchema>;
+export type ClientFeedback = typeof clientFeedback.$inferSelect;
+export type InsertClientFeedback = z.infer<typeof insertClientFeedbackSchema>;
 export type Expenditure = typeof expenditures.$inferSelect;
 export type InsertExpenditure = z.infer<typeof insertExpenditureSchema>;
 export type PriceBookItem = typeof priceBookItems.$inferSelect;

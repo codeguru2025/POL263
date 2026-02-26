@@ -36,17 +36,17 @@ export default function StaffLogin() {
       <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-8">
           <div className="mx-auto bg-primary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6">
-            <img src="/assets/logo.png" alt="Chibikhulu Logo" className="w-10 h-10 rounded-lg" />
+            <img src="/assets/logo.png" alt="POL263 Logo" className="w-10 h-10 rounded-lg" />
           </div>
           <CardTitle className="text-3xl font-display">Staff Portal</CardTitle>
           <CardDescription className="text-base mt-2">
-            Sign in with your corporate Google account to access the Falakhe PMS.
+            Sign in with your corporate Google account. Your email must be added by an administrator first.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {authError && (
             <p className="text-sm text-destructive bg-destructive/10 p-3 rounded text-center" data-testid="text-auth-error">
-              Authentication failed. Please try again or contact your administrator.
+              {decodeURIComponent(authError)}
             </p>
           )}
 
@@ -65,7 +65,12 @@ export default function StaffLogin() {
           </Button>
 
           <p className="text-xs text-center text-muted-foreground pt-4">
-            Only authorized staff members can access this portal. Contact your administrator if you need access.
+            Only authorized staff can sign in. Contact your administrator to add your email.{" "}
+            <Link href="/agent/login">
+              <Button variant="link" className="p-0 h-auto text-xs">
+                Agent? Sign in here
+              </Button>
+            </Link>
           </p>
 
           <div className="text-center pt-2">

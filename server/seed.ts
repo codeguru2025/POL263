@@ -55,6 +55,8 @@ const SYSTEM_PERMISSIONS = [
   { name: "write:notification", description: "Manage notification templates", category: "notifications" },
   { name: "manage:approvals", description: "Handle maker-checker approvals", category: "approvals" },
   { name: "backdate:payment", description: "Backdate payment value dates", category: "finance" },
+  { name: "create:tenant", description: "Add new tenants (organizations)", category: "platform" },
+  { name: "delete:tenant", description: "Remove tenants (organizations)", category: "platform" },
 ];
 
 const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -134,7 +136,7 @@ export async function seedDatabase() {
   let defaultOrg = (await storage.getOrganizations())[0];
   if (!defaultOrg) {
     defaultOrg = await storage.createOrganization({
-      name: "Chibikhulu",
+      name: "POL263",
       logoUrl: "/assets/logo.png",
       primaryColor: "#D4AF37",
       footerText: "For a service beyond Ubuntu",
@@ -200,7 +202,7 @@ export async function seedDatabase() {
     });
   }
 
-  const superuserRoles = await storage.getUserRoles(superuser!.id);
+  const superuserRoles = await storage.getUserRoles(superuser!.id, defaultOrg.id);
   const hasSuperuserRole = superuserRoles.some((r) => r.name === "superuser");
 
   if (!hasSuperuserRole) {

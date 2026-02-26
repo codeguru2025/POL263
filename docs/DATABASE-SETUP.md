@@ -1,4 +1,4 @@
-# Database setup for Falakhe PMS
+# Database setup for POL263
 
 The app uses **PostgreSQL**. You can use a **free cloud database** (easiest) or **PostgreSQL on your computer**.
 
@@ -11,7 +11,7 @@ No install on your PC. You get a connection URL and paste it into `.env`.
 ### Neon (free tier)
 
 1. Go to **[neon.tech](https://neon.tech)** and sign up (free).
-2. Create a new project (e.g. "Falakhe PMS").
+2. Create a new project (e.g. "POL263").
 3. Copy the **connection string** (looks like `postgresql://user:password@ep-xxx.region.aws.neon.tech/neondb?sslmode=require`).
 4. Open the `.env` file in this project and set:
    ```env
@@ -63,13 +63,13 @@ Open a terminal and run (adjust username if needed):
 **Windows (Command Prompt or PowerShell):**
 
 ```bash
-psql -U postgres -c "CREATE DATABASE falakhe;"
+psql -U postgres -c "CREATE DATABASE pol263;"
 ```
 
 **Mac/Linux:**
 
 ```bash
-psql -U postgres -c "CREATE DATABASE falakhe;"
+psql -U postgres -c "CREATE DATABASE pol263;"
 ```
 
 If `psql` is not in your PATH, use the full path (e.g. `"C:\Program Files\PostgreSQL\16\bin\psql"` on Windows).
@@ -79,7 +79,7 @@ If `psql` is not in your PATH, use the full path (e.g. `"C:\Program Files\Postgr
 Open the `.env` file in this project and set:
 
 ```env
-DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/falakhe
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/pol263
 ```
 
 Replace `YOUR_PASSWORD` with the password you set for the `postgres` user.
@@ -106,7 +106,7 @@ Open http://127.0.0.1:5000 in your browser.
 
 | Step | Command or action |
 |------|--------------------|
-| 1. Get PostgreSQL | Option A: Neon or Supabase (free). Option B: Install Postgres locally and create database `falakhe`. |
+| 1. Get PostgreSQL | Option A: Neon or Supabase (free). Option B: Install Postgres locally and create database `pol263`. |
 | 2. Put URL in `.env` | `DATABASE_URL=postgresql://...` |
 | 3. Create tables + seed | `npm run db:setup` |
 | 4. Run the app | `npm run dev` → open http://127.0.0.1:5000 |

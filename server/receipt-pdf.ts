@@ -6,7 +6,7 @@
 import path from "path";
 import fs from "fs";
 import PDFDocument from "pdfkit";
-import { storage } from "./storage";
+import { storage, findPaymentReceiptById } from "./storage";
 
 const MM_TO_PT = 2.83465;
 const WIDTH_MM = 80;
@@ -22,11 +22,12 @@ const RECEIPT_FOOTER_TEXT = process.env.RECEIPT_FOOTER_TEXT || "Thank you for yo
 const RECEIPT_CONTACTS = process.env.RECEIPT_CONTACTS || "";
 
 export async function generateReceiptPdf(receiptId: string): Promise<string | null> {
-  const receipt = await storage.getPaymentReceiptById(receiptId);
+  const receipt = await findPaymentReceiptById(receiptId);
   if (!receipt) return null;
-  const policy = await storage.getPolicy(receipt.policyId);
-  const client = await storage.getClient(receipt.clientId);
-  const org = await storage.getOrganization(receipt.organizationId);
+  const orgId = receipt.organizationId;
+  const policy = await storage.getPolicy(receipt.policyId, orgId);
+  const client = await storage.getClient(receipt.clientId, orgId);
+  const org = await storage.getOrganization(orgId);
   if (!policy || !client || !org) return null;
 
   const receiptsDir = path.resolve(process.cwd(), "uploads", "receipts");

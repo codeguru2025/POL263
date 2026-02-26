@@ -1,9 +1,12 @@
 import { Link, useLocation } from "wouter";
 import {
   Home,
-  Shield,
   LogOut,
-  UserCircle
+  UserCircle,
+  CreditCard,
+  FileText,
+  ClipboardList,
+  MessageSquare
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -18,6 +21,10 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
 
   const navItems = [
     { href: "/client", label: "Overview", icon: Home },
+    { href: "/client/payments", label: "Pay", icon: CreditCard },
+    { href: "/client/documents", label: "Documents", icon: FileText },
+    { href: "/client/claims", label: "Claims", icon: ClipboardList },
+    { href: "/client/feedback", label: "Complaints & feedback", icon: MessageSquare },
   ];
 
   const handleLogout = () => {
@@ -30,7 +37,7 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
     <div className="min-h-screen bg-background flex flex-col">
       <header className="h-16 border-b bg-card flex items-center justify-between px-6 shrink-0 sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <img src="/assets/logo.png" alt="Chibikhulu Logo" className="h-8 w-8 rounded" />
+          <img src="/assets/logo.png" alt="POL263 Logo" className="h-8 w-8 rounded" />
           <span className="font-display font-bold text-lg">Client Portal</span>
         </div>
 

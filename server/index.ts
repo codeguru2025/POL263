@@ -87,7 +87,8 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use("/api/auth", authLimiter);
-app.use("/api/client-auth", authLimiter);
+  app.use("/api/agent-auth", authLimiter);
+  app.use("/api/client-auth", authLimiter);
 app.use("/api/security-questions", authLimiter);
 app.use("/api/agents/by-referral", authLimiter);
 
@@ -171,7 +172,7 @@ app.use((req, res, next) => {
       host: process.env.HOST || "127.0.0.1",
     },
     async () => {
-      structuredLog("info", `Falakhe PMS serving on port ${port}`);
+      structuredLog("info", `POL263 serving on port ${port}`);
 
       if (process.env.RUN_DB_BOOTSTRAP === "true") {
         try {

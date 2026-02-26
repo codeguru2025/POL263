@@ -34,7 +34,7 @@
 }
 
 :root {
-  /* Chibikhulu theme - warm gold & light background */
+  /* POL263 theme - warm gold & light background */
   --background: 40 20% 98%;
   --foreground: 0 0% 10%;
   
@@ -67,7 +67,7 @@
 }
 
 .dark {
-  /* Chibikhulu dark - charcoal background, gold accent */
+  /* POL263 dark - charcoal background, gold accent */
   --background: 0 0% 10%;
   --foreground: 43 30% 92%;
   

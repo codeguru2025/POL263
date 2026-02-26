@@ -16,11 +16,24 @@ const connectionTimeoutMillis =
     parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10)) ||
   5_000;
 
-const isSupabase = process.env.DATABASE_URL?.includes("supabase");
-const sslConfig = isSupabase ? { rejectUnauthorized: false } : undefined;
+// Supabase (and some poolers) use certs Node doesn't trust by default. Allow bypass for dev/local.
+const acceptSelfSigned =
+  process.env.DB_ACCEPT_SELF_SIGNED === "true" ||
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
+  (typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.includes("supabase"));
+const sslConfig = acceptSelfSigned ? { rejectUnauthorized: false } : undefined;
+
+// When we set our own SSL config, strip sslmode from URL so pg doesn't override with strict verification
+let connectionString = process.env.DATABASE_URL;
+if (sslConfig && connectionString) {
+  connectionString = connectionString
+    .replace(/\?sslmode=[^&]*&?/gi, "?")
+    .replace(/&sslmode=[^&]*/gi, "")
+    .replace(/\?$/, "");
+}
 
 export const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   max,
   idleTimeoutMillis,
   connectionTimeoutMillis,

@@ -1,4 +1,4 @@
-# Falakhe PMS - Multi-Tenant Funeral Policy & Operations Platform
+# POL263 - Multi-Tenant Funeral Policy & Operations Platform
 
 ## Architecture
 
@@ -47,7 +47,7 @@
 5. `/staff/funerals` - Funeral case management, task checklists, fleet vehicles
 6. `/staff/leads` - Kanban-style lead pipeline (captured→contacted→quote→activated→lost)
 7. `/staff/groups` - Groups module (churches/SMEs/community), assign policies, group dashboards
-8. `/staff/finance` - Payments, cashups, commissions, expenditures, Chibikhulu 2.5% revenue share (tabbed view)
+8. `/staff/finance` - Payments, cashups, commissions, expenditures, POL263 2.5% revenue share (tabbed view)
 9. `/staff/pricebook` - Price book items CRUD, cost sheets with itemized line items
 10. `/staff/payroll` - Employee records, payroll runs, payslips
 11. `/staff/reports` - 9 report types (policies, claims, payments, funerals, fleet, expenditure, payroll, commissions, chibikhulu) with CSV export
@@ -89,7 +89,7 @@
 ### Financial Features
 - Immutable payment ledger (corrections via reversals only)
 - Sequential receipt numbering (RCP-000001)
-- Auto Chibikhulu 2.5% receivable on every cleared payment
+- Auto POL263 2.5% receivable on every cleared payment
 - Settlement workflow with maker-checker approval
 - Cost sheets with itemized line items linked to price book
 - Commission plans with configurable rates and clawback thresholds
