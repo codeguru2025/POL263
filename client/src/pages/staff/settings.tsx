@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,20 @@ import { useAuth } from "@/hooks/use-auth";
 export default function StaffSettings() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const search = useSearch();
+  const [, setLocation] = useLocation();
+  const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
+  const [activeTab, setActiveTab] = useState(tabParam === "terms" ? "terms" : tabParam === "rbac" ? "rbac" : "branding");
+
+  useEffect(() => {
+    const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
+    if (t === "terms" || t === "rbac" || t === "branding") setActiveTab(t);
+  }, [search]);
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    setLocation(value === "branding" ? "/staff/settings" : `/staff/settings?tab=${value}`);
+  };
 
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
@@ -231,7 +246,7 @@ export default function StaffSettings() {
           <p className="text-muted-foreground mt-1">Manage organization settings and Role-Based Access Control.</p>
         </div>
 
-        <Tabs defaultValue="branding" className="w-full">
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList className="grid w-full grid-cols-3 max-w-2xl">
             <TabsTrigger value="branding">Tenant Branding</TabsTrigger>
             <TabsTrigger value="terms">Terms & Conditions</TabsTrigger>
@@ -416,7 +431,7 @@ export default function StaffSettings() {
               <CardHeader>
                 <CardTitle>Terms and Conditions</CardTitle>
                 <CardDescription>
-                  Manage terms shown on policy documents and e-statements. Only active terms appear on PDFs. Order by sort order.
+                  Terms and conditions appear on policy documents and e-statements. Add and reorder them below; only active terms are included on PDFs.
                 </CardDescription>
               </CardHeader>
               <CardContent>

@@ -38,7 +38,7 @@ function ageFromDob(dob: string | null | undefined): number | null {
   return age;
 }
 
-export async function streamPolicyDocumentToResponse(policyId: string, orgId: string, res: Response): Promise<void> {
+export async function streamPolicyDocumentToResponse(policyId: string, orgId: string, res: Response, options?: { inline?: boolean }): Promise<void> {
   const policy = await storage.getPolicy(policyId, orgId);
   if (!policy || policy.organizationId !== orgId) {
     res.status(404).json({ message: "Policy not found" });
@@ -60,7 +60,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   }
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="Policy-${policy.policyNumber}.pdf"`);
+  res.setHeader("Content-Disposition", options?.inline ? `inline; filename="Policy-${policy.policyNumber}.pdf"` : `attachment; filename="Policy-${policy.policyNumber}.pdf"`);
   doc.pipe(res);
   const primaryColor = org?.primaryColor || "#D4AF37";
   const logoBuffer = await resolveImageForPdf(org?.logoUrl);
@@ -139,6 +139,40 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     y += 15;
   }
   y += 10;
+  const agentId = (policy as any).agentId;
+  if (agentId) {
+    const agent = await storage.getUser(agentId);
+    if (agent) {
+      if (y > 620) {
+        doc.addPage();
+        y = 50;
+      }
+      doc
+        .fillColor(primaryColor)
+        .fontSize(12)
+        .font("Helvetica-Bold")
+        .text("Agent", 50, y);
+      y += 5;
+      doc
+        .moveTo(50, y + 12)
+        .lineTo(545, y + 12)
+        .strokeColor(primaryColor)
+        .lineWidth(1)
+        .stroke();
+      y += 20;
+      const agentFields = [
+        ["Name", agent.displayName || agent.email || "—"],
+        ["Email", agent.email || "—"],
+      ];
+      doc.font("Helvetica").fontSize(9).fillColor("#000000");
+      for (const [label, value] of agentFields) {
+        doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
+        doc.font("Helvetica").text(`  ${value}`, { width: 350 });
+        y += 15;
+      }
+      y += 10;
+    }
+  }
   if (client) {
     doc
       .fillColor(primaryColor)

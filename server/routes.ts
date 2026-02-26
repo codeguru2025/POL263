@@ -332,7 +332,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
-    return res.json(await storage.getClientsByOrg(user.organizationId, limit, offset, search));
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const list = isAgent
+      ? await storage.getClientsByAgent(user.id, user.organizationId, limit, offset, search)
+      : await storage.getClientsByOrg(user.organizationId, limit, offset, search);
+    return res.json(list);
   });
 
   app.get("/api/clients/:id", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
@@ -340,6 +345,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const client = await storage.getClient(req.params.id as string, user.organizationId);
     if (!client) return res.status(404).json({ message: "Not found" });
     if (client.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent) {
+      const agentClients = await storage.getClientsByAgent(user.id, user.organizationId, 10000, 0);
+      if (!agentClients.some((c: any) => c.id === client.id)) return res.status(403).json({ message: "Access denied" });
+    }
     return res.json(client);
   });
 
@@ -375,6 +386,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getClient(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent) {
+      const agentClients = await storage.getClientsByAgent(user.id, user.organizationId, 10000, 0);
+      if (!agentClients.some((c: any) => c.id === before.id)) return res.status(403).json({ message: "Access denied" });
+    }
     const updated = await storage.updateClient(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_CLIENT", "Client", req.params.id as string, before, updated);
     return res.json(updated);
@@ -536,8 +553,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
     const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
-    const filters = (fromDate || toDate || status || search) ? { fromDate, toDate, status, search } : undefined;
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, limit, offset, filters));
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    let list: any[];
+    if (isAgent) {
+      list = await storage.getPoliciesByAgent(user.id, user.organizationId);
+      if (fromDate) list = list.filter((p: any) => p.createdAt >= fromDate + "T00:00:00.000Z");
+      if (toDate) list = list.filter((p: any) => p.createdAt <= toDate + "T23:59:59.999Z");
+      if (status) list = list.filter((p: any) => p.status === status);
+      if (search && search.trim()) {
+        const q = search.trim().toLowerCase();
+        list = list.filter((p: any) => (p.policyNumber && p.policyNumber.toLowerCase().includes(q)));
+      }
+      list = list.slice(offset, offset + limit);
+    } else {
+      const filters = (fromDate || toDate || status || search) ? { fromDate, toDate, status, search } : undefined;
+      list = await storage.getPoliciesByOrg(user.organizationId, limit, offset, filters);
+    }
+    return res.json(list);
   });
 
   app.get("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -545,6 +578,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!policy) return res.status(404).json({ message: "Not found" });
     if (policy.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent && (policy as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
     const today = new Date().toISOString().split("T")[0];
     const statusOk = policy.status === "active" || policy.status === "grace";
     const waitingOver = !policy.waitingPeriodEndDate || policy.waitingPeriodEndDate <= today;
@@ -609,6 +645,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
     const updated = await storage.updatePolicy(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);
     return res.json(updated);
@@ -1005,7 +1044,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getLeadsByOrg(user.organizationId, limit, offset));
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const list = isAgent
+      ? (await storage.getLeadsByAgent(user.id, user.organizationId)).slice(offset, offset + limit)
+      : await storage.getLeadsByOrg(user.organizationId, limit, offset);
+    return res.json(list);
   });
 
   app.post("/api/leads", requireAuth, requireTenantScope, requirePermission("write:lead"), async (req, res) => {
@@ -1020,6 +1064,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getLead(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
     const updated = await storage.updateLead(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_LEAD", "Lead", req.params.id as string, before, updated);
     return res.json(updated);

@@ -221,6 +221,25 @@ export function setupClientAuth(app: Express) {
     });
   });
 
+  app.get("/api/client-auth/tenant", async (req: Request, res: Response) => {
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientOrgId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const org = await storage.getOrganization(clientOrgId);
+    if (!org) {
+      return res.status(404).json({ message: "Tenant not found" });
+    }
+    return res.json({
+      name: org.name,
+      logoUrl: org.logoUrl,
+      address: org.address,
+      phone: org.phone,
+      email: org.email,
+      website: org.website,
+    });
+  });
+
   app.get("/api/client-auth/policies", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
@@ -275,7 +294,8 @@ export function setupClientAuth(app: Express) {
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
-    await streamPolicyDocumentToResponse(policy.id, clientOrgId, res);
+    const inline = req.query.inline === "1" || req.query.inline === "true";
+    await streamPolicyDocumentToResponse(policy.id, clientOrgId, res, { inline });
   });
 
   app.get("/api/client-auth/claims", async (req: Request, res: Response) => {

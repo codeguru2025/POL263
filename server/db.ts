@@ -6,6 +6,17 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL must be set. Ensure the database is provisioned.");
 }
 
+// Catch placeholder or wrong host (e.g. DigitalOcean binding resolving to "base")
+const raw = process.env.DATABASE_URL.trim();
+const hostMatch = raw.match(/@([^:/]+)(?::|\/)/);
+const host = hostMatch ? hostMatch[1] : "";
+if (host === "base") {
+  throw new Error(
+    `DATABASE_URL has invalid host "base". Use your full database URL (e.g. Supabase pooler host like aws-1-eu-central-1.pooler.supabase.com). ` +
+    "If using DigitalOcean, set DATABASE_URL manually to the full connection string; do not use a database component binding that might inject a placeholder."
+  );
+}
+
 const max =
   (process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10)) || 25;
 const idleTimeoutMillis =

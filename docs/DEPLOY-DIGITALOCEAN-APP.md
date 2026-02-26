@@ -104,6 +104,8 @@ Optional (for production):
 
 **Important:** Do **not** commit `.env` or paste secrets into the repo. Set everything in the App Platform UI.
 
+**If you see `getaddrinfo ENOTFOUND base` in logs:** The app is trying to connect to a host named `"base"`. That means `DATABASE_URL` is wrong or unresolved. Fix it by either: (1) Using an **external** database (e.g. Supabase): set `DATABASE_URL` to the **full** connection string (e.g. `postgresql://postgres.xxx:PASSWORD@aws-1-eu-central-1.pooler.supabase.com:6543/postgres?sslmode=require`) — paste the real URI, no `${...}` placeholders. (2) Using a **DO Managed Database** attached to the app: use the exact bind variable name App Platform shows for the database (e.g. `DATABASE_URL` = value from the database component’s “Connection string” or the variable they provide), and ensure the database component is linked to the app so the variable resolves at runtime.
+
 ---
 
 ## 5. Deploy

@@ -189,6 +189,31 @@ export default function ClientPayments() {
               />
             </div>
 
+            <div>
+              <Label>Payment method</Label>
+              <Select value={method} onValueChange={setMethod}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
+                  <SelectItem value="ecocash">EcoCash</SelectItem>
+                  <SelectItem value="onemoney">One Money</SelectItem>
+                  <SelectItem value="innbucks">InnBucks</SelectItem>
+                  <SelectItem value="omari">O Mari</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {(method === "ecocash" || method === "onemoney") && (
+              <div>
+                <Label>Mobile number</Label>
+                <Input
+                  placeholder="0771234567"
+                  value={payerPhone}
+                  onChange={(e) => setPayerPhone(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">A USSD prompt will appear; enter PIN to approve.</p>
+              </div>
+            )}
+
             {!currentIntent ? (
               <Button
                 className="w-full"

@@ -128,6 +128,7 @@ export interface IStorage {
   getAuditLogs(organizationId: string, limit?: number, offset?: number): Promise<AuditLog[]>;
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getClientsByOrg(organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
+  getClientsByAgent(agentId: string, organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
   getClient(id: string, orgId: string): Promise<Client | undefined>;
   getClientByActivationCode(code: string, orgId: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
@@ -482,6 +483,28 @@ export class DatabaseStorage implements IStorage {
   async getClientsByOrg(organizationId: string, limit = 50, offset = 0, search?: string): Promise<Client[]> {
     const tdb = await getDbForOrg(organizationId);
     const conditions = [eq(clients.organizationId, organizationId)];
+    if (search && search.trim()) {
+      const raw = String(search).trim();
+      const esc = raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      const q = `%${esc}%`;
+      conditions.push(
+        or(
+          ilike(clients.firstName, q),
+          ilike(clients.lastName, q),
+          ilike(clients.email, q),
+          ilike(clients.phone, q)
+        )!
+      );
+    }
+    return tdb.select().from(clients).where(and(...conditions))
+      .orderBy(desc(clients.createdAt)).limit(limit).offset(offset);
+  }
+  async getClientsByAgent(agentId: string, organizationId: string, limit = 50, offset = 0, search?: string): Promise<Client[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const policyRows = await tdb.select({ clientId: policies.clientId }).from(policies).where(eq(policies.agentId, agentId));
+    const clientIds = [...new Set(policyRows.map((r) => r.clientId).filter(Boolean))] as string[];
+    if (clientIds.length === 0) return [];
+    const conditions = [eq(clients.organizationId, organizationId), inArray(clients.id, clientIds)];
     if (search && search.trim()) {
       const raw = String(search).trim();
       const esc = raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
@@ -28,6 +28,8 @@ import {
   Copy,
   Link2,
   Building2,
+  Menu,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -69,9 +71,28 @@ function ReferralLinkBox({ referralCode }: { referralCode: string }) {
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, roles, permissions, isAuthenticated, isLoading, logout } = useAuth();
 
+  // Close mobile sidebar when route changes
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location]);
+
+  // Lock body scroll when mobile menu is open
+  useEffect(() => {
+    if (sidebarOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [sidebarOpen]);
+
   const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
+  const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
 
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
@@ -89,6 +110,62 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   });
 
   const pendingApprovalsCount = approvals?.filter((a: any) => a.status === "pending").length || 0;
+
+  const navGroupsRaw: { title: string; items: { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number }[] }[] = [
+    {
+      title: "Overview",
+      items: [{ href: "/staff", label: "Dashboard", icon: LayoutDashboard }],
+    },
+    {
+      title: "Core Operations",
+      items: [
+        { href: "/staff/policies", label: "Policies", icon: FileStack, permission: "read:policy" },
+        { href: "/staff/clients", label: "Clients", icon: Users, permission: "read:client" },
+        { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim" },
+        { href: "/staff/funerals", label: "Funeral Ops", icon: Truck, permission: "read:funeral_ops" },
+        { href: "/staff/leads", label: "Lead Pipeline", icon: Target, permission: "read:lead" },
+        { href: "/staff/groups", label: "Groups", icon: Layers, permission: "read:policy" },
+      ],
+    },
+    {
+      title: "Finance",
+      items: [
+        { href: "/staff/finance", label: "Finance", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "read:product" },
+        { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
+        { href: "/staff/reports", label: "Reports", icon: BarChart3, permission: "read:report" },
+      ],
+    },
+    {
+      title: "Configuration",
+      items: [
+        { href: "/staff/products", label: "Product Builder", icon: Box, permission: "read:product" },
+        { href: "/staff/notifications", label: "Notifications", icon: Bell, permission: "read:notification" },
+      ],
+    },
+    {
+      title: "System & Audit",
+      items: [
+        ...(canManageTenants ? [{ href: "/staff/tenants", label: "Tenants", icon: Building2 }] : []),
+        { href: "/staff/users", label: "User Management", icon: UserCog, permission: "read:user" },
+        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals", badge: pendingApprovalsCount },
+        { href: "/staff/audit", label: "Audit Logs", icon: History, permission: "read:audit_log" },
+        { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope, permission: "read:audit_log" },
+        { href: "/staff/settings", label: "Tenant Settings", icon: Settings, permission: "manage:settings" },
+        { href: "/staff/settings?tab=terms", label: "Terms & Conditions", icon: FileText, permission: "manage:settings" },
+      ].filter(Boolean) as { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number }[],
+    },
+  ];
+
+  const navGroups = navGroupsRaw
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        const perms = item.permissions ?? (item.permission ? [item.permission] : []);
+        return hasAny(perms);
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
 
   if (isLoading) {
     return (
@@ -113,51 +190,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     .toUpperCase()
     .slice(0, 2);
 
-  const navGroups = [
-    {
-      title: "Overview",
-      items: [{ href: "/staff", label: "Dashboard", icon: LayoutDashboard }],
-    },
-    {
-      title: "Core Operations",
-      items: [
-        { href: "/staff/policies", label: "Policies", icon: FileStack },
-        { href: "/staff/clients", label: "Clients", icon: Users },
-        { href: "/staff/claims", label: "Claims", icon: FileText },
-        { href: "/staff/funerals", label: "Funeral Ops", icon: Truck },
-        { href: "/staff/leads", label: "Lead Pipeline", icon: Target },
-        { href: "/staff/groups", label: "Groups", icon: Layers },
-      ],
-    },
-    {
-      title: "Finance",
-      items: [
-        { href: "/staff/finance", label: "Finance", icon: DollarSign },
-        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen },
-        { href: "/staff/payroll", label: "Payroll", icon: Wallet2 },
-        { href: "/staff/reports", label: "Reports", icon: BarChart3 },
-      ],
-    },
-    {
-      title: "Configuration",
-      items: [
-        { href: "/staff/products", label: "Product Builder", icon: Box },
-        { href: "/staff/notifications", label: "Notifications", icon: Bell },
-      ],
-    },
-    {
-      title: "System & Audit",
-      items: [
-        ...(canManageTenants ? [{ href: "/staff/tenants", label: "Tenants", icon: Building2 }] : []),
-        { href: "/staff/users", label: "User Management", icon: UserCog },
-        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, badge: pendingApprovalsCount },
-        { href: "/staff/audit", label: "Audit Logs", icon: History },
-        { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope },
-        { href: "/staff/settings", label: "Tenant Settings", icon: Settings },
-      ].filter(Boolean) as { href: string; label: string; icon: any; badge?: number }[],
-    },
-  ];
-
   const handleLogout = async () => {
     await logout();
     setLocation("/");
@@ -165,14 +197,40 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="min-h-screen flex bg-background">
-      <aside className="w-64 border-r border-primary/20 bg-card flex flex-col shadow-[2px_0_20px_rgba(0,0,0,0.15)] z-10 relative">
-        <div className="h-16 flex items-center justify-center px-4 border-b shrink-0">
-          <img
-            src={currentOrg?.logoUrl || "/assets/logo.png"}
-            alt="POL263"
-            className="h-10 w-10 rounded-lg object-contain mr-2"
-          />
-          <span className="font-display font-bold text-lg tracking-tight text-foreground">POL263</span>
+      {/* Mobile overlay - tap to close sidebar */}
+      <button
+        type="button"
+        aria-label="Close menu"
+        className={`fixed inset-0 z-40 bg-black/60 transition-opacity md:hidden ${sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <aside
+        className={`
+          fixed md:static inset-y-0 left-0 z-50 w-64 border-r border-primary/20 bg-card flex flex-col shadow-[2px_0_20px_rgba(0,0,0,0.15)]
+          transform transition-transform duration-200 ease-out
+          md:translate-x-0 md:flex
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+        `}
+      >
+        <div className="h-16 flex items-center justify-between px-4 border-b shrink-0">
+          <div className="flex items-center">
+            <img
+              src={currentOrg?.logoUrl || "/assets/logo.png"}
+              alt="POL263"
+              className="h-10 w-10 rounded-lg object-contain mr-2"
+            />
+            <span className="font-display font-bold text-lg tracking-tight text-foreground">POL263</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="md:hidden shrink-0"
+            aria-label="Close menu"
+            onClick={() => setSidebarOpen(false)}
+          >
+            <X className="h-5 w-5" />
+          </Button>
         </div>
 
         <ScrollArea className="flex-1 px-4 py-6">
@@ -191,10 +249,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                         className={`w-full justify-start h-10 ${isActive ? "font-medium bg-secondary/80 text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
                         data-testid={`nav-link-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
                       >
-                        <item.icon className={`mr-3 h-5 w-5 ${isActive ? "text-primary" : ""}`} />
-                        {item.label}
+                        <item.icon className={`mr-3 h-5 w-5 shrink-0 ${isActive ? "text-primary" : ""}`} />
+                        <span className="truncate">{item.label}</span>
                         {"badge" in item && (item as any).badge > 0 && (
-                          <Badge variant="destructive" className="ml-auto h-5 min-w-[20px] px-1.5 text-[10px]" data-testid={`badge-nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                          <Badge variant="destructive" className="ml-auto h-5 min-w-[20px] px-1.5 text-[10px] shrink-0" data-testid={`badge-nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}>
                             {(item as any).badge}
                           </Badge>
                         )}
@@ -212,11 +270,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <ReferralLinkBox referralCode={user.referralCode} />
           )}
           <div className="flex items-center gap-3 px-2 py-2 mb-2 bg-card rounded-lg border shadow-sm">
-            <Avatar className="h-9 w-9 border">
+            <Avatar className="h-9 w-9 border shrink-0">
               <AvatarImage src={user?.avatarUrl || undefined} />
               <AvatarFallback className="bg-primary/10 text-primary font-medium">{initials}</AvatarFallback>
             </Avatar>
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{user?.email}</p>
               <p className="text-[10px] uppercase tracking-wider font-semibold text-primary mt-0.5">
                 {primaryRole}
@@ -229,35 +287,46 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             data-testid="btn-logout"
             onClick={handleLogout}
           >
-            <LogOut className="mr-3 h-4 w-4" />
+            <LogOut className="mr-3 h-4 w-4 shrink-0" />
             Sign out
           </Button>
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col h-screen overflow-hidden bg-background">
-        <header className="h-16 border-b bg-card/50 backdrop-blur-sm flex items-center px-8 justify-between shrink-0 z-10 sticky top-0">
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2 text-sm">
-              <Building className="h-4 w-4 text-muted-foreground" />
-              <span className="text-muted-foreground font-medium">Tenant:</span>
-              <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50">
-                {currentOrg?.name || "Loading..."} <ChevronDown className="h-3 w-3 opacity-50" />
+      <main className="flex-1 flex flex-col min-h-screen md:h-screen overflow-hidden bg-background min-w-0">
+        <header className="h-14 md:h-16 border-b bg-card/50 backdrop-blur-sm flex items-center px-4 md:px-8 justify-between shrink-0 z-10 sticky top-0">
+          <div className="flex items-center gap-2 md:gap-6 min-w-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden shrink-0"
+              aria-label="Open menu"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="hidden sm:flex items-center gap-2 text-sm">
+              <Building className="h-4 w-4 text-muted-foreground shrink-0" />
+              <span className="text-muted-foreground font-medium shrink-0">Tenant:</span>
+              <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
+                <span className="truncate max-w-[120px]">{currentOrg?.name || "Loading..."}</span>
+                <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
               </Button>
             </div>
-            <div className="h-5 w-px bg-border"></div>
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-muted-foreground font-medium">Branch:</span>
-              <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm">
-                {currentBranch?.name || "Loading..."} <ChevronDown className="h-3 w-3 opacity-50" />
+            <div className="hidden lg:flex items-center gap-2 text-sm">
+              <div className="h-5 w-px bg-border" />
+              <span className="text-muted-foreground font-medium shrink-0">Branch:</span>
+              <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm min-w-0">
+                <span className="truncate max-w-[100px]">{currentBranch?.name || "Loading..."}</span>
+                <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
               </Button>
             </div>
           </div>
         </header>
 
-        <div className="flex-1 overflow-auto p-8 relative">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent pointer-events-none -z-10"></div>
-          <div className="max-w-6xl mx-auto relative z-0">{children}</div>
+        <div className="flex-1 overflow-auto p-4 sm:p-6 md:p-8 relative">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent pointer-events-none -z-10" />
+          <div className="max-w-6xl mx-auto relative z-0 min-w-0">{children}</div>
         </div>
       </main>
     </div>

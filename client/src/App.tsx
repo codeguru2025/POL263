@@ -35,6 +35,7 @@ import ClientResetPassword from "@/pages/client/reset-password";
 import ClientDashboard from "@/pages/client/dashboard";
 import ClientPayments from "@/pages/client/payments";
 import ClientDocuments from "@/pages/client/documents";
+import ClientDocumentView from "@/pages/client/document-view";
 import ClientClaims from "@/pages/client/claims";
 import ClientFeedback from "@/pages/client/feedback";
 import JoinPage from "@/pages/join";
@@ -85,6 +86,7 @@ function Router() {
       <Route path="/client" component={ClientDashboard} />
       <Route path="/client/payments" component={ClientPayments} />
       <Route path="/client/documents" component={ClientDocuments} />
+      <Route path="/client/documents/view/:policyId" component={ClientDocumentView} />
       <Route path="/client/claims" component={ClientClaims} />
       <Route path="/client/feedback" component={ClientFeedback} />
       <Route path="/client/payments/return">

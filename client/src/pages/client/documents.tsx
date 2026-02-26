@@ -1,14 +1,14 @@
 /**
- * Client documents page: list policies and download policy document PDF per policy.
+ * Client documents page: list policies and view or download policy document PDF per policy.
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { FileText, ArrowLeft, Download } from "lucide-react";
+import { FileText, ArrowLeft, Download, Eye } from "lucide-react";
 
 interface Policy {
   id: string;
@@ -43,7 +43,7 @@ export default function ClientDocuments() {
               Policy documents
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Download your policy certificate (policy document) for each policy below.
+              View or download your policy certificate (policy document) for each policy below.
             </p>
           </CardHeader>
           <CardContent>
@@ -54,20 +54,28 @@ export default function ClientDocuments() {
             ) : (
               <ul className="space-y-3">
                 {policies.map((p) => (
-                  <li key={p.id} className="flex items-center justify-between p-4 border rounded-lg">
+                  <li key={p.id} className="flex items-center justify-between gap-4 p-4 border rounded-lg flex-wrap">
                     <div>
                       <p className="font-medium text-sm">{p.policyNumber}</p>
                       <p className="text-xs text-muted-foreground capitalize">{p.status.replace(/_/g, " ")} — {p.currency} {p.premiumAmount}</p>
                     </div>
-                    <a
-                      href={`${base}/api/client-auth/policies/${p.id}/document`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 text-sm text-primary hover:underline"
-                    >
-                      <Download className="h-4 w-4" />
-                      Download policy document
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/client/documents/view/${p.id}`}>
+                        <Button variant="outline" size="sm" className="gap-2">
+                          <Eye className="h-4 w-4" />
+                          View
+                        </Button>
+                      </Link>
+                      <a
+                        href={`${base}/api/client-auth/policies/${p.id}/document`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 text-sm text-primary hover:underline"
+                      >
+                        <Download className="h-4 w-4" />
+                        Download
+                      </a>
+                    </div>
                   </li>
                 ))}
               </ul>
