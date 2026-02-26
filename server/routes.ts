@@ -44,6 +44,40 @@ function auditLog(req: any, action: string, entityType: string, entityId: string
   });
 }
 
+/** Compute policy premium from product version and add-ons (never use client-sent premium). */
+async function computePolicyPremium(
+  orgId: string,
+  productVersionId: string,
+  currency: string,
+  paymentSchedule: string,
+  addOnIds: string[]
+): Promise<string> {
+  const pv = await storage.getProductVersion(productVersionId, orgId);
+  if (!pv) return "0";
+  let base = 0;
+  if (paymentSchedule === "monthly") {
+    base = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
+  } else if (paymentSchedule === "weekly") {
+    base = parseFloat(String(pv.premiumWeeklyUsd ?? 0));
+  } else if (paymentSchedule === "biweekly") {
+    base = parseFloat(String(pv.premiumBiweeklyUsd ?? 0));
+  }
+  if (addOnIds.length > 0) {
+    const addOns = await storage.getAddOns(orgId);
+    for (const id of addOnIds) {
+      const ao = addOns.find((a: any) => a.id === id);
+      if (!ao) continue;
+      const price = parseFloat(String(ao.priceAmount ?? 0));
+      if (ao.pricingMode === "percentage") {
+        base += base * (price / 100);
+      } else {
+        base += price;
+      }
+    }
+  }
+  return base.toFixed(2);
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
   const DASHBOARD_MAX_ROWS =
@@ -608,12 +642,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const members = Array.isArray(req.body.members) ? req.body.members : [];
     const addOnIds = Array.isArray(req.body.addOnIds) ? req.body.addOnIds : [];
 
+    // Premium is always computed from product version and add-ons; never use client-sent premiumAmount
+    let premiumAmount = req.body.premiumAmount;
+    if (req.body.productVersionId) {
+      premiumAmount = await computePolicyPremium(
+        user.organizationId,
+        req.body.productVersionId,
+        req.body.currency || "USD",
+        req.body.paymentSchedule || "monthly",
+        addOnIds,
+      );
+    }
+
     const parsed = insertPolicySchema.parse({
       ...req.body,
       organizationId: user.organizationId,
       policyNumber,
       status: "draft",
       agentId,
+      premiumAmount: premiumAmount ?? "0",
     });
     const policy = await storage.createPolicy(parsed);
     await storage.createPolicyStatusHistory(policy.id, null, "draft", "Policy created", user.id);
@@ -648,7 +695,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
     if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
-    const updated = await storage.updatePolicy(req.params.id as string, req.body, user.organizationId);
+    // Premium cannot be updated manually; strip it if sent
+    const body = { ...req.body };
+    delete body.premiumAmount;
+    const updated = await storage.updatePolicy(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);
     return res.json(updated);
   });
@@ -1269,7 +1319,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       const client = await storage.createClient(clientParsed);
       const policyNumber = await storage.generatePolicyNumber(orgId);
-      const premium = premiumAmount != null ? String(premiumAmount) : (pv.premiumMonthlyUsd ?? "0");
+      const premium = await computePolicyPremium(
+        orgId,
+        productVersionId,
+        currency || "USD",
+        paymentSchedule || "monthly",
+        [],
+      );
       const policyParsed = insertPolicySchema.parse({
         organizationId: orgId,
         branchId: effectiveBranchId,

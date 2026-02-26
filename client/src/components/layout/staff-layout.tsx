@@ -30,6 +30,7 @@ import {
   Building2,
   Menu,
   X,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -195,6 +196,14 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     setLocation("/");
   };
 
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const displayName = user?.displayName || user?.email || "User";
+  const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
   return (
     <div className="min-h-screen flex bg-background">
       {/* Mobile overlay - tap to close sidebar */}
@@ -321,6 +330,14 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                 <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
               </Button>
             </div>
+          </div>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground shrink-0">
+            <span className="hidden md:inline truncate max-w-[140px]" title={user?.email}>{displayName}</span>
+            <span className="hidden sm:inline font-medium text-foreground">{primaryRole}</span>
+            <span className="flex items-center gap-1.5" title="Current date and time">
+              <Clock className="h-4 w-4 hidden sm:block" />
+              {dateTimeStr}
+            </span>
           </div>
         </header>
 

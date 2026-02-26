@@ -4,7 +4,7 @@ import fs from "fs";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 
-/** Resolve logo or signature image for PDF: tenant setting can be a path (/uploads/...) or full URL. */
+/** Resolve logo or signature image for PDF: tenant setting can be a path (/uploads/... or /assets/...) or full URL. */
 async function resolveImageForPdf(url: string | null | undefined): Promise<Buffer | null> {
   if (!url || !url.trim()) return null;
   const u = url.trim();
@@ -18,13 +18,23 @@ async function resolveImageForPdf(url: string | null | undefined): Promise<Buffe
       return null;
     }
   }
-  const localPath = path.resolve(process.cwd(), u.replace(/^\/+/, ""));
-  if (!fs.existsSync(localPath)) return null;
-  try {
-    return fs.readFileSync(localPath);
-  } catch {
-    return null;
+  const relativePath = u.replace(/^\/+/, "");
+  const bases = [
+    path.join(process.cwd(), "dist", "public"),
+    path.join(process.cwd(), "client", "public"),
+    process.cwd(),
+  ];
+  for (const base of bases) {
+    const localPath = path.resolve(base, relativePath);
+    if (fs.existsSync(localPath)) {
+      try {
+        return fs.readFileSync(localPath);
+      } catch {
+        continue;
+      }
+    }
   }
+  return null;
 }
 
 function ageFromDob(dob: string | null | undefined): number | null {

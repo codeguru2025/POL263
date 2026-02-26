@@ -836,23 +836,13 @@ export default function StaffPolicies() {
             )}
             {createStep === 4 && (
               <>
-                {calculatedPremium != null && (
-                  <div className="rounded-md bg-muted/50 p-3">
-                    <p className="text-sm font-medium">Calculated premium: {createForm.currency} {calculatedPremium}</p>
-                  </div>
-                )}
+                <div className="rounded-md bg-muted/50 p-3">
+                  <p className="text-sm font-medium">
+                    Premium (from product & add-ons): {createForm.currency} {calculatedPremium ?? "—"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">Premium is calculated from the selected product version and add-ons; it cannot be edited.</p>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Premium Amount</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={createForm.premiumAmount || calculatedPremium || ""}
-                      onChange={(e) => setCreateForm({ ...createForm, premiumAmount: e.target.value })}
-                      placeholder="0.00"
-                      data-testid="input-premium-amount"
-                    />
-                  </div>
                   <div>
                     <Label>Currency</Label>
                     <Select value={createForm.currency} onValueChange={(v) => setCreateForm({ ...createForm, currency: v })}>
@@ -913,9 +903,9 @@ export default function StaffPolicies() {
               <Button
                 onClick={() => createMutation.mutate({
                   ...createForm,
-                  premiumAmount: createForm.premiumAmount || calculatedPremium || "",
+                  premiumAmount: calculatedPremium ?? "",
                 })}
-                disabled={createMutation.isPending || !createForm.clientId || !createForm.productVersionId || !(createForm.premiumAmount || calculatedPremium)}
+                disabled={createMutation.isPending || !createForm.clientId || !createForm.productVersionId || !calculatedPremium}
                 data-testid="btn-submit-policy"
               >
                 {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

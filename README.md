@@ -10,6 +10,8 @@
 
 **Builds on every push:** Pushing to `main` triggers a GitHub Actions workflow that builds the web app, Android APK, and iOS (simulator). Download artifacts from the **Actions** tab. See **[docs/WEB-AND-MOBILE-SINGLE-CODEBASE.md](docs/WEB-AND-MOBILE-SINGLE-CODEBASE.md)** for CI details and release signing.
 
+**Publish to stores:** To ship to **Google Play** and **App Store Connect**, follow **[docs/GOOGLE-PLAY-AND-APP-STORE.md](docs/GOOGLE-PLAY-AND-APP-STORE.md)** (keystore, GitHub Secrets, store listing, and upload steps).
+
 Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**  
 **Database setup (PostgreSQL):** **[docs/DATABASE-SETUP.md](docs/DATABASE-SETUP.md)**  
 **Deploy on DigitalOcean App Platform (from GitHub):** **[docs/DEPLOY-DIGITALOCEAN-APP.md](docs/DEPLOY-DIGITALOCEAN-APP.md)**  

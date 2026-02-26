@@ -1,4 +1,5 @@
 import { Link, useLocation } from "wouter";
+import { useState, useEffect } from "react";
 import {
   Home,
   LogOut,
@@ -6,7 +7,8 @@ import {
   CreditCard,
   FileText,
   ClipboardList,
-  MessageSquare
+  MessageSquare,
+  Clock,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -28,6 +30,12 @@ interface TenantInfo {
 
 export default function ClientLayout({ children, clientName = "Client", onLogout }: ClientLayoutProps) {
   const [location] = useLocation();
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   const { data: tenant } = useQuery<TenantInfo>({
     queryKey: ["/api/client-auth/tenant"],
     retry: false,
@@ -62,6 +70,11 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
         </div>
 
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+          <span className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground" title="Current date and time">
+            <Clock className="h-3.5 w-3.5" />
+            {dateTimeStr}
+          </span>
+          <div className="h-4 w-px bg-border hidden sm:block" />
           <div className="flex items-center gap-1 sm:gap-2 min-w-0">
             <UserCircle className="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground shrink-0" />
             <span className="text-xs sm:text-sm font-medium truncate max-w-[80px] sm:max-w-[180px]" data-testid="text-client-name">{clientName}</span>

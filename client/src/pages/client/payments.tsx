@@ -138,6 +138,15 @@ export default function ClientPayments() {
   const policy = policies?.find((p) => p.id === selectedPolicyId);
   const canPay = paynowConfig?.enabled && policy && (["active", "grace", "reinstatement_pending"].includes(policy.status) || policy.status === "lapsed");
 
+  // Default amount to policy premium when policy selection changes
+  useEffect(() => {
+    if (policy?.premiumAmount) setAmount(policy.premiumAmount);
+    else if (!selectedPolicyId) setAmount("");
+  }, [selectedPolicyId, policy?.id, policy?.premiumAmount]);
+
+  // For Pay now: require phone when method is ecocash/onemoney
+  const canInitiatePay = currentIntent && currentIntent.status !== "paid" && (method !== "ecocash" && method !== "onemoney" || (payerPhone && payerPhone.trim().length >= 9));
+
   return (
     <ClientLayout clientName="">
       <div className="max-w-2xl mx-auto space-y-6">
@@ -217,7 +226,7 @@ export default function ClientPayments() {
             {!currentIntent ? (
               <Button
                 className="w-full"
-                disabled={!canPay || createIntentMutation.isPending}
+                disabled={!canPay || createIntentMutation.isPending || !(amount && parseFloat(amount) > 0)}
                 onClick={() => createIntentMutation.mutate()}
               >
                 {createIntentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
@@ -259,7 +268,7 @@ export default function ClientPayments() {
                     )}
                     <Button
                       className="w-full"
-                      disabled={initiateMutation.isPending || polling}
+                      disabled={!canInitiatePay || initiateMutation.isPending || polling}
                       onClick={() => initiateMutation.mutate()}
                     >
                       {initiateMutation.isPending || polling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
