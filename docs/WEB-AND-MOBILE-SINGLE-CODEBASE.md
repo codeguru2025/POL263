@@ -108,3 +108,21 @@ From the same codebase you can still adjust behavior per platform:
 | Do changes apply to both? | **Yes.** Change React (or shared code), run `npm run build` and `npx cap sync`, then run web and/or mobile. |
 | Backend shared? | **Yes.** Same Express API serves web and mobile. |
 | Best approach here? | **Capacitor:** wrap the existing web app in a native shell so one codebase powers web and mobile. |
+
+---
+
+## CI/CD: Build Web + Android + iOS on Every Push
+
+A GitHub Actions workflow (`.github/workflows/build-web-mobile.yml`) runs on every **push to `main`** and on **manual trigger**:
+
+| Job | Runner | Output |
+|-----|--------|--------|
+| **Build Web** | `ubuntu-latest` | Builds the app; uploads `dist/public` and server bundle as artifact. |
+| **Build Android** | `ubuntu-latest` | Downloads web artifact, runs `cap sync android`, builds **debug APK**. Uploads `app-debug.apk` as a workflow artifact. |
+| **Build iOS** | `macos-latest` | Downloads web artifact, runs `cap sync ios`, `pod install`, builds for **iOS Simulator**. Uploads `App.app` as a workflow artifact. |
+
+After a run, open the workflow run in the **Actions** tab and download **android-apk** and **ios-build** artifacts.
+
+- **Web app updates:** If the repo is connected to Netlify (or Vercel), they build and deploy the web app on push; the workflow’s web build is then used only for syncing into the mobile projects. To deploy the same build from the workflow, add a deploy job (e.g. Netlify deploy with `NETLIFY_AUTH_TOKEN` and `NETLIFY_SITE_ID`).
+- **Android release:** The workflow builds a **debug** APK. For a **release** (signed) APK or AAB, configure signing in `android/app/build.gradle` and use a job that runs `assembleRelease` or `bundleRelease` with keystore secrets.
+- **iOS device / TestFlight:** The workflow builds for the **simulator** only (no code signing). For device or App Store, run the iOS build on a Mac with Xcode and your Apple Developer account, or use a service (e.g. Capgo, Ionic Appflow) with signing credentials.

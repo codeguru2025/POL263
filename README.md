@@ -6,6 +6,10 @@
 
 **Android app:** Run `npm run setup` once, then `npm run cap:android` to open Android Studio and run the app.
 
+**iOS app:** After `npm run setup`, run `npm run cap:ios` to open Xcode (requires macOS and Xcode). On Windows, the `ios/` project is in the repo; build and run on a Mac or in CI.
+
+**Builds on every push:** Pushing to `main` triggers a GitHub Actions workflow that builds the web app, Android APK, and iOS (simulator). Download artifacts from the **Actions** tab. See **[docs/WEB-AND-MOBILE-SINGLE-CODEBASE.md](docs/WEB-AND-MOBILE-SINGLE-CODEBASE.md)** for CI details and release signing.
+
 Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**  
 **Database setup (PostgreSQL):** **[docs/DATABASE-SETUP.md](docs/DATABASE-SETUP.md)**  
 **Deploy on DigitalOcean App Platform (from GitHub):** **[docs/DEPLOY-DIGITALOCEAN-APP.md](docs/DEPLOY-DIGITALOCEAN-APP.md)**  
