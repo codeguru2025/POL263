@@ -34,67 +34,63 @@
 }
 
 :root {
-  /* POL263 theme - warm gold & light background */
-  --background: 40 20% 98%;
-  --foreground: 0 0% 10%;
+  /* Premium black & gold theme */
+  --background: 0 0% 6%;
+  --foreground: 43 30% 95%;
   
-  --card: 0 0% 100%;
-  --card-foreground: 0 0% 10%;
+  --card: 0 0% 9%;
+  --card-foreground: 43 30% 95%;
   
-  --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 10%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 43 30% 95%;
   
-  --primary: 43 61% 52%;
-  --primary-foreground: 0 0% 10%;
+  --primary: 43 74% 49%;
+  --primary-foreground: 0 0% 6%;
   
-  --secondary: 43 30% 92%;
-  --secondary-foreground: 0 0% 10%;
+  --secondary: 0 0% 14%;
+  --secondary-foreground: 43 30% 92%;
   
-  --muted: 43 25% 94%;
-  --muted-foreground: 0 0% 40%;
+  --muted: 0 0% 14%;
+  --muted-foreground: 43 15% 55%;
   
-  --accent: 43 30% 92%;
-  --accent-foreground: 0 0% 10%;
+  --accent: 43 40% 25%;
+  --accent-foreground: 43 50% 92%;
   
-  --destructive: 0 84.2% 60.2%;
+  --destructive: 0 62.8% 45%;
   --destructive-foreground: 0 0% 98%;
   
-  --border: 43 20% 88%;
-  --input: 43 20% 88%;
-  --ring: 43 61% 52%;
+  --border: 43 20% 18%;
+  --input: 43 20% 18%;
+  --ring: 43 74% 49%;
   
-  --radius: 0.75rem;
+  --radius: 0.5rem;
 }
 
 .dark {
-  /* POL263 dark - charcoal background, gold accent */
-  --background: 0 0% 10%;
-  --foreground: 43 30% 92%;
+  --background: 0 0% 4%;
+  --foreground: 43 30% 95%;
   
-  --card: 0 0% 13%;
-  --card-foreground: 43 30% 92%;
+  --card: 0 0% 8%;
+  --card-foreground: 43 30% 95%;
   
-  --popover: 0 0% 13%;
-  --popover-foreground: 43 30% 92%;
+  --popover: 0 0% 8%;
+  --popover-foreground: 43 30% 95%;
   
-  --primary: 43 61% 52%;
-  --primary-foreground: 0 0% 10%;
+  --primary: 43 74% 52%;
+  --primary-foreground: 0 0% 4%;
   
-  --secondary: 0 0% 18%;
+  --secondary: 0 0% 12%;
   --secondary-foreground: 43 30% 92%;
   
-  --muted: 0 0% 18%;
-  --muted-foreground: 43 20% 65%;
+  --muted: 0 0% 12%;
+  --muted-foreground: 43 15% 55%;
   
-  --accent: 0 0% 18%;
-  --accent-foreground: 43 30% 92%;
+  --accent: 43 35% 22%;
+  --accent-foreground: 43 50% 92%;
   
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
-  
-  --border: 0 0% 22%;
-  --input: 0 0% 22%;
-  --ring: 43 61% 52%;
+  --border: 43 15% 16%;
+  --input: 43 15% 16%;
+  --ring: 43 74% 52%;
 }
 
 @layer base {
@@ -107,4 +103,10 @@
   h1, h2, h3, h4, h5, h6 {
     @apply font-display tracking-tight;
   }
+}
+
+/* Premium gold focus ring */
+*:focus-visible {
+  outline: 2px solid hsl(43 74% 49%);
+  outline-offset: 2px;
 }

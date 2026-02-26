@@ -427,7 +427,8 @@ export function setupClientAuth(app: Express) {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
-    const intent = await storage.getPaymentIntentById(req.params.id, clientOrgId);
+    const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
     if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
     const { method, payerPhone, payerEmail } = req.body;
     const result = await initiatePaynowPayment({
@@ -447,7 +448,8 @@ export function setupClientAuth(app: Express) {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
-    const intent = await storage.getPaymentIntentById(req.params.id, clientOrgId);
+    const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
     if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
     const result = await pollPaynowStatus(intent.id, clientOrgId);
     return res.json({ status: result.status, paid: result.paid, error: result.error });
@@ -473,7 +475,8 @@ export function setupClientAuth(app: Express) {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
-    const receipt = await storage.getPaymentReceiptById(req.params.id, clientOrgId);
+    const receiptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const receipt = await storage.getPaymentReceiptById(receiptId, clientOrgId);
     if (!receipt || receipt.clientId !== clientId) return res.status(404).json({ message: "Not found" });
     const { getReceiptPdfPath } = await import("./receipt-pdf");
     const filePath = getReceiptPdfPath(receipt.pdfStorageKey);

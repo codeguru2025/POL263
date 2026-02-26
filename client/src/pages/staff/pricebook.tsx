@@ -154,7 +154,7 @@ export default function StaffPriceBook() {
 
   const activeItemCount = priceBookItems.filter((i) => i.isActive).length;
   const draftSheetCount = costSheets.filter((s) => s.status === "draft").length;
-  const categories = [...new Set(priceBookItems.map((i) => i.category).filter(Boolean))];
+  const categories = Array.from(new Set(priceBookItems.map((i) => i.category).filter(Boolean))) as string[];
 
   const selectedSheet = costSheets.find((s) => s.id === selectedSheetId);
   const selectedCase = selectedSheet?.funeralCaseId

@@ -7,7 +7,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const max =
-  (process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10)) || 10;
+  (process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10)) || 25;
 const idleTimeoutMillis =
   (process.env.DB_IDLE_TIMEOUT_MS && parseInt(process.env.DB_IDLE_TIMEOUT_MS, 10)) ||
   30_000;

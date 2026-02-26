@@ -165,14 +165,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="min-h-screen flex bg-background">
-      <aside className="w-64 border-r bg-card flex flex-col shadow-[1px_0_10px_rgba(0,0,0,0.02)] z-10 relative">
-        <div className="h-16 flex items-center px-6 border-b shrink-0">
+      <aside className="w-64 border-r border-primary/20 bg-card flex flex-col shadow-[2px_0_20px_rgba(0,0,0,0.15)] z-10 relative">
+        <div className="h-16 flex items-center justify-center px-4 border-b shrink-0">
           <img
             src={currentOrg?.logoUrl || "/assets/logo.png"}
             alt="Logo"
-            className="h-8 w-8 rounded mr-3 shadow-sm border border-border/50"
+            className="h-10 w-10 rounded-lg object-contain"
           />
-          <span className="font-display font-bold text-lg tracking-tight">POL263 Staff</span>
         </div>
 
         <ScrollArea className="flex-1 px-4 py-6">
@@ -256,7 +255,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         </header>
 
         <div className="flex-1 overflow-auto p-8 relative">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/5 via-background to-background pointer-events-none -z-10"></div>
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent pointer-events-none -z-10"></div>
           <div className="max-w-6xl mx-auto relative z-0">{children}</div>
         </div>
       </main>

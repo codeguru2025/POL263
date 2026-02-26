@@ -17,7 +17,7 @@ import { organizations } from "@shared/schema";
 const poolCache = new Map<string, pg.Pool>();
 const dbCache = new Map<string, ReturnType<typeof drizzle>>();
 
-const max = (process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10)) || 10;
+const max = (process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10)) || 25;
 const idleTimeoutMillis =
   (process.env.DB_IDLE_TIMEOUT_MS && parseInt(process.env.DB_IDLE_TIMEOUT_MS, 10)) || 30_000;
 const connectionTimeoutMillis =

@@ -394,9 +394,9 @@ export class DatabaseStorage implements IStorage {
   }
   async clearUserRoles(userId: string): Promise<void> {
     const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-    const orgId = user?.organizationId;
-    if (orgId) {
-      const tdb = await getDbForOrg(orgId);
+    const orgId = user?.organizationId ?? null;
+    if (orgId != null) {
+      const tdb = await getDbForOrg(orgId as string);
       await tdb.delete(userRoles).where(eq(userRoles.userId, userId));
       return;
     }
@@ -471,7 +471,9 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(auditLogs.timestamp)).limit(limit).offset(offset);
   }
   async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
-    const tdb = await getDbForOrg(log.organizationId);
+    const orgId = log.organizationId;
+    if (!orgId) throw new Error("createAuditLog: organizationId is required");
+    const tdb = await getDbForOrg(orgId);
     const [created] = await tdb.insert(auditLogs).values(log).returning();
     return created;
   }
@@ -919,13 +921,16 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(paymentEvents.createdAt));
   }
   async createPaymentReceipt(receipt: InsertPaymentReceipt): Promise<PaymentReceipt> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
-      const [pi] = await tdb.select().from(paymentIntents).where(eq(paymentIntents.id, receipt.paymentIntentId)).limit(1);
-      if (pi) {
-        const [created] = await tdb.insert(paymentReceipts).values(receipt).returning();
-        return created;
+    const intentId = receipt.paymentIntentId ?? undefined;
+    if (intentId) {
+      const orgs = await db.select({ id: organizations.id }).from(organizations);
+      for (const org of orgs) {
+        const tdb = await getDbForOrg(org.id);
+        const [pi] = await tdb.select().from(paymentIntents).where(eq(paymentIntents.id, intentId)).limit(1);
+        if (pi) {
+          const [created] = await tdb.insert(paymentReceipts).values(receipt).returning();
+          return created;
+        }
       }
     }
     const [created] = await db.insert(paymentReceipts).values(receipt).returning();
@@ -1318,7 +1323,7 @@ export class DatabaseStorage implements IStorage {
       ON CONFLICT (organization_id) DO UPDATE SET policy_next = org_policy_sequences.policy_next + 1
       RETURNING policy_next
     `);
-    const nextVal = (result as { rows?: { policy_next: number }[] }).rows?.[0]?.policy_next ?? 1;
+    const nextVal = (result as unknown as { rows?: { policy_next: number }[] }).rows?.[0]?.policy_next ?? 1;
     const org = await this.getOrganization(orgId);
     const padding = Math.max(1, org?.policyNumberPadding ?? 5);
     const prefix = (org?.policyNumberPrefix ?? "").trim();

@@ -45,8 +45,8 @@ export default function ClientLogin() {
     <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
       <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
-          <div className="mx-auto bg-primary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6">
-            <img src="/assets/logo.png" alt="POL263 Logo" className="w-10 h-10 rounded-lg" />
+          <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
+            <img src="/assets/logo.png" alt="Logo" className="w-10 h-10 rounded-lg object-contain" />
           </div>
           <CardTitle className="text-3xl font-display">Client Portal</CardTitle>
           <CardDescription className="text-base mt-2">

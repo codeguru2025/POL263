@@ -111,7 +111,7 @@ export default function ClientPayments() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  useQuery({
+  const { data: paymentStatusData } = useQuery({
     queryKey: ["/api/client-auth/payment-intents", currentIntent?.id, polling],
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/client-auth/payment-intents/${currentIntent!.id}/status`, { credentials: "include" });
@@ -120,17 +120,20 @@ export default function ClientPayments() {
     enabled: !!currentIntent?.id && polling && currentIntent?.status !== "paid",
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
-    onSuccess: (data) => {
-      if (data.paid || data.status === "paid") {
-        setPolling(false);
-        qc.invalidateQueries({ queryKey: ["/api/client-auth/payment-intents"] });
-        qc.invalidateQueries({ queryKey: ["/api/client-auth/policies"] });
-        qc.invalidateQueries({ queryKey: ["/api/client-auth/receipts"] });
-        toast({ title: "Payment successful", description: "You can download your receipt below." });
-      }
-      if (data.status === "failed") setPolling(false);
-    },
   });
+
+  useEffect(() => {
+    const d = paymentStatusData;
+    if (!d) return;
+    if (d.paid || d.status === "paid") {
+      setPolling(false);
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/payment-intents"] });
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/policies"] });
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/receipts"] });
+      toast({ title: "Payment successful", description: "You can download your receipt below." });
+    }
+    if (d.status === "failed") setPolling(false);
+  }, [paymentStatusData, qc, toast]);
 
   const policy = policies?.find((p) => p.id === selectedPolicyId);
   const canPay = paynowConfig?.enabled && policy && (["active", "grace", "reinstatement_pending"].includes(policy.status) || policy.status === "lapsed");

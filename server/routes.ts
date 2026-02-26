@@ -47,9 +47,9 @@ function auditLog(req: any, action: string, entityType: string, entityId: string
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
   const DASHBOARD_MAX_ROWS =
-    (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 20000;
+    (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 50000;
   const REPORT_EXPORT_MAX_ROWS =
-    (process.env.REPORT_EXPORT_MAX_ROWS && parseInt(process.env.REPORT_EXPORT_MAX_ROWS, 10)) || 5000;
+    (process.env.REPORT_EXPORT_MAX_ROWS && parseInt(process.env.REPORT_EXPORT_MAX_ROWS, 10)) || 15000;
 
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -313,7 +313,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/audit-logs", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     return res.json(await storage.getAuditLogs(user.organizationId, limit, offset));
   });
@@ -329,7 +329,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/clients", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
     return res.json(await storage.getClientsByOrg(user.organizationId, limit, offset, search));
@@ -530,7 +530,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -651,7 +651,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -715,13 +715,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Payment intents (Paynow) & receipts ─────────────────────
   app.get("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     return res.json(await storage.getPaymentIntentsByOrg(user.organizationId, limit));
   });
 
   app.get("/api/payment-intents/:id", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const intent = await storage.getPaymentIntentById(req.params.id, user.organizationId);
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const intent = await storage.getPaymentIntentById(id, user.organizationId);
     if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const events = await storage.getPaymentEventsByIntentId(intent.id, user.organizationId);
     return res.json({ ...intent, events });
@@ -729,7 +730,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/payment-intents/:id/poll", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const intent = await storage.getPaymentIntentById(req.params.id, user.organizationId);
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const intent = await storage.getPaymentIntentById(id, user.organizationId);
     if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const result = await pollPaynowStatus(intent.id, intent.organizationId);
     return res.json(result);
@@ -737,9 +739,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/receipts/:id/download", requireAuth, async (req, res) => {
     const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const receipt = user.organizationId
-      ? await storage.getPaymentReceiptById(req.params.id, user.organizationId)
-      : await findPaymentReceiptById(req.params.id);
+      ? await storage.getPaymentReceiptById(id, user.organizationId)
+      : await findPaymentReceiptById(id);
     if (!receipt) return res.status(404).json({ message: "Not found" });
     if (user.organizationId && receipt.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
     const filePath = getReceiptPdfPath(receipt.pdfStorageKey);
@@ -839,7 +842,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -909,7 +912,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/funeral-cases", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -960,7 +963,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.patch("/api/funeral-tasks/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
-    const updated = await storage.updateFuneralTask(req.params.id as string, req.body, user.organizationId);
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const updated = await storage.updateFuneralTask(id, req.body, user.organizationId);
     return res.json(updated);
   });
 
@@ -998,7 +1003,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/leads", requireAuth, requireTenantScope, requirePermission("read:lead"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     return res.json(await storage.getLeadsByOrg(user.organizationId, limit, offset));
   });
@@ -1039,7 +1044,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/expenditures", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -1227,8 +1232,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         agentId: agent.id,
         status: "draft",
         premiumAmount: premium,
-        currency: currency || pv.currency || "USD",
-        paymentSchedule: paymentSchedule || pv.paymentSchedule || "monthly",
+        currency: currency || "USD",
+        paymentSchedule: paymentSchedule || "monthly",
         effectiveDate: null,
       });
       const policy = await storage.createPolicy(policyParsed);
@@ -1292,7 +1297,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/chibikhulu/receivables", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const limit = parseInt(String(req.query.limit) || "100");
+    const limit = Math.min(parseInt(String(req.query.limit) || "100", 10) || 100, 500);
     const offset = parseInt(String(req.query.offset) || "0");
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -1431,9 +1436,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const allPayments = await storage.getPaymentsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
 
+    const pvToProductId: Record<string, string> = {};
+    for (const prod of allProducts) {
+      const versions = await storage.getProductVersions(prod.id, user.organizationId);
+      versions.forEach((v: { id: string }) => { pvToProductId[v.id] = prod.id; });
+    }
     const policyByProduct: Record<string, { total: number; active: number; lapsed: number }> = {};
     allPolicies.forEach((p: any) => {
-      const pid = p.productId || "unknown";
+      const pid = pvToProductId[p.productVersionId] || "unknown";
       if (!policyByProduct[pid]) policyByProduct[pid] = { total: 0, active: 0, lapsed: 0 };
       policyByProduct[pid].total++;
       if (p.status === "active") policyByProduct[pid].active++;
@@ -1443,7 +1453,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const revenueByProduct: Record<string, number> = {};
     allPayments.filter((p: any) => p.status === "cleared").forEach((p: any) => {
       const pol = allPolicies.find((pol: any) => pol.id === p.policyId);
-      const pid = pol?.productId || "unknown";
+      const pid = pol ? (pvToProductId[pol.productVersionId] || "unknown") : "unknown";
       revenueByProduct[pid] = (revenueByProduct[pid] || 0) + parseFloat(p.amount || "0");
     });
 

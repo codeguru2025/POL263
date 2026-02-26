@@ -37,8 +37,7 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
     <div className="min-h-screen bg-background flex flex-col">
       <header className="h-16 border-b bg-card flex items-center justify-between px-6 shrink-0 sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <img src="/assets/logo.png" alt="POL263 Logo" className="h-8 w-8 rounded" />
-          <span className="font-display font-bold text-lg">Client Portal</span>
+          <img src="/assets/logo.png" alt="Logo" className="h-9 w-9 rounded-lg object-contain" />
         </div>
 
         <div className="flex items-center gap-4">

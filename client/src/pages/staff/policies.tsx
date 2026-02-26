@@ -97,6 +97,9 @@ export default function StaffPolicies() {
     queryKey: ["/api/policies"],
   });
 
+  const { data: clients } = useQuery<any[]>({
+    queryKey: ["/api/clients"],
+  });
   const { data: usersList } = useQuery<any[]>({
     queryKey: ["/api/users"],
   });

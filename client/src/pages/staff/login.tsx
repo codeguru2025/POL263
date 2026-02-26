@@ -35,8 +35,8 @@ export default function StaffLogin() {
     <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
       <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-8">
-          <div className="mx-auto bg-primary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6">
-            <img src="/assets/logo.png" alt="POL263 Logo" className="w-10 h-10 rounded-lg" />
+          <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
+            <img src="/assets/logo.png" alt="Logo" className="w-10 h-10 rounded-lg object-contain" />
           </div>
           <CardTitle className="text-3xl font-display">Staff Portal</CardTitle>
           <CardDescription className="text-base mt-2">
@@ -51,7 +51,7 @@ export default function StaffLogin() {
           )}
 
           <Button
-            className="w-full h-12 text-base font-medium bg-white text-black border border-gray-200 hover:bg-gray-50 hover:text-black shadow-sm flex items-center gap-3"
+            className="w-full h-12 text-base font-medium bg-primary text-primary-foreground hover:bg-primary/90 border-0 shadow-md flex items-center gap-3"
             data-testid="btn-google-login"
             onClick={handleGoogleLogin}
           >
