@@ -26,6 +26,7 @@ export default function StaffLogin() {
 
   const params = new URLSearchParams(window.location.search);
   const authError = params.get("error");
+  const sessionError = authError === "session";
 
   const handleGoogleLogin = () => {
     try {
@@ -60,7 +61,9 @@ export default function StaffLogin() {
         <CardContent className="space-y-4">
           {authError && (
             <p className="text-sm text-destructive bg-destructive/10 p-3 rounded text-center" data-testid="text-auth-error">
-              {decodeURIComponent(authError)}
+              {sessionError
+                ? "Could not load your session after sign-in. Please try again or reload the page."
+                : decodeURIComponent(authError)}
             </p>
           )}
 

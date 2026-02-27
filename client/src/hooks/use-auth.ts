@@ -20,7 +20,7 @@ interface AuthSession {
 export function useAuth() {
   const queryClient = useQueryClient();
 
-  const { data: session, isLoading, error } = useQuery<AuthSession>({
+  const { data: session, isLoading, error, isError } = useQuery<AuthSession | null>({
     queryKey: ["/api/auth/me"],
     retry: false,
     staleTime: 5 * 60 * 1000,
@@ -42,6 +42,8 @@ export function useAuth() {
     permissions: session?.permissions ?? [],
     isAuthenticated: !!session?.user,
     isLoading,
+    isError,
+    error: error instanceof Error ? error.message : undefined,
     logout: logoutMutation.mutateAsync,
   };
 }

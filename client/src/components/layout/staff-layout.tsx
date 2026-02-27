@@ -73,7 +73,7 @@ function ReferralLinkBox({ referralCode }: { referralCode: string }) {
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { user, roles, permissions, isAuthenticated, isLoading, logout } = useAuth();
+  const { user, roles, permissions, isAuthenticated, isLoading, isError: authError, logout } = useAuth();
 
   // Close mobile sidebar when route changes
   useEffect(() => {
@@ -98,9 +98,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   // Redirect to login when not authenticated (in effect to avoid "update during render")
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-      setLocation("/staff/login");
+      setLocation(authError ? "/staff/login?error=session" : "/staff/login");
     }
-  }, [isLoading, isAuthenticated, setLocation]);
+  }, [isLoading, isAuthenticated, authError, setLocation]);
 
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],

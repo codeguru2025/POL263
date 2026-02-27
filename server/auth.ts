@@ -277,14 +277,25 @@ export function setupAuth(app: Express) {
     }
 
     const user = req.user as any;
-    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const effectivePermissions = await storage.getUserEffectivePermissions(user.id);
+    try {
+      const orgId = user.organizationId ?? undefined;
+      const userRoles = orgId
+        ? await storage.getUserRoles(user.id, orgId)
+        : [];
+      const effectivePermissions = await storage.getUserEffectivePermissions(user.id);
 
-    return res.json({
-      user: sanitizeUser(user),
-      roles: userRoles.map((r) => ({ name: r.name, branchId: r.branchId })),
-      permissions: effectivePermissions,
-    });
+      return res.json({
+        user: sanitizeUser(user),
+        roles: userRoles.map((r) => ({ name: r.name, branchId: r.branchId })),
+        permissions: effectivePermissions,
+      });
+    } catch (err) {
+      structuredLog("error", "GET /api/auth/me failed", {
+        error: (err as Error).message,
+        userId: user?.id,
+      });
+      return res.status(500).json({ message: "Could not load session. Please try again." });
+    }
   });
 }
 
