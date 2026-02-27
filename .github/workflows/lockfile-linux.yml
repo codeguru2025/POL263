@@ -1,19 +1,19 @@
 # Regenerate package-lock.json on Linux so DigitalOcean (ubuntu) npm ci succeeds.
-# Platform-specific optional deps (e.g. @esbuild/linux-x64, @rollup/rollup-linux-x64-gnu,
-# @tailwindcss/oxide-linux-x64-gnu, lightningcss-linux-x64-gnu) are only resolved when
-# npm install runs on Linux. A lockfile authored on Windows omits them → npm ci fails.
 #
-# On push to main: regenerate, verify build, auto-commit if changed.
-# On PRs: regenerate, verify build, fail if lockfile differs (contributor must merge main).
-name: Lockfile (Linux)
+# Problem: npm resolves platform-specific optional deps (esbuild, rollup, tailwindcss-oxide,
+# lightningcss) based on the OS where `npm install` runs. A lockfile from Windows omits
+# linux-x64 binaries → `npm ci` on DO/Ubuntu fails with "Missing: …".
+#
+# Solution: CI regenerates the lockfile on ubuntu, verifies the build, commits to main,
+# then fast-forwards the `deploy` branch. DigitalOcean tracks `deploy`, not `main`,
+# so it only builds commits that already have a Linux-correct lockfile.
+#
+# Loop protection: skips runs triggered by github-actions[bot] or [skip ci] commits.
+name: Lockfile (Linux) & Deploy
 
 on:
   push:
     branches: [main]
-    paths:
-      - package.json
-      - package-lock.json
-      - .npmrc
   pull_request:
     branches: [main]
     paths:
@@ -30,12 +30,17 @@ env:
 
 jobs:
   lockfile:
-    name: Regen & verify lockfile
+    name: Regen lockfile & sync deploy
     runs-on: ubuntu-latest
+
+    # Loop protection: don't run on our own commits
+    if: |
+      github.actor != 'github-actions[bot]' &&
+      !contains(github.event.head_commit.message, '[skip ci]')
+
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so we can push back; use the default GITHUB_TOKEN
           fetch-depth: 0
 
       - name: Setup Node ${{ env.NODE_VERSION }}
@@ -70,16 +75,23 @@ jobs:
           fi
 
       # ── On push to main: auto-commit the updated lockfile ──
-      - name: Commit & push lockfile
+      - name: Commit lockfile to main
         if: steps.diff.outputs.changed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package-lock.json
-          git commit -m "chore: regen package-lock on linux for deploy"
-          git push
+          git commit -m "chore: regen package-lock on linux [skip ci]"
+          git push origin main
 
-      # ── On PRs: fail so contributor knows to merge main after bot updates ──
+      # ── Fast-forward deploy branch to current main HEAD ──
+      - name: Sync deploy branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "Pushing main HEAD ($(git rev-parse --short HEAD)) → deploy"
+          git push origin HEAD:refs/heads/deploy --force
+
+      # ── On PRs: fail so contributor knows to merge main ──
       - name: Fail PR if lockfile out of sync
         if: steps.diff.outputs.changed == 'true' && github.event_name == 'pull_request'
         run: |

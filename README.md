@@ -70,7 +70,7 @@ Build output: **`dist/public/`** (client) and **`dist/index.cjs`** (server). The
 - **npm** 11.x. Use `npm ci` in CI and on first clone; use `npm install` only when adding/updating dependencies, then commit `package-lock.json`.
 - After changing `package.json`, run `npm run lint:lock` before pushing to ensure the lockfile is in sync. To regenerate from scratch: `npm run relock`.
 
-**Lockfile rule** — `package-lock.json` is **regenerated on Linux by CI** (`.github/workflows/lockfile-linux.yml`). This ensures platform-specific optional dependencies (esbuild, rollup, tailwindcss-oxide, lightningcss — all have linux-x64 variants) are present so `npm ci` succeeds on DigitalOcean / Ubuntu. Do not hand-edit the lockfile. If CI auto-commits a lockfile update, pull the latest `main` before pushing again.
+**Lockfile & deploy flow** — `package-lock.json` is **regenerated on Linux by CI** (`.github/workflows/lockfile-linux.yml`). This ensures platform-specific optional dependencies (esbuild, rollup, tailwindcss-oxide, lightningcss — all have linux-x64 variants) are present so `npm ci` succeeds on Ubuntu. The workflow then fast-forwards the **`deploy`** branch to the verified commit. **DigitalOcean tracks `deploy`, not `main`**, so it only builds commits with a Linux-correct lockfile. Do not hand-edit the lockfile or push directly to `deploy`. If CI auto-commits a lockfile update to `main`, run `git pull` before pushing again.
 
 ```bash
 npm install

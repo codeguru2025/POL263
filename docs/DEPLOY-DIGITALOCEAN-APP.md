@@ -58,10 +58,12 @@ You will use this URI as `DATABASE_URL` in the app’s environment.
 
 1. In DigitalOcean: **Apps** → **Create App**.
 2. **Choose source:** GitHub. Authorize DigitalOcean to access GitHub if needed.
-3. Select your **POL263** repository and choose branch **main** (not `docs-deploy` or `docs-and-deploy`).
+3. Select your **POL263** repository and choose branch **deploy** (not `main` or `docs-deploy`).
 4. **Resource type:** Choose **Web Service** (not static site).
 
-**If DigitalOcean shows a different branch (e.g. docs-deploy):** Use the **Branch** dropdown and select **main**. If the app already exists: **Settings** → **Source** (or **App Spec**) → set **Branch** to **main** → Save and redeploy.
+**Why `deploy` instead of `main`?** A GitHub Actions workflow regenerates `package-lock.json` on Linux (so platform-specific deps like esbuild-linux-x64 are present) and then fast-forwards the `deploy` branch to that verified commit. DigitalOcean only builds from `deploy`, so `npm ci` always succeeds. Never push directly to `deploy`; it is managed by CI.
+
+**If DigitalOcean shows a different branch:** Use the **Branch** dropdown and select **deploy**. If the app already exists: **Settings** → **Source** (or **App Spec**) → set **Branch** to **deploy** → Save and redeploy.
 
 ---
 
@@ -132,9 +134,9 @@ In the app’s **Settings** → **Domains**, add your domain (e.g. `app.pol263.c
 
 ## 7. Updates (push to GitHub)
 
-Whenever you push to the **main** branch (the branch the app is connected to), App Platform will rebuild and redeploy automatically (if auto-deploy is on). To deploy manually, use **Deploy** in the DO dashboard.
+Push your changes to **main**. GitHub Actions will regenerate the lockfile on Linux (if needed), then fast-forward the **deploy** branch. DigitalOcean auto-deploys from **deploy**, so the build always has a Linux-correct lockfile.
 
-**Ensure the app is set to branch main:** In DigitalOcean → your app → **Settings** → **Source** (or **App Spec**). Set **Branch** to **main** so deploys use the main branch, not e.g. `docs-deploy`.
+**Ensure the app is set to branch `deploy`:** In DigitalOcean → your app → **Settings** → **Source**. Set **Branch** to **deploy**. Do not set it to `main` (that would race the CI lockfile step and fail).
 
 ---
 
