@@ -41,14 +41,20 @@ export function verifyPaynowHash(postedFields: Record<string, string>): boolean 
 
 /**
  * Generate hash for outbound Paynow request.
+ * PayNow docs: concatenate values in the ORDER they appear in the message (id, reference, amount, ...), then append Integration Key, SHA512, uppercase hex.
+ * Do NOT use alphabetical order.
  * @param params - key-value pairs (values will be URL-encoded in request; pass raw values here)
+ * @param keyOrder - order of keys for hash (excluding "hash" itself). If omitted, uses alphabetical (for backward compat / validation).
  */
-export function generatePaynowHash(params: Record<string, string>): string {
+export function generatePaynowHash(params: Record<string, string>, keyOrder?: string[]): string {
   const key = getPaynowIntegrationKey();
   if (!key) return "";
 
-  const sortedKeys = Object.keys(params).sort();
-  const concatenated = sortedKeys.map((k) => String(params[k] ?? "")).join("");
+  const keys = keyOrder ?? Object.keys(params).sort();
+  const concatenated = keys
+    .filter((k) => k.toLowerCase() !== "hash")
+    .map((k) => String(params[k] ?? ""))
+    .join("");
   const toHash = concatenated + key;
   return crypto.createHash("sha512").update(toHash).digest("hex").toUpperCase();
 }

@@ -457,31 +457,41 @@ export function setupClientAuth(app: Express) {
     if (!policyId || amount == null || !idempotencyKey) {
       return res.status(400).json({ message: "policyId, amount, and idempotencyKey are required" });
     }
-    const policy = await storage.getPolicy(policyId, clientOrgId);
-    if (!policy || policy.organizationId !== clientOrgId) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    let allowedClientId = clientId;
-    if (policy.clientId !== clientId) {
-      const lookedUp = (req.session as any)?.lookedUpClientId;
-      const lookedUpAt = (req.session as any)?.lookedUpClientIdAt;
-      const fiveMin = 5 * 60 * 1000;
-      if (lookedUp === policy.clientId && lookedUpAt && Date.now() - lookedUpAt < fiveMin) {
-        allowedClientId = policy.clientId;
-      } else {
-        return res.status(403).json({ message: "Access denied. Look up the client by phone first to pay for their policy." });
+    try {
+      const policy = await storage.getPolicy(policyId, clientOrgId);
+      if (!policy || policy.organizationId !== clientOrgId) {
+        return res.status(403).json({ message: "Access denied" });
       }
+      let allowedClientId = clientId;
+      if (policy.clientId !== clientId) {
+        const lookedUp = (req.session as any)?.lookedUpClientId;
+        const lookedUpAt = (req.session as any)?.lookedUpClientIdAt;
+        const fiveMin = 5 * 60 * 1000;
+        if (lookedUp === policy.clientId && lookedUpAt && Date.now() - lookedUpAt < fiveMin) {
+          allowedClientId = policy.clientId;
+        } else {
+          return res.status(403).json({ message: "Access denied. Look up the client by phone first to pay for their policy." });
+        }
+      }
+      const result = await createPaymentIntent({
+        organizationId: clientOrgId,
+        clientId: allowedClientId,
+        policyId,
+        amount: String(amount),
+        purpose: purpose || "premium",
+        idempotencyKey,
+      });
+      if (result.error) return res.status(400).json({ message: result.error });
+      return res.json({ intent: result.intent, created: result.created });
+    } catch (err) {
+      structuredLog("error", "Client payment intent create failed", {
+        error: (err as Error).message,
+        stack: (err as Error).stack,
+        clientId,
+        policyId,
+      });
+      return res.status(500).json({ message: "Payment setup failed. Please try again or contact support." });
     }
-    const result = await createPaymentIntent({
-      organizationId: clientOrgId,
-      clientId: allowedClientId,
-      policyId,
-      amount: String(amount),
-      purpose: purpose || "premium",
-      idempotencyKey,
-    });
-    if (result.error) return res.status(400).json({ message: result.error });
-    return res.json({ intent: result.intent, created: result.created });
   });
 
   app.post("/api/client-auth/payment-intents/:id/initiate", async (req: Request, res: Response) => {
@@ -489,20 +499,30 @@ export function setupClientAuth(app: Express) {
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
-    if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
-    const { method, payerPhone, payerEmail } = req.body;
-    const result = await initiatePaynowPayment({
-      intentId: intent.id,
-      organizationId: clientOrgId,
-      method: method || "visa_mastercard",
-      payerPhone,
-      payerEmail,
-      actorType: "client",
-      actorId: clientId,
-    });
-    if (!result.ok) return res.status(400).json({ message: result.error });
-    return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
+    try {
+      const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
+      if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+      const { method, payerPhone, payerEmail } = req.body;
+      const result = await initiatePaynowPayment({
+        intentId: intent.id,
+        organizationId: clientOrgId,
+        method: method || "visa_mastercard",
+        payerPhone,
+        payerEmail,
+        actorType: "client",
+        actorId: clientId,
+      });
+      if (!result.ok) return res.status(400).json({ message: result.error });
+      return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
+    } catch (err) {
+      structuredLog("error", "Client PayNow initiate failed", {
+        error: (err as Error).message,
+        stack: (err as Error).stack,
+        clientId,
+        intentId,
+      });
+      return res.status(500).json({ message: "Could not start payment. Please try again or contact support." });
+    }
   });
 
   app.get("/api/client-auth/payment-intents/:id/status", async (req: Request, res: Response) => {
@@ -510,10 +530,19 @@ export function setupClientAuth(app: Express) {
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
-    if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
-    const result = await pollPaynowStatus(intent.id, clientOrgId);
-    return res.json({ status: result.status, paid: result.paid, error: result.error });
+    try {
+      const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
+      if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+      const result = await pollPaynowStatus(intent.id, clientOrgId);
+      return res.json({ status: result.status, paid: result.paid, error: result.error });
+    } catch (err) {
+      structuredLog("error", "Client payment status poll failed", {
+        error: (err as Error).message,
+        clientId,
+        intentId,
+      });
+      return res.status(500).json({ status: "unknown", error: "Could not check status." });
+    }
   });
 
   app.get("/api/client-auth/payment-intents", async (req: Request, res: Response) => {

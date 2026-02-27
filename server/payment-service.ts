@@ -16,6 +16,11 @@ const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction"
 const REINSTATEMENT_PURPOSE = "reinstatement";
 const GROUP_PAYMENT_STATUS_PAID = "paid";
 
+/** actor_id in payment_events references users.id; clients are not in users. Use null when actor is client. */
+function eventActorId(actorType: string, actorId: string | null | undefined): string | null {
+  return actorType === "client" ? null : (actorId ?? null);
+}
+
 export interface CreateIntentInput {
   organizationId: string;
   clientId: string;
@@ -111,7 +116,7 @@ export async function createPaymentIntent(input: CreateIntentInput): Promise<{
   return { intent, created: true };
 }
 
-/** Build form body for Paynow init (standard redirect). */
+/** Build form body for Paynow init (standard redirect). Hash uses field order per PayNow docs: id, reference, amount, returnurl, resulturl, status. */
 function buildInitParams(merchantReference: string, amount: string, returnUrl: string, resultUrl: string): Record<string, string> {
   const id = getPaynowIntegrationId();
   const params: Record<string, string> = {
@@ -122,11 +127,12 @@ function buildInitParams(merchantReference: string, amount: string, returnUrl: s
     resulturl: resultUrl,
     status: "Message",
   };
-  params.hash = generatePaynowHash(params);
+  const hashKeyOrder = ["id", "reference", "amount", "returnurl", "resulturl", "status"];
+  params.hash = generatePaynowHash(params, hashKeyOrder);
   return params;
 }
 
-/** Build form body for Paynow remote (mobile). */
+/** Build form body for Paynow remote (mobile). Hash uses field order: id, reference, amount, returnurl, resulturl, status, method, phone. */
 function buildRemoteParams(
   merchantReference: string,
   amount: string,
@@ -151,7 +157,8 @@ function buildRemoteParams(
     method: paynowMethod,
     phone: phone.replace(/\D/g, "").trim(),
   };
-  params.hash = generatePaynowHash(params);
+  const hashKeyOrder = ["id", "reference", "amount", "returnurl", "resulturl", "status", "method", "phone"];
+  params.hash = generatePaynowHash(params, hashKeyOrder);
   return params;
 }
 
@@ -234,7 +241,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
       type: "marked_failed",
       payloadJson: { status, error: errMsg },
       actorType: input.actorType,
-      actorId: input.actorId ?? null,
+      actorId: eventActorId(input.actorType, input.actorId),
     });
     return { ok: false, error: errMsg || "Initiation failed" };
   }
@@ -252,7 +259,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
     type: "redirect_issued",
     payloadJson: { pollUrl: !!pollUrl, hasRedirect: !!redirectUrl },
     actorType: input.actorType,
-    actorId: input.actorId ?? null,
+    actorId: eventActorId(input.actorType, input.actorId),
   });
 
   return {
@@ -389,6 +396,7 @@ export async function applyPaymentToPolicy(
   if (!policy) return { ok: false, error: "Policy not found" };
 
   const today = new Date().toISOString().split("T")[0];
+  const effectiveUserId = eventActorId(actorType, actorId);
   const txData = {
     organizationId: intent.organizationId,
     policyId: intent.policyId,
@@ -403,7 +411,7 @@ export async function applyPaymentToPolicy(
     receivedAt: new Date(),
     postedDate: today,
     valueDate: today,
-    recordedBy: actorId ?? undefined,
+    recordedBy: effectiveUserId ?? undefined,
   };
   const transaction = await storage.createPaymentTransaction(txData);
 
@@ -426,7 +434,7 @@ export async function applyPaymentToPolicy(
     amount: String(intent.amount),
     currency: intent.currency,
     paymentChannel,
-    issuedByUserId: actorId ?? undefined,
+    issuedByUserId: effectiveUserId ?? undefined,
     status: "issued",
     printFormat: "thermal_80mm",
     metadataJson: { transactionId: transaction.id, paynowReference: intent.paynowReference },
@@ -440,22 +448,22 @@ export async function applyPaymentToPolicy(
     type: "marked_paid",
     payloadJson: { transactionId: transaction.id, receiptId: receipt.id },
     actorType,
-    actorId,
+    actorId: eventActorId(actorType, actorId),
   });
 
   if (policy.status === "grace") {
     await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null }, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "grace", "active", "Payment received", actorId ?? undefined);
+    await storage.createPolicyStatusHistory(intent.policyId, "grace", "active", "Payment received", effectiveUserId ?? undefined);
   } else if (policy.status === "reinstatement_pending" && intent.purpose === REINSTATEMENT_PURPOSE) {
     await storage.updatePolicy(intent.policyId, { status: "active" }, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "reinstatement_pending", "active", "Reinstatement payment received", actorId ?? undefined);
+    await storage.createPolicyStatusHistory(intent.policyId, "reinstatement_pending", "active", "Reinstatement payment received", effectiveUserId ?? undefined);
   } else if (policy.status === "pending") {
     const today = new Date().toISOString().split("T")[0];
     const update: { status: string; inceptionDate?: string; effectiveDate?: string } = { status: "active" };
     update.inceptionDate = today;
     if (!policy.effectiveDate) update.effectiveDate = today;
     await storage.updatePolicy(intent.policyId, update, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "pending", "active", "First premium paid", actorId ?? undefined);
+    await storage.createPolicyStatusHistory(intent.policyId, "pending", "active", "First premium paid", effectiveUserId ?? undefined);
   }
 
   const { generateReceiptPdf } = await import("./receipt-pdf");
@@ -470,7 +478,7 @@ export async function applyPaymentToPolicy(
     type: "receipt_issued",
     payloadJson: { receiptId: receipt.id },
     actorType,
-    actorId,
+    actorId: eventActorId(actorType, actorId),
   });
 
   await storage.createNotificationLog(intent.organizationId, {
