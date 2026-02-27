@@ -271,30 +271,39 @@ export default function StaffUsers() {
 
         <Dialog open={!!editingUser} onOpenChange={(open) => !open && setEditingUser(null)}>
           <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col p-0">
-            <div className="px-6 pt-6 pb-2 shrink-0">
+            <div className="px-6 pt-6 pb-2 shrink-0 space-y-4">
               <DialogHeader>
                 <DialogTitle>Edit User</DialogTitle>
                 <DialogDescription>Update {editingUser?.displayName || editingUser?.email}'s details and roles. You can change email, display name, status, branch, roles, and password.</DialogDescription>
               </DialogHeader>
+              {editingUser && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-user-email">Email (sign-in address)</Label>
+                    <Input
+                      id="edit-user-email"
+                      type="email"
+                      value={editingUser.email || ""}
+                      onChange={e => setEditingUser((p: any) => ({ ...p, email: e.target.value }))}
+                      placeholder="user@example.com"
+                      data-testid="input-edit-user-email"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-user-display-name">Display Name</Label>
+                    <Input
+                      id="edit-user-display-name"
+                      value={editingUser.displayName || ""}
+                      onChange={e => setEditingUser((p: any) => ({ ...p, displayName: e.target.value }))}
+                      data-testid="input-edit-user-name"
+                    />
+                  </div>
+                </>
+              )}
             </div>
             {editingUser && (
-              <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-user-email">Email (sign-in address)</Label>
-                  <Input
-                    id="edit-user-email"
-                    type="email"
-                    value={editingUser.email || ""}
-                    onChange={e => setEditingUser((p: any) => ({ ...p, email: e.target.value }))}
-                    placeholder="user@example.com"
-                    data-testid="input-edit-user-email"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Display Name</Label>
-                  <Input value={editingUser.displayName || ""} onChange={e => setEditingUser((p: any) => ({ ...p, displayName: e.target.value }))} data-testid="input-edit-user-name" />
-                </div>
-                <div className="space-y-2">
+              <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1 border-t">
+                <div className="space-y-2 pt-2">
                   <Label>Status</Label>
                   <Select value={editingUser.isActive ? "true" : "false"} onValueChange={v => setEditingUser((p: any) => ({ ...p, isActive: v === "true" }))}>
                     <SelectTrigger data-testid="select-edit-user-status"><SelectValue /></SelectTrigger>
