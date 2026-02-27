@@ -29,7 +29,13 @@ export function useAuth() {
   const logoutMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/auth/logout");
-      return res.json();
+      const text = await res.text();
+      if (!text.trim()) return {};
+      try {
+        return JSON.parse(text);
+      } catch {
+        return {};
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });

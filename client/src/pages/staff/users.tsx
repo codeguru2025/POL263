@@ -270,16 +270,25 @@ export default function StaffUsers() {
         </Card>
 
         <Dialog open={!!editingUser} onOpenChange={(open) => !open && setEditingUser(null)}>
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Edit User</DialogTitle>
-              <DialogDescription>Update {editingUser?.displayName || editingUser?.email}'s details and roles.</DialogDescription>
-            </DialogHeader>
+          <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col p-0">
+            <div className="px-6 pt-6 pb-2 shrink-0">
+              <DialogHeader>
+                <DialogTitle>Edit User</DialogTitle>
+                <DialogDescription>Update {editingUser?.displayName || editingUser?.email}'s details and roles. You can change email, display name, status, branch, roles, and password.</DialogDescription>
+              </DialogHeader>
+            </div>
             {editingUser && (
-              <div className="space-y-4 py-4">
+              <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1">
                 <div className="space-y-2">
-                  <Label>Email</Label>
-                  <Input type="email" value={editingUser.email || ""} onChange={e => setEditingUser((p: any) => ({ ...p, email: e.target.value }))} placeholder="user@example.com" data-testid="input-edit-user-email" />
+                  <Label htmlFor="edit-user-email">Email (sign-in address)</Label>
+                  <Input
+                    id="edit-user-email"
+                    type="email"
+                    value={editingUser.email || ""}
+                    onChange={e => setEditingUser((p: any) => ({ ...p, email: e.target.value }))}
+                    placeholder="user@example.com"
+                    data-testid="input-edit-user-email"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Display Name</Label>
@@ -329,7 +338,7 @@ export default function StaffUsers() {
                 </div>
               </div>
             )}
-            <DialogFooter>
+            <DialogFooter className="px-6 pb-6 pt-4 shrink-0 border-t">
               <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
               <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined } })} disabled={updateMutation.isPending} data-testid="button-submit-edit-user">
                 {updateMutation.isPending ? "Saving..." : "Save Changes"}

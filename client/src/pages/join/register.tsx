@@ -36,6 +36,7 @@ export default function JoinRegisterPage() {
 
   const [options, setOptions] = useState<RegistrationOptions | null>(null);
   const [loading, setLoading] = useState(!!refCode);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [result, setResult] = useState<{ policyNumber: string; activationCode: string } | null>(null);
 
@@ -55,14 +56,17 @@ export default function JoinRegisterPage() {
   useEffect(() => {
     if (!refCode) {
       setLoading(false);
+      setLoadError(null);
       return;
     }
+    setLoadError(null);
     sessionStorage.setItem("agent_referral_code", refCode);
     fetch(getApiBase() + `/api/public/registration-options?ref=${encodeURIComponent(refCode)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        setOptions(data);
         if (data?.products?.length) {
+          setOptions(data);
+          setLoadError(null);
           const first = data.products[0];
           const firstVersion = first?.versions?.[0];
           setForm((f) => ({
@@ -71,9 +75,16 @@ export default function JoinRegisterPage() {
             productVersionId: firstVersion?.id || "",
             premiumAmount: firstVersion?.premiumMonthlyUsd || firstVersion?.premiumMonthlyZar || "",
           }));
+        } else {
+          setOptions(null);
+          setLoadError(data?.message || "Invalid or expired referral link.");
         }
       })
-      .catch(() => toast({ title: "Error", description: "Could not load options.", variant: "destructive" }))
+      .catch(() => {
+        setOptions(null);
+        setLoadError("Could not load registration options. Please check the link and try again.");
+        toast({ title: "Error", description: "Could not load options.", variant: "destructive" });
+      })
       .finally(() => setLoading(false));
   }, [refCode, toast]);
 
@@ -147,13 +158,30 @@ export default function JoinRegisterPage() {
     );
   }
 
-  if (loading || !options) {
+  if (loading || (!options && !loadError)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           <p className="text-muted-foreground">Loading...</p>
         </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Unable to load registration</CardTitle>
+            <CardDescription>{loadError}</CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <Button variant="outline" onClick={() => setLocation("/join")}>Back to Join</Button>
+            <Button onClick={() => { setLoadError(null); setLoading(true); window.location.reload(); }}>Try again</Button>
+          </CardFooter>
+        </Card>
       </div>
     );
   }
@@ -195,6 +223,8 @@ export default function JoinRegisterPage() {
       </div>
     );
   }
+
+  if (!options) return null;
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
