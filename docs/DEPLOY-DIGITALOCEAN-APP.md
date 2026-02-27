@@ -134,6 +134,24 @@ Whenever you push to the connected branch (e.g. `main`), App Platform will rebui
 
 ---
 
+## 8. If the build fails: "npm lockfile is not in sync"
+
+**Symptom:** Build log shows **"npm lockfile is not in sync"** or **"Missing: … from lock file"** and the deploy fails.
+
+**Cause:** App Platform runs **`npm ci`**, which requires `package-lock.json` to exactly match `package.json`. If a commit changed `package.json` (e.g. added dependencies) but did **not** include an updated `package-lock.json`, that commit will always fail to build.
+
+**Fix:**
+
+1. **Deploy from the latest commit on `main`**  
+   In DigitalOcean: **Settings** → ensure the app is set to deploy from branch **main**, then trigger a **new deployment** so it uses the **latest** commit. Do not pin the app to an older commit.
+
+2. **Always commit the lock file**  
+   After changing `package.json`, run `npm install` and commit the updated `package-lock.json` in the same (or next) commit. Run `npm run lockfile:check` before pushing to verify.
+
+3. **If the build log shows an old commit hash** (e.g. "Deploying commit e84976d"), the platform is building that old commit. Switch to deploying from **branch main** and redeploy so it picks the latest commit with the fixed lock file.
+
+---
+
 ## Summary
 
 | Item        | Value |

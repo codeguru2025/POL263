@@ -27,7 +27,8 @@
     "cap:android": "npx cap open android",
     "generate-secret": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lockfile:check": "node script/lockfile-check.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
