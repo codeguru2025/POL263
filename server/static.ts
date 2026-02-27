@@ -12,8 +12,13 @@ export function serveStatic(app: Express) {
 
   app.use(express.static(distPath));
 
-  // fall through to index.html if the file doesn't exist
-  app.use("/{*path}", (_req, res) => {
-    res.sendFile(path.resolve(distPath, "index.html"));
+  // SPA fallback: serve index.html for app routes so reload gets fresh HTML after deploy (no-cache). Missing assets → 404.
+  app.get("*", (req, res) => {
+    const looksLikeAsset = req.path.startsWith("/assets/") || /\.[a-z0-9]+$/i.test(req.path);
+    if (looksLikeAsset) {
+      return res.status(404).send("Not found");
+    }
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.sendFile(path.join(distPath, "index.html"));
   });
 }

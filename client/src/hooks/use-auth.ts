@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 
 interface AuthUser {
   id: string;
@@ -17,11 +17,25 @@ interface AuthSession {
   permissions: string[];
 }
 
+/** Auth/me never throws so reload in production does not hit the Error Boundary (e.g. on 500 or network). */
+async function fetchAuthSession(): Promise<AuthSession | null> {
+  try {
+    const url = getApiBase() + "/api/auth/me";
+    const res = await fetch(url, { credentials: "include" });
+    if (res.status === 401 || res.status === 403) return null;
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export function useAuth() {
   const queryClient = useQueryClient();
 
   const { data: session, isLoading, error, isError } = useQuery<AuthSession | null>({
     queryKey: ["/api/auth/me"],
+    queryFn: fetchAuthSession,
     retry: false,
     staleTime: 5 * 60 * 1000,
   });
