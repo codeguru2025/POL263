@@ -1,17 +1,16 @@
 # Build and deploy web + Android + iOS on every push to main.
-# Web: build output is published (Netlify/Vercel can deploy from git or use their API).
-# Android: APK artifact uploaded (debug build; configure signing for release).
-# iOS: build runs on macOS (simulator build in CI; configure signing for device/TestFlight).
-
+# Also runs on PRs to main to verify lockfile + build (no merge if lockfile out of sync).
 name: Build Web & Mobile
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "22"
 
 jobs:
   build-web:
@@ -28,6 +27,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Verify lockfile in sync
+        run: npm run lint:lock
 
       - name: Build web client
         run: npm run build

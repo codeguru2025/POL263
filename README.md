@@ -15,7 +15,8 @@
 Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**  
 **Database setup (PostgreSQL):** **[docs/DATABASE-SETUP.md](docs/DATABASE-SETUP.md)**  
 **Deploy on DigitalOcean App Platform (from GitHub):** **[docs/DEPLOY-DIGITALOCEAN-APP.md](docs/DEPLOY-DIGITALOCEAN-APP.md)**  
-**Deploy on InterServer VPS:** **[docs/DEPLOY-INTERSERVER-VPS.md](docs/DEPLOY-INTERSERVER-VPS.md)**
+**Deploy on InterServer VPS:** **[docs/DEPLOY-INTERSERVER-VPS.md](docs/DEPLOY-INTERSERVER-VPS.md)**  
+**TestSprite (AI testing in Cursor):** **[docs/TESTSPRITE-SETUP.md](docs/TESTSPRITE-SETUP.md)**
 
 ---
 
@@ -23,10 +24,10 @@ Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**
 POL263 is a modern, multi-tenant Property Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
 
 ## Architecture & Tech Stack
-*   **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + Wouter
-*   **Backend Strategy**: Modular API routes with Zod validation, shared DTOs (simulated in mockup mode)
-*   **Database**: PostgreSQL + Prisma ORM (simulated in mockup mode)
-*   **Styling**: Custom CSS Variables matching a modern SaaS aesthetic
+*   **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + Wouter + TanStack Query
+*   **Backend**: Express (Node.js), modular API routes with Zod validation where applied, shared schema and DTOs
+*   **Database**: PostgreSQL + Drizzle ORM; schema and migrations in `shared/schema.ts` and `migrations/`
+*   **Styling**: Custom CSS variables (Tailwind) for tenant branding and a modern SaaS look
 
 ## Core Implementations
 
@@ -51,6 +52,12 @@ POL263 is a modern, multi-tenant Property Management System built with a focus o
 *   Settings UI allows dynamic updates to the organization's visual identity.
 
 ## Development Setup
+
+**Toolchain & install**
+- **Node.js** 22.x (use [nvm](https://github.com/nvm-sh/nvm) and run `nvm use` or set from `.nvmrc`).
+- **npm** 11.x. Use `npm ci` in CI and on first clone; use `npm install` only when adding/updating dependencies, then commit `package-lock.json`.
+- After changing `package.json`, run `npm run lint:lock` before pushing to ensure the lockfile is in sync. To regenerate from scratch: `npm run relock`.
+
 ```bash
 npm install
 npm run dev:client

@@ -5,8 +5,9 @@
   "license": "MIT",
   "engines": {
     "node": "22.x",
-    "npm": ">=9.0.0"
+    "npm": ">=10.0.0"
   },
+  "packageManager": "npm@11.11.0",
   "scripts": {
     "dev:client": "vite dev --port 5000",
     "dev": "cross-env NODE_ENV=development tsx server/index.ts",
@@ -29,7 +30,9 @@
     "generate-secret": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lockfile:check": "node script/lockfile-check.cjs"
+    "lockfile:check": "node script/lockfile-check.cjs",
+    "lint:lock": "node script/lockfile-check.cjs",
+    "relock": "node script/relock.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
