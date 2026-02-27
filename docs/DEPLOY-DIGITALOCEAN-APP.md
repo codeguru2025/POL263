@@ -152,6 +152,40 @@ Whenever you push to the connected branch (e.g. `main`), App Platform will rebui
 
 ---
 
+## 9. Deploy / Force Rebuild fails, but Restart works
+
+**Symptom:** When you click **Deploy** or **Force Rebuild and Deploy**, the build fails (e.g. "tsx: command not found", "vite: command not found", or script errors). When you click **Restart** (without rebuilding), the app runs fine.
+
+**Cause:**
+
+- **Deploy / Force Rebuild** runs the full build: install dependencies, then run your **Build Command** (`npm run build`). Our build needs **devDependencies** (e.g. `tsx`, `vite`, `tailwindcss`) to run `npx tsx script/build.ts` and Vite. If the install step runs with **production-only** (e.g. `NPM_CONFIG_PRODUCTION=true` or `NODE_ENV=production` at install time), devDependencies are not installed, so `npm run build` fails.
+- **Restart** does **not** rebuild. It restarts the existing container image. That image was built successfully at some earlier time (e.g. when cache still had devDeps, or before an env change), so the app starts correctly.
+- **Force Rebuild with “Clear Build Cache”** can make this worse: a fresh install may run with production-only settings, so devDeps are missing and the build fails.
+
+**Fix (choose one):**
+
+### Option A: Use the DigitalOcean build script (recommended)
+
+1. In the repo we added a script that runs **`npm ci --include=dev`** (full install including devDependencies) then **`npm run build`**, so the build always has `tsx`, `vite`, etc. available.
+2. In DigitalOcean: **Settings** → **Commands** → set **Build Command** to:
+   ```bash
+   npm run build:do
+   ```
+3. Save and trigger a new **Deploy** (no need to clear cache).
+
+### Option B: Ensure devDependencies are installed at build time
+
+1. In DigitalOcean: **Settings** → **App-Level Environment Variables**.
+2. Add a **build-time** variable (scope **Build Time** / **BUILD_TIME**):
+   - **Key:** `NPM_CONFIG_PRODUCTION`  
+   - **Value:** `false`
+3. This makes the buildpack’s `npm ci` install devDependencies. Then your existing Build Command `npm run build` will work.
+4. Save and trigger a new **Deploy**.
+
+After applying Option A or B, **Deploy** and **Force Rebuild and Deploy** should succeed. Use **Restart** only when you want to restart the app without rebuilding.
+
+---
+
 ## Summary
 
 | Item        | Value |
