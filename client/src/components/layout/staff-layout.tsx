@@ -95,6 +95,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
 
+  // Redirect to login when not authenticated (in effect to avoid "update during render")
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      setLocation("/staff/login");
+    }
+  }, [isLoading, isAuthenticated, setLocation]);
+
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
     enabled: isAuthenticated,
@@ -177,7 +184,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   }
 
   if (!isAuthenticated) {
-    setLocation("/staff/login");
     return null;
   }
 

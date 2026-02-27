@@ -43,6 +43,7 @@ import JoinPage from "@/pages/join";
 import JoinRegisterPage from "@/pages/join/register";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
+import { isNativeMobile } from "@/lib/mobile-payment";
 
 function PaynowReturnRedirect() {
   const [, setLocation] = useLocation();
@@ -50,8 +51,41 @@ function PaynowReturnRedirect() {
   return null;
 }
 
+/** When app is opened via deep link (e.g. pol263://client/payments?returned=1), navigate to that path. */
+function DeepLinkHandler() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    if (!isNativeMobile()) return;
+    const parseSchemeUrl = (url: string): string | null => {
+      try {
+        const u = new URL(url);
+        if (u.protocol !== "pol263:") return null;
+        const path = u.host ? `/${u.host}${u.pathname || ""}` : u.pathname || "";
+        const clean = path.replace(/\/+/g, "/").replace(/^\//, "/") || "/";
+        const query = u.search ? u.search : "";
+        return clean !== "/" ? `${clean}${query}` : null;
+      } catch {
+        return null;
+      }
+    };
+    const go = (url: string) => {
+      const path = parseSchemeUrl(url);
+      if (path) setLocation(path);
+    };
+    let remove: (() => Promise<void>) | null = null;
+    import("@capacitor/app").then(({ App }) => {
+      App.getLaunchUrl().then((r) => { if (r?.url) go(r.url); });
+      App.addListener("appUrlOpen", (e) => go(e.url)).then((handle) => { remove = handle.remove; });
+    });
+    return () => { remove?.(); };
+  }, [setLocation]);
+  return null;
+}
+
 function Router() {
   return (
+    <>
+      <DeepLinkHandler />
     <Switch>
       <Route path="/" component={Home} />
       
@@ -96,6 +130,7 @@ function Router() {
       
       <Route component={NotFound} />
     </Switch>
+    </>
   );
 }
 

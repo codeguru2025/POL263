@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -840,6 +841,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [dependentMaxAge, setDependentMaxAge] = useState("20");
   const [cashInLieuAdult, setCashInLieuAdult] = useState("");
   const [cashInLieuChild, setCashInLieuChild] = useState("");
+  const [reinstatementRequiresArrears, setReinstatementRequiresArrears] = useState(true);
+  const [reinstatementNewWaitingPeriod, setReinstatementNewWaitingPeriod] = useState(true);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -853,6 +856,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       waitingPeriodAccidentalDeath: waitingAccidental ? parseInt(waitingAccidental) : undefined,
       waitingPeriodSuicide: waitingSuicide ? parseInt(waitingSuicide) : undefined,
       gracePeriodDays: gracePeriodDays ? parseInt(gracePeriodDays) : undefined,
+      reinstatementRequiresArrears,
+      reinstatementNewWaitingPeriod,
       eligibilityMinAge: eligibilityMinAge ? parseInt(eligibilityMinAge) : undefined,
       eligibilityMaxAge: eligibilityMaxAge ? parseInt(eligibilityMaxAge) : undefined,
       dependentMaxAge: dependentMaxAge ? parseInt(dependentMaxAge) : undefined,
@@ -915,6 +920,33 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <div className="space-y-2">
             <Label>Grace Period (days)</Label>
             <Input type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-version-grace" />
+          </div>
+
+          <Separator />
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Reinstatement Rules</h3>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="reinstatement-requires-arrears"
+                checked={reinstatementRequiresArrears}
+                onCheckedChange={(v) => setReinstatementRequiresArrears(v === true)}
+                data-testid="checkbox-reinstatement-requires-arrears"
+              />
+              <Label htmlFor="reinstatement-requires-arrears" className="text-sm font-normal cursor-pointer">
+                Reinstatement requires arrears to be paid
+              </Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="reinstatement-new-waiting-period"
+                checked={reinstatementNewWaitingPeriod}
+                onCheckedChange={(v) => setReinstatementNewWaitingPeriod(v === true)}
+                data-testid="checkbox-reinstatement-new-waiting-period"
+              />
+              <Label htmlFor="reinstatement-new-waiting-period" className="text-sm font-normal cursor-pointer">
+                New waiting period applies after reinstatement
+              </Label>
+            </div>
           </div>
 
           <Separator />

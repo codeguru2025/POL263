@@ -28,12 +28,21 @@ export default function StaffLogin() {
   const authError = params.get("error");
 
   const handleGoogleLogin = () => {
-    const base = getApiBase() || window.location.origin;
-    const returnTo = "/staff";
-    const url = new URL(base + "/api/auth/google");
-    url.searchParams.set("returnTo", returnTo);
-    url.searchParams.set("origin", window.location.origin);
-    window.location.href = url.toString();
+    try {
+      const base = getApiBase() || window.location.origin;
+      const returnTo = "/staff";
+      const path = base ? `${base.replace(/\/$/, "")}/api/auth/google` : `${window.location.origin}/api/auth/google`;
+      const url = new URL(path);
+      url.searchParams.set("returnTo", returnTo);
+      url.searchParams.set("origin", window.location.origin);
+      window.location.href = url.toString();
+    } catch (e) {
+      console.error("Invalid API base URL", e);
+      const url = new URL("/api/auth/google", window.location.origin);
+      url.searchParams.set("returnTo", "/staff");
+      url.searchParams.set("origin", window.location.origin);
+      window.location.href = url.toString();
+    }
   };
 
   return (

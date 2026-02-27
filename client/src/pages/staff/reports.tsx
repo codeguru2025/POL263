@@ -11,16 +11,30 @@ import { Label } from "@/components/ui/label";
 import { getApiBase } from "@/lib/queryClient";
 import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle } from "lucide-react";
 
-function buildQuery(f: { fromDate?: string; toDate?: string; userId?: string }) {
+export type ReportFiltersState = {
+  fromDate?: string;
+  toDate?: string;
+  userId?: string;
+  branchId?: string;
+  productId?: string;
+  agentId?: string;
+  status?: string;
+};
+
+function buildQuery(f: ReportFiltersState) {
   const p = new URLSearchParams();
   if (f.fromDate) p.set("fromDate", f.fromDate);
   if (f.toDate) p.set("toDate", f.toDate);
   if (f.userId) p.set("userId", f.userId);
+  if (f.branchId) p.set("branchId", f.branchId);
+  if (f.productId) p.set("productId", f.productId);
+  if (f.agentId) p.set("agentId", f.agentId);
+  if (f.status) p.set("status", f.status);
   const q = p.toString();
   return q ? "?" + q : "";
 }
 
-function ExportButton({ reportType, filters }: { reportType: string; filters: { fromDate?: string; toDate?: string; userId?: string } }) {
+function ExportButton({ reportType, filters }: { reportType: string; filters: ReportFiltersState }) {
   const handleExport = () => {
     const q = buildQuery(filters);
     window.open(getApiBase() + `/api/reports/export/${reportType}` + q, "_blank");
@@ -37,7 +51,19 @@ export default function StaffReports() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [userId, setUserId] = useState("");
-  const filters = useMemo(() => ({ fromDate: fromDate || undefined, toDate: toDate || undefined, userId: userId || undefined }), [fromDate, toDate, userId]);
+  const [branchId, setBranchId] = useState("");
+  const [productId, setProductId] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const filters = useMemo<ReportFiltersState>(() => ({
+    fromDate: fromDate || undefined,
+    toDate: toDate || undefined,
+    userId: userId || undefined,
+    branchId: branchId || undefined,
+    productId: productId || undefined,
+    agentId: agentId || undefined,
+    status: statusFilter || undefined,
+  }), [fromDate, toDate, userId, branchId, productId, agentId, statusFilter]);
   const q = buildQuery(filters);
 
   const { data: stats } = useQuery<any>({ queryKey: ["/api/dashboard/stats"] });
@@ -157,6 +183,24 @@ export default function StaffReports() {
     },
   });
   const { data: users = [] } = useQuery<any[]>({ queryKey: ["/api/users"] });
+  const { data: branches = [] } = useQuery<any[]>({ queryKey: ["/api/branches"] });
+  const { data: products = [] } = useQuery<any[]>({ queryKey: ["/api/products"] });
+  const { data: policyDetails = [], isLoading: loadingPolicyDetails } = useQuery<any[]>({
+    queryKey: ["reports", "policy-details", filters.fromDate, filters.toDate, filters.branchId, filters.productId, filters.agentId, filters.status],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/policy-details?limit=500" + buildQuery(filters), { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const { data: financeReport = [], isLoading: loadingFinance } = useQuery<any[]>({
+    queryKey: ["reports", "finance", filters.fromDate, filters.toDate, filters.branchId, filters.productId, filters.agentId, filters.status],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/finance?limit=500" + buildQuery(filters), { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
   const { data: cashups = [], isLoading: loadingCashups } = useQuery<any[]>({
     queryKey: ["reports", "cashups", fromDate, toDate, userId],
     queryFn: async () => {
@@ -196,7 +240,7 @@ export default function StaffReports() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Report filters</CardTitle>
-            <p className="text-sm text-muted-foreground">Apply date range (and user for Cashups) before generating or exporting.</p>
+            <p className="text-sm text-muted-foreground">Apply date range, branch, product, agent and status for policy reports and exports.</p>
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap items-end gap-4">
@@ -215,6 +259,46 @@ export default function StaffReports() {
                   {users.map((u: any) => (
                     <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
                   ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="branchId">Branch</Label>
+                <select id="branchId" value={branchId} onChange={(e) => setBranchId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-48">
+                  <option value="">All branches</option>
+                  {(branches as any[]).map((b: any) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="productId">Product</Label>
+                <select id="productId" value={productId} onChange={(e) => setProductId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-48">
+                  <option value="">All products</option>
+                  {(products as any[]).map((p: any) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="agentId">Agent</Label>
+                <select id="agentId" value={agentId} onChange={(e) => setAgentId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-48">
+                  <option value="">All agents</option>
+                  {users.map((u: any) => (
+                    <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="statusFilter">Status</Label>
+                <select id="statusFilter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-48">
+                  <option value="">All statuses</option>
+                  <option value="draft">Draft</option>
+                  <option value="pending">Pending</option>
+                  <option value="active">Active</option>
+                  <option value="grace">Grace</option>
+                  <option value="lapsed">Lapsed</option>
+                  <option value="reinstatement_pending">Reinstatement pending</option>
+                  <option value="cancelled">Cancelled</option>
                 </select>
               </div>
             </div>
@@ -251,6 +335,8 @@ export default function StaffReports() {
         <Tabs defaultValue="policies">
           <TabsList className="flex-wrap h-auto gap-1">
             <TabsTrigger value="policies" data-testid="tab-policies-report">Policies</TabsTrigger>
+            <TabsTrigger value="policy-details" data-testid="tab-policy-details">Policy report</TabsTrigger>
+            <TabsTrigger value="finance" data-testid="tab-finance-report">Finance</TabsTrigger>
             <TabsTrigger value="active-policies" data-testid="tab-active-policies">Active</TabsTrigger>
             <TabsTrigger value="awaiting-payments" data-testid="tab-awaiting-payments">Awaiting payments</TabsTrigger>
             <TabsTrigger value="overdue" data-testid="tab-overdue">Overdue</TabsTrigger>
@@ -312,6 +398,160 @@ export default function StaffReports() {
                       ))}
                     </TableBody>
                   </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="policy-details">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />Policy report (full details)</CardTitle>
+                  <ExportButton reportType="policy-details" filters={filters} />
+                </div>
+                <p className="text-sm text-muted-foreground">All policy and client details. Use filters above to narrow by branch, product, agent or status.</p>
+              </CardHeader>
+              <CardContent>
+                {loadingPolicyDetails ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                ) : policyDetails.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-policy-details">No policies match the filters</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Policy #</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Premium</TableHead>
+                          <TableHead>Schedule</TableHead>
+                          <TableHead>Capture date</TableHead>
+                          <TableHead>Inception date</TableHead>
+                          <TableHead>Cover date</TableHead>
+                          <TableHead>Effective</TableHead>
+                          <TableHead>Grace end</TableHead>
+                          <TableHead>Client name</TableHead>
+                          <TableHead>National ID</TableHead>
+                          <TableHead>DOB</TableHead>
+                          <TableHead>Gender</TableHead>
+                          <TableHead>Phone</TableHead>
+                          <TableHead>Email</TableHead>
+                          <TableHead>Address</TableHead>
+                          <TableHead>Location</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead>Product code</TableHead>
+                          <TableHead>Branch</TableHead>
+                          <TableHead>Group</TableHead>
+                          <TableHead>Agent</TableHead>
+                          <TableHead>Created</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {policyDetails.map((r: any) => (
+                          <TableRow key={r.policyId} data-testid={`row-policy-detail-${r.policyId}`}>
+                            <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
+                            <TableCell><Badge variant={r.status === "active" ? "default" : "secondary"}>{r.status}</Badge></TableCell>
+                            <TableCell className="whitespace-nowrap">{r.currency} {r.premiumAmount}</TableCell>
+                            <TableCell>{r.paymentSchedule}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.effectiveDate ? new Date(r.effectiveDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.graceEndDate ? new Date(r.graceEndDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="whitespace-nowrap">{[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</TableCell>
+                            <TableCell className="font-mono text-sm">{r.clientNationalId || "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.clientDateOfBirth ? new Date(r.clientDateOfBirth).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell>{r.clientGender || "—"}</TableCell>
+                            <TableCell className="text-sm">{r.clientPhone || "—"}</TableCell>
+                            <TableCell className="text-sm">{r.clientEmail || "—"}</TableCell>
+                            <TableCell className="text-sm max-w-[200px] truncate" title={r.clientAddress || ""}>{r.clientAddress || "—"}</TableCell>
+                            <TableCell>{r.clientLocation || "—"}</TableCell>
+                            <TableCell className="text-sm">{r.productName || "—"}</TableCell>
+                            <TableCell className="font-mono text-sm">{r.productCode || "—"}</TableCell>
+                            <TableCell>{r.branchName || "—"}</TableCell>
+                            <TableCell>{r.groupName || "—"}</TableCell>
+                            <TableCell className="text-sm">{r.agentDisplayName || r.agentEmail || "—"}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="finance">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5" />Finance report</CardTitle>
+                  <ExportButton reportType="finance" filters={filters} />
+                </div>
+                <p className="text-sm text-muted-foreground">Date paid, due date, grace days used/remaining, receipt count, months paid, outstanding and advance premiums. Use filters above to narrow by branch, product, agent or status.</p>
+              </CardHeader>
+              <CardContent>
+                {loadingFinance ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                ) : financeReport.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-finance-report">No policies match the filters</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Policy #</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Premium</TableHead>
+                          <TableHead>Capture date</TableHead>
+                          <TableHead>Inception date</TableHead>
+                          <TableHead>Cover date</TableHead>
+                          <TableHead>Due date</TableHead>
+                          <TableHead>Date paid</TableHead>
+                          <TableHead>Receipt count</TableHead>
+                          <TableHead>Months paid</TableHead>
+                          <TableHead>Grace used</TableHead>
+                          <TableHead>Grace remaining</TableHead>
+                          <TableHead>Outstanding</TableHead>
+                          <TableHead>Advance</TableHead>
+                          <TableHead>Client</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead>Product code</TableHead>
+                          <TableHead>Branch</TableHead>
+                          <TableHead>Group</TableHead>
+                          <TableHead>Agent</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {financeReport.map((r: any) => (
+                          <TableRow key={r.policyId} data-testid={`row-finance-${r.policyId}`}>
+                            <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
+                            <TableCell><Badge variant={r.status === "active" ? "default" : "secondary"}>{r.status}</Badge></TableCell>
+                            <TableCell className="whitespace-nowrap">{r.currency} {r.premiumAmount}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">{r.datePaid ? new Date(r.datePaid).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell>{r.receiptCount}</TableCell>
+                            <TableCell>{r.monthsPaid}</TableCell>
+                            <TableCell>{r.graceDaysUsed}</TableCell>
+                            <TableCell>{r.graceDaysRemaining != null ? r.graceDaysRemaining : "—"}</TableCell>
+                            <TableCell className="font-medium">{r.currency} {r.outstandingPremium}</TableCell>
+                            <TableCell className="text-green-700">{r.currency} {r.advancePremium}</TableCell>
+                            <TableCell className="whitespace-nowrap">{[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</TableCell>
+                            <TableCell className="text-sm">{r.productName || "—"}</TableCell>
+                            <TableCell className="font-mono text-sm">{r.productCode || "—"}</TableCell>
+                            <TableCell>{r.branchName || "—"}</TableCell>
+                            <TableCell>{r.groupName || "—"}</TableCell>
+                            <TableCell className="text-sm">{r.agentDisplayName || r.agentEmail || "—"}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 )}
               </CardContent>
             </Card>
