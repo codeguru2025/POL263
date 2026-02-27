@@ -1073,7 +1073,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
     }
     const policies = await Promise.all(policyIds.map((id: string) => storage.getPolicy(id, user.organizationId)));
-    const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
+    const valid = policies.filter((p): p is NonNullable<typeof p> => Boolean(p && p.organizationId === user.organizationId && p.groupId === groupId));
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));
@@ -1131,7 +1131,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
     }
     const policies = await Promise.all(policyIds.map((id: string) => storage.getPolicy(id, user.organizationId)));
-    const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
+    const valid = policies.filter((p): p is NonNullable<typeof p> => Boolean(p && p.organizationId === user.organizationId && p.groupId === groupId));
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));
@@ -1163,16 +1163,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/group-payment-intents/:id", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const intent = await storage.getGroupPaymentIntentById(req.params.id, user.organizationId);
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) return res.status(400).json({ message: "Missing id" });
+    const intent = await storage.getGroupPaymentIntentById(id, user.organizationId);
     if (!intent) return res.status(404).json({ message: "Not found" });
     return res.json(intent);
   });
 
   app.post("/api/group-payment-intents/:id/initiate", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) return res.status(400).json({ message: "Missing id" });
     const { method, payerPhone } = req.body || {};
     const result = await initiatePaynowForGroup({
-      groupIntentId: req.params.id,
+      groupIntentId: id,
       organizationId: user.organizationId,
       method: method || "visa_mastercard",
       payerPhone,
@@ -1185,7 +1189,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/group-payment-intents/:id/poll", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const result = await pollGroupPaynowStatus(req.params.id, user.organizationId);
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) return res.status(400).json({ message: "Missing id" });
+    const result = await pollGroupPaynowStatus(id, user.organizationId);
     return res.json(result);
   });
 

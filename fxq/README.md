@@ -20,7 +20,7 @@ Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**
 ---
 
 ## Overview
-POL263 is a modern, multi-tenant Property Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
+POL263 is a modern, multi-tenant Policy Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
 
 ## Architecture & Tech Stack
 *   **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + Wouter + TanStack Query

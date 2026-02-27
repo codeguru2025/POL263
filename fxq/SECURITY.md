@@ -7,7 +7,7 @@
 
 ## Authorization (RBAC & Tenancy)
 *   **Tenant Isolation**: Every API request is verified against the user's allowed `organization_id` and `branch_id`. Row-level checks prevent cross-tenant data leakage.
-*   **Server-Side Guards**: All sensitive operations are protected by permission-specific guards (e.g., `requiresPermission('write:lease')`).
+*   **Server-Side Guards**: All sensitive operations are protected by permission-specific guards (e.g., `requiresPermission('write:policy')`).
 
 ## Audit Trail
 *   All mutations (CREATE, UPDATE, DELETE) and sensitive READs generate an immutable audit log entry containing the user identity, timestamp, IP, and the exact data delta (before/after).

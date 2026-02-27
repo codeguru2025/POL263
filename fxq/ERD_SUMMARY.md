@@ -1,6 +1,6 @@
 # ERD Summary - POL263 (Phase 0-1)
 
-This outlines the core tables required for multi-tenancy, authentication, and RBAC before specific product features (properties, leases, payments) are fully modeled.
+This outlines the core tables required for multi-tenancy, authentication, and RBAC before specific product features (policies, claims, payments) are fully modeled.
 
 ## 1. Tenancy
 ### Organization
@@ -27,11 +27,11 @@ This outlines the core tables required for multi-tenancy, authentication, and RB
 ### Role
 *   `id` (UUID, PK)
 *   `organization_id` (UUID, FK -> Organization)
-*   `name` (String) // e.g., 'Superuser', 'Property Manager'
+*   `name` (String) // e.g., 'Superuser', 'Policy Manager'
 
 ### Permission
 *   `id` (UUID, PK)
-*   `name` (String, Unique) // e.g., 'write:lease', 'read:audit_log'
+*   `name` (String, Unique) // e.g., 'write:policy', 'read:audit_log'
 
 ### RolePermission
 *   `role_id` (UUID, FK -> Role)
@@ -60,4 +60,4 @@ This outlines the core tables required for multi-tenancy, authentication, and RB
 *   `timestamp` (Timestamp)
 *   `request_id` (String) // For tracing
 
-*(Note: Product tables like Property, Unit, Lease, Payment will all inherit `organization_id` and potentially `branch_id` from this foundation.)*
+*(Note: Product tables like Policy, Client, Claim, Payment will all inherit `organization_id` and potentially `branch_id` from this foundation.)*

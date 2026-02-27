@@ -8,6 +8,10 @@ const fs = require('fs');
 const path = require('path');
 
 const lockPath = path.join(process.cwd(), 'package-lock.json');
+if (!fs.existsSync(lockPath)) {
+  console.error('ERROR: package-lock.json is missing. Run "npm install" and commit it.');
+  process.exit(1);
+}
 const before = fs.readFileSync(lockPath, 'utf8');
 execSync('npm install --package-lock-only', { stdio: 'inherit' });
 const after = fs.readFileSync(lockPath, 'utf8');

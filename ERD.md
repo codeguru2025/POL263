@@ -7,11 +7,11 @@
 ## Identity & Access
 - **User**: System actors (Staff or Clients)
 - **Role**: Defined roles (Superuser, Manager, Staff, Viewer)
-- **Permission**: Atomic actions (read:property, write:lease)
+- **Permission**: Atomic actions (read:policy, write:policy)
 - **RolePermission**: Join table mapping Roles to Permissions
 - **UserRole**: Join table mapping Users to Roles (scoped to Org/Branch)
 
 ## Domain Entities
-- **Property**: Physical real estate assets (belongs to Org/Branch)
-- **Lease**: Contracts tying Users (Clients) to Properties
+- **Policy**: Insurance policies (belongs to Org/Branch)
+- **Claim**: Claims tying Clients to Policies
 - **AuditLog**: Immutable ledger of all CUD operations, storing `before` and `after` diffs.

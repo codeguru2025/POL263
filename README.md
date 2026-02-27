@@ -21,7 +21,19 @@ Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**
 ---
 
 ## Overview
-POL263 is a modern, multi-tenant Property Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
+POL263 is a modern, multi-tenant Policy Management System built with a focus on security, scalability, and clean design. This repository contains the Phase 0-1 foundation, establishing the core architecture, tenant isolation, and RBAC implementation before product features are built.
+
+## Project structure
+Run all commands from the **repository root** (this directory). The app is a single codebase:
+*   **`client/`** – React (Vite) frontend; entry `client/index.html` and `client/src/main.tsx`
+*   **`server/`** – Express API and server entry `server/index.ts`
+*   **`shared/`** – Drizzle schema and shared types
+*   **`script/`** – Build, DB migrations, seed, lockfile checks
+*   **`migrations/`** – SQL migrations
+*   **`tests/`** – Unit tests (Vitest)
+*   **`android/`**, **`ios/`** – Capacitor native projects (synced via `npm run cap:sync`)
+
+Build output: **`dist/public/`** (client) and **`dist/index.cjs`** (server). The `fxq/` folder is a legacy mirror; use the root `client/`, `server/`, and configs as the single source of truth.
 
 ## Architecture & Tech Stack
 *   **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + Wouter + TanStack Query

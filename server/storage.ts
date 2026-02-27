@@ -604,7 +604,7 @@ export class DatabaseStorage implements IStorage {
   async getClientsByAgent(agentId: string, organizationId: string, limit = 50, offset = 0, search?: string): Promise<Client[]> {
     const tdb = await getDbForOrg(organizationId);
     const policyRows = await tdb.select({ clientId: policies.clientId }).from(policies).where(eq(policies.agentId, agentId));
-    const clientIds = [...new Set(policyRows.map((r) => r.clientId).filter(Boolean))] as string[];
+    const clientIds = Array.from(new Set(policyRows.map((r) => r.clientId).filter(Boolean))) as string[];
     if (clientIds.length === 0) return [];
     const conditions = [eq(clients.organizationId, organizationId), inArray(clients.id, clientIds)];
     if (search && search.trim()) {
