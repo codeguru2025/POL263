@@ -16,10 +16,10 @@ npm run start
 - **`npm run build`** builds the client (Vite) and server (esbuild) into `dist/`. Production serves from `dist/` and runs `dist/index.cjs`.
 - **Restart** is required so the new server bundle and static files are used.
 
-## 2. If you use a host (Replit, Railway, Render, etc.)
+## 2. If you use a host (DigitalOcean App Platform, Railway, Render, etc.)
 
-- Trigger a **redeploy** from `main` (or push to the deploy branch). The host usually runs `npm run build` and then starts the app.
-- No extra steps unless your host uses a custom build/start command.
+- **DigitalOcean App Platform:** Use **Build Command** `npm run build:do`. See [docs/DEPLOY-DIGITALOCEAN-APP.md](DEPLOY-DIGITALOCEAN-APP.md).
+- For other hosts: trigger a **redeploy** from `main`. The host usually runs `npm run build` (or `npm run build:do`) and then starts the app.
 
 ## 3. After deploy – cache and “Something went wrong”
 
@@ -33,6 +33,6 @@ npm run start
 | Step              | Command / action                    |
 |-------------------|-------------------------------------|
 | Pull latest       | `git pull origin main`              |
-| Build             | `npm run build`                     |
+| Build             | `npm run build` or `npm run build:do` (DO App Platform) |
 | Start production  | `npm run start`                     |
 | User sees update  | Reload page (or hard refresh)      |

@@ -103,7 +103,8 @@
 - Anti-enumeration: constant-time responses
 
 ### Environment Variables
-- `DATABASE_URL` - PostgreSQL connection string (auto-provisioned)
-- `SUPERUSER_EMAIL` - Default superuser email (default: ausiziba@gmail.com)
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` - Google OAuth (optional for dev)
-- `SESSION_SECRET` - Session encryption key
+
+- `DATABASE_URL` – PostgreSQL connection string (from your database provider or DigitalOcean inbuilt database when using App Platform; see [docs/DEPLOY-DIGITALOCEAN-APP.md](docs/DEPLOY-DIGITALOCEAN-APP.md)).
+- `SUPERUSER_EMAIL` – Default superuser email (e.g. for deployment).
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` – Google OAuth (optional for dev).
+- `SESSION_SECRET` – Session encryption key.

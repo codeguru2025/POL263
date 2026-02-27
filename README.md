@@ -14,9 +14,8 @@
 
 Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**  
 **Database setup (PostgreSQL):** **[docs/DATABASE-SETUP.md](docs/DATABASE-SETUP.md)**  
-**Deploy on DigitalOcean App Platform (from GitHub):** **[docs/DEPLOY-DIGITALOCEAN-APP.md](docs/DEPLOY-DIGITALOCEAN-APP.md)**  
-**Deploy on InterServer VPS:** **[docs/DEPLOY-INTERSERVER-VPS.md](docs/DEPLOY-INTERSERVER-VPS.md)**  
-**TestSprite (AI testing in Cursor):** **[docs/TESTSPRITE-SETUP.md](docs/TESTSPRITE-SETUP.md)**
+**Deploy on DigitalOcean App Platform (from scratch, with inbuilt database):** **[docs/DEPLOY-DIGITALOCEAN-APP.md](docs/DEPLOY-DIGITALOCEAN-APP.md)**  
+**Deploy on InterServer VPS:** **[docs/DEPLOY-INTERSERVER-VPS.md](docs/DEPLOY-INTERSERVER-VPS.md)**
 
 ---
 

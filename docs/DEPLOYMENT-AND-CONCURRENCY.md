@@ -7,7 +7,7 @@
 - **Droplet:** Use only if you want full control over the OS and prefer to manage Node, PM2, nginx, and DB yourself.
 - **Gradient AI:** Not needed for POL263 unless you add AI features later.
 
-**Recommendation:** **App Platform** (app) + **Managed Database** or existing **Supabase** (DB).
+**Recommendation:** **App Platform** (app) + **App Platform inbuilt PostgreSQL** (add Database component and bind `DATABASE_URL`). Alternatively use **Managed Database** or **Supabase** and set `DATABASE_URL` manually. See [DEPLOY-DIGITALOCEAN-APP.md](DEPLOY-DIGITALOCEAN-APP.md).
 
 ---
 
@@ -41,7 +41,7 @@
 
 | Topic | Current behavior | Recommendation |
 |-------|-------------------|----------------|
-| Hosting | — | App Platform (app) + Managed DB or Supabase |
+| Hosting | — | App Platform (app) + inbuilt Database component or Managed DB or Supabase |
 | Agent link | Persistent (same link for all); domain = current origin | Set `VITE_APP_PUBLIC_URL` for a fixed production domain |
 | Policy number | COUNT+1 (race possible; unique index prevents duplicate) | Use atomic sequence table (implemented) |
 | Payments | Idempotency keys; unique constraints | Keep; optionally make receipt number atomic like policy number |

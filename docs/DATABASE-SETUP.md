@@ -1,6 +1,8 @@
 # Database setup for POL263
 
-The app uses **PostgreSQL**. You can use a **free cloud database** (easiest) or **PostgreSQL on your computer**.
+The app uses **PostgreSQL**. You can use a **free cloud database**, **DigitalOcean’s inbuilt database** (when deploying on App Platform), or **PostgreSQL on your computer**.
+
+**Production on DigitalOcean App Platform:** You can add a Database component in the same app and bind `DATABASE_URL`; see **[docs/DEPLOY-DIGITALOCEAN-APP.md](DEPLOY-DIGITALOCEAN-APP.md)**.
 
 ---
 
