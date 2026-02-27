@@ -123,7 +123,21 @@ export function setupAuth(app: Express) {
 
     app.get(
       "/api/auth/google",
-      passport.authenticate("google", { scope: ["profile", "email"] })
+      (req, res, next) => {
+        const returnTo = typeof req.query.returnTo === "string" && req.query.returnTo.startsWith("/")
+          ? req.query.returnTo
+          : undefined;
+        const origin = typeof req.query.origin === "string" && /^https?:\/\//.test(req.query.origin)
+          ? req.query.origin.replace(/\/$/, "")
+          : (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+        if (returnTo && (origin || returnTo.startsWith("/"))) {
+          (req.session as any).authReturnTo = origin ? `${origin}${returnTo}` : returnTo;
+        }
+        (req.session as any).save((err: Error | null) => {
+          if (err) return next(err);
+          passport.authenticate("google", { scope: ["profile", "email"] })(req, res, next);
+        });
+      }
     );
 
     app.get(
@@ -140,10 +154,21 @@ export function setupAuth(app: Express) {
           }
           req.login(user, (loginErr) => {
             if (loginErr) return next(loginErr);
+            const session = req.session as any;
+            const returnTo = session?.authReturnTo;
+            if (returnTo) {
+              delete session.authReturnTo;
+              return res.redirect(returnTo);
+            }
             const baseUrl = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
             const staffPath = "/staff";
-            const redirectUrl = baseUrl ? `${baseUrl}${staffPath}` : staffPath;
-            return res.redirect(redirectUrl);
+            if (baseUrl) {
+              return res.redirect(`${baseUrl}${staffPath}`);
+            }
+            const host = req.get("host");
+            const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || (req as any).protocol || "http";
+            const sameOrigin = host ? `${proto}://${host}` : "";
+            return res.redirect(sameOrigin ? `${sameOrigin}${staffPath}` : staffPath);
           });
         })(req, res, next);
       }

@@ -13,7 +13,7 @@ import { structuredLog } from "./logger";
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
 const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
 
-const PAYABLE_STATUSES = ["active", "grace", "reinstatement_pending"] as const;
+const PAYABLE_STATUSES = ["active", "grace", "reinstatement_pending", "pending"] as const;
 const REINSTATEMENT_PURPOSE = "reinstatement";
 
 export interface CreateIntentInput {
@@ -430,6 +430,9 @@ export async function applyPaymentToPolicy(
   } else if (policy.status === "reinstatement_pending" && intent.purpose === REINSTATEMENT_PURPOSE) {
     await storage.updatePolicy(intent.policyId, { status: "active" }, orgId);
     await storage.createPolicyStatusHistory(intent.policyId, "reinstatement_pending", "active", "Reinstatement payment received", actorId ?? undefined);
+  } else if (policy.status === "pending") {
+    await storage.updatePolicy(intent.policyId, { status: "active" }, orgId);
+    await storage.createPolicyStatusHistory(intent.policyId, "pending", "active", "First premium paid", actorId ?? undefined);
   }
 
   const { generateReceiptPdf } = await import("./receipt-pdf");

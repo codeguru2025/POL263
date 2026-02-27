@@ -136,7 +136,10 @@ export default function ClientPayments() {
   }, [paymentStatusData, qc, toast]);
 
   const policy = policies?.find((p) => p.id === selectedPolicyId);
-  const canPay = paynowConfig?.enabled && policy && (["active", "grace", "reinstatement_pending"].includes(policy.status) || policy.status === "lapsed");
+  const canPay = paynowConfig?.enabled && policy && (["active", "grace", "reinstatement_pending", "pending"].includes(policy.status) || policy.status === "lapsed");
+
+  const amountNum = typeof amount === "string" ? parseFloat(amount) : NaN;
+  const hasValidAmount = typeof amount === "string" && amount.trim() !== "" && Number.isFinite(amountNum) && amountNum > 0;
 
   // Default amount to policy premium when policy selection changes
   useEffect(() => {
@@ -226,7 +229,7 @@ export default function ClientPayments() {
             {!currentIntent ? (
               <Button
                 className="w-full"
-                disabled={!canPay || createIntentMutation.isPending || !(amount && parseFloat(amount) > 0)}
+                disabled={!canPay || createIntentMutation.isPending || !hasValidAmount}
                 onClick={() => createIntentMutation.mutate()}
               >
                 {createIntentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}

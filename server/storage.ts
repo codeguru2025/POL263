@@ -131,6 +131,10 @@ export interface IStorage {
   getClientsByAgent(agentId: string, organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
   getClient(id: string, orgId: string): Promise<Client | undefined>;
   getClientByActivationCode(code: string, orgId: string): Promise<Client | undefined>;
+  /** Find first client in org by email (case-insensitive). */
+  getClientByEmail(orgId: string, email: string): Promise<Client | undefined>;
+  /** Find first client in org by national ID (exact match). */
+  getClientByNationalId(orgId: string, nationalId: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, data: Partial<InsertClient>, orgId: string): Promise<Client | undefined>;
   getDependentsByClient(clientId: string, orgId: string): Promise<Dependent[]>;
@@ -530,6 +534,26 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [client] = await tdb.select().from(clients)
       .where(and(eq(clients.activationCode, code), eq(clients.organizationId, orgId)));
+    return client;
+  }
+  async getClientByEmail(orgId: string, email: string): Promise<Client | undefined> {
+    const trimmed = String(email).trim();
+    if (!trimmed) return undefined;
+    const tdb = await getDbForOrg(orgId);
+    const [client] = await tdb.select().from(clients).where(and(
+      eq(clients.organizationId, orgId),
+      sql`lower(trim(${clients.email})) = lower(${trimmed})`
+    ));
+    return client;
+  }
+  async getClientByNationalId(orgId: string, nationalId: string): Promise<Client | undefined> {
+    const trimmed = String(nationalId).trim();
+    if (!trimmed) return undefined;
+    const tdb = await getDbForOrg(orgId);
+    const [client] = await tdb.select().from(clients).where(and(
+      eq(clients.organizationId, orgId),
+      eq(clients.nationalId, trimmed)
+    ));
     return client;
   }
   async getClientIdsByOrgSearch(organizationId: string, search: string): Promise<string[]> {

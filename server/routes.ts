@@ -75,7 +75,8 @@ async function computePolicyPremium(
       }
     }
   }
-  return base.toFixed(2);
+  const total = Number.isFinite(base) && base >= 0 ? base : 0;
+  return total.toFixed(2);
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -1303,21 +1304,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const product = await storage.getProduct(pv.productId, orgId);
     if (!product) return res.status(400).json({ error: "Product not found" });
     const effectiveBranchId = branchId || agent.branchId || null;
-    const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    try {
+
+    // Reuse existing client when identified by email or national ID (no duplicate clients)
+    let client: Awaited<ReturnType<typeof storage.createClient>>;
+    const emailTrim = email ? String(email).trim() : "";
+    const nationalIdTrim = nationalId ? String(nationalId).trim() : "";
+    let existing = emailTrim ? await storage.getClientByEmail(orgId, emailTrim) : undefined;
+    if (!existing && nationalIdTrim) existing = await storage.getClientByNationalId(orgId, nationalIdTrim);
+    if (existing) {
+      client = existing;
+      const updates: Record<string, unknown> = {};
+      if (effectiveBranchId !== undefined) updates.branchId = effectiveBranchId;
+      if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
+      if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
+      if (nationalIdTrim) updates.nationalId = nationalIdTrim;
+      if (!client.activationCode) {
+        updates.activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      }
+      if (Object.keys(updates).length > 0) {
+        const updated = await storage.updateClient(client.id, updates, orgId);
+        if (updated) client = updated;
+      }
+    } else {
+      const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
       const clientParsed = insertClientSchema.parse({
         organizationId: orgId,
         branchId: effectiveBranchId,
         firstName: String(firstName).trim(),
         lastName: String(lastName).trim(),
-        email: email ? String(email).trim() : null,
+        email: emailTrim || null,
         phone: phone ? String(phone).trim() : null,
         dateOfBirth: dateOfBirth || null,
-        nationalId: nationalId ? String(nationalId).trim() : null,
+        nationalId: nationalIdTrim || null,
         activationCode,
         isEnrolled: false,
       });
-      const client = await storage.createClient(clientParsed);
+      client = await storage.createClient(clientParsed);
+    }
+
+    try {
       const policyNumber = await storage.generatePolicyNumber(orgId);
       const premium = await computePolicyPremium(
         orgId,
@@ -1333,14 +1358,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         clientId: client.id,
         productVersionId: pv.id,
         agentId: agent.id,
-        status: "draft",
+        status: "pending",
         premiumAmount: premium,
         currency: currency || "USD",
         paymentSchedule: paymentSchedule || "monthly",
-        effectiveDate: null,
+        effectiveDate: new Date().toISOString().split("T")[0],
       });
       const policy = await storage.createPolicy(policyParsed);
-      await storage.createPolicyStatusHistory(policy.id, null, "draft", "Registered via agent link");
+      await storage.createPolicyStatusHistory(policy.id, null, "pending", "Registered via agent link");
       await storage.createPolicyMember({
         policyId: policy.id,
         clientId: client.id,

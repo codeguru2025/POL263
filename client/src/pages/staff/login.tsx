@@ -28,7 +28,12 @@ export default function StaffLogin() {
   const authError = params.get("error");
 
   const handleGoogleLogin = () => {
-    window.location.href = getApiBase() + "/api/auth/google";
+    const base = getApiBase() || window.location.origin;
+    const returnTo = "/staff";
+    const url = new URL(base + "/api/auth/google");
+    url.searchParams.set("returnTo", returnTo);
+    url.searchParams.set("origin", window.location.origin);
+    window.location.href = url.toString();
   };
 
   return (
