@@ -11,11 +11,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { UserPlus, Shield, Copy, Search, UserX, Pencil, Check, X } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { UserPlus, Shield, Copy, Search, UserX, Pencil, Check, X, Trash2 } from "lucide-react";
 
 export default function StaffUsers() {
   const { toast } = useToast();
+  const { permissions } = useAuth();
   const queryClient = useQueryClient();
+  const canEditUsers = permissions.includes("write:user");
+  const canDeleteUsers = permissions.includes("delete:user");
   const [searchTerm, setSearchTerm] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -63,7 +67,7 @@ export default function StaffUsers() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
-      toast({ title: "User deactivated" });
+      toast({ title: "User deleted", description: "The user has been deactivated and can no longer sign in." });
     },
     onError: (err: any) => {
       toast({ title: "Error", description: err.message || "Failed to deactivate user", variant: "destructive" });
@@ -254,9 +258,9 @@ export default function StaffUsers() {
                           <Button variant="ghost" size="sm" onClick={() => setEditingUser({ ...u, roleIds: u.roles?.map((r: any) => r.id) || [], branchId: u.branchId || "" })} data-testid={`button-edit-user-${u.id}`}>
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          {u.isActive && (
-                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => { if (confirm(`Deactivate ${u.displayName || u.email}?`)) deactivateMutation.mutate(u.id); }} data-testid={`button-deactivate-user-${u.id}`}>
-                              <UserX className="h-4 w-4" />
+                          {canDeleteUsers && u.isActive && (
+                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => { if (confirm(`Delete user ${u.displayName || u.email}? They will be deactivated and cannot sign in.`)) deactivateMutation.mutate(u.id); }} data-testid={`button-deactivate-user-${u.id}`} title="Delete user">
+                              <Trash2 className="h-4 w-4" />
                             </Button>
                           )}
                         </div>
@@ -271,41 +275,44 @@ export default function StaffUsers() {
 
         <Dialog open={!!editingUser} onOpenChange={(open) => !open && setEditingUser(null)}>
           <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col p-0">
-            <div className="px-6 pt-6 pb-2 shrink-0 space-y-4">
+            <div className="px-6 pt-6 pb-2 shrink-0">
               <DialogHeader>
                 <DialogTitle>Edit User</DialogTitle>
-                <DialogDescription>Update {editingUser?.displayName || editingUser?.email}'s details and roles. You can change email, display name, status, branch, roles, and password.</DialogDescription>
+                <DialogDescription>
+                  Update {editingUser?.displayName || editingUser?.email}'s details and roles.
+                  {canEditUsers && " You can edit all fields below, including email."}
+                </DialogDescription>
               </DialogHeader>
-              {editingUser && (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-user-email">Email (sign-in address)</Label>
-                    <Input
-                      id="edit-user-email"
-                      type="email"
-                      value={editingUser.email || ""}
-                      onChange={e => setEditingUser((p: any) => ({ ...p, email: e.target.value }))}
-                      placeholder="user@example.com"
-                      data-testid="input-edit-user-email"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-user-display-name">Display Name</Label>
-                    <Input
-                      id="edit-user-display-name"
-                      value={editingUser.displayName || ""}
-                      onChange={e => setEditingUser((p: any) => ({ ...p, displayName: e.target.value }))}
-                      data-testid="input-edit-user-name"
-                    />
-                  </div>
-                </>
-              )}
             </div>
             {editingUser && (
-              <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1 border-t">
-                <div className="space-y-2 pt-2">
+              <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-user-email">Email (sign-in address)</Label>
+                  <Input
+                    id="edit-user-email"
+                    type="email"
+                    value={editingUser.email || ""}
+                    onChange={e => setEditingUser((p: any) => ({ ...p, email: e.target.value }))}
+                    placeholder="user@example.com"
+                    data-testid="input-edit-user-email"
+                    readOnly={!canEditUsers}
+                    className={!canEditUsers ? "bg-muted" : undefined}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-user-display-name">Display Name</Label>
+                  <Input
+                    id="edit-user-display-name"
+                    value={editingUser.displayName || ""}
+                    onChange={e => setEditingUser((p: any) => ({ ...p, displayName: e.target.value }))}
+                    data-testid="input-edit-user-name"
+                    readOnly={!canEditUsers}
+                    className={!canEditUsers ? "bg-muted" : undefined}
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label>Status</Label>
-                  <Select value={editingUser.isActive ? "true" : "false"} onValueChange={v => setEditingUser((p: any) => ({ ...p, isActive: v === "true" }))}>
+                  <Select value={editingUser.isActive ? "true" : "false"} onValueChange={v => setEditingUser((p: any) => ({ ...p, isActive: v === "true" }))} disabled={!canEditUsers}>
                     <SelectTrigger data-testid="select-edit-user-status"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="true">Active</SelectItem>
@@ -315,12 +322,12 @@ export default function StaffUsers() {
                 </div>
                 <div className="space-y-2">
                   <Label>New password (optional, min 8 characters)</Label>
-                  <Input type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" />
+                  <Input type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" disabled={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
                 </div>
                 {branches.length > 0 && (
                   <div className="space-y-2">
                     <Label>Branch</Label>
-                    <Select value={editingUser.branchId || "none"} onValueChange={v => setEditingUser((p: any) => ({ ...p, branchId: v === "none" ? "" : v }))}>
+                    <Select value={editingUser.branchId || "none"} onValueChange={v => setEditingUser((p: any) => ({ ...p, branchId: v === "none" ? "" : v }))} disabled={!canEditUsers}>
                       <SelectTrigger data-testid="select-edit-user-branch"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">No Branch</SelectItem>
@@ -337,7 +344,7 @@ export default function StaffUsers() {
                     {roles.filter((r: any) => r.name !== "superuser").map((role: any) => {
                       const isSelected = editingUser.roleIds?.includes(role.id);
                       return (
-                        <Badge key={role.id} variant={isSelected ? "default" : "outline"} className={`cursor-pointer select-none ${isSelected ? "" : "opacity-60 hover:opacity-100"}`} onClick={() => setEditingUser((p: any) => ({ ...p, roleIds: toggleRole(role.id, p.roleIds || []) }))} data-testid={`badge-edit-role-${role.name}`}>
+                        <Badge key={role.id} variant={isSelected ? "default" : "outline"} className={`cursor-pointer select-none ${isSelected ? "" : "opacity-60 hover:opacity-100"} ${!canEditUsers ? "pointer-events-none" : ""}`} onClick={() => canEditUsers && setEditingUser((p: any) => ({ ...p, roleIds: toggleRole(role.id, p.roleIds || []) }))} data-testid={`badge-edit-role-${role.name}`}>
                           {isSelected ? <Check className="mr-1 h-3 w-3" /> : null}
                           {role.name}
                         </Badge>
@@ -347,11 +354,30 @@ export default function StaffUsers() {
                 </div>
               </div>
             )}
-            <DialogFooter className="px-6 pb-6 pt-4 shrink-0 border-t">
-              <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
-              <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined } })} disabled={updateMutation.isPending} data-testid="button-submit-edit-user">
-                {updateMutation.isPending ? "Saving..." : "Save Changes"}
-              </Button>
+            <DialogFooter className="px-6 pb-6 pt-4 shrink-0 border-t flex-wrap gap-2">
+              {canDeleteUsers && editingUser?.isActive && (
+                <Button
+                  variant="destructive"
+                  className="mr-auto"
+                  onClick={() => {
+                    if (confirm(`Delete user ${editingUser?.displayName || editingUser?.email}? They will be deactivated and cannot sign in.`)) {
+                      deactivateMutation.mutate(editingUser.id);
+                      setEditingUser(null);
+                    }
+                  }}
+                  disabled={deactivateMutation.isPending}
+                  data-testid="button-delete-user-in-dialog"
+                >
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Delete user
+                </Button>
+              )}
+              <div className="flex gap-2 ml-auto">
+                <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
+                <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined } })} disabled={updateMutation.isPending || !canEditUsers} data-testid="button-submit-edit-user">
+                  {updateMutation.isPending ? "Saving..." : "Save Changes"}
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>
