@@ -26,7 +26,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { Check, Loader2, Plus, Pencil, Trash2 } from "lucide-react";
+import { Check, Loader2, Plus, Pencil, Trash2, KeyRound } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -37,11 +37,11 @@ export default function StaffSettings() {
   const search = useSearch();
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const [activeTab, setActiveTab] = useState(tabParam === "terms" ? "terms" : tabParam === "rbac" ? "rbac" : "branding");
+  const [activeTab, setActiveTab] = useState(tabParam === "terms" ? "terms" : tabParam === "rbac" ? "rbac" : tabParam === "account" ? "account" : "branding");
 
   useEffect(() => {
     const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
-    if (t === "terms" || t === "rbac" || t === "branding") setActiveTab(t);
+    if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
   }, [search]);
 
   const handleTabChange = (value: string) => {
@@ -89,6 +89,10 @@ export default function StaffSettings() {
   const [termIsActive, setTermIsActive] = useState(true);
   const [termToDeleteId, setTermToDeleteId] = useState<string | null>(null);
 
+  const [changePasswordCurrent, setChangePasswordCurrent] = useState("");
+  const [changePasswordNew, setChangePasswordNew] = useState("");
+  const [changePasswordConfirm, setChangePasswordConfirm] = useState("");
+
   useEffect(() => {
     if (currentOrg) {
       setOrgName(currentOrg.name || "");
@@ -113,6 +117,18 @@ export default function StaffSettings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+    },
+  });
+
+  const changePasswordMutation = useMutation({
+    mutationFn: async (body: { currentPassword: string; newPassword: string }) => {
+      const res = await apiRequest("POST", "/api/auth/change-password", body);
+      return res.json();
+    },
+    onSuccess: () => {
+      setChangePasswordCurrent("");
+      setChangePasswordNew("");
+      setChangePasswordConfirm("");
     },
   });
 
@@ -247,8 +263,9 @@ export default function StaffSettings() {
         </div>
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 max-w-2xl">
+          <TabsList className="grid w-full grid-cols-4 max-w-2xl">
             <TabsTrigger value="branding">Tenant Branding</TabsTrigger>
+            <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="terms">Terms & Conditions</TabsTrigger>
             <TabsTrigger value="rbac">RBAC Configuration</TabsTrigger>
           </TabsList>
@@ -422,6 +439,93 @@ export default function StaffSettings() {
                     <Check className="h-4 w-4" /> Saved successfully. Audit log entry created.
                   </p>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="account" className="mt-6">
+            <Card className="shadow-sm">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <KeyRound className="h-5 w-5" /> Change password
+                </CardTitle>
+                <CardDescription>
+                  Change your sign-in password. If you sign in with Google, this section does not apply.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 max-w-md">
+                <div className="grid gap-2">
+                  <Label htmlFor="currentPassword">Current password</Label>
+                  <Input
+                    id="currentPassword"
+                    type="password"
+                    autoComplete="current-password"
+                    value={changePasswordCurrent}
+                    onChange={(e) => setChangePasswordCurrent(e.target.value)}
+                    placeholder="••••••••"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="newPassword">New password (min 8 characters)</Label>
+                  <Input
+                    id="newPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    value={changePasswordNew}
+                    onChange={(e) => setChangePasswordNew(e.target.value)}
+                    placeholder="••••••••"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="confirmPassword">Confirm new password</Label>
+                  <Input
+                    id="confirmPassword"
+                    type="password"
+                    autoComplete="new-password"
+                    value={changePasswordConfirm}
+                    onChange={(e) => setChangePasswordConfirm(e.target.value)}
+                    placeholder="••••••••"
+                  />
+                </div>
+                {changePasswordMutation.isError && (
+                  <p className="text-sm text-destructive">
+                    {(() => {
+                      const msg = (changePasswordMutation.error as Error)?.message || "";
+                      const match = msg.match(/^\d+: (.+)$/);
+                      if (match) {
+                        try {
+                          const o = JSON.parse(match[1]);
+                          return o.message || msg;
+                        } catch {
+                          return msg;
+                        }
+                      }
+                      return msg;
+                    })()}
+                  </p>
+                )}
+                {changePasswordMutation.isSuccess && (
+                  <p className="text-sm text-emerald-600 flex items-center gap-1">
+                    <Check className="h-4 w-4" /> Password updated successfully.
+                  </p>
+                )}
+                <Button
+                  onClick={() =>
+                    changePasswordMutation.mutate({
+                      currentPassword: changePasswordCurrent,
+                      newPassword: changePasswordNew,
+                    })
+                  }
+                  disabled={
+                    !changePasswordCurrent ||
+                    changePasswordNew.length < 8 ||
+                    changePasswordNew !== changePasswordConfirm ||
+                    changePasswordMutation.isPending
+                  }
+                >
+                  {changePasswordMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Change password
+                </Button>
               </CardContent>
             </Card>
           </TabsContent>

@@ -442,6 +442,32 @@ export function setupClientAuth(app: Express) {
     }
   });
 
+  app.post("/api/client-auth/change-password", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current password and new password are required" });
+    }
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    }
+    const client = await storage.getClient(clientId, clientOrgId);
+    if (!client || !client.passwordHash) {
+      return res.status(400).json({ message: "No password set for this account" });
+    }
+    const valid = await verifySecret(currentPassword, client.passwordHash);
+    if (!valid) {
+      return constantTimeResponse(res, 400, { message: "Current password is incorrect" });
+    }
+    const newHash = await hashSecret(newPassword);
+    await storage.updateClient(clientId, { passwordHash: newHash }, clientOrgId);
+    return res.json({ message: "Password updated" });
+  });
+
   app.post("/api/client-auth/logout", (req: Request, res: Response) => {
     (req.session as any).clientId = null;
     (req.session as any).clientOrgId = null;

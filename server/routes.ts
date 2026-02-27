@@ -291,8 +291,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(404).json({ message: "User not found" });
     }
     const before = { ...targetUser };
-    const { displayName, isActive, branchId, roleIds, password } = req.body;
+    const { displayName, isActive, branchId, roleIds, password, email } = req.body;
     const updates: any = {};
+    if (email !== undefined) {
+      const trimmed = String(email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+        return res.status(400).json({ message: "Invalid email format" });
+      }
+      const existing = await storage.getUserByEmail(trimmed);
+      if (existing && existing.id !== req.params.id) {
+        return res.status(400).json({ message: "Email already in use" });
+      }
+      updates.email = trimmed;
+    }
     if (displayName !== undefined) updates.displayName = displayName;
     if (isActive !== undefined) updates.isActive = isActive;
     if (branchId !== undefined) updates.branchId = branchId;

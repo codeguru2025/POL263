@@ -32,11 +32,24 @@ export default function ClientFeedback() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ type: "feedback" as "complaint" | "feedback", subject: "", message: "" });
 
-  const { data: me } = useQuery<{ client: { id: string } }>({ queryKey: ["/api/client-auth/me"], retry: false });
+  const { data: me, isFetched: meFetched, isError: meError } = useQuery<{ client: { id: string } }>({ queryKey: ["/api/client-auth/me"], retry: false });
   const { data: items = [], isLoading } = useQuery<FeedbackItem[]>({
     queryKey: ["/api/client-auth/feedback"],
     enabled: !!me?.client,
   });
+
+  if (meFetched && (meError || !me?.client)) {
+    return (
+      <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md shadow-lg">
+          <CardContent className="pt-6 text-center space-y-4">
+            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const createMutation = useMutation({
     mutationFn: async () => {

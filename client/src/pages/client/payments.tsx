@@ -72,7 +72,7 @@ export default function ClientPayments() {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState("");
 
-  const { data: me } = useQuery<{ client: { id: string } }>({ queryKey: ["/api/client-auth/me"], retry: false });
+  const { data: me, isFetched: meFetched, isError: meError } = useQuery<{ client: { id: string } }>({ queryKey: ["/api/client-auth/me"], retry: false });
   const { data: policies } = useQuery<Policy[]>({ queryKey: ["/api/client-auth/policies"], enabled: !!me?.client });
   const { data: paynowConfig } = useQuery<{ enabled: boolean }>({ queryKey: ["/api/client-auth/paynow-config"], retry: false });
 
@@ -173,6 +173,22 @@ export default function ClientPayments() {
       setSelectedPolicyId(policies[0].id);
     }
   }, [policies, selectedPolicyId]);
+
+  // Session guard: show friendly message instead of broken page when not authenticated
+  if (meFetched && (meError || !me?.client)) {
+    return (
+      <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md shadow-lg">
+          <CardContent className="pt-6 text-center space-y-4">
+            <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto" />
+            <h2 className="text-xl font-bold">Session Expired</h2>
+            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // For Pay now: require phone when method is ecocash/onemoney
   const canInitiatePay = currentIntent && currentIntent.status !== "paid" && (method !== "ecocash" && method !== "onemoney" || (payerPhone && payerPhone.trim().length >= 9));

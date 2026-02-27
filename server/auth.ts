@@ -271,6 +271,28 @@ export function setupAuth(app: Express) {
     });
   });
 
+  app.post("/api/auth/change-password", requireAuth, async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current password and new password are required" });
+    }
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    }
+    const fullUser = await storage.getUser(user.id);
+    if (!fullUser || !fullUser.passwordHash) {
+      return res.status(400).json({ message: "This account uses Google sign-in; there is no password to change." });
+    }
+    const valid = await argon2.verify(fullUser.passwordHash, currentPassword);
+    if (!valid) {
+      return res.status(400).json({ message: "Current password is incorrect" });
+    }
+    const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id });
+    await storage.updateUser(user.id, { passwordHash });
+    return res.json({ message: "Password updated" });
+  });
+
   app.get("/api/auth/me", async (req, res) => {
     if (!req.isAuthenticated() || !req.user) {
       return res.status(401).json({ message: "Not authenticated" });

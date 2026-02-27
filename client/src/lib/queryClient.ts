@@ -32,8 +32,10 @@ export async function apiRequest(
 type UnauthorizedBehavior = "returnNull" | "throw";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
+  /** When true, 403 is also treated as "unauthenticated" and returns null instead of throwing (for auth/me and client-auth/me). */
+  on403ReturnNull?: boolean;
 }) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
+  ({ on401: unauthorizedBehavior, on403ReturnNull = true }) =>
   async ({ queryKey }) => {
     const path = queryKey.join("/") as string;
     const fullUrl = path.startsWith("http") ? path : getApiBase() + path;
@@ -44,6 +46,9 @@ export const getQueryFn: <T>(options: {
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
     }
+    if (on403ReturnNull && res.status === 403) {
+      return null;
+    }
 
     await throwIfResNotOk(res);
     return await res.json();
@@ -52,7 +57,7 @@ export const getQueryFn: <T>(options: {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      queryFn: getQueryFn({ on401: "returnNull" }),
+      queryFn: getQueryFn({ on401: "returnNull", on403ReturnNull: true }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
       staleTime: Infinity,

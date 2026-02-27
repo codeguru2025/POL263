@@ -278,6 +278,10 @@ export default function StaffUsers() {
             {editingUser && (
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
+                  <Label>Email</Label>
+                  <Input type="email" value={editingUser.email || ""} onChange={e => setEditingUser((p: any) => ({ ...p, email: e.target.value }))} placeholder="user@example.com" data-testid="input-edit-user-email" />
+                </div>
+                <div className="space-y-2">
                   <Label>Display Name</Label>
                   <Input value={editingUser.displayName || ""} onChange={e => setEditingUser((p: any) => ({ ...p, displayName: e.target.value }))} data-testid="input-edit-user-name" />
                 </div>
@@ -291,12 +295,10 @@ export default function StaffUsers() {
                     </SelectContent>
                   </Select>
                 </div>
-                {editingUser.roleIds?.some((rid: string) => roles.find((r: any) => r.id === rid)?.name === "agent") && (
-                  <div className="space-y-2">
-                    <Label>New password (optional, min 8 characters)</Label>
-                    <Input type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" />
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <Label>New password (optional, min 8 characters)</Label>
+                  <Input type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" />
+                </div>
                 {branches.length > 0 && (
                   <div className="space-y-2">
                     <Label>Branch</Label>
@@ -329,7 +331,7 @@ export default function StaffUsers() {
             )}
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
-              <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined } })} disabled={updateMutation.isPending} data-testid="button-submit-edit-user">
+              <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined } })} disabled={updateMutation.isPending} data-testid="button-submit-edit-user">
                 {updateMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>
             </DialogFooter>

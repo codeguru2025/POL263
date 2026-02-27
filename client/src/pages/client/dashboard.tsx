@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   Timer,
   Heart,
+  KeyRound,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { getApiBase } from "@/lib/queryClient";
@@ -84,6 +85,93 @@ function ClientNotificationSettings() {
             onCheckedChange={(checked) => updateMutation.mutate({ pushEnabled: checked })}
           />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientChangePassword() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const changeMutation = useMutation({
+    mutationFn: async (body: { currentPassword: string; newPassword: string }) => {
+      const res = await fetch(getApiBase() + "/api/client-auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || res.statusText || "Failed to change password");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      toast({ title: "Password updated successfully" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <div className="space-y-4 p-4 border rounded-lg bg-muted/30">
+      <p className="text-sm font-medium text-muted-foreground">Change your portal password</p>
+      <div className="grid gap-3 max-w-sm">
+        <div>
+          <Label className="text-sm">Current password</Label>
+          <Input
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="••••••••"
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label className="text-sm">New password (min 8 characters)</Label>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="••••••••"
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label className="text-sm">Confirm new password</Label>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="••••••••"
+            className="mt-1"
+          />
+        </div>
+        <Button
+          onClick={() => changeMutation.mutate({ currentPassword, newPassword })}
+          disabled={
+            !currentPassword ||
+            newPassword.length < 8 ||
+            newPassword !== confirmPassword ||
+            changeMutation.isPending
+          }
+        >
+          {changeMutation.isPending ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Updating...
+            </>
+          ) : (
+            "Change password"
+          )}
+        </Button>
       </div>
     </div>
   );
@@ -336,7 +424,7 @@ export default function ClientDashboard() {
         )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="overview" data-testid="tab-overview">
               <Shield className="h-4 w-4 mr-2" />Overview
             </TabsTrigger>
@@ -348,6 +436,9 @@ export default function ClientDashboard() {
             </TabsTrigger>
             <TabsTrigger value="notifications" data-testid="tab-notifications">
               <Bell className="h-4 w-4 mr-2" />Alerts
+            </TabsTrigger>
+            <TabsTrigger value="account" data-testid="tab-account">
+              <KeyRound className="h-4 w-4 mr-2" />Account
             </TabsTrigger>
           </TabsList>
 
@@ -559,6 +650,21 @@ export default function ClientDashboard() {
                     </div>
                   )}
                 </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="account" className="space-y-6 mt-6">
+            <Card className="shadow-sm">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <KeyRound className="h-5 w-5" />
+                  Account &amp; security
+                </CardTitle>
+                <CardDescription>Change your client portal password.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ClientChangePassword />
               </CardContent>
             </Card>
           </TabsContent>

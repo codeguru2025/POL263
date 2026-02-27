@@ -212,35 +212,35 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="min-h-screen flex bg-background">
-      {/* Mobile overlay - tap to close sidebar */}
+      {/* Mobile/tablet overlay - tap to close sidebar; only when sidebar is open below lg */}
       <button
         type="button"
         aria-label="Close menu"
-        className={`fixed inset-0 z-40 bg-black/60 transition-opacity md:hidden ${sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        className={`fixed inset-0 z-40 bg-black/60 transition-opacity lg:hidden ${sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
         onClick={() => setSidebarOpen(false)}
       />
 
       <aside
         className={`
-          fixed md:static inset-y-0 left-0 z-50 w-64 border-r border-primary/20 bg-card flex flex-col shadow-[2px_0_20px_rgba(0,0,0,0.15)]
+          fixed lg:static inset-y-0 left-0 z-50 w-64 max-w-[85vw] lg:max-w-none border-r border-primary/20 bg-card flex flex-col shadow-[2px_0_20px_rgba(0,0,0,0.15)]
           transform transition-transform duration-200 ease-out
-          md:translate-x-0 md:flex
-          ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+          lg:translate-x-0 lg:flex
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
         `}
       >
         <div className="h-16 flex items-center justify-between px-4 border-b shrink-0">
-          <div className="flex items-center">
+          <div className="flex items-center min-w-0">
             <img
               src={currentOrg?.logoUrl || "/assets/logo.png"}
               alt="POL263"
-              className="h-10 w-10 rounded-lg object-contain mr-2"
+              className="h-10 w-10 rounded-lg object-contain mr-2 shrink-0"
             />
-            <span className="font-display font-bold text-lg tracking-tight text-foreground">POL263</span>
+            <span className="font-display font-bold text-lg tracking-tight text-foreground truncate">POL263</span>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            className="md:hidden shrink-0"
+            className="lg:hidden shrink-0"
             aria-label="Close menu"
             onClick={() => setSidebarOpen(false)}
           >
@@ -308,13 +308,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col min-h-screen md:h-screen overflow-hidden bg-background min-w-0">
+      <main className="flex-1 flex flex-col min-h-screen lg:min-h-screen overflow-hidden bg-background min-w-0">
         <header className="h-14 md:h-16 border-b bg-card/50 backdrop-blur-sm flex items-center px-4 md:px-8 justify-between shrink-0 z-10 sticky top-0">
           <div className="flex items-center gap-2 md:gap-6 min-w-0">
             <Button
               variant="ghost"
               size="icon"
-              className="md:hidden shrink-0"
+              className="lg:hidden shrink-0"
               aria-label="Open menu"
               onClick={() => setSidebarOpen(true)}
             >
