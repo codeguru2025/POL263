@@ -1,0 +1,2 @@
+# Keep lockfile with LF endings so Linux CI and DigitalOcean builds stay stable.
+package-lock.json text eol=lf
