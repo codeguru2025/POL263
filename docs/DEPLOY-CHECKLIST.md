@@ -36,3 +36,8 @@ npm run start
 | Build             | `npm run build`                     |
 | Start production  | `npm run start`                     |
 | User sees update  | Reload page (or hard refresh)      |
+
+## Security (optional)
+
+- **Secrets**: Keep API keys, DB URLs, and superuser email in environment variables (e.g. `PLATFORM_SUPERUSER_EMAIL`), not in code.
+- **CSRF**: If you add cookie-based sessions or non-GET forms that change state, consider enabling `ENABLE_CSRF_PROTECTION` and using CSRF tokens; see server auth/session code for support.

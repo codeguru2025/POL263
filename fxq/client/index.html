@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <title>POL263</title>
+
+    <meta property="og:title" content="POL263" />
+    <meta property="og:description" content="Core Administration Platform - Staff & Client Portals" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://replit.com/public/images/opengraph.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@replit" />
+    <meta name="twitter:title" content="POL263" />
+    <meta name="twitter:description" content="Core Administration Platform - Staff & Client Portals" />
+    <meta name="twitter:image" content="https://replit.com/public/images/opengraph.png" />
+
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.5rem;
+        background: hsl(0 0% 6%);
+        color: hsl(43 30% 95%);
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        transition: opacity 0.4s ease-out;
+      }
+      #app-splash.splash-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #app-splash .splash-logo {
+        width: 80px;
+        height: 80px;
+        object-fit: contain;
+        animation: splash-pulse 1.2s ease-in-out infinite;
+      }
+      #app-splash .splash-title {
+        font-size: 1.75rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: hsl(43 74% 49%);
+      }
+      #app-splash .splash-spinner {
+        width: 32px;
+        height: 32px;
+        border: 3px solid hsl(0 0% 14%);
+        border-top-color: hsl(43 74% 49%);
+        border-radius: 50%;
+        animation: splash-spin 0.8s linear infinite;
+      }
+      @keyframes splash-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.85; transform: scale(1.02); }
+      }
+      @keyframes splash-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-splash" aria-hidden="true">
+      <img src="/assets/logo.png" alt="" class="splash-logo" />
+      <span class="splash-title">POL263</span>
+      <div class="splash-spinner" aria-label="Loading"></div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

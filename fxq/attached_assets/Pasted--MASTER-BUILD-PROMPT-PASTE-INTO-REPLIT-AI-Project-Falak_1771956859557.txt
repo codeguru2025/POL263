@@ -1,0 +1,642 @@
+# MASTER BUILD PROMPT (PASTE INTO REPLIT AI)
+# Project: Falakhe PMS (Multi-Tenant, Production-Grade Policy + Funeral Operations + Finance Platform)
+# Goal: Build a full-scale, secure, configurable, audit-ready platform. Progressive delivery without breaking existing features.
+
+You are a principal full-stack architect + security engineer. Build “Falakhe PMS” as a production-grade, multi-tenant SaaS-style platform for funeral policy administration, payments, claims, funeral operations, fleet, finance, payroll, reporting, dashboards, and notifications. This is NOT an MVP. It must be scalable (target 200,000 policies), easy to debug, and hardened against abuse from any account type (client, agent, cashier, admin, manager, executive, superuser).
+
+=====================================================================
+A) NON-NEGOTIABLE ENGINEERING RULES (PROGRESSIVE, SAFE, DEBUGGABLE)
+=====================================================================
+
+1) Progressive delivery (no breaking changes)
+- Implement in small phases with feature flags.
+- Never break existing endpoints or DB schemas without migrations and tests.
+- Every phase must ship: migrations, unit tests, and at least one e2e test for the new critical path.
+- Use semantic versioning in the repo tags/releases.
+- Keep old behavior behind flags until new behavior is verified.
+
+2) Configuration-first (no hard-coded business rules)
+- Products, benefits, pricing, add-ons, eligibility, waiting periods, grace/lapse/reinstatement, commissions, age bands, claim requirements, exclusions, notification templates, price book items, costing rules must be DB-configurable via Admin Builders with versioning + effective dates + rollback.
+- Code is an engine; business is configuration.
+
+3) Financial integrity (immutable ledger)
+- NEVER edit or delete financial transactions.
+- Corrections happen via VOID/REVERSAL entries (negative entries).
+- Every receipt has immutable identity; voiding requires reason, approver (maker-checker), and audit.
+- Daily cashups can be locked; unlocking is logged and restricted.
+
+4) Security-first / Zero-trust
+- All authorization is server-side. Never trust front-end.
+- Enforce RBAC + row-level access checks on EVERY API route.
+- Prevent IDOR: use UUIDs, signed references where needed.
+- Rate limit auth, resets, webhooks.
+- Strict CSP, secure cookies, SameSite, CSRF protection, input validation.
+- Hardened against privilege escalation and lateral movement between tenants/roles.
+
+5) Debuggability
+- Structured logging with request_id on every request; include user_id, role, tenant_id, policy_id where relevant.
+- Central error handler, safe user-facing messages, detailed server logs.
+- Admin diagnostics screens: failed webhooks, queue backlog, notification failures, reconciliation mismatches.
+- Audit log viewer: searchable, filterable, before/after diff.
+
+=====================================================================
+B) TECH STACK (LOCKED)
+=====================================================================
+
+Frontend:
+- Next.js (App Router) + TypeScript + Tailwind.
+- Separate portals: /staff and /client with strict route separation.
+
+Backend:
+- Next.js API routes initially (simpler), but modularized as if it could be split into a service later.
+- Use Zod for request validation; shared DTO types.
+
+Database:
+- PostgreSQL + Prisma ORM + Prisma migrations.
+- UUID primary keys for all major tables.
+- Soft deletes where required (never for financial ledger; use status).
+
+Jobs/Queues:
+- Prefer Redis + BullMQ. If Redis unavailable, implement DB-backed job runner with locks.
+- Background tasks: notifications, paynow reconciliation, report generation, scheduled rules evaluation.
+
+Payments:
+- Paynow integration with webhook validation + idempotency + reconciliation queue.
+
+Testing:
+- Unit: Vitest/Jest.
+- E2E: Playwright for critical flows.
+
+Security:
+- Helmet-like headers, strict CSP.
+- Rate limiting middleware.
+- Audit logging everywhere.
+- Secrets only via environment variables.
+
+=====================================================================
+C) BRANDING & ASSETS
+=====================================================================
+
+App name everywhere: “Falakhe PMS”
+
+Logo:
+- Use the provided Falakhe logo asset.
+- Place it at: /apps/web/public/assets/logo.png (or /public/assets/logo.png if single app).
+- Branding must be configurable per tenant using DB settings; do not hard-code logo path in logic.
+- Add Admin Branding Settings: organization name, logo path, primary color, footer text.
+
+=====================================================================
+D) MULTI-TENANCY (LOCKED)
+=====================================================================
+
+- Implement multi-tenant isolation from day one.
+- Every major table MUST include organization_id (tenant).
+- Most operational tables also include branch_id where applicable.
+- All API queries MUST be tenant-scoped using the authenticated user’s organization_id.
+- Never allow cross-tenant access even for superuser (superuser is tenant-scoped by default).
+- Future “platform superuser” mode can be added later without weakening isolation (not required now).
+
+Tenant model:
+- Organization (tenant) → Branches → Users/Agents/Clients/Policies/etc.
+
+=====================================================================
+E) IDENTITY, AUTHENTICATION, AND AUTHORIZATION (LOCKED)
+=====================================================================
+
+User Types:
+1) Internal Staff Users (OAuth-only)
+2) Agents (internal accounts; also OAuth-only)
+3) Clients/Policyholders (policy-number + password)
+
+E1) Internal users: OAuth ONLY (no passwords)
+- Implement OIDC/OAuth with Google as initial provider.
+- Design to support additional providers later (Microsoft Entra ID).
+- On first OAuth login:
+  - Create user record if missing.
+  - Assign role based on admin assignment rules.
+  - Enforce tenant scope.
+
+Default Superuser (MUST NOT be hard-coded)
+- Default superuser email must be “ausiziba@gmail.com”.
+- Do NOT hard-code in source code.
+- Use env var: SUPERUSER_EMAIL with default deployment value set to ausiziba@gmail.com.
+- Seed script behavior:
+  - If a user record exists with SUPERUSER_EMAIL: assign role=superuser (within that tenant).
+  - If no user record exists: create placeholder user record “awaiting first OAuth login”, assign superuser role.
+- All automatic role assignments logged.
+
+E2) Clients: Policy Number + Password (NO OTP providers)
+- Client authentication is separate from staff auth.
+- Client “claims” access to an existing policy by:
+  - policy_number + one additional verification method WITHOUT OTP provider:
+    - Use an Admin-generated activation code printed/issued during signup OR
+    - Use a secure security-question based enrollment + admin verification workflow.
+- Once claimed:
+  - Client sets password (Argon2id).
+  - Client chooses ONE security question from a configurable list and sets an answer.
+  - Store security answer hashed with Argon2id (normalize: trim, casefold).
+- Password reset:
+  - requires policy number + correct security answer.
+  - rate-limited + lockout after N failures + cooldown timers.
+- Do not allow enumeration:
+  - identical response timing/messages whether policy exists or not.
+
+E3) RBAC: roles + permissions (DB-driven)
+Role profiles required:
+- superuser
+- executive
+- manager
+- administrator (and optionally “admin”)
+- cashier
+- agent
+- claims_officer (optional but recommended)
+- fleet_ops (optional but recommended)
+Permissions:
+- stored in DB
+- roles are bundles of permissions
+- optional per-user permission overrides
+- branch-scoping where applicable
+- agent “own book only” scoping
+Maker-checker:
+- Implement approval workflows for sensitive actions (initiator + approver).
+
+=====================================================================
+F) CORE DOMAIN: CONFIG-DRIVEN “POLICY ENGINE”
+=====================================================================
+
+F1) Entities (high level)
+- Organization, Branch
+- User, Role, Permission, UserProfile
+- AgentProfile (can be a user with agent role)
+- Client (policyholder), Dependent
+- Policy, PolicyMember (policyholder/spouse/child/dependent slots), PolicyStatusHistory
+- Product, ProductVersion, ProductCoverageRules
+- BenefitCatalogItem, BenefitBundle, ProductBenefitBundleLink
+- AddOn, AddOnPricingRule
+- AgeBandConfig
+- Claim, ClaimDocument, ClaimStatusHistory
+- FuneralCase, FuneralTask, ResourceAllocation
+- FleetVehicle, FleetMaintenance, FleetFuelLog, DriverAssignment
+- PriceBookItem, PriceBookVersion
+- CostSheet, CostLineItem
+- PaymentTransaction (immutable), Receipt (immutable), ReversalEntry
+- Cashup, ReconciliationRecord
+- CommissionPlan, CommissionLedgerEntry, CommissionStatement, CommissionPayout
+- ChibikhuluReceivableEntry, Settlement, SettlementAllocation
+- PayrollEmployee, PayrollRun, Payslip, PayrollLedger
+- NotificationTemplate, NotificationEvent, NotificationLog
+- AuditLog
+All major tables include organization_id; branch_id where relevant.
+
+F2) Product Builder (Admin)
+- Create products/packages with versions and effective dates.
+- Configure:
+  - eligibility: policyholder age 18–70 (configurable), dependent rules, child age band default 0–20 (configurable)
+  - premium per currency (USD, ZAR) and per payment schedule (weekly/biweekly/monthly supported)
+  - waiting period rules:
+    - general waiting period (default 3 months)
+    - exceptions: accidental death = 0, suicide death = 0 (defaults; configurable)
+  - grace & lapse rules:
+    - grace period duration (default 30 days)
+    - lapse action: policy lapses, benefits void, premiums forfeited (defaults; configurable)
+  - reinstatement rules:
+    - arrears required (yes)
+    - reapplication required (configurable)
+    - NEW waiting period on reinstatement (LOCKED TRUE by default; configurable)
+  - cash-in-lieu amounts (adult/child; configurable)
+  - claim doc requirements (linked to claim type)
+  - exclusions list
+  - benefit bundles and add-ons attach
+- Strict versioning: policies reference the exact product_version active at issuance so old policies remain adjudicated correctly.
+
+F3) Benefits & Add-ons Builder
+- Maintain benefits catalog items (with optional internal cost defaults).
+- Build bundles and attach to product versions.
+- Add-ons builder supports pricing modes (flat, per person, per km, etc.).
+
+F4) Age Bands Builder (Dashboards)
+- Admin configures age bands (versioned) used for coverage/death analytics.
+
+=====================================================================
+G) POLICY LIFECYCLE, BILLING, GRACE/LAPSE, REINSTATEMENT (LOCKED + MATH)
+=====================================================================
+
+G1) Policy status state machine (enforced)
+Allowed transitions:
+- Draft → Pending → Active
+- Active → Grace → Active
+- Grace → Lapsed
+- Lapsed → ReinstatementPending → Active (after approval/auto-conditions)
+- Active/Grace/Lapsed → Cancelled (if allowed; configurable)
+Illegal transitions must be rejected.
+
+G2) 30-day billing cycle with installment payments (mathematical definition)
+Variables:
+- Pm = monthly premium amount for the policy’s currency/product version.
+- CycleStart = the start date of the current billing cycle.
+- CycleEnd = CycleStart + 30 days.
+- GraceEnd = CycleEnd + 30 days.
+- Each PaymentTransaction has:
+  - received_at (timestamp recorded/cleared; used for financial reporting & cashups)
+  - posted_date (date it hits books; default = received_at date)
+  - value_date (effective date used for policy compliance allocation; can be backdated with approval)
+- ΣCyclePaid = sum(amount allocated to this policy with value_date ∈ [CycleStart, CycleEnd] and status=cleared)
+- ΣPaidByGrace = sum(amount allocated to this policy with value_date ∈ [CycleStart, GraceEnd] and status=cleared)
+
+Rules:
+1) Compliant by Cycle End if ΣCyclePaid ≥ Pm.
+2) If ΣCyclePaid < Pm at CycleEnd → status becomes GRACE immediately.
+3) If ΣPaidByGrace ≥ Pm at any time during grace → status returns to ACTIVE (subject to reinstatement rule if it had lapsed).
+4) If ΣPaidByGrace < Pm at GraceEnd → status becomes LAPSED.
+
+Carry forward:
+- If payment exceeds remaining amount needed for current cycle, allocate remainder to next cycle as Advance Credit (configurable behavior; default: carry forward).
+
+G3) Lapse behavior (LOCKED)
+On LAPSED:
+- policyholder + dependents are frozen (no benefits; no edits except reinstatement workflow)
+- commissions clawback logic applies (below)
+
+G4) Automatic revival on arrears (LOCKED)
+- If arrears are fully paid (ΣPaidByGrace reaches required amounts for lapsed cycles), system automatically triggers reinstatement workflow and restores policy to ACTIVE (with audit and any required approvals).
+- Reinstatement triggers NEW waiting period (LOCKED TRUE by default; configurable).
+
+G5) Backdated payments WITHOUT distorting cashups/reports (LOCKED)
+- Backdating changes value_date only.
+- Financial reports and daily cashups are computed using received_at/posted_date.
+- Backdating requires: permission + reason + maker-checker approval + audit.
+- Max backdate window configurable.
+
+=====================================================================
+H) AGENTS, ATTRIBUTION LINKS, GROUPS, REASSIGNMENT (LOCKED)
+=====================================================================
+
+H1) Agent referral links (auto-attribution)
+- Each agent has a unique referral code and link (/join?ref=AGTxxxx).
+- When a client uses the link to start a policy/application, the resulting policy auto-associates agent_id.
+- Attribution is immutable by default.
+
+H2) Agent reassignment best practice (LOCKED)
+- Only manager/executive/superuser can reassign.
+- Requires reason, effective date, maker-checker approval, audit trail.
+- Default: affects future commissions only (retroactive requires explicit approval and is audited).
+- Historical statements remain intact.
+
+H3) Groups module (LOCKED)
+- Create groups (churches/SMEs/community).
+- Assign policies to groups.
+- Group dashboards + reports (policies, lives, collections, arrears, lapses, claims).
+
+=====================================================================
+I) PAYMENTS, RECEIPTING, PAYNOW, RECONCILIATION (LOCKED)
+=====================================================================
+
+I1) Payments
+- Support cash, bank, Paynow, and future methods.
+- All payment transactions are immutable ledger entries.
+- Receipt numbering configurable; receipt PDF generated for every cleared payment.
+- Receipts visible in client portal and downloadable.
+
+I2) Paynow integration
+- Implement webhook/callback verification (signature/secret), idempotency keys, and retry-safe handlers.
+- On Paynow “paid/cleared”:
+  - auto-create PaymentTransaction (received_at = webhook time; posted_date = received_at; value_date default = received_at date)
+  - generate receipt
+  - attach receipt to policy and client portal
+- If Paynow payment cannot be matched to a policy (bad reference), route to Unallocated Payments Queue for admin resolution (audited).
+- Provide reconciliation screen: Paynow vs system, unresolved items, duplicates, reversals.
+
+I3) Client portal “Pay Now” button (LOCKED)
+- On policy view, client can:
+  - click Pay Now
+  - choose pay full monthly premium or custom/weekly amount
+  - redirect to Paynow
+  - see updated payment history and receipts after payment clears
+
+I4) Daily cashups
+- Cashiers produce daily cashup reports using posted_date/received_at totals.
+- Cashup day can be locked after reconciliation; unlocking requires approval and logs.
+
+=====================================================================
+J) CLIENT PORTAL (LOCKED)
+=====================================================================
+
+Client capabilities:
+- View ONLY their policies (strict row-level checks).
+- View policy details: product, premium, status, waiting period countdown, grace/lapse state, covered members, benefits/add-ons, payment history, receipts, claims history, notifications.
+- Add dependent via request (no direct edits):
+  - create DependentChangeRequest with docs
+  - admin reviews → approve/reject
+  - audit log
+- Download policy documents (PDF) and payment statements (optional).
+- Pay Now button (Paynow).
+
+Client restrictions:
+- Cannot edit saved core policyholder info or existing dependent details.
+- Cannot change product/package directly.
+- Cannot access staff/admin modules.
+
+Client documents:
+- Policy document generator produces PDF with: policy number, members, product version, premium, key rules summary, benefits, branch, agent attribution, effective dates, and verification code/QR.
+
+Agents can also download policy documents for policies in their book (RBAC enforced).
+
+=====================================================================
+K) CLAIMS (SERVICE + CASH-IN-LIEU) + FRAUD CONTROLS
+=====================================================================
+
+- Claim types: service claim and cash claim.
+- Requirements are configuration-driven (document checklists linked to product/claim type).
+- Workflow: Submitted → Verified → Approved → Scheduled/Payable → Completed/Paid → Closed.
+- Waiting period evaluation uses policy rules engine and exception logic (accidental/suicide exceptions configurable).
+- Fraud controls:
+  - flagged anomalies (duplicate docs, repeated claims, unusual cash-in-lieu frequency)
+  - maker-checker approvals for payouts
+- Cash claims produce itemized costing (see costing engine) and payout workflow.
+
+=====================================================================
+L) FUNERAL OPERATIONS + FLEET (STRUCTURE + COSTING)
+=====================================================================
+
+L1) Funeral case file (best practice)
+- Every service execution becomes a FuneralCase linked to policy/claim.
+- Auto-generate task checklist based on benefit bundle:
+  - body removal, washing/dressing, embalming, tents/chairs, PA, livestream, lettering, flowers, repatriation, groceries, airtime/data, refreshments, etc.
+- Assign staff/resources; capture timestamps; SLA compliance.
+
+L2) Fleet module
+- Vehicles, drivers, scheduling, fuel logs, maintenance.
+- Link fleet usage costs to FuneralCase and expenditure.
+
+=====================================================================
+M) PRICE BOOK + ITEMIZED COSTING ENGINE (LOCKED, NO HARD-CODED PRICES)
+=====================================================================
+
+M1) Price Book (Admin)
+- Maintain every item with unit and price, currency, effective dates, versioning, optional branch overrides.
+- Items cover: funeral service resources, consumables, fuel, mileage, overtime, third-party services, etc.
+
+M2) Cost Sheet (Auto)
+- For each FuneralCase and each cash claim:
+  - generate itemized CostSheet using benefit bundle defaults + recorded quantities
+  - allow additional items (requires permission + approval if above thresholds)
+  - compute totals automatically
+- Integrate into expenditure and profitability reporting.
+
+=====================================================================
+N) COMMISSIONS, INCENTIVES, STATEMENTS (LOCKED)
+=====================================================================
+
+N1) Commission plan builder (configurable)
+- Default Falakhe plan:
+  - first 2 months of premium: 50% of collected premium
+  - from month 5 onwards: 10% recurring while active
+  - commission only on collected premiums
+  - no commission on lapsed policies
+(Keep configurable with versioning.)
+
+N2) Clawback rule (LOCKED)
+- If policy lapses before the 4th payment is completed:
+  - claw back commissions via negative CommissionLedger entries.
+- If policy is reinstated:
+  - previously clawed-back commissions are rolled back via offsetting ledger entries.
+- Define “4th payment completed” as a configurable rule but default to:
+  - completion of 4 full monthly premium obligations (recommended for clarity) OR
+  - if you implement “payment events” counting, document exact interpretation and make it consistent.
+(Implement as configuration with Falakhe default.)
+
+N3) Agent funeral service incentive (LOCKED)
+- Agents earn USD $50 per funeral service sold (configurable).
+- Post as:
+  - revenue transaction (counts toward “all revenue”)
+  - incentive payout entry (commission ledger)
+
+N4) Statements
+- Agents can view/download statements (PDF) date-filtered.
+- Admin can bulk-generate for all agents.
+- Maintain earned vs payable vs paid ledgers.
+- Statement periods can be locked after finalization.
+
+=====================================================================
+O) CHIBIKHULU 2.5% REVENUE SHARE (LOCKED)
+=====================================================================
+
+- Applies to ALL revenue recorded in app (premiums, add-ons, service sales, fees, etc.).
+- Use receivable ledger:
+  - each qualifying revenue transaction creates receivable entry = 2.5% * amount
+  - refunds/voids/reversals create negative receivable adjustments
+- Settlement workflow:
+  - record settlements with method/reference/attachments
+  - maker-checker approval
+  - allocate settlement against open receivable balance
+  - show daily due, MTD due, outstanding, aging
+- Settled amounts must never be counted again in future due calculations.
+
+=====================================================================
+P) PAYROLL + EXPENDITURE (LOCKED)
+=====================================================================
+
+Payroll:
+- Employee records, pay items (earnings/deductions), payroll runs, payslip PDF generation, distribution logs.
+- RBAC: only authorized roles can run payroll; executive sees summaries.
+
+Expenditure:
+- Capture spend categories (fuel, maintenance, groceries, flowers, etc.)
+- Link to branches, fleet, funeral cases, and optionally products
+- Maker-checker approvals for high spend thresholds
+- Roll into profitability views.
+
+=====================================================================
+Q) REPORTS + EXPORTS (LOCKED)
+=====================================================================
+
+Date-filtered reports MUST exist for:
+- Policies (new/active/grace/lapsed/reinstated, upgrades)
+- Transactions (payments, receipts, voids, reversals, arrears)
+- Claims (service/cash, turnaround, approvals/rejections)
+- Funerals (cases, SLA, resource usage)
+- Fleet (usage, fuel, maintenance)
+- Expenditure (by category/branch/case)
+- Payroll (total cost, by branch)
+- Commissions (earned/payable/paid, clawbacks)
+- Chibikhulu (due, settled, outstanding)
+Export formats:
+- Excel (.xlsx) and PDF for all major reports.
+RBAC enforcement on report visibility.
+
+=====================================================================
+R) DASHBOARDS (LOCKED, LIVE, FILTERABLE)
+=====================================================================
+
+Dashboards must be live (near real-time) and filterable by:
+- date range
+- branch
+- product
+- agent (RBAC limited)
+- currency (where relevant)
+- status
+
+Must show:
+- Live covered lives (total active covered members)
+- Death ratio per age band (age bands configurable)
+- Deaths by gender
+- Deaths by gender and age band
+- Daily sales and revenue trend lines
+- Conversion metrics and trend lines (requires lead pipeline module; implement)
+- Lapses trend lines and retention/persistency
+- Product performance scorecards per metric:
+  - sales, revenue, add-on attachment
+  - lapse/retention/grace incidence
+  - claims frequency & cash-in-lieu share
+  - service execution & SLA
+  - cost per funeral (where data exists)
+
+Implement cohort analysis for retention (policies sold in month X and still active after N months).
+
+=====================================================================
+S) LEAD PIPELINE (BEST PRACTICE, REQUIRED FOR “CONVERSIONS”)
+=====================================================================
+
+Implement CRM-lite stages:
+- Lead captured → Contacted → Quote generated → Application started → Submitted → Approved → Activated → Lost (with reason)
+Track conversion by stage and by source (agent link, walk-in, campaign).
+Agents see their own pipeline; managers see branch; executives see all.
+
+=====================================================================
+T) NOTIFICATIONS & ALERTS (LOCKED, CUSTOMIZABLE)
+=====================================================================
+
+Events:
+- premium due reminders (configurable offsets)
+- grace start
+- pre-lapse warnings (configurable offsets before GraceEnd)
+- activation
+- reinstatement
+- birthdays
+- policy anniversaries
+- payment receipt confirmation (optional; Paynow already has receipts)
+
+Channels:
+- In-app mandatory; SMS/WhatsApp/Email optional integration, but templates must support all.
+Templates:
+- Admin Template Builder with merge tags:
+  {name}, {policy_number}, {premium_amount}, {outstanding}, {cycle_end}, {grace_end}, {payment_link}, etc.
+- Versioning + effective dates for templates.
+Scheduler:
+- background job runs to enqueue notifications.
+Logs:
+- NotificationLog with status, attempts, failure reason.
+Opt-outs:
+- allow opt-out for non-essential messages (birthday/anniversary) but keep critical billing messages configurable.
+
+=====================================================================
+U) SECURITY CONTROLS (WATER-TIGHT)
+=====================================================================
+
+- Strict server-side RBAC guard on every route.
+- Row-level enforcement:
+  - client can only access own policies and related data
+  - agent can only access own attributed policies and own pipeline
+  - cashier cannot see payroll; cannot change product rules
+  - executive has read-only (by permission)
+- Rate limiting:
+  - login, reset, webhook endpoints
+- Lockouts and cooldown timers for client login and reset attempts.
+- CSRF protection for cookie session actions.
+- Secure cookies: httpOnly, secure, SameSite=strict.
+- Strict CSP, no inline scripts, sanitize dynamic content.
+- Validate all inputs with Zod; never accept raw SQL.
+- Webhooks:
+  - verify signatures/secrets
+  - idempotency keys
+  - store webhook events for audit
+- Secrets:
+  - only env vars; never in source
+- Data masking:
+  - partially mask national IDs and sensitive fields unless authorized
+- Backups:
+  - daily automated DB backups; record backup health
+- Concurrency:
+  - transactions and row locks for critical operations (claim approvals, payment posting, status changes)
+- Maker-checker for sensitive actions:
+  - backdating, claim approvals, settlements, payroll finalization, agent reassignment, policy number override, rule/template changes, cashups unlock
+
+=====================================================================
+V) PERFORMANCE & SCALABILITY (TARGET 200,000 POLICIES)
+=====================================================================
+
+- Add indexes on:
+  - organization_id, branch_id, policy_number, policy_status, agent_id
+  - transaction posted_date, received_at, policy_id
+  - claim status, funeral case date fields
+- Pagination everywhere; no unbounded queries.
+- Reporting:
+  - use summary tables/materialized views for heavy dashboards if needed.
+- Async jobs for:
+  - notification sends
+  - paynow reconciliation
+  - report exports generation
+
+=====================================================================
+W) BUILD PHASES (STRICT ORDER, FULL SCALE BUT SAFE)
+=====================================================================
+
+Phase 0: Repo scaffolding, env config, Prisma schema baseline, linting, testing harness, structured logging.
+Phase 1: OAuth auth for staff + RBAC tables + seed script using SUPERUSER_EMAIL + audit log foundation.
+Phase 2: Tenant/Org + Branch + core entities (Users, Agents, Clients, Policies) + policy number generator + client auth enrollment (policy claim + password + security question).
+Phase 3: Config Builders v1 (Products, Benefits, Add-ons, Claim Docs, Exclusions, Age Bands, Branch settings, Branding).
+Phase 4: Policy engine + status machine + cycle/grace/lapse logic + backdating approvals + audit.
+Phase 5: Payments/ledger/receipts + daily cashups + locking + Paynow integration + unallocated queue + reconciliation.
+Phase 6: Client portal (view, pay button, receipts, download policy docs, dependent request workflow).
+Phase 7: Agents (referral links, pipeline, policy attribution, reassignment workflow, doc downloads).
+Phase 8: Claims + fraud controls + approvals.
+Phase 9: Price book + costing engine + funeral case + fleet + expenditure linkage.
+Phase 10: Commissions + clawbacks + reinstatement rollbacks + service incentive ($50) + statements + payout ledger.
+Phase 11: Chibikhulu receivable ledger + settlements + daily due dashboard.
+Phase 12: Payroll + payslips + distribution logs + integrate into costs.
+Phase 13: Reporting & dashboards (all metrics, cohort analysis) + Excel/PDF exports + scheduled reports.
+Phase 14: Notifications engine + template builder + scheduler + logs.
+Throughout: maintain feature flags and never break earlier phases.
+
+Each phase must:
+- include DB migrations
+- include unit tests for logic introduced
+- include at least one Playwright test for the new critical flow
+- keep CI green
+
+=====================================================================
+X) REQUIRED DELIVERABLES (AS YOU BUILD)
+=====================================================================
+
+1) README:
+- local setup
+- env vars list
+- how to run migrations
+- how to seed SUPERUSER_EMAIL
+- how to run tests
+
+2) SECURITY.md:
+- threat model summary
+- security controls implemented
+- incident response basics
+
+3) ERD summary (markdown)
+4) Postman/Bruno collection or typed API docs
+5) Admin “Diagnostics” pages
+
+=====================================================================
+Y) START NOW (FIRST VERTICAL SLICE)
+=====================================================================
+
+Implement Phase 0–1 and deliver:
+- Next.js app with /staff and /client route groups
+- OAuth login for staff working
+- Tenant-scoped RBAC working with DB permissions
+- Seed script reads SUPERUSER_EMAIL from env (deployment default set to ausiziba@gmail.com) and assigns superuser (NOT hard-coded)
+- Audit log framework + viewer scaffold
+- Basic branding config loads logo from /public/assets/logo.png
+- Unit tests for RBAC guard and tenant scoping
+- Playwright e2e: staff OAuth login (mock if needed)
+
+DO NOT start product/policy features until auth + RBAC + tenant isolation are correct and tested.
+END.

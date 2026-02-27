@@ -126,9 +126,9 @@ export default function JoinRegisterPage() {
           premiumAmount: form.premiumAmount ? String(form.premiumAmount) : undefined,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast({ title: "Registration failed", description: data?.error || "Please try again.", variant: "destructive" });
+        toast({ title: "Registration failed", description: (data as { error?: string }).error || "Please try again.", variant: "destructive" });
         return;
       }
       setResult({ policyNumber: data.policyNumber, activationCode: data.activationCode });

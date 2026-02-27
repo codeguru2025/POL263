@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">POL263</string>
+    <string name="title_activity_main">POL263</string>
+    <string name="package_name">com.pol263.app</string>
+    <string name="custom_url_scheme">com.pol263.app</string>
+</resources>

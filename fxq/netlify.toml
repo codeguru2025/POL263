@@ -1,0 +1,14 @@
+# Netlify: deploy the frontend (client) only.
+# The Express API must be hosted elsewhere (e.g. Railway, Render). Set VITE_API_BASE in Netlify env to your API URL.
+
+[build]
+  command = "npm run build:client"
+  publish = "dist/public"
+  environment = { NODE_VERSION = "20" }
+
+# SPA: serve index.html for client-side routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  force = true

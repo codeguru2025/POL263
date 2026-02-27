@@ -126,7 +126,9 @@ export default function ClientPayments() {
   const { data: paymentStatusData } = useQuery({
     queryKey: ["/api/client-auth/payment-intents", currentIntent?.id, polling],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + `/api/client-auth/payment-intents/${currentIntent!.id}/status`, { credentials: "include" });
+      if (!currentIntent?.id) return null;
+      const res = await fetch(getApiBase() + `/api/client-auth/payment-intents/${currentIntent.id}/status`, { credentials: "include" });
+      if (!res.ok) return null;
       return res.json() as Promise<{ status: string; paid?: boolean }>;
     },
     enabled: !!currentIntent?.id && polling && currentIntent?.status !== "paid",

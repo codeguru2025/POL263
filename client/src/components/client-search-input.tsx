@@ -53,8 +53,16 @@ export function ClientSearchInput({
           getApiBase() + `/api/clients?q=${encodeURIComponent(query.trim())}&limit=20`,
           { credentials: "include" }
         );
+        if (!res.ok) {
+          setResults([]);
+          setOpen(true);
+          return;
+        }
         const data = await res.json();
         setResults(Array.isArray(data) ? data : []);
+        setOpen(true);
+      } catch {
+        setResults([]);
         setOpen(true);
       } finally {
         setLoading(false);

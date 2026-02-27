@@ -1046,7 +1046,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         creditNoteCount: creditNotes,
         status: "completed",
       }).where(eq(monthEndRuns.id, run.id));
-    }).catch(() => {});
+    }).catch((err) => {
+      structuredLog("warn", "Month-end run update failed (run already saved)", { runId: run.id, error: (err as Error).message });
+    });
     return res.status(201).json({ run: { ...run, receiptedCount: receipted, creditNoteCount: creditNotes, status: "completed" }, receiptedCount: receipted, creditNoteCount: creditNotes });
   });
 

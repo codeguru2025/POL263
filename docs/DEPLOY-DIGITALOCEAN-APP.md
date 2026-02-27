@@ -166,7 +166,8 @@ Whenever you push to the connected branch (e.g. `main`), App Platform will rebui
 
 ### Option A: Use the DigitalOcean build script (recommended)
 
-1. In the repo we added a script that runs **`npm ci --include=dev`** (full install including devDependencies) then **`npm run build`**, so the build always has `tsx`, `vite`, etc. available.
+1. In the repo we added a script that runs **`npm ci --include=dev`** (full install including devDependencies) then **`npm run build`**, so the build always has `tsx`, `vite`, etc. available.  
+   (Use this **only on App Platform**; locally run **`npm run build`**.)
 2. In DigitalOcean: **Settings** → **Commands** → set **Build Command** to:
    ```bash
    npm run build:do
@@ -198,3 +199,13 @@ After applying Option A or B, **Deploy** and **Force Rebuild and Deploy** should
 | Database   | DigitalOcean Managed PostgreSQL or existing Supabase/Neon |
 
 Keeping everything under the name **POL263** and in one GitHub repo keeps App Platform and future deploys consistent.
+
+---
+
+## 10. App Spec (YAML) – optional
+
+If you manage the app via **App Spec** (e.g. `.do/app.yaml` or DO’s spec editor):
+
+- **Build:** `build_command: npm run build` is fine now that the lockfile is fixed. For extra reliability (no reliance on `NPM_CONFIG_PRODUCTION`), you can set **Build Command** to `npm run build:do`.
+- **Single DATABASE_URL:** In the service `envs`, list `DATABASE_URL` only once. If you use an external DB (e.g. Supabase), use the full connection string with scope `RUN_AND_BUILD_TIME`. If you use a DO database component, use only the reference (e.g. `value: ${production-database.DATABASE_URL}`) and the same scope. Remove any second `DATABASE_URL` entry to avoid confusion.
+- **Secrets:** Do **not** commit an app spec file that contains real secrets (e.g. `SESSION_SECRET`, `DATABASE_URL` with password, `GOOGLE_CLIENT_SECRET`, `PAYNOW_INTEGRATION_KEY`). Prefer setting those in the DigitalOcean dashboard (Settings → App-Level Environment Variables) or via DO’s secret / component bindings. If you keep a spec in the repo, use placeholders (e.g. `SET_IN_DASHBOARD`) and document that real values are configured in the dashboard.
