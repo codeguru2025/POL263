@@ -260,6 +260,36 @@ export function setupClientAuth(app: Express) {
     return res.json(clientPolicies);
   });
 
+  /** Look up another client by phone to pay for their policy. Requires login. Sets session so next payment-intent can be for that client. */
+  app.get("/api/client-auth/lookup-by-phone", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const phone = typeof req.query.phone === "string" ? req.query.phone.trim() : "";
+    if (!phone || phone.length < 9) {
+      return res.status(400).json({ message: "Valid phone number is required" });
+    }
+    const client = await storage.getClientByPhone(clientOrgId, phone);
+    if (!client) {
+      return res.status(404).json({ message: "No client found with this phone number" });
+    }
+    const policies = await storage.getPoliciesByClient(client.id, clientOrgId);
+    const payables = policies.filter((p) => p.policyNumber != null && String(p.policyNumber).trim() !== "");
+    (req.session as any).lookedUpClientId = client.id;
+    (req.session as any).lookedUpClientIdAt = Date.now();
+    return res.json({
+      clientId: client.id,
+      clientName: [client.title, client.firstName, client.lastName].filter(Boolean).join(" "),
+      policies: payables.map((p) => ({
+        id: p.id,
+        policyNumber: p.policyNumber,
+        status: p.status,
+        premiumAmount: p.premiumAmount,
+        currency: p.currency,
+      })),
+    });
+  });
+
   app.get("/api/client-auth/policies/:id/payments", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
@@ -423,17 +453,28 @@ export function setupClientAuth(app: Express) {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
-    const { policyId, amount, purpose, idempotencyKey } = req.body;
+    const { policyId, amount, purpose, idempotencyKey, payForClientId } = req.body;
     if (!policyId || amount == null || !idempotencyKey) {
       return res.status(400).json({ message: "policyId, amount, and idempotencyKey are required" });
     }
     const policy = await storage.getPolicy(policyId, clientOrgId);
-    if (!policy || policy.clientId !== clientId || policy.organizationId !== clientOrgId) {
+    if (!policy || policy.organizationId !== clientOrgId) {
       return res.status(403).json({ message: "Access denied" });
+    }
+    let allowedClientId = clientId;
+    if (policy.clientId !== clientId) {
+      const lookedUp = (req.session as any)?.lookedUpClientId;
+      const lookedUpAt = (req.session as any)?.lookedUpClientIdAt;
+      const fiveMin = 5 * 60 * 1000;
+      if (lookedUp === policy.clientId && lookedUpAt && Date.now() - lookedUpAt < fiveMin) {
+        allowedClientId = policy.clientId;
+      } else {
+        return res.status(403).json({ message: "Access denied. Look up the client by phone first to pay for their policy." });
+      }
     }
     const result = await createPaymentIntent({
       organizationId: clientOrgId,
-      clientId,
+      clientId: allowedClientId,
       policyId,
       amount: String(amount),
       purpose: purpose || "premium",
@@ -511,5 +552,82 @@ export function setupClientAuth(app: Express) {
       mode: config.mode,
       returnUrl: config.returnUrl,
     });
+  });
+
+  app.get("/api/client-auth/notifications", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const tdb = await (await import("./tenant-db")).getDbForOrg(clientOrgId);
+    const { notificationLogs } = await import("@shared/schema");
+    const { eq, desc, and } = await import("drizzle-orm");
+    const logs = await tdb.select().from(notificationLogs)
+      .where(and(eq(notificationLogs.organizationId, clientOrgId), eq(notificationLogs.recipientType, "client"), eq(notificationLogs.recipientId, clientId)))
+      .orderBy(desc(notificationLogs.createdAt))
+      .limit(50);
+    return res.json(logs);
+  });
+
+  app.get("/api/client-auth/credit-notes", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const notes = await storage.getCreditNotesByClient(clientId, clientOrgId);
+    return res.json(notes);
+  });
+
+  app.get("/api/client-auth/settings", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const client = await storage.getClient(clientId, clientOrgId);
+    if (!client) return res.status(401).json({ message: "Not authenticated" });
+    return res.json({
+      notificationTone: (client as any).notificationTone ?? "default",
+      pushEnabled: !!(client as any).pushEnabled,
+    });
+  });
+
+  app.patch("/api/client-auth/settings", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { notificationTone, pushEnabled } = req.body || {};
+    const updates: Record<string, unknown> = {};
+    if (notificationTone !== undefined && ["default", "silent", "high"].includes(notificationTone)) {
+      updates.notificationTone = notificationTone;
+    }
+    if (pushEnabled !== undefined) updates.pushEnabled = !!pushEnabled;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ message: "No valid fields to update" });
+    const updated = await storage.updateClient(clientId, updates as any, clientOrgId);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    return res.json({
+      notificationTone: (updated as any).notificationTone ?? "default",
+      pushEnabled: !!(updated as any).pushEnabled,
+    });
+  });
+
+  app.post("/api/client-auth/register-device", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { token, platform } = req.body || {};
+    if (!token || typeof token !== "string" || !token.trim()) {
+      return res.status(400).json({ message: "token is required" });
+    }
+    const plat = ["ios", "android", "web"].includes(platform) ? platform : "web";
+    await storage.addClientDeviceToken(clientOrgId, clientId, token.trim(), plat);
+    return res.status(204).send();
+  });
+
+  app.delete("/api/client-auth/register-device", async (req: Request, res: Response) => {
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { token } = req.body || {};
+    if (!token || typeof token !== "string" || !token.trim()) {
+      return res.status(400).json({ message: "token is required" });
+    }
+    await storage.removeClientDeviceToken(clientOrgId, token.trim());
+    return res.status(204).send();
   });
 }

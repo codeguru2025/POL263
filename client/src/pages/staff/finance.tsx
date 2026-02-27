@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,188 @@ import { useToast } from "@/hooks/use-toast";
 import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { PolicySearchInput } from "@/components/policy-search-input";
+
+function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
+  const { toast } = useToast();
+  const [file, setFile] = useState<File | null>(null);
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error("Select a file");
+      const form = new FormData();
+      form.set("file", file);
+      const res = await fetch(getApiBase() + "/api/month-end-run", { method: "POST", body: form, credentials: "include" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.message || res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => { setFile(null); onSuccess(); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const creditApplyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/apply-credit-balances");
+      const data = await res.json() as { applied: number; errors: string[] };
+      return data;
+    },
+    onSuccess: (data) => {
+      const applied = data?.applied ?? 0;
+      const errCount = data?.errors?.length ?? 0;
+      toast({ title: "Credit balance run complete", description: `Applied to ${applied} policies.${errCount ? ` ${errCount} errors.` : ""}` });
+      onSuccess();
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-4">
+      <div>
+        <Label>CSV file</Label>
+        <Input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="max-w-xs" />
+      </div>
+      <Button onClick={() => mutation.mutate()} disabled={!file || mutation.isPending} data-testid="button-run-month-end">
+        {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+        Run
+      </Button>
+      {mutation.isError && <p className="text-sm text-destructive">{(mutation.error as Error).message}</p>}
+      </div>
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => creditApplyMutation.mutate()} disabled={creditApplyMutation.isPending} data-testid="button-apply-credit-balances">
+          {creditApplyMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+          Apply credit balances (due premiums)
+        </Button>
+        <span className="text-xs text-muted-foreground">Runs auto-apply of credit balance to policies with due premium.</span>
+      </div>
+    </div>
+  );
+}
+
+function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
+  const { toast } = useToast();
+  const [groupId, setGroupId] = useState("");
+  const [policyIds, setPolicyIds] = useState<Set<string>>(new Set());
+  const [totalAmount, setTotalAmount] = useState("");
+  const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
+  const { data: groups = [] } = useQuery<any[]>({ queryKey: ["/api/groups"] });
+  const { data: paynowConfig } = useQuery<{ enabled: boolean }>({ queryKey: ["/api/paynow-config"], retry: false });
+  const { data: groupPolicies = [] } = useQuery<any[]>({
+    queryKey: ["/api/groups", groupId, "policies"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/policies`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!groupId,
+  });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/group-receipt", { groupId, policyIds: Array.from(policyIds), totalAmount: parseFloat(totalAmount), currency: "USD" });
+    },
+    onSuccess: () => { setPolicyIds(new Set()); setTotalAmount(""); onSuccess(); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const paynowMutation = useMutation({
+    mutationFn: async () => {
+      const createRes = await apiRequest("POST", "/api/group-payment-intents", {
+        groupId,
+        policyIds: Array.from(policyIds),
+        totalAmount: parseFloat(totalAmount),
+        currency: "USD",
+      });
+      const createJson = await createRes.json() as { id: string };
+      const intentId = createJson.id;
+      const initRes = await apiRequest("POST", `/api/group-payment-intents/${intentId}/initiate`, { method: "visa_mastercard" });
+      const initJson = await initRes.json() as { redirectUrl?: string; pollUrl?: string };
+      return { intentId, redirectUrl: initJson.redirectUrl, pollUrl: initJson.pollUrl };
+    },
+    onSuccess: (data) => {
+      setPaynowIntentId(data.intentId);
+      if (data.redirectUrl) window.open(data.redirectUrl, "_blank");
+      setPolling(true);
+    },
+    onError: (e: Error) => toast({ title: "PayNow error", description: e.message, variant: "destructive" }),
+  });
+  const pollQuery = useQuery<{ status: string; paid?: boolean } | null>({
+    queryKey: ["/api/group-payment-intents", paynowIntentId, "poll"],
+    queryFn: async () => {
+      if (!paynowIntentId) return null;
+      const res = await fetch(getApiBase() + `/api/group-payment-intents/${paynowIntentId}/poll`, { method: "POST", credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!paynowIntentId && polling,
+    refetchInterval: (q) => (q.state.data?.paid === true || q.state.data?.status === "failed" ? false : 3000),
+    refetchIntervalInBackground: true,
+  });
+  useEffect(() => {
+    if (!polling || !pollQuery.data) return;
+    if (pollQuery.data.paid) {
+      setPolling(false);
+      setPaynowIntentId(null);
+      setPolicyIds(new Set());
+      setTotalAmount("");
+      toast({ title: "Group PayNow payment received" });
+      onSuccess();
+    } else if (pollQuery.data.status === "failed") {
+      setPolling(false);
+      toast({ title: "Payment failed", variant: "destructive" });
+    }
+  }, [polling, pollQuery.data, onSuccess, toast]);
+  const togglePolicy = (id: string) => {
+    setPolicyIds((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  };
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label>Group</Label>
+        <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setPaynowIntentId(null); setPolling(false); }}>
+          <SelectTrigger className="max-w-xs"><SelectValue placeholder="Select group" /></SelectTrigger>
+          <SelectContent>
+            {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      {groupId && (
+        <>
+          <div>
+            <Label>Policies (select to include)</Label>
+            <div className="border rounded-md p-2 max-h-48 overflow-auto space-y-1">
+              {groupPolicies.map((p: any) => (
+                <label key={p.id} className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={policyIds.has(p.id)} onChange={() => togglePolicy(p.id)} />
+                  <span className="font-mono text-sm">{p.policyNumber}</span>
+                  <span className="text-muted-foreground">{p.currency} {p.premiumAmount}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <Label>Total amount</Label>
+            <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total to split" className="max-w-xs" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => mutation.mutate()} disabled={policyIds.size === 0 || !totalAmount || mutation.isPending} data-testid="button-submit-group-receipt">
+              {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Receipt selected ({policyIds.size} policies)
+            </Button>
+            {paynowConfig?.enabled && (
+              <Button variant="outline" onClick={() => paynowMutation.mutate()} disabled={policyIds.size === 0 || !totalAmount || paynowMutation.isPending || polling}>
+                {paynowMutation.isPending || polling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                {polling ? "Waiting for PayNow…" : "Pay with PayNow"}
+              </Button>
+            )}
+          </div>
+          {polling && paynowIntentId && (
+            <p className="text-sm text-muted-foreground">Complete payment in the opened window. This page will update when payment is received.</p>
+          )}
+          {mutation.isError && <p className="text-sm text-destructive">{(mutation.error as Error).message}</p>}
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function StaffFinance() {
   const { toast } = useToast();
@@ -356,6 +538,8 @@ export default function StaffFinance() {
             <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>
             <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>
             <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu">POL263</TabsTrigger>
+            <TabsTrigger value="month-end" data-testid="tab-month-end">Month-end run</TabsTrigger>
+            <TabsTrigger value="group-receipt" data-testid="tab-group-receipt">Group receipt</TabsTrigger>
           </TabsList>
 
           <TabsContent value="payments">
@@ -750,6 +934,37 @@ export default function StaffFinance() {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          <TabsContent value="month-end">
+            <Card>
+              <CardHeader>
+                <CardTitle>Month-end run</CardTitle>
+                <p className="text-sm text-muted-foreground">Upload a CSV with policy_number, amount, currency. Policies with sufficient amount are receipted; underpayments go to policy credit balance and a credit note is issued.</p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center gap-4">
+                  <Button variant="outline" asChild>
+                    <a href={getApiBase() + "/api/month-end-run/template"} download="month-end-run-template.csv" data-testid="button-download-month-end-template">
+                      Download template
+                    </a>
+                  </Button>
+                </div>
+                <MonthEndRunUpload onSuccess={() => { toast({ title: "Month-end run completed" }); queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); }} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="group-receipt">
+            <Card>
+              <CardHeader>
+                <CardTitle>Group receipt</CardTitle>
+                <p className="text-sm text-muted-foreground">Select a group and policies to receipt at once. Total amount is split by premium proportion.</p>
+              </CardHeader>
+              <CardContent>
+                <GroupReceiptForm onSuccess={() => { toast({ title: "Group receipted" }); queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); }} />
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

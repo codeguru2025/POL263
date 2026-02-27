@@ -33,6 +33,111 @@ import {
   Heart,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getApiBase } from "@/lib/queryClient";
+import { Switch } from "@/components/ui/switch";
+
+function ClientNotificationSettings() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { data: settings } = useQuery<{ notificationTone: string; pushEnabled: boolean }>({
+    queryKey: ["/api/client-auth/settings"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/client-auth/settings", { credentials: "include" });
+      if (!res.ok) return { notificationTone: "default", pushEnabled: false };
+      return res.json();
+    },
+    retry: false,
+  });
+  const updateMutation = useMutation({
+    mutationFn: async (patch: { notificationTone?: string; pushEnabled?: boolean }) => {
+      await apiRequest("PATCH", "/api/client-auth/settings", patch);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/client-auth/settings"] });
+      toast({ title: "Settings saved" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  if (!settings) return null;
+  return (
+    <div className="space-y-4 p-4 border rounded-lg bg-muted/30">
+      <p className="text-sm font-medium text-muted-foreground">Notification preferences</p>
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm">Sound</Label>
+          <Select
+            value={settings.notificationTone}
+            onValueChange={(v) => updateMutation.mutate({ notificationTone: v })}
+          >
+            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">Default</SelectItem>
+              <SelectItem value="silent">Silent</SelectItem>
+              <SelectItem value="high">High</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-sm">Push notifications</Label>
+          <Switch
+            checked={settings.pushEnabled}
+            onCheckedChange={(checked) => updateMutation.mutate({ pushEnabled: checked })}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientNotificationsList() {
+  const { data: notifications = [] } = useQuery<any[]>({
+    queryKey: ["/api/client-auth/notifications"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/client-auth/notifications", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    retry: false,
+  });
+  if (!notifications.length) return null;
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium text-muted-foreground">Recent notifications</p>
+      {notifications.slice(0, 10).map((n) => (
+        <div key={n.id} className="p-3 border rounded-lg bg-muted/50">
+          <p className="text-sm font-medium">{n.subject || "Notification"}</p>
+          <p className="text-xs text-muted-foreground mt-1">{n.body}</p>
+          <p className="text-xs text-muted-foreground mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ClientCreditNotesList() {
+  const { data: creditNotes = [] } = useQuery<any[]>({
+    queryKey: ["/api/client-auth/credit-notes"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/client-auth/credit-notes", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    retry: false,
+  });
+  if (!creditNotes.length) return null;
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium text-muted-foreground">Credit notes</p>
+      {creditNotes.slice(0, 5).map((cn) => (
+        <div key={cn.id} className="p-3 border rounded-lg bg-green-50 border-green-200">
+          <p className="text-sm font-medium">Credit note #{cn.creditNoteNumber}</p>
+          <p className="text-xs text-muted-foreground">{cn.currency} {cn.amount} — {cn.reason || "Credit to policy balance"}</p>
+          <p className="text-xs text-muted-foreground mt-1">{new Date(cn.createdAt).toLocaleDateString()}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 interface ClientInfo {
   client: {
@@ -444,6 +549,9 @@ export default function ClientDashboard() {
                       </div>
                     </div>
                   )}
+                  <ClientNotificationsList />
+                  <ClientCreditNotesList />
+                  <ClientNotificationSettings />
                   {!gracePolicy && !(activePolicy?.waitingPeriodEndDate && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0) && (
                     <div className="text-center py-8 text-muted-foreground flex flex-col items-center gap-3">
                       <Heart className="h-8 w-8 text-green-500" />

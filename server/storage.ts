@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, count, gte, lte, inArray, or, ilike } from "drizzle-orm";
+import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike } from "drizzle-orm";
 import { db } from "./db";
 import { getDbForOrg } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
@@ -19,6 +19,12 @@ import {
   approvalRequests, featureFlags, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
+  policyCreditBalances, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
+  clientDeviceTokens,
+  type GroupPaymentIntent, type InsertGroupPaymentIntent,
+  type GroupPaymentAllocation, type InsertGroupPaymentAllocation,
+  type PolicyCreditBalance, type CreditNote, type MonthEndRun,
+  type InsertPolicyCreditBalance, type InsertCreditNote, type InsertMonthEndRun,
   type Organization, type InsertOrganization,
   type Branch, type InsertBranch,
   type User, type InsertUser,
@@ -49,6 +55,7 @@ import {
   type CommissionPlan, type InsertCommissionPlan,
   type CommissionLedgerEntry, type InsertCommissionLedgerEntry,
   type NotificationTemplate, type InsertNotificationTemplate,
+  type NotificationLog,
   type Lead, type InsertLead,
   type Expenditure, type InsertExpenditure,
   type PriceBookItem, type InsertPriceBookItem,
@@ -81,6 +88,67 @@ export interface ReportFilters {
   userId?: string;
   status?: string;
   statuses?: string[]; // for "in" filter e.g. ['active','grace']
+  branchId?: string;
+  productId?: string;
+  agentId?: string;
+}
+
+export interface PolicyReportRow {
+  policyId: string;
+  policyNumber: string;
+  status: string;
+  currency: string;
+  premiumAmount: string;
+  paymentSchedule: string;
+  effectiveDate: string | null;
+  /** Issue date: set when first payment is received. */
+  inceptionDate: string | null;
+  waitingPeriodEndDate: string | null;
+  currentCycleStart: string | null;
+  currentCycleEnd: string | null;
+  graceEndDate: string | null;
+  policyCreatedAt: string;
+  clientId: string;
+  clientTitle: string | null;
+  clientFirstName: string;
+  clientLastName: string;
+  clientNationalId: string | null;
+  clientDateOfBirth: string | null;
+  clientGender: string | null;
+  clientMaritalStatus: string | null;
+  clientPhone: string | null;
+  clientEmail: string | null;
+  clientAddress: string | null;
+  clientPreferredCommMethod: string | null;
+  clientLocation: string | null;
+  productName: string | null;
+  productCode: string | null;
+  branchName: string | null;
+  /** Group or company name when policy belongs to a group. */
+  groupName: string | null;
+  agentEmail: string | null;
+  agentDisplayName: string | null;
+  /** From product version; used for finance report. */
+  gracePeriodDays: number | null;
+}
+
+export interface FinanceReportRow extends PolicyReportRow {
+  /** Last payment (receipt) date. */
+  datePaid: string | null;
+  /** Current cycle end = next due date. */
+  dueDate: string | null;
+  /** Number of receipts (payments) for this policy. */
+  receiptCount: number;
+  /** Months paid (same as receipt count when one receipt per period). */
+  monthsPaid: number;
+  /** Grace period days used (e.g. days into grace). */
+  graceDaysUsed: number;
+  /** Grace period days remaining until lapse. */
+  graceDaysRemaining: number | null;
+  /** Estimated outstanding premium (one period if due date passed). */
+  outstandingPremium: string;
+  /** Advance (overpayment) amount. */
+  advancePremium: string;
 }
 
 export interface ActivationEntry {
@@ -135,6 +203,8 @@ export interface IStorage {
   getClientByEmail(orgId: string, email: string): Promise<Client | undefined>;
   /** Find first client in org by national ID (exact match). */
   getClientByNationalId(orgId: string, nationalId: string): Promise<Client | undefined>;
+  /** Find first client in org by phone (normalized digits match). */
+  getClientByPhone(orgId: string, phone: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, data: Partial<InsertClient>, orgId: string): Promise<Client | undefined>;
   getDependentsByClient(clientId: string, orgId: string): Promise<Dependent[]>;
@@ -157,6 +227,9 @@ export interface IStorage {
   getAgeBandConfigs(orgId: string): Promise<AgeBandConfig[]>;
   createAgeBandConfig(config: InsertAgeBandConfig): Promise<AgeBandConfig>;
   getPoliciesByOrg(organizationId: string, limit?: number, offset?: number, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]>;
+  /** Policy report rows with client, product, branch, agent details for reports/export. */
+  getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
+  getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<FinanceReportRow[]>;
   getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]>;
   getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]>;
   getPolicy(id: string, orgId: string): Promise<Policy | undefined>;
@@ -218,6 +291,7 @@ export interface IStorage {
   createCommissionLedgerEntry(entry: InsertCommissionLedgerEntry): Promise<CommissionLedgerEntry>;
   getNotificationTemplates(orgId: string): Promise<NotificationTemplate[]>;
   createNotificationTemplate(tmpl: InsertNotificationTemplate): Promise<NotificationTemplate>;
+  createNotificationLog(orgId: string, data: { recipientType: string; recipientId: string | null; channel: string; subject?: string | null; body?: string | null; templateId?: string | null; status?: string }): Promise<NotificationLog>;
   getLeadsByOrg(orgId: string, limit?: number, offset?: number): Promise<Lead[]>;
   getLeadsByAgent(agentId: string, orgId: string): Promise<Lead[]>;
   getLead(id: string, orgId: string): Promise<Lead | undefined>;
@@ -253,6 +327,30 @@ export interface IStorage {
   getGroup(id: string, orgId: string): Promise<Group | undefined>;
   createGroup(group: InsertGroup): Promise<Group>;
   updateGroup(id: string, data: Partial<InsertGroup>, orgId: string): Promise<Group | undefined>;
+  getGroupsWhereClientIsExecutive(orgId: string, clientId: string): Promise<Group[]>;
+  getPoliciesByGroupId(orgId: string, groupId: string): Promise<Policy[]>;
+  createGroupPaymentIntent(intent: InsertGroupPaymentIntent): Promise<GroupPaymentIntent>;
+  getGroupPaymentIntentById(id: string, orgId: string): Promise<GroupPaymentIntent | undefined>;
+  getGroupPaymentIntentByOrgAndIdempotencyKey(orgId: string, key: string): Promise<GroupPaymentIntent | undefined>;
+  updateGroupPaymentIntent(id: string, data: Partial<GroupPaymentIntent>, orgId: string): Promise<GroupPaymentIntent | undefined>;
+  getGroupPaymentAllocations(intentId: string, orgId: string): Promise<GroupPaymentAllocation[]>;
+  getGroupPaymentIntentByMerchantReference(orgId: string, merchantReference: string): Promise<GroupPaymentIntent | undefined>;
+  createGroupPaymentAllocations(orgId: string, allocations: InsertGroupPaymentAllocation[]): Promise<void>;
+  getOrCreatePolicyCreditBalance(orgId: string, policyId: string, currency: string): Promise<PolicyCreditBalance>;
+  addPolicyCreditBalance(orgId: string, policyId: string, amount: string, currency: string): Promise<PolicyCreditBalance | undefined>;
+  getPolicyCreditBalance(orgId: string, policyId: string): Promise<PolicyCreditBalance | undefined>;
+  getPolicyCreditBalancesWithPositiveBalance(orgId: string): Promise<PolicyCreditBalance[]>;
+  deductPolicyCreditBalance(orgId: string, policyId: string, amount: string): Promise<PolicyCreditBalance | undefined>;
+  getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
+  addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
+  removeClientDeviceToken(orgId: string, token: string): Promise<void>;
+  getNextCreditNoteNumber(orgId: string): Promise<string>;
+  createCreditNote(note: InsertCreditNote): Promise<CreditNote>;
+  getCreditNotesByClient(clientId: string, orgId: string): Promise<CreditNote[]>;
+  getCreditNotesByPolicy(policyId: string, orgId: string): Promise<CreditNote[]>;
+  createMonthEndRun(run: InsertMonthEndRun): Promise<MonthEndRun>;
+  getMonthEndRunById(id: string, orgId: string): Promise<MonthEndRun | undefined>;
+  getNextMonthEndRunNumber(orgId: string): Promise<string>;
   getChibikhuluReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<ChibikhuluReceivable[]>;
   createChibikhuluReceivable(entry: InsertChibikhuluReceivable): Promise<ChibikhuluReceivable>;
   getChibikhuluSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }>;
@@ -556,6 +654,15 @@ export class DatabaseStorage implements IStorage {
     ));
     return client;
   }
+  /** Normalize phone to digits for matching. */
+  async getClientByPhone(orgId: string, phone: string): Promise<Client | undefined> {
+    const digits = String(phone).replace(/\D/g, "");
+    if (digits.length < 9) return undefined;
+    const tdb = await getDbForOrg(orgId);
+    const allClients = await tdb.select().from(clients).where(eq(clients.organizationId, orgId));
+    const match = allClients.find((c) => c.phone && String(c.phone).replace(/\D/g, "").slice(-9) === digits.slice(-9));
+    return match;
+  }
   async getClientIdsByOrgSearch(organizationId: string, search: string): Promise<string[]> {
     if (!search || !search.trim()) return [];
     const tdb = await getDbForOrg(organizationId);
@@ -708,6 +815,14 @@ export class DatabaseStorage implements IStorage {
     if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
     if (filters?.status) conditions.push(eq(policies.status, filters.status));
     if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else conditions.push(sql`1 = 0`);
+    }
     if (filters?.search && filters.search.trim()) {
       const raw = String(filters.search).trim();
       const esc = raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
@@ -722,6 +837,145 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(policies).where(and(...conditions))
       .orderBy(desc(policies.createdAt)).limit(limit).offset(offset);
   }
+
+  async getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const conditions = [eq(policies.organizationId, organizationId)];
+    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.status) conditions.push(eq(policies.status, filters.status));
+    if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else conditions.push(sql`1 = 0`);
+    }
+    const rows = await tdb
+      .select({
+        policyId: policies.id,
+        policyNumber: policies.policyNumber,
+        status: policies.status,
+        currency: policies.currency,
+        premiumAmount: policies.premiumAmount,
+        paymentSchedule: policies.paymentSchedule,
+        effectiveDate: policies.effectiveDate,
+        inceptionDate: policies.inceptionDate,
+        waitingPeriodEndDate: policies.waitingPeriodEndDate,
+        currentCycleStart: policies.currentCycleStart,
+        currentCycleEnd: policies.currentCycleEnd,
+        graceEndDate: policies.graceEndDate,
+        policyCreatedAt: policies.createdAt,
+        clientId: clients.id,
+        clientTitle: clients.title,
+        clientFirstName: clients.firstName,
+        clientLastName: clients.lastName,
+        clientNationalId: clients.nationalId,
+        clientDateOfBirth: clients.dateOfBirth,
+        clientGender: clients.gender,
+        clientMaritalStatus: clients.maritalStatus,
+        clientPhone: clients.phone,
+        clientEmail: clients.email,
+        clientAddress: clients.address,
+        clientPreferredCommMethod: clients.preferredCommMethod,
+        clientLocation: clients.location,
+        productName: products.name,
+        productCode: products.code,
+        branchName: branches.name,
+        groupName: groups.name,
+        agentEmail: users.email,
+        agentDisplayName: users.displayName,
+        gracePeriodDays: productVersions.gracePeriodDays,
+      })
+      .from(policies)
+      .innerJoin(clients, eq(policies.clientId, clients.id))
+      .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+      .innerJoin(products, eq(productVersions.productId, products.id))
+      .leftJoin(branches, eq(policies.branchId, branches.id))
+      .leftJoin(groups, eq(policies.groupId, groups.id))
+      .leftJoin(users, eq(policies.agentId, users.id))
+      .where(and(...conditions))
+      .orderBy(desc(policies.createdAt))
+      .limit(limit)
+      .offset(offset);
+    return rows.map((r) => ({
+      ...r,
+      premiumAmount: String(r.premiumAmount ?? ""),
+      effectiveDate: r.effectiveDate ? String(r.effectiveDate) : null,
+      inceptionDate: r.inceptionDate ? String(r.inceptionDate) : null,
+      waitingPeriodEndDate: r.waitingPeriodEndDate ? String(r.waitingPeriodEndDate) : null,
+      currentCycleStart: r.currentCycleStart ? String(r.currentCycleStart) : null,
+      currentCycleEnd: r.currentCycleEnd ? String(r.currentCycleEnd) : null,
+      graceEndDate: r.graceEndDate ? String(r.graceEndDate) : null,
+      policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
+      clientDateOfBirth: r.clientDateOfBirth ? String(r.clientDateOfBirth) : null,
+      groupName: r.groupName ?? null,
+      gracePeriodDays: r.gracePeriodDays != null ? Number(r.gracePeriodDays) : null,
+    }));
+  }
+
+  /** Receipt aggregates by policy for finance report. */
+  async getReceiptAggregatesByPolicyIds(orgId: string, policyIds: string[]): Promise<Map<string, { lastPaymentAt: string; receiptCount: number; totalAmount: string }>> {
+    if (policyIds.length === 0) return new Map();
+    const tdb = await getDbForOrg(orgId);
+    const receipts = await tdb.select({
+      policyId: paymentReceipts.policyId,
+      issuedAt: paymentReceipts.issuedAt,
+      amount: paymentReceipts.amount,
+    }).from(paymentReceipts).where(inArray(paymentReceipts.policyId, policyIds));
+    const map = new Map<string, { lastPaymentAt: string; receiptCount: number; totalAmount: string }>();
+    for (const p of policyIds) map.set(p, { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" });
+    for (const r of receipts) {
+      const cur = map.get(r.policyId)!;
+      if (!cur.lastPaymentAt || (r.issuedAt && String(r.issuedAt) > cur.lastPaymentAt)) cur.lastPaymentAt = r.issuedAt ? new Date(r.issuedAt).toISOString() : "";
+      cur.receiptCount += 1;
+      cur.totalAmount = (parseFloat(cur.totalAmount) + parseFloat(String(r.amount ?? 0))).toFixed(2);
+    }
+    return map;
+  }
+
+  async getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<FinanceReportRow[]> {
+    const rows = await this.getPolicyReportByOrg(organizationId, limit, offset, filters);
+    const policyIds = rows.map((r) => r.policyId);
+    const aggregates = await this.getReceiptAggregatesByPolicyIds(organizationId, policyIds);
+    const today = new Date().toISOString().split("T")[0];
+    return rows.map((r) => {
+      const agg = aggregates.get(r.policyId) ?? { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" };
+      const dueDate = r.currentCycleEnd ?? null;
+      const premium = parseFloat(r.premiumAmount || "0");
+      const totalReceived = parseFloat(agg.totalAmount || "0");
+      const monthsPaid = agg.receiptCount;
+      let graceDaysUsed = 0;
+      let graceDaysRemaining: number | null = null;
+      const graceDays = r.gracePeriodDays ?? 0;
+      if (r.status === "grace" && r.graceEndDate && graceDays > 0) {
+        const graceEnd = new Date(r.graceEndDate);
+        const now = new Date();
+        graceDaysRemaining = Math.max(0, Math.ceil((graceEnd.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+        graceDaysUsed = Math.min(graceDays, graceDays - graceDaysRemaining);
+      }
+      let outstandingPremium = "0";
+      if (dueDate && dueDate < today && premium > 0) {
+        outstandingPremium = r.premiumAmount;
+      }
+      const expectedPaid = monthsPaid * premium;
+      const advancePremium = totalReceived > expectedPaid ? (totalReceived - expectedPaid).toFixed(2) : "0";
+      return {
+        ...r,
+        datePaid: agg.lastPaymentAt || null,
+        dueDate,
+        receiptCount: monthsPaid,
+        monthsPaid,
+        graceDaysUsed,
+        graceDaysRemaining,
+        outstandingPremium,
+        advancePremium,
+      } as FinanceReportRow;
+    });
+  }
+
   async getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(policies).where(eq(policies.clientId, clientId));
@@ -1178,6 +1432,30 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(notificationTemplates).values(tmpl).returning();
     return created;
   }
+  async createNotificationLog(orgId: string, data: {
+    recipientType: string;
+    recipientId: string | null;
+    channel: string;
+    subject?: string | null;
+    body?: string | null;
+    templateId?: string | null;
+    status?: string;
+  }): Promise<NotificationLog> {
+    const tdb = await getDbForOrg(orgId);
+    const [created] = await tdb.insert(notificationLogs).values({
+      organizationId: orgId,
+      recipientType: data.recipientType,
+      recipientId: data.recipientId,
+      channel: data.channel,
+      subject: data.subject ?? null,
+      body: data.body ?? null,
+      templateId: data.templateId ?? null,
+      status: data.status ?? "sent",
+      attempts: 1,
+      sentAt: new Date(),
+    }).returning();
+    return created;
+  }
 
   // ─── Leads ─────────────────────────────────────────────────
   async getLeadsByOrg(orgId: string, limit = 50, offset = 0): Promise<Lead[]> {
@@ -1420,6 +1698,183 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(groups).set(data).where(eq(groups.id, id)).returning();
     return updated;
+  }
+
+  async getGroupsWhereClientIsExecutive(orgId: string, clientId: string): Promise<Group[]> {
+    const client = await this.getClient(clientId, orgId);
+    if (!client?.phone) return [];
+    const digits = String(client.phone).replace(/\D/g, "").slice(-9);
+    if (digits.length < 9) return [];
+    const all = await this.getGroupsByOrg(orgId);
+    return all.filter((g) => {
+      const phones = [g.chairpersonPhone, g.secretaryPhone, g.treasurerPhone].filter(Boolean);
+      return phones.some((p) => String(p).replace(/\D/g, "").slice(-9) === digits);
+    });
+  }
+
+  async getPoliciesByGroupId(orgId: string, groupId: string): Promise<Policy[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(policies)
+      .where(and(eq(policies.organizationId, orgId), eq(policies.groupId, groupId)))
+      .orderBy(desc(policies.createdAt));
+  }
+
+  async createGroupPaymentIntent(intent: InsertGroupPaymentIntent): Promise<GroupPaymentIntent> {
+    const tdb = await getDbForOrg(intent.organizationId);
+    const [created] = await tdb.insert(groupPaymentIntents).values({ ...intent, updatedAt: new Date() }).returning();
+    return created;
+  }
+  async getGroupPaymentIntentById(id: string, orgId: string): Promise<GroupPaymentIntent | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(groupPaymentIntents).where(eq(groupPaymentIntents.id, id));
+    return row;
+  }
+  async getGroupPaymentIntentByOrgAndIdempotencyKey(orgId: string, key: string): Promise<GroupPaymentIntent | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(groupPaymentIntents)
+      .where(and(eq(groupPaymentIntents.organizationId, orgId), eq(groupPaymentIntents.idempotencyKey, key)));
+    return row;
+  }
+  async updateGroupPaymentIntent(id: string, data: Partial<GroupPaymentIntent>, orgId: string): Promise<GroupPaymentIntent | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(groupPaymentIntents).set({ ...data, updatedAt: new Date() }).where(eq(groupPaymentIntents.id, id)).returning();
+    return updated;
+  }
+  async getGroupPaymentAllocations(intentId: string, orgId: string): Promise<GroupPaymentAllocation[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(groupPaymentAllocations)
+      .where(eq(groupPaymentAllocations.groupPaymentIntentId, intentId));
+  }
+  async getGroupPaymentIntentByMerchantReference(orgId: string, merchantReference: string): Promise<GroupPaymentIntent | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(groupPaymentIntents)
+      .where(and(eq(groupPaymentIntents.organizationId, orgId), eq(groupPaymentIntents.merchantReference, merchantReference)));
+    return row;
+  }
+  async createGroupPaymentAllocations(orgId: string, allocations: InsertGroupPaymentAllocation[]): Promise<void> {
+    if (allocations.length === 0) return;
+    const tdb = await getDbForOrg(orgId);
+    await tdb.insert(groupPaymentAllocations).values(allocations);
+  }
+
+  async getOrCreatePolicyCreditBalance(orgId: string, policyId: string, currency: string): Promise<PolicyCreditBalance> {
+    const tdb = await getDbForOrg(orgId);
+    const [existing] = await tdb.select().from(policyCreditBalances)
+      .where(and(eq(policyCreditBalances.organizationId, orgId), eq(policyCreditBalances.policyId, policyId)));
+    if (existing) return existing;
+    const [created] = await tdb.insert(policyCreditBalances).values({
+      organizationId: orgId,
+      policyId,
+      balance: "0",
+      currency,
+      updatedAt: new Date(),
+    }).returning();
+    return created;
+  }
+  async addPolicyCreditBalance(orgId: string, policyId: string, amount: string, currency: string): Promise<PolicyCreditBalance | undefined> {
+    const row = await this.getOrCreatePolicyCreditBalance(orgId, policyId, currency);
+    const tdb = await getDbForOrg(orgId);
+    const newBalance = (parseFloat(String(row.balance)) + parseFloat(amount)).toFixed(2);
+    const [updated] = await tdb.update(policyCreditBalances)
+      .set({ balance: newBalance, updatedAt: new Date() })
+      .where(eq(policyCreditBalances.id, row.id))
+      .returning();
+    return updated;
+  }
+  async getPolicyCreditBalance(orgId: string, policyId: string): Promise<PolicyCreditBalance | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(policyCreditBalances)
+      .where(and(eq(policyCreditBalances.organizationId, orgId), eq(policyCreditBalances.policyId, policyId)));
+    return row;
+  }
+  async getPolicyCreditBalancesWithPositiveBalance(orgId: string): Promise<PolicyCreditBalance[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(policyCreditBalances)
+      .where(and(eq(policyCreditBalances.organizationId, orgId), gt(policyCreditBalances.balance, "0")));
+  }
+  async deductPolicyCreditBalance(orgId: string, policyId: string, amount: string): Promise<PolicyCreditBalance | undefined> {
+    const row = await this.getPolicyCreditBalance(orgId, policyId);
+    if (!row) return undefined;
+    const current = parseFloat(String(row.balance));
+    const deduct = parseFloat(amount);
+    const newBalance = Math.max(0, current - deduct).toFixed(2);
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(policyCreditBalances)
+      .set({ balance: newBalance, updatedAt: new Date() })
+      .where(eq(policyCreditBalances.id, row.id))
+      .returning();
+    return updated;
+  }
+  async getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select({ id: clientDeviceTokens.id, token: clientDeviceTokens.token, platform: clientDeviceTokens.platform })
+      .from(clientDeviceTokens)
+      .where(and(eq(clientDeviceTokens.organizationId, orgId), eq(clientDeviceTokens.clientId, clientId)));
+    return rows;
+  }
+  async addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    const tok = token.trim();
+    const plat = platform || "web";
+    const existing = await tdb.select().from(clientDeviceTokens)
+      .where(and(eq(clientDeviceTokens.organizationId, orgId), eq(clientDeviceTokens.token, tok)))
+      .limit(1);
+    if (existing.length > 0) {
+      await tdb.update(clientDeviceTokens)
+        .set({ clientId, platform: plat })
+        .where(eq(clientDeviceTokens.id, existing[0].id));
+    } else {
+      await tdb.insert(clientDeviceTokens).values({
+        organizationId: orgId,
+        clientId,
+        token: tok,
+        platform: plat,
+      });
+    }
+  }
+  async removeClientDeviceToken(orgId: string, token: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(clientDeviceTokens)
+      .where(and(eq(clientDeviceTokens.organizationId, orgId), eq(clientDeviceTokens.token, token.trim())));
+  }
+  async getNextCreditNoteNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const [result] = await tdb.select({ cnt: count() }).from(creditNotes).where(eq(creditNotes.organizationId, orgId));
+    const num = ((result?.cnt || 0) as number) + 1;
+    return `CN-${String(num).padStart(6, "0")}`;
+  }
+  async createCreditNote(note: InsertCreditNote): Promise<CreditNote> {
+    const tdb = await getDbForOrg(note.organizationId);
+    const [created] = await tdb.insert(creditNotes).values(note).returning();
+    return created;
+  }
+  async getCreditNotesByClient(clientId: string, orgId: string): Promise<CreditNote[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(creditNotes)
+      .where(and(eq(creditNotes.organizationId, orgId), eq(creditNotes.clientId, clientId)))
+      .orderBy(desc(creditNotes.createdAt));
+  }
+  async getCreditNotesByPolicy(policyId: string, orgId: string): Promise<CreditNote[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(creditNotes)
+      .where(and(eq(creditNotes.organizationId, orgId), eq(creditNotes.policyId, policyId)))
+      .orderBy(desc(creditNotes.createdAt));
+  }
+  async createMonthEndRun(run: InsertMonthEndRun): Promise<MonthEndRun> {
+    const tdb = await getDbForOrg(run.organizationId);
+    const [created] = await tdb.insert(monthEndRuns).values(run).returning();
+    return created;
+  }
+  async getMonthEndRunById(id: string, orgId: string): Promise<MonthEndRun | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(monthEndRuns).where(eq(monthEndRuns.id, id));
+    return row;
+  }
+  async getNextMonthEndRunNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const [result] = await tdb.select({ cnt: count() }).from(monthEndRuns).where(eq(monthEndRuns.organizationId, orgId));
+    const num = ((result?.cnt || 0) as number) + 1;
+    return `MER-${String(num).padStart(6, "0")}`;
   }
 
   // ─── Chibikhulu Receivables ──────────────────────────────

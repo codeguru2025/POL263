@@ -191,11 +191,37 @@ export const clients = pgTable(
     failedLoginAttempts: integer("failed_login_attempts").default(0).notNull(),
     lockedUntil: timestamp("locked_until"),
     isActive: boolean("is_active").default(true).notNull(),
+    /** Notification sound preference: default | silent | high */
+    notificationTone: text("notification_tone").default("default"),
+    /** Whether to send push notifications to registered devices */
+    pushEnabled: boolean("push_enabled").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
     index("clients_org_idx").on(t.organizationId),
     index("clients_branch_idx").on(t.branchId),
+  ]
+);
+
+// ─── CLIENT DEVICE TOKENS (for push notifications) ───
+export const clientDeviceTokens = pgTable(
+  "client_device_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    token: text("token").notNull(),
+    platform: text("platform").notNull(), // ios | android | web
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("cdt_org_idx").on(t.organizationId),
+    index("cdt_client_idx").on(t.clientId),
+    uniqueIndex("cdt_token_org_idx").on(t.organizationId, t.token),
   ]
 );
 
@@ -424,6 +450,8 @@ export const policies = pgTable(
     premiumAmount: numeric("premium_amount").notNull(),
     paymentSchedule: text("payment_schedule").default("monthly").notNull(),
     effectiveDate: date("effective_date"),
+    /** Set when first payment is received (issue/inception date). */
+    inceptionDate: date("inception_date"),
     waitingPeriodEndDate: date("waiting_period_end_date"),
     currentCycleStart: date("current_cycle_start"),
     currentCycleEnd: date("current_cycle_end"),
@@ -660,6 +688,79 @@ export const paymentReceipts = pgTable(
     index("pr_intent_idx").on(t.paymentIntentId),
     index("pr_policy_idx").on(t.policyId),
     uniqueIndex("pr_receipt_org_idx").on(t.receiptNumber, t.organizationId),
+  ]
+);
+
+// ─── MONTH-END RUN (batch receipt from bank file) ───
+export const monthEndRuns = pgTable(
+  "month_end_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    runNumber: text("run_number").notNull(),
+    fileName: text("file_name"),
+    totalRows: integer("total_rows").default(0),
+    receiptedCount: integer("receipted_count").default(0),
+    creditNoteCount: integer("credit_note_count").default(0),
+    status: text("status").default("completed").notNull(),
+    runBy: uuid("run_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("mer_org_idx").on(t.organizationId),
+    uniqueIndex("mer_number_org_idx").on(t.runNumber, t.organizationId),
+  ]
+);
+
+// ─── POLICY CREDIT BALANCE (for month-end run underpayments) ───
+export const policyCreditBalances = pgTable(
+  "policy_credit_balances",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id),
+    balance: numeric("balance", { precision: 12, scale: 2 }).default("0").notNull(),
+    currency: text("currency").default("USD").notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pcb_org_idx").on(t.organizationId),
+    index("pcb_policy_idx").on(t.policyId),
+    uniqueIndex("pcb_policy_org_idx").on(t.policyId, t.organizationId),
+  ]
+);
+
+export const creditNotes = pgTable(
+  "credit_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    creditNoteNumber: text("credit_note_number").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    reason: text("reason"),
+    monthEndRunId: uuid("month_end_run_id").references(() => monthEndRuns.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("cn_org_idx").on(t.organizationId),
+    index("cn_policy_idx").on(t.policyId),
+    index("cn_client_idx").on(t.clientId),
+    uniqueIndex("cn_number_org_idx").on(t.creditNoteNumber, t.organizationId),
   ]
 );
 
@@ -1369,6 +1470,9 @@ export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true 
 export const insertPaymentIntentSchema = createInsertSchema(paymentIntents).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPaymentEventSchema = createInsertSchema(paymentEvents).omit({ id: true, createdAt: true });
 export const insertPaymentReceiptSchema = createInsertSchema(paymentReceipts).omit({ id: true, createdAt: true });
+export const insertPolicyCreditBalanceSchema = createInsertSchema(policyCreditBalances).omit({ id: true });
+export const insertCreditNoteSchema = createInsertSchema(creditNotes).omit({ id: true, createdAt: true });
+export const insertMonthEndRunSchema = createInsertSchema(monthEndRuns).omit({ id: true, createdAt: true });
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
 export const insertClaimDocumentSchema = createInsertSchema(claimDocuments).omit({ id: true, uploadedAt: true });
 export const insertFuneralCaseSchema = createInsertSchema(funeralCases).omit({ id: true, createdAt: true });
@@ -1433,6 +1537,12 @@ export type PaymentEvent = typeof paymentEvents.$inferSelect;
 export type InsertPaymentEvent = z.infer<typeof insertPaymentEventSchema>;
 export type PaymentReceipt = typeof paymentReceipts.$inferSelect;
 export type InsertPaymentReceipt = z.infer<typeof insertPaymentReceiptSchema>;
+export type PolicyCreditBalance = typeof policyCreditBalances.$inferSelect;
+export type InsertPolicyCreditBalance = z.infer<typeof insertPolicyCreditBalanceSchema>;
+export type CreditNote = typeof creditNotes.$inferSelect;
+export type InsertCreditNote = z.infer<typeof insertCreditNoteSchema>;
+export type MonthEndRun = typeof monthEndRuns.$inferSelect;
+export type InsertMonthEndRun = z.infer<typeof insertMonthEndRunSchema>;
 export type Claim = typeof claims.$inferSelect;
 export type InsertClaim = z.infer<typeof insertClaimSchema>;
 export type ClaimDocument = typeof claimDocuments.$inferSelect;
@@ -1527,6 +1637,66 @@ export const groups = pgTable(
 export const insertGroupSchema = createInsertSchema(groups).omit({ id: true, createdAt: true });
 export type Group = typeof groups.$inferSelect;
 export type InsertGroup = z.infer<typeof insertGroupSchema>;
+
+// ─── GROUP BULK PAYMENT (executive pays for multiple group policies at once) ───
+export const groupPaymentIntents = pgTable(
+  "group_payment_intents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => groups.id),
+    totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    status: text("status").default("created").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    merchantReference: varchar("merchant_reference", { length: 255 }).notNull(),
+    paynowReference: varchar("paynow_reference", { length: 255 }),
+    paynowPollUrl: text("paynow_poll_url"),
+    paynowRedirectUrl: text("paynow_redirect_url"),
+    methodSelected: text("method_selected").default("unknown"),
+    initiatedByClientId: uuid("initiated_by_client_id").references(() => clients.id),
+    initiatedByUserId: uuid("initiated_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("gpi_org_idx").on(t.organizationId),
+    index("gpi_group_idx").on(t.groupId),
+    index("gpi_status_idx").on(t.status),
+    uniqueIndex("gpi_idempotency_org_idx").on(t.organizationId, t.idempotencyKey),
+  ]
+);
+
+export const groupPaymentAllocations = pgTable(
+  "group_payment_allocations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    groupPaymentIntentId: uuid("group_payment_intent_id")
+      .notNull()
+      .references(() => groupPaymentIntents.id, { onDelete: "cascade" }),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("gpa_intent_idx").on(t.groupPaymentIntentId),
+    index("gpa_policy_idx").on(t.policyId),
+  ]
+);
+
+export const insertGroupPaymentIntentSchema = createInsertSchema(groupPaymentIntents).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertGroupPaymentAllocationSchema = createInsertSchema(groupPaymentAllocations).omit({ id: true, createdAt: true });
+export type GroupPaymentIntent = typeof groupPaymentIntents.$inferSelect;
+export type InsertGroupPaymentIntent = z.infer<typeof insertGroupPaymentIntentSchema>;
+export type GroupPaymentAllocation = typeof groupPaymentAllocations.$inferSelect;
+export type InsertGroupPaymentAllocation = z.infer<typeof insertGroupPaymentAllocationSchema>;
 
 // ─── SETTLEMENT ALLOCATIONS ────────────────────────────────
 

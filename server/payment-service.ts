@@ -13,8 +13,8 @@ import { structuredLog } from "./logger";
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
 const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
 
-const PAYABLE_STATUSES = ["active", "grace", "reinstatement_pending", "pending"] as const;
 const REINSTATEMENT_PURPOSE = "reinstatement";
+const GROUP_PAYMENT_STATUS_PAID = "paid";
 
 export interface CreateIntentInput {
   organizationId: string;
@@ -44,15 +44,21 @@ function generateMerchantReference(orgCode: string, policyNumber: string): strin
   return `${orgCode}-POL${policyNumber}-${date}-${time}-${rand}`.slice(0, 255);
 }
 
-/** Validate policy is payable for the given purpose. */
+/** Merchant reference for group PayNow (prefix GRP- so result handler can distinguish). */
+export function generateGroupMerchantReference(orgCode: string, groupId: string): string {
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const time = now.toTimeString().slice(0, 8).replace(/:/g, "");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `GRP-${orgCode}-${groupId.slice(0, 8)}-${date}-${time}-${rand}`.slice(0, 255);
+}
+
+/** Validate policy is payable: allow all statuses; only reject when there is no policy number
+ * (e.g. captured clients who don't have an issued policy yet; only self-capture via agent links get a policy number immediately). */
 function validatePolicyPayable(policy: Policy, purpose: string): { ok: boolean; message?: string } {
   if (!policy) return { ok: false, message: "Policy not found" };
-  if (!PAYABLE_STATUSES.includes(policy.status as any)) {
-    if (purpose === REINSTATEMENT_PURPOSE && policy.status === "lapsed") {
-      return { ok: true };
-    }
-    return { ok: false, message: `Policy status "${policy.status}" is not payable` };
-  }
+  const hasPolicyNumber = policy.policyNumber != null && String(policy.policyNumber).trim() !== "";
+  if (!hasPolicyNumber) return { ok: false, message: "Policy has no policy number yet" };
   return { ok: true };
 }
 
@@ -274,38 +280,51 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
   const orgId = orgs[0].id;
 
   const intent = await storage.getPaymentIntentByMerchantReference(orgId, reference);
-  if (!intent) {
-    structuredLog("warn", "Paynow result unknown reference", { reference });
-    return { ok: true }; // 200 so Paynow does not retry
-  }
-
-  await storage.createPaymentEvent({
-    paymentIntentId: intent.id,
-    organizationId: intent.organizationId,
-    type: "status_update_received",
-    payloadJson: { status, paynowReference: paynowRef },
-    actorType: "system",
-    actorId: null,
-  });
-
-  if (intent.status === "paid" || intent.status === "failed") {
-    return { ok: true }; // already processed
-  }
-
-  if (status === "paid" || status === "sent") {
-    await applyPaymentToPolicy(intent.id, "system", null);
-    return { ok: true };
-  }
-  if (status === "cancelled" || status === "failed" || status === "disputed") {
-    await storage.updatePaymentIntent(intent.id, { status: "failed" }, intent.organizationId);
+  if (intent) {
     await storage.createPaymentEvent({
       paymentIntentId: intent.id,
       organizationId: intent.organizationId,
-      type: "marked_failed",
-      payloadJson: postedFields,
+      type: "status_update_received",
+      payloadJson: { status, paynowReference: paynowRef },
       actorType: "system",
       actorId: null,
     });
+
+    if (intent.status === "paid" || intent.status === "failed") {
+      return { ok: true }; // already processed
+    }
+
+    if (status === "paid" || status === "sent") {
+      await applyPaymentToPolicy(intent.id, "system", null);
+      return { ok: true };
+    }
+    if (status === "cancelled" || status === "failed" || status === "disputed") {
+      await storage.updatePaymentIntent(intent.id, { status: "failed" }, intent.organizationId);
+      await storage.createPaymentEvent({
+        paymentIntentId: intent.id,
+        organizationId: intent.organizationId,
+        type: "marked_failed",
+        payloadJson: postedFields,
+        actorType: "system",
+        actorId: null,
+      });
+    }
+    return { ok: true };
+  }
+
+  // Try group payment intent
+  const groupIntent = await storage.getGroupPaymentIntentByMerchantReference(orgId, reference);
+  if (!groupIntent) {
+    structuredLog("warn", "Paynow result unknown reference", { reference });
+    return { ok: true }; // 200 so Paynow does not retry
+  }
+  if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) return { ok: true };
+  if (status === "paid" || status === "sent") {
+    await applyGroupPaymentToPolicies(groupIntent.id, orgId, "system", null);
+    return { ok: true };
+  }
+  if (status === "cancelled" || status === "failed" || status === "disputed") {
+    await storage.updateGroupPaymentIntent(groupIntent.id, { status: "failed" }, orgId);
   }
   return { ok: true };
 }
@@ -431,7 +450,11 @@ export async function applyPaymentToPolicy(
     await storage.updatePolicy(intent.policyId, { status: "active" }, orgId);
     await storage.createPolicyStatusHistory(intent.policyId, "reinstatement_pending", "active", "Reinstatement payment received", actorId ?? undefined);
   } else if (policy.status === "pending") {
-    await storage.updatePolicy(intent.policyId, { status: "active" }, orgId);
+    const today = new Date().toISOString().split("T")[0];
+    const update: { status: string; inceptionDate?: string; effectiveDate?: string } = { status: "active" };
+    update.inceptionDate = today;
+    if (!policy.effectiveDate) update.effectiveDate = today;
+    await storage.updatePolicy(intent.policyId, update, orgId);
     await storage.createPolicyStatusHistory(intent.policyId, "pending", "active", "First premium paid", actorId ?? undefined);
   }
 
@@ -450,5 +473,206 @@ export async function applyPaymentToPolicy(
     actorId,
   });
 
+  await storage.createNotificationLog(intent.organizationId, {
+    recipientType: "client",
+    recipientId: intent.clientId,
+    channel: "in_app",
+    subject: "Payment received",
+    body: `Payment of ${intent.currency} ${intent.amount} received for policy ${policy.policyNumber}. Receipt #${receiptNumber}.`,
+    status: "sent",
+  });
+
   return { ok: true, transactionId: transaction.id, receiptId: receipt.id };
+}
+
+/** Apply group PayNow payment: create transaction + receipt per allocation, update policies, mark group intent paid. Idempotent. */
+export async function applyGroupPaymentToPolicies(
+  groupIntentId: string,
+  orgId: string,
+  actorType: "client" | "admin" | "system",
+  actorId: string | null
+): Promise<{ ok: boolean; receiptCount?: number; error?: string }> {
+  const groupIntent = await storage.getGroupPaymentIntentById(groupIntentId, orgId);
+  if (!groupIntent) return { ok: false, error: "Group payment intent not found" };
+  if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) {
+    const allocations = await storage.getGroupPaymentAllocations(groupIntentId, orgId);
+    return { ok: true, receiptCount: allocations.length };
+  }
+
+  const allocations = await storage.getGroupPaymentAllocations(groupIntentId, orgId);
+  if (allocations.length === 0) return { ok: false, error: "No allocations" };
+
+  const today = new Date().toISOString().split("T")[0];
+  const refPrefix = groupIntent.merchantReference;
+  const notifiedClients = new Set<string>();
+
+  for (const alloc of allocations) {
+    const policy = await storage.getPolicy(alloc.policyId, orgId);
+    if (!policy) continue;
+    const amount = String(alloc.amount);
+    const currency = alloc.currency || groupIntent.currency || "USD";
+    await storage.createPaymentTransaction({
+      organizationId: orgId,
+      policyId: alloc.policyId,
+      clientId: policy.clientId!,
+      amount,
+      currency,
+      paymentMethod: "paynow",
+      status: "cleared",
+      reference: refPrefix,
+      paynowReference: groupIntent.paynowReference ?? undefined,
+      idempotencyKey: `grp-${groupIntentId}-${alloc.policyId}`,
+      receivedAt: new Date(),
+      postedDate: today,
+      valueDate: today,
+      notes: "Group PayNow",
+      recordedBy: actorId ?? undefined,
+    });
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(orgId);
+    await storage.createPaymentReceipt({
+      organizationId: orgId,
+      branchId: policy.branchId ?? undefined,
+      receiptNumber,
+      paymentIntentId: undefined as any,
+      policyId: alloc.policyId,
+      clientId: policy.clientId!,
+      amount,
+      currency,
+      paymentChannel: "paynow_ecocash",
+      issuedByUserId: actorId ?? undefined,
+      status: "issued",
+      metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference },
+    });
+    if (policy.status === "grace") {
+      await storage.updatePolicy(alloc.policyId, { status: "active", graceEndDate: null }, orgId);
+      await storage.createPolicyStatusHistory(alloc.policyId, "grace", "active", "Payment received (group PayNow)", actorId ?? undefined);
+    } else if (policy.status === "pending") {
+      await storage.updatePolicy(alloc.policyId, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, orgId);
+      await storage.createPolicyStatusHistory(alloc.policyId, "pending", "active", "First premium paid (group PayNow)", actorId ?? undefined);
+    }
+    if (!notifiedClients.has(policy.clientId!)) {
+      notifiedClients.add(policy.clientId!);
+      await storage.createNotificationLog(orgId, {
+        recipientType: "client",
+        recipientId: policy.clientId!,
+        channel: "in_app",
+        subject: "Group payment received",
+        body: `Payment of ${currency} ${amount} received for policy ${policy.policyNumber}. Receipt #${receiptNumber}.`,
+        status: "sent",
+      });
+    }
+  }
+
+  await storage.updateGroupPaymentIntent(groupIntentId, { status: GROUP_PAYMENT_STATUS_PAID }, orgId);
+  return { ok: true, receiptCount: allocations.length };
+}
+
+export interface InitiatePaynowForGroupInput {
+  groupIntentId: string;
+  organizationId: string;
+  method: string;
+  payerPhone?: string;
+  actorType: "client" | "admin" | "system";
+  actorId?: string | null;
+}
+
+/** Initiate PayNow for a group payment intent. */
+export async function initiatePaynowForGroup(input: InitiatePaynowForGroupInput): Promise<{
+  ok: boolean;
+  redirectUrl?: string;
+  pollUrl?: string;
+  error?: string;
+}> {
+  const config = getPaynowConfig();
+  if (!config.enabled) return { ok: false, error: "Paynow is not configured" };
+
+  const groupIntent = await storage.getGroupPaymentIntentById(input.groupIntentId, input.organizationId);
+  if (!groupIntent) return { ok: false, error: "Group payment intent not found" };
+  if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) return { ok: false, error: "Payment already completed" };
+  if (groupIntent.status === "failed" || groupIntent.status === "cancelled" || groupIntent.status === "expired") {
+    return { ok: false, error: `Group intent is ${groupIntent.status}` };
+  }
+
+  const returnUrl = config.returnUrl || "";
+  const resultUrl = config.resultUrl || "";
+  if (!returnUrl || !resultUrl) return { ok: false, error: "Paynow return/result URL not configured" };
+
+  const method = (input.method || "visa_mastercard").toLowerCase();
+  const isRemote = ["ecocash", "onemoney"].includes(method) && input.payerPhone;
+  const amount = String(groupIntent.totalAmount);
+
+  let params: Record<string, string>;
+  let url: string;
+  if (isRemote) {
+    params = buildRemoteParams(groupIntent.merchantReference, amount, returnUrl, resultUrl, method, input.payerPhone!);
+    url = PAYNOW_REMOTE_URL;
+  } else {
+    params = buildInitParams(groupIntent.merchantReference, amount, returnUrl, resultUrl);
+    url = PAYNOW_INIT_URL;
+  }
+
+  const body = toFormUrlEncoded(params);
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  } catch (err) {
+    structuredLog("error", "Paynow group initiate failed", { error: (err as Error).message });
+    return { ok: false, error: "Payment gateway unavailable" };
+  }
+
+  const text = await res.text();
+  const parsed = new URLSearchParams(text);
+  const status = parsed.get("status") ?? "";
+  const pollUrl = parsed.get("pollurl") ?? undefined;
+  const redirectUrl = parsed.get("browserurl") ?? parsed.get("redirecturl") ?? undefined;
+  const paynowRef = parsed.get("paynowreference") ?? undefined;
+
+  if (status.toLowerCase() !== "ok") {
+    const errMsg = parsed.get("error") ?? text.slice(0, 200);
+    await storage.updateGroupPaymentIntent(input.groupIntentId, { status: "failed" }, input.organizationId);
+    return { ok: false, error: errMsg || "Initiation failed" };
+  }
+
+  await storage.updateGroupPaymentIntent(input.groupIntentId, {
+    status: "pending_paynow",
+    paynowPollUrl: pollUrl ?? undefined,
+    paynowRedirectUrl: redirectUrl ?? undefined,
+    paynowReference: paynowRef ?? undefined,
+    methodSelected: method,
+  }, input.organizationId);
+
+  return { ok: true, redirectUrl: redirectUrl ?? undefined, pollUrl: pollUrl ?? undefined };
+}
+
+/** Poll group PayNow status; apply payments if paid. */
+export async function pollGroupPaynowStatus(groupIntentId: string, orgId: string): Promise<{ status: string; paid?: boolean; error?: string }> {
+  const groupIntent = await storage.getGroupPaymentIntentById(groupIntentId, orgId);
+  if (!groupIntent) return { status: "unknown", error: "Group intent not found" };
+  if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) return { status: "paid", paid: true };
+  if (groupIntent.status === "failed" || groupIntent.status === "cancelled" || groupIntent.status === "expired") {
+    return { status: groupIntent.status };
+  }
+  const pollUrl = groupIntent.paynowPollUrl;
+  if (!pollUrl) return { status: groupIntent.status, error: "No poll URL" };
+
+  try {
+    const res = await fetch(pollUrl, { method: "POST", body: "" });
+    const text = await res.text();
+    const parsed = new URLSearchParams(text);
+    const status = (parsed.get("status") ?? "").toLowerCase();
+    if (!verifyPaynowHash(Object.fromEntries(parsed))) {
+      return { status: groupIntent.status, error: "Invalid poll response hash" };
+    }
+    if (status === "paid" || status === "sent") {
+      await applyGroupPaymentToPolicies(groupIntentId, orgId, "system", null);
+      return { status: "paid", paid: true };
+    }
+    if (status === "cancelled" || status === "failed") {
+      await storage.updateGroupPaymentIntent(groupIntentId, { status: "failed" }, orgId);
+      return { status: "failed" };
+    }
+    return { status: groupIntent.status };
+  } catch (err) {
+    return { status: groupIntent.status, error: (err as Error).message };
+  }
 }

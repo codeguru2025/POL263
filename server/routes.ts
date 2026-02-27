@@ -10,9 +10,10 @@ import path from "path";
 import fs from "fs";
 import express from "express";
 import { registerPolicyDocumentRoute } from "./policy-document";
-import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy } from "./payment-service";
+import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
+import { runApplyCreditBalances } from "./credit-apply";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -718,6 +719,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = { ...policy };
     const updated = await storage.updatePolicy(policy.id, { status: toStatus }, user.organizationId);
     await storage.createPolicyStatusHistory(policy.id, policy.status, toStatus, reason, user.id);
+    await storage.createNotificationLog(user.organizationId, {
+      recipientType: "client",
+      recipientId: policy.clientId,
+      channel: "in_app",
+      subject: "Policy status updated",
+      body: `Policy ${policy.policyNumber} status has been updated to ${toStatus}.${reason ? ` Reason: ${reason}` : ""}`,
+      status: "sent",
+    });
     await auditLog(req, "TRANSITION_POLICY", "Policy", policy.id, before, updated);
     return res.json(updated);
   });
@@ -881,6 +890,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { generateReceiptPdf } = await import("./receipt-pdf");
     const pdfPath = await generateReceiptPdf(receipt.id);
     if (pdfPath) await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath }, receipt.organizationId);
+    if (policy.status === "pending") {
+      const todayDate = new Date().toISOString().split("T")[0];
+      const update: { status: string; inceptionDate?: string; effectiveDate?: string } = { status: "active" };
+      update.inceptionDate = todayDate;
+      if (!policy.effectiveDate) update.effectiveDate = todayDate;
+      await storage.updatePolicy(policyId, update, user.organizationId);
+      await storage.createPolicyStatusHistory(policyId, "pending", "active", "First premium paid (cash)", user.id);
+    } else if (policy.status === "grace") {
+      await storage.updatePolicy(policyId, { status: "active", graceEndDate: null }, user.organizationId);
+      await storage.createPolicyStatusHistory(policyId, "grace", "active", "Payment received", user.id);
+    }
     await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", receipt.id, null, receipt);
     return res.status(201).json({ transaction: tx, receipt });
   });
@@ -903,6 +923,267 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     await auditLog(req, "RECEIPT_REPRINT", "PaymentReceipt", receiptId, null, { receiptId });
     return res.json({ message: "Reprint logged" });
+  });
+
+  // ─── Month-end run (batch receipt from bank file) ─────────────
+  app.get("/api/month-end-run/template", requireAuth, requireTenantScope, requirePermission("read:finance"), (_req, res) => {
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=month-end-run-template.csv");
+    res.send("policy_number,amount,currency\nPOL001,25.00,USD\n");
+  });
+
+  const memoryUpload = multer({ storage: multer.memoryStorage() });
+  app.post("/api/month-end-run", requireAuth, requireTenantScope, requirePermission("write:finance"), memoryUpload.single("file"), async (req, res) => {
+    const user = req.user as any;
+    if (!req.file?.buffer) return res.status(400).json({ message: "No file uploaded" });
+    const runNumber = await storage.getNextMonthEndRunNumber(user.organizationId);
+    const run = await storage.createMonthEndRun({
+      organizationId: user.organizationId,
+      runNumber,
+      fileName: (req.file as any).originalname || "upload.csv",
+      totalRows: 0,
+      receiptedCount: 0,
+      creditNoteCount: 0,
+      status: "processing",
+      runBy: user.id,
+    });
+    const text = req.file.buffer.toString("utf-8");
+    const lines = text.split(/\r?\n/).filter((l) => l.trim());
+    const header = lines[0]?.toLowerCase() || "";
+    const policyCol = header.includes("policy_number") ? "policy_number" : header.split(",")[0]?.trim().toLowerCase() || "policy_number";
+    const amountCol = header.includes("amount") ? "amount" : "amount";
+    const currencyCol = header.includes("currency") ? "currency" : "currency";
+    const rows = lines.slice(1);
+    let receipted = 0;
+    let creditNotes = 0;
+    const today = new Date().toISOString().split("T")[0];
+    for (const line of rows) {
+      const parts = line.split(",").map((p) => p.trim());
+      if (parts.length < 2) continue;
+      const policyNumber = parts[0];
+      const amountStr = parts[1] || "0";
+      const currency = (parts[2] || "USD").toUpperCase();
+      const amount = parseFloat(amountStr);
+      if (!policyNumber || !Number.isFinite(amount) || amount < 0) continue;
+      const policy = await storage.getPolicyByNumber(policyNumber, user.organizationId);
+      if (!policy) continue;
+      const premium = parseFloat(String(policy.premiumAmount || 0));
+      if (amount >= premium) {
+        const tx = await storage.createPaymentTransaction({
+          organizationId: user.organizationId,
+          policyId: policy.id,
+          clientId: policy.clientId,
+          amount: String(premium),
+          currency: policy.currency || "USD",
+          paymentMethod: "bank",
+          status: "cleared",
+          reference: `MER-${runNumber}-${policyNumber}`,
+          receivedAt: new Date(),
+          postedDate: today,
+          valueDate: today,
+          recordedBy: user.id,
+        });
+        const receiptNum = await storage.getNextPaymentReceiptNumber(user.organizationId);
+        await storage.createPaymentReceipt({
+          organizationId: user.organizationId,
+          branchId: policy.branchId ?? undefined,
+          receiptNumber: receiptNum,
+          policyId: policy.id,
+          clientId: policy.clientId!,
+          amount: String(premium),
+          currency: policy.currency || "USD",
+          paymentChannel: "bank",
+          issuedByUserId: user.id,
+          status: "issued",
+          metadataJson: { monthEndRunId: run.id },
+        });
+        receipted++;
+        if (policy.status === "pending") {
+          await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, user.organizationId);
+          await storage.createPolicyStatusHistory(policy.id, "pending", "active", "First premium paid (month-end run)", user.id);
+        } else if (policy.status === "grace") {
+          await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
+          await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received", user.id);
+        }
+        if (amount > premium) {
+          await storage.addPolicyCreditBalance(user.organizationId, policy.id, (amount - premium).toFixed(2), currency);
+        }
+      } else {
+        await storage.addPolicyCreditBalance(user.organizationId, policy.id, amountStr, currency);
+        const cnNumber = await storage.getNextCreditNoteNumber(user.organizationId);
+        await storage.createCreditNote({
+          organizationId: user.organizationId,
+          policyId: policy.id,
+          clientId: policy.clientId!,
+          creditNoteNumber: cnNumber,
+          amount: amountStr,
+          currency,
+          reason: "Insufficient payment in month-end run; credited to policy balance.",
+          monthEndRunId: run.id,
+        });
+        creditNotes++;
+      }
+    }
+    await storage.getMonthEndRunById(run.id, user.organizationId).then(async () => {
+      const { getDbForOrg } = await import("./tenant-db");
+      const { monthEndRuns } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      const tdb = await getDbForOrg(user.organizationId);
+      await tdb.update(monthEndRuns).set({
+        totalRows: rows.length,
+        receiptedCount: receipted,
+        creditNoteCount: creditNotes,
+        status: "completed",
+      }).where(eq(monthEndRuns.id, run.id));
+    }).catch(() => {});
+    return res.status(201).json({ run: { ...run, receiptedCount: receipted, creditNoteCount: creditNotes, status: "completed" }, receiptedCount: receipted, creditNoteCount: creditNotes });
+  });
+
+  app.get("/api/credit-notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const policyId = typeof req.query.policyId === "string" ? req.query.policyId : undefined;
+    const clientId = typeof req.query.clientId === "string" ? req.query.clientId : undefined;
+    if (policyId) {
+      return res.json(await storage.getCreditNotesByPolicy(policyId, user.organizationId));
+    }
+    if (clientId) {
+      return res.json(await storage.getCreditNotesByClient(clientId, user.organizationId));
+    }
+    return res.status(400).json({ message: "policyId or clientId required" });
+  });
+
+  // ─── Group batch receipt (staff: receipt multiple group policies at once) ───
+  app.post("/api/group-receipt", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { groupId, policyIds, totalAmount, currency } = req.body;
+    if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
+      return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
+    }
+    const policies = await Promise.all(policyIds.map((id: string) => storage.getPolicy(id, user.organizationId)));
+    const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
+    if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
+    const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
+    const amountNum = parseFloat(String(totalAmount));
+    const today = new Date().toISOString().split("T")[0];
+    const results: { policyId: string; policyNumber: string; amount: string; receiptNumber: string }[] = [];
+    for (const policy of valid) {
+      const premium = parseFloat(String(policy.premiumAmount || 0));
+      const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
+      const tx = await storage.createPaymentTransaction({
+        organizationId: user.organizationId,
+        policyId: policy.id,
+        clientId: policy.clientId!,
+        amount,
+        currency: currency || policy.currency || "USD",
+        paymentMethod: "cash",
+        status: "cleared",
+        reference: `GRP-${groupId.slice(0, 8)}-${Date.now()}`,
+        receivedAt: new Date(),
+        postedDate: today,
+        valueDate: today,
+        notes: "Group batch receipt",
+        recordedBy: user.id,
+      });
+      const receiptNum = await storage.getNextPaymentReceiptNumber(user.organizationId);
+      await storage.createPaymentReceipt({
+        organizationId: user.organizationId,
+        branchId: policy.branchId ?? undefined,
+        receiptNumber: receiptNum,
+        policyId: policy.id,
+        clientId: policy.clientId!,
+        amount,
+        currency: currency || policy.currency || "USD",
+        paymentChannel: "cash",
+        issuedByUserId: user.id,
+        status: "issued",
+        metadataJson: { groupId },
+      });
+      if (policy.status === "pending") {
+        await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, user.organizationId);
+        await storage.createPolicyStatusHistory(policy.id, "pending", "active", "First premium paid (group receipt)", user.id);
+      } else if (policy.status === "grace") {
+        await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
+        await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received", user.id);
+      }
+      results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum });
+    }
+    return res.status(201).json({ receipted: results.length, results });
+  });
+
+  // ─── Group PayNow (create intent, initiate, poll) ───
+  app.post("/api/group-payment-intents", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { groupId, policyIds, totalAmount, currency } = req.body;
+    if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
+      return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
+    }
+    const policies = await Promise.all(policyIds.map((id: string) => storage.getPolicy(id, user.organizationId)));
+    const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
+    if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
+    const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
+    const amountNum = parseFloat(String(totalAmount));
+    const cur = currency || "USD";
+    const idempotencyKey = `grp-${groupId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const org = await storage.getOrganization(user.organizationId);
+    const orgCode = (org?.name ?? "ORG").replace(/\s+/g, "").slice(0, 8).toUpperCase();
+    const merchantReference = generateGroupMerchantReference(orgCode, groupId);
+    const existing = await storage.getGroupPaymentIntentByOrgAndIdempotencyKey(user.organizationId, idempotencyKey);
+    if (existing) return res.json(existing);
+    const intent = await storage.createGroupPaymentIntent({
+      organizationId: user.organizationId,
+      groupId,
+      totalAmount: amountNum.toFixed(2),
+      currency: cur,
+      status: "created",
+      idempotencyKey,
+      merchantReference,
+      initiatedByUserId: user.id,
+    });
+    const allocations = valid.map((p) => {
+      const premium = parseFloat(String(p.premiumAmount || 0));
+      const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
+      return { groupPaymentIntentId: intent.id, policyId: p.id, amount, currency: cur };
+    });
+    await storage.createGroupPaymentAllocations(user.organizationId, allocations);
+    return res.status(201).json(intent);
+  });
+
+  app.get("/api/group-payment-intents/:id", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const intent = await storage.getGroupPaymentIntentById(req.params.id, user.organizationId);
+    if (!intent) return res.status(404).json({ message: "Not found" });
+    return res.json(intent);
+  });
+
+  app.post("/api/group-payment-intents/:id/initiate", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { method, payerPhone } = req.body || {};
+    const result = await initiatePaynowForGroup({
+      groupIntentId: req.params.id,
+      organizationId: user.organizationId,
+      method: method || "visa_mastercard",
+      payerPhone,
+      actorType: "admin",
+      actorId: user.id,
+    });
+    if (!result.ok) return res.status(400).json({ message: result.error });
+    return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
+  });
+
+  app.post("/api/group-payment-intents/:id/poll", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const result = await pollGroupPaynowStatus(req.params.id, user.organizationId);
+    return res.json(result);
+  });
+
+  app.get("/api/paynow-config", requireAuth, requireTenantScope, requirePermission("read:finance"), (_req, res) => {
+    return res.json({ enabled: getPaynowConfig().enabled });
+  });
+
+  app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const result = await runApplyCreditBalances(user.organizationId);
+    return res.json(result);
   });
 
   // ─── Cashups ────────────────────────────────────────────────
@@ -1421,6 +1702,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  app.get("/api/groups/:id/policies", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    return res.json(await storage.getPoliciesByGroupId(user.organizationId, groupId));
+  });
+
   // ─── Chibikhulu Revenue Share ────────────────────────────
 
   app.get("/api/chibikhulu/receivables", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -1656,8 +1945,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fromDate = typeof q.fromDate === "string" && q.fromDate ? q.fromDate : undefined;
     const toDate = typeof q.toDate === "string" && q.toDate ? q.toDate : undefined;
     const userId = typeof q.userId === "string" && q.userId ? q.userId : undefined;
-    return { fromDate, toDate, userId };
+    const branchId = typeof q.branchId === "string" && q.branchId ? q.branchId : undefined;
+    const productId = typeof q.productId === "string" && q.productId ? q.productId : undefined;
+    const agentId = typeof q.agentId === "string" && q.agentId ? q.agentId : undefined;
+    const status = typeof q.status === "string" && q.status ? q.status : undefined;
+    const statuses = Array.isArray(q.statuses) ? q.statuses.filter((s: unknown) => typeof s === "string") : undefined;
+    return { fromDate, toDate, userId, branchId, productId, agentId, status, statuses };
   };
+
+  app.get("/api/reports/policy-details", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
+    const offset = parseInt(String(req.query.offset)) || 0;
+    const rows = await storage.getPolicyReportByOrg(user.organizationId, limit, offset, filters);
+    return res.json(rows);
+  });
+
+  app.get("/api/reports/finance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
+    const offset = parseInt(String(req.query.offset)) || 0;
+    const rows = await storage.getFinanceReportByOrg(user.organizationId, limit, offset, filters);
+    return res.json(rows);
+  });
 
   app.get("/api/reports/reinstatements", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -1721,6 +2033,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           rows = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
           rows = rows.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "policy-details": {
+          const reportRows = await storage.getPolicyReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = [
+            "Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Capture Date", "Inception Date", "Effective Date", "Cover Date", "Current Cycle Start", "Current Cycle End", "Grace End",
+            "Client First Name", "Client Last Name", "Title", "National ID", "Date of Birth", "Gender", "Marital Status", "Phone", "Email", "Address", "Preferred Comm", "Location",
+            "Product Name", "Product Code", "Branch", "Group", "Agent Email", "Agent Name",
+          ];
+          rows = reportRows.map((r: any) => [
+            r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.effectiveDate ?? "", r.waitingPeriodEndDate ?? "", r.currentCycleStart ?? "", r.currentCycleEnd ?? "", r.graceEndDate ?? "",
+            r.clientFirstName, r.clientLastName, r.clientTitle ?? "", r.clientNationalId ?? "", r.clientDateOfBirth ?? "", r.clientGender ?? "", r.clientMaritalStatus ?? "", r.clientPhone ?? "", r.clientEmail ?? "", r.clientAddress ?? "", r.clientPreferredCommMethod ?? "", r.clientLocation ?? "",
+            r.productName ?? "", r.productCode ?? "", r.branchName ?? "", r.groupName ?? "", r.agentEmail ?? "", r.agentDisplayName ?? "",
+          ]);
+          break;
+        }
+        case "finance": {
+          const reportRows = await storage.getFinanceReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = [
+            "Policy Number", "Status", "Currency", "Premium", "Capture Date", "Inception Date", "Cover Date", "Due Date", "Date Paid", "Receipt Count", "Months Paid", "Grace Days Used", "Grace Days Remaining", "Outstanding Premium", "Advance Premium",
+            "Client Name", "Product", "Product Code", "Branch", "Group", "Agent",
+          ];
+          rows = reportRows.map((r: any) => [
+            r.policyNumber, r.status, r.currency, r.premiumAmount, r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.waitingPeriodEndDate ?? "", r.dueDate ?? "", r.datePaid ?? "", r.receiptCount, r.monthsPaid, r.graceDaysUsed, r.graceDaysRemaining ?? "", r.outstandingPremium, r.advancePremium,
+            [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), r.productName ?? "", r.productCode ?? "", r.branchName ?? "", r.groupName ?? "", r.agentDisplayName ?? r.agentEmail ?? "",
+          ]);
           break;
         }
         case "claims": {

@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { openPaymentInSystemBrowser, redirectToAppIfMobileReturn, isNativeMobile } from "@/lib/mobile-payment";
 
 interface PaymentIntent {
   id: string;
@@ -53,12 +54,23 @@ export default function ClientPayments() {
     }
   }, [returnedFromPaynow, toast, qc]);
 
+  // On mobile: when return URL loads in system browser, redirect back into the app
+  useEffect(() => {
+    if (returnedFromPaynow) {
+      redirectToAppIfMobileReturn("client/payments?returned=1");
+    }
+  }, [returnedFromPaynow]);
+
   const [selectedPolicyId, setSelectedPolicyId] = useState(policyIdParam || "");
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("visa_mastercard");
   const [payerPhone, setPayerPhone] = useState("");
   const [currentIntent, setCurrentIntent] = useState<PaymentIntent | null>(null);
   const [polling, setPolling] = useState(false);
+  const [payForPhone, setPayForPhone] = useState("");
+  const [lookedUp, setLookedUp] = useState<{ clientName: string; policies: Policy[] } | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState("");
 
   const { data: me } = useQuery<{ client: { id: string } }>({ queryKey: ["/api/client-auth/me"], retry: false });
   const { data: policies } = useQuery<Policy[]>({ queryKey: ["/api/client-auth/policies"], enabled: !!me?.client });
@@ -102,7 +114,7 @@ export default function ClientPayments() {
         return;
       }
       if (data.redirectUrl) {
-        window.location.href = data.redirectUrl;
+        openPaymentInSystemBrowser(data.redirectUrl);
         return;
       }
       setPolling(true);
@@ -135,20 +147,66 @@ export default function ClientPayments() {
     if (d.status === "failed") setPolling(false);
   }, [paymentStatusData, qc, toast]);
 
-  const policy = policies?.find((p) => p.id === selectedPolicyId);
-  const canPay = paynowConfig?.enabled && policy && (["active", "grace", "reinstatement_pending", "pending"].includes(policy.status) || policy.status === "lapsed");
+  const policy = policies?.find((p) => p.id === selectedPolicyId) ?? lookedUp?.policies?.find((p) => p.id === selectedPolicyId);
+  // Enable payments for all statuses; only disable when there is no policy number (e.g. captured clients
+  // who don't have an issued policy yet — only clients who self-capture via agent links get a policy number immediately).
+  const hasPolicyNumber = policy?.policyNumber != null && String(policy.policyNumber).trim() !== "";
+  const canPay = paynowConfig?.enabled && policy && hasPolicyNumber;
 
-  const amountNum = typeof amount === "string" ? parseFloat(amount) : NaN;
-  const hasValidAmount = typeof amount === "string" && amount.trim() !== "" && Number.isFinite(amountNum) && amountNum > 0;
+  // Effective amount: user input or policy premium when a policy is selected
+  const amountStr = typeof amount === "string" ? amount.trim() : "";
+  const amountNum = amountStr !== "" ? parseFloat(amount) : (policy?.premiumAmount != null && policy.premiumAmount !== "" ? parseFloat(String(policy.premiumAmount)) : NaN);
+  const hasValidAmount = !!policy && Number.isFinite(amountNum) && amountNum >= 0;
 
   // Default amount to policy premium when policy selection changes
   useEffect(() => {
-    if (policy?.premiumAmount) setAmount(policy.premiumAmount);
-    else if (!selectedPolicyId) setAmount("");
+    if (policy?.premiumAmount != null && policy.premiumAmount !== "") {
+      setAmount(String(policy.premiumAmount));
+    } else if (!selectedPolicyId) {
+      setAmount("");
+    }
   }, [selectedPolicyId, policy?.id, policy?.premiumAmount]);
+
+  // Auto-select when only one policy is available so the form is ready immediately
+  useEffect(() => {
+    if (policies?.length === 1 && !selectedPolicyId) {
+      setSelectedPolicyId(policies[0].id);
+    }
+  }, [policies, selectedPolicyId]);
 
   // For Pay now: require phone when method is ecocash/onemoney
   const canInitiatePay = currentIntent && currentIntent.status !== "paid" && (method !== "ecocash" && method !== "onemoney" || (payerPhone && payerPhone.trim().length >= 9));
+
+  const handleLookupByPhone = async () => {
+    const phone = payForPhone.trim();
+    if (!phone || phone.length < 9) {
+      setLookupError("Enter a valid phone number");
+      return;
+    }
+    setLookupError("");
+    setLookupLoading(true);
+    try {
+      const base = getApiBase();
+      const res = await fetch(base + `/api/client-auth/lookup-by-phone?phone=${encodeURIComponent(phone)}`, { credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) {
+        setLookedUp(null);
+        setLookupError(data.message || "Lookup failed");
+        return;
+      }
+      setLookedUp({ clientName: data.clientName, policies: data.policies });
+      if (data.policies?.length === 1) setSelectedPolicyId(data.policies[0].id);
+      else if (data.policies?.length > 0) setSelectedPolicyId(data.policies[0].id);
+      else setSelectedPolicyId("");
+    } finally {
+      setLookupLoading(false);
+    }
+  };
+
+  const showPayForOther = lookedUp !== undefined;
+  const effectivePolicies = lookedUp ? (lookedUp?.policies ?? []) : (policies ?? []);
+  const isPayingForOther = lookedUp !== null && lookedUp !== undefined;
+  const displayPolicies = isPayingForOther ? (lookedUp?.policies ?? []) : (policies ?? []);
 
   return (
     <ClientLayout clientName="">
@@ -166,6 +224,9 @@ export default function ClientPayments() {
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Choose your policy, amount, and payment method. You will be redirected to Paynow or receive a USSD prompt.
+              {isNativeMobile() && (
+                <span className="block mt-2 text-primary font-medium">On this device you’ll complete payment in your browser, then return to the app.</span>
+              )}
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -181,13 +242,41 @@ export default function ClientPayments() {
               <Select value={selectedPolicyId} onValueChange={setSelectedPolicyId}>
                 <SelectTrigger><SelectValue placeholder="Select policy" /></SelectTrigger>
                 <SelectContent>
-                  {policies?.map((p) => (
+                  {displayPolicies?.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.policyNumber} — {p.status} — {p.currency} {p.premiumAmount}
+                      {isPayingForOther && lookedUp?.clientName ? ` (${lookedUp.clientName})` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {isPayingForOther && lookedUp?.clientName && (
+                <p className="text-xs text-muted-foreground mt-1">Paying for {lookedUp.clientName}. Look up expires in 5 minutes.</p>
+              )}
+            </div>
+
+            <div className="space-y-2 rounded-lg border p-3 bg-muted/40">
+              <Label>Pay for someone else</Label>
+              <p className="text-xs text-muted-foreground">Enter the client&apos;s phone number to find their policies and pay on their behalf.</p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="e.g. 0771234567"
+                  value={payForPhone}
+                  onChange={(e) => { setPayForPhone(e.target.value); setLookupError(""); }}
+                />
+                <Button type="button" variant="secondary" onClick={handleLookupByPhone} disabled={lookupLoading}>
+                  {lookupLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Look up"}
+                </Button>
+              </div>
+              {lookupError && <p className="text-sm text-destructive">{lookupError}</p>}
+              {lookedUp && lookedUp.clientName && (
+                <p className="text-sm text-green-700">Found: {lookedUp.clientName}. Select their policy above.</p>
+              )}
+              {lookedUp && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => { setLookedUp(null); setLookupError(""); setSelectedPolicyId(policies?.[0]?.id ?? ""); }}>
+                  Show my policies instead
+                </Button>
+              )}
             </div>
 
             <div>
