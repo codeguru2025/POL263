@@ -231,6 +231,16 @@ export default function StaffFinance() {
   const [reprintReceiptId, setReprintReceiptId] = useState("");
   const [pollingIntentId, setPollingIntentId] = useState<string | null>(null);
 
+  // Paynow flow state for receipt dialog
+  const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
+  const [paynowPolling, setPaynowPolling] = useState(false);
+  const [paynowInnbucksCode, setPaynowInnbucksCode] = useState("");
+  const [paynowInnbucksExpiry, setPaynowInnbucksExpiry] = useState("");
+  const [paynowNeedsOtp, setPaynowNeedsOtp] = useState(false);
+  const [paynowOtpRef, setPaynowOtpRef] = useState("");
+  const [paynowOtp, setPaynowOtp] = useState("");
+  const [paynowPhase, setPaynowPhase] = useState<"select" | "waiting">("select");
+
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
   const { data: cashups = [] } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
   const { data: commissionPlans = [] } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
@@ -380,6 +390,14 @@ export default function StaffFinance() {
     setPaymentMethod("cash");
     setPaymentReference("");
     setPaymentNotes("");
+    setPaynowIntentId(null);
+    setPaynowPolling(false);
+    setPaynowInnbucksCode("");
+    setPaynowInnbucksExpiry("");
+    setPaynowNeedsOtp(false);
+    setPaynowOtpRef("");
+    setPaynowOtp("");
+    setPaynowPhase("select");
   };
 
   const chibDailyDue = useMemo(() => {
@@ -447,6 +465,121 @@ export default function StaffFinance() {
     setShowPaymentDialog(true);
   };
 
+  const paynowMethods = ["ecocash", "onemoney", "innbucks", "omari", "visa_mastercard"];
+
+  const paynowInitiateMutation = useMutation({
+    mutationFn: async () => {
+      if (!receiptDialogPolicy) throw new Error("No policy selected");
+      const autoAmount = receiptDialogPolicy.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : paymentAmount;
+      // Step 1: Create intent
+      const intentRes = await apiRequest("POST", "/api/payment-intents", {
+        policyId: receiptDialogPolicy.id,
+        clientId: receiptDialogPolicy.clientId,
+        amount: autoAmount,
+        currency: paymentCurrency,
+        purpose: "premium",
+      });
+      const intent = await intentRes.json();
+      if (intent.message) throw new Error(intent.message);
+      setPaynowIntentId(intent.id);
+      // Step 2: Initiate Paynow
+      const initRes = await apiRequest("POST", `/api/payment-intents/${intent.id}/initiate`, {
+        method: paymentMethod,
+        payerPhone: ["ecocash", "onemoney", "innbucks", "omari"].includes(paymentMethod) ? paymentReference : undefined,
+        payerEmail: paymentMethod === "visa_mastercard" ? paymentReference : undefined,
+      });
+      return initRes.json() as Promise<{
+        redirectUrl?: string; pollUrl?: string; message?: string;
+        innbucksCode?: string; innbucksExpiry?: string;
+        omariOtpReference?: string; needsOtp?: boolean;
+      }>;
+    },
+    onSuccess: (data) => {
+      if (data.message) {
+        toast({ title: "Error", description: data.message, variant: "destructive" });
+        return;
+      }
+      setPaynowPhase("waiting");
+
+      if (paymentMethod === "innbucks" && data.innbucksCode) {
+        setPaynowInnbucksCode(data.innbucksCode);
+        setPaynowInnbucksExpiry(data.innbucksExpiry || "");
+        setPaynowPolling(true);
+        toast({ title: "InnBucks code ready", description: "Give the client the authorization code shown." });
+        return;
+      }
+      if (paymentMethod === "omari" && data.needsOtp) {
+        setPaynowNeedsOtp(true);
+        setPaynowOtpRef(data.omariOtpReference || "");
+        toast({ title: "OTP sent", description: "Ask the client for the OTP sent to their phone." });
+        return;
+      }
+      if (data.redirectUrl) {
+        window.open(data.redirectUrl, "_blank");
+        setPaynowPolling(true);
+        toast({ title: "Redirect opened", description: "Card payment page opened in new tab." });
+        return;
+      }
+      setPaynowPolling(true);
+      toast({ title: "USSD sent", description: "Client should receive a prompt on their phone to approve the payment." });
+    },
+    onError: (e: Error) => toast({ title: "Payment failed", description: e.message, variant: "destructive" }),
+  });
+
+  const paynowOtpMutation = useMutation({
+    mutationFn: async () => {
+      if (!paynowIntentId) throw new Error("No payment intent");
+      const res = await apiRequest("POST", `/api/payment-intents/${paynowIntentId}/otp`, { otp: paynowOtp });
+      return res.json() as Promise<{ paid?: boolean; message?: string }>;
+    },
+    onSuccess: (data) => {
+      if (data.message) {
+        toast({ title: "OTP error", description: data.message, variant: "destructive" });
+        return;
+      }
+      if (data.paid) {
+        queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/payment-intents"] });
+        setShowPaymentDialog(false);
+        resetPaymentForm();
+        toast({ title: "Payment successful", description: "Payment has been completed and receipt generated." });
+      } else {
+        setPaynowPolling(true);
+        setPaynowNeedsOtp(false);
+        toast({ title: "OTP accepted", description: "Payment is being processed..." });
+      }
+    },
+    onError: (e: Error) => toast({ title: "OTP failed", description: e.message, variant: "destructive" }),
+  });
+
+  // Poll Paynow payment status
+  const { data: paynowPollData } = useQuery({
+    queryKey: ["paynow-poll", paynowIntentId],
+    queryFn: async () => {
+      if (!paynowIntentId) return null;
+      const res = await apiRequest("POST", `/api/payment-intents/${paynowIntentId}/poll`, {});
+      return res.json() as Promise<{ status: string; paid?: boolean }>;
+    },
+    enabled: !!paynowIntentId && paynowPolling,
+    refetchInterval: 5000,
+  });
+
+  useEffect(() => {
+    if (!paynowPollData) return;
+    if (paynowPollData.paid || paynowPollData.status === "paid") {
+      setPaynowPolling(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-intents"] });
+      setShowPaymentDialog(false);
+      resetPaymentForm();
+      toast({ title: "Payment successful", description: "Paynow payment confirmed. Receipt generated." });
+    }
+    if (paynowPollData.status === "failed") {
+      setPaynowPolling(false);
+      toast({ title: "Payment failed", description: "The payment was declined or cancelled.", variant: "destructive" });
+    }
+  }, [paynowPollData]);
+
   const handleSubmitPayment = () => {
     if (!receiptDialogPolicy) {
       toast({ title: "Select a policy", description: "Search and select the policy you're receipting.", variant: "destructive" });
@@ -457,16 +590,26 @@ export default function StaffFinance() {
       toast({ title: "No premium", description: "Policy has no premium set.", variant: "destructive" });
       return;
     }
-    createPaymentMutation.mutate({
-      policyId: receiptDialogPolicy.id,
-      clientId: receiptDialogPolicy.clientId,
-      amount: autoAmount,
-      currency: paymentCurrency,
-      paymentMethod: paymentMethod,
-      status: "cleared",
-      reference: paymentReference || undefined,
-      notes: paymentNotes || undefined,
-    });
+
+    if (paymentMethod === "cash") {
+      createPaymentMutation.mutate({
+        policyId: receiptDialogPolicy.id,
+        clientId: receiptDialogPolicy.clientId,
+        amount: autoAmount,
+        currency: paymentCurrency,
+        paymentMethod: paymentMethod,
+        status: "cleared",
+        reference: paymentReference || undefined,
+        notes: paymentNotes || undefined,
+      });
+    } else {
+      if (!paymentReference || paymentReference.trim().length < 5) {
+        const label = paymentMethod === "visa_mastercard" ? "email address" : "mobile number";
+        toast({ title: `Enter ${label}`, description: `Required for ${paymentMethod === "visa_mastercard" ? "card" : "mobile"} payment.`, variant: "destructive" });
+        return;
+      }
+      paynowInitiateMutation.mutate();
+    }
   };
 
   const getClient = (clientId: string) => clientMap[clientId];
@@ -1214,88 +1357,127 @@ export default function StaffFinance() {
               </Select>
             </div>
 
-            {(paymentMethod === "ecocash" || paymentMethod === "onemoney") && (
-              <div>
-                <Label>Payer Mobile Number</Label>
-                <Input
-                  placeholder="e.g. 0771234567"
-                  value={paymentReference}
-                  onChange={(e) => setPaymentReference(e.target.value)}
-                  data-testid="input-payment-reference"
-                />
-                <p className="text-xs text-muted-foreground mt-1">The mobile number used for the {paymentMethod === "ecocash" ? "EcoCash" : "OneMoney"} payment.</p>
-              </div>
-            )}
-            {paymentMethod === "innbucks" && (
-              <div>
-                <Label>InnBucks Authorization Code</Label>
-                <Input
-                  placeholder="e.g. 123456"
-                  value={paymentReference}
-                  onChange={(e) => setPaymentReference(e.target.value)}
-                  data-testid="input-payment-reference"
-                />
-                <p className="text-xs text-muted-foreground mt-1">The authorization code used for the InnBucks payment.</p>
-              </div>
-            )}
-            {paymentMethod === "omari" && (
-              <div>
-                <Label>O'Mari Transaction Reference</Label>
-                <Input
-                  placeholder="Transaction reference..."
-                  value={paymentReference}
-                  onChange={(e) => setPaymentReference(e.target.value)}
-                  data-testid="input-payment-reference"
-                />
-                <p className="text-xs text-muted-foreground mt-1">The reference from the O'Mari payment.</p>
-              </div>
-            )}
-            {paymentMethod === "visa_mastercard" && (
-              <div>
-                <Label>Card Transaction Reference</Label>
-                <Input
-                  placeholder="e.g. TXN-123456"
-                  value={paymentReference}
-                  onChange={(e) => setPaymentReference(e.target.value)}
-                  data-testid="input-payment-reference"
-                />
-                <p className="text-xs text-muted-foreground mt-1">The transaction reference from the card payment.</p>
-              </div>
-            )}
-            {paymentMethod === "cash" && (
-              <div>
-                <Label>Reference (optional)</Label>
-                <Input
-                  placeholder="Receipt number, etc."
-                  value={paymentReference}
-                  onChange={(e) => setPaymentReference(e.target.value)}
-                  data-testid="input-payment-reference"
-                />
-              </div>
+            {paynowPhase === "select" && (
+              <>
+                {(paymentMethod === "ecocash" || paymentMethod === "onemoney") && (
+                  <div>
+                    <Label>Client's Mobile Number</Label>
+                    <Input placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <p className="text-xs text-muted-foreground mt-1">A USSD prompt will be sent to this number. The client enters their PIN to approve.</p>
+                  </div>
+                )}
+                {paymentMethod === "innbucks" && (
+                  <div>
+                    <Label>Client's Mobile Number</Label>
+                    <Input placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <p className="text-xs text-muted-foreground mt-1">An authorization code will be generated. The client enters it in their InnBucks app.</p>
+                  </div>
+                )}
+                {paymentMethod === "omari" && (
+                  <div>
+                    <Label>Client's Mobile Number</Label>
+                    <Input placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <p className="text-xs text-muted-foreground mt-1">An OTP will be sent via SMS. You will need to enter the OTP the client receives.</p>
+                  </div>
+                )}
+                {paymentMethod === "visa_mastercard" && (
+                  <div>
+                    <Label>Client's Email Address</Label>
+                    <Input type="email" placeholder="client@example.com" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <p className="text-xs text-muted-foreground mt-1">A secure payment page will open where the client enters card details.</p>
+                  </div>
+                )}
+                {paymentMethod === "cash" && (
+                  <div>
+                    <Label>Reference (optional)</Label>
+                    <Input placeholder="Receipt number, etc." value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                  </div>
+                )}
+
+                <div>
+                  <Label>Notes (optional)</Label>
+                  <Input placeholder="Additional notes..." value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} data-testid="input-payment-notes" />
+                </div>
+              </>
             )}
 
-            <div>
-              <Label>Notes (optional)</Label>
-              <Input
-                placeholder="Additional notes..."
-                value={paymentNotes}
-                onChange={(e) => setPaymentNotes(e.target.value)}
-                data-testid="input-payment-notes"
-              />
-            </div>
+            {paynowPhase === "waiting" && (
+              <>
+                {paynowInnbucksCode && (
+                  <div className="p-4 rounded-lg border-2 border-blue-300 bg-blue-50 space-y-3">
+                    <p className="font-semibold text-blue-900">InnBucks Authorization Code</p>
+                    <p className="text-3xl font-mono font-bold text-center tracking-widest text-blue-800">{paynowInnbucksCode}</p>
+                    {paynowInnbucksExpiry && <p className="text-xs text-blue-700 text-center">Expires: {paynowInnbucksExpiry}</p>}
+                    <div className="text-sm text-blue-800">
+                      <p className="font-medium">Give this code to the client:</p>
+                      <ol className="list-decimal list-inside space-y-1 mt-1">
+                        <li>Open the <strong>InnBucks</strong> app</li>
+                        <li>Go to <strong>Payments</strong></li>
+                        <li>Enter the code above</li>
+                        <li>Confirm the payment</li>
+                      </ol>
+                    </div>
+                    {paynowPolling && (
+                      <div className="flex items-center justify-center gap-2 text-sm text-blue-700">
+                        <Loader2 className="h-4 w-4 animate-spin" /> Waiting for payment confirmation...
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {paynowNeedsOtp && (
+                  <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 space-y-3">
+                    <p className="font-semibold text-amber-900">Enter O'Mari OTP</p>
+                    <p className="text-sm text-amber-800">Ask the client for the OTP sent to their phone via SMS.</p>
+                    {paynowOtpRef && <p className="text-xs text-amber-700">Reference: {paynowOtpRef}</p>}
+                    <Input
+                      placeholder="Enter OTP"
+                      value={paynowOtp}
+                      onChange={(e) => setPaynowOtp(e.target.value)}
+                      maxLength={10}
+                      className="text-center text-lg font-mono tracking-widest"
+                    />
+                    <Button
+                      className="w-full"
+                      disabled={!paynowOtp || paynowOtp.trim().length < 4 || paynowOtpMutation.isPending}
+                      onClick={() => paynowOtpMutation.mutate()}
+                    >
+                      {paynowOtpMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                      Verify OTP
+                    </Button>
+                  </div>
+                )}
+
+                {!paynowInnbucksCode && !paynowNeedsOtp && paynowPolling && (
+                  <div className="p-4 rounded-lg border-2 border-green-300 bg-green-50 space-y-3 text-center">
+                    <Loader2 className="h-8 w-8 animate-spin mx-auto text-green-700" />
+                    <p className="font-semibold text-green-900">
+                      {paymentMethod === "visa_mastercard" ? "Waiting for card payment..." : "Waiting for client to approve on their phone..."}
+                    </p>
+                    <p className="text-sm text-green-800">
+                      {paymentMethod === "visa_mastercard"
+                        ? "The client should complete payment in the card payment page that was opened."
+                        : `A USSD prompt has been sent. The client must enter their ${paymentMethod === "ecocash" ? "EcoCash" : "OneMoney"} PIN to approve.`}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <DialogFooter className="mt-2">
-            <Button variant="outline" onClick={() => setShowPaymentDialog(false)}>Cancel</Button>
-            <Button
-              onClick={handleSubmitPayment}
-              disabled={!receiptDialogPolicy || (!receiptDialogPolicy?.premiumAmount && !paymentAmount) || createPaymentMutation.isPending}
-              data-testid="button-submit-payment"
-            >
-              {createPaymentMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              <Receipt className="h-4 w-4 mr-2" />
-              Record Payment & Generate Receipt
-            </Button>
+            <Button variant="outline" onClick={() => { setShowPaymentDialog(false); resetPaymentForm(); }}>Cancel</Button>
+            {paynowPhase === "select" && (
+              <Button
+                onClick={handleSubmitPayment}
+                disabled={!receiptDialogPolicy || (!receiptDialogPolicy?.premiumAmount && !paymentAmount) || createPaymentMutation.isPending || paynowInitiateMutation.isPending}
+                data-testid="button-submit-payment"
+              >
+                {(createPaymentMutation.isPending || paynowInitiateMutation.isPending) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                <Receipt className="h-4 w-4 mr-2" />
+                {paymentMethod === "cash" ? "Record Payment & Generate Receipt" : "Send Payment Request"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

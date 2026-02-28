@@ -1268,6 +1268,79 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(result);
   });
 
+  // Staff-side Paynow: create intent, initiate, submit OTP
+  app.post("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { policyId, clientId, amount, currency, purpose } = req.body;
+    if (!policyId || !clientId || !amount) return res.status(400).json({ message: "policyId, clientId, and amount are required" });
+    try {
+      const idempotencyKey = `staff-${user.id}-${policyId}-${Date.now()}`;
+      const result = await createPaymentIntent({
+        organizationId: user.organizationId,
+        clientId,
+        policyId,
+        amount: String(amount),
+        currency: currency || "USD",
+        purpose: purpose || "premium",
+        idempotencyKey,
+      });
+      if (result.error) return res.status(400).json({ message: result.error });
+      return res.status(201).json(result.intent);
+    } catch (err) {
+      structuredLog("error", "Staff create payment intent failed", { error: (err as Error).message });
+      return res.status(500).json({ message: "Failed to create payment intent" });
+    }
+  });
+
+  app.post("/api/payment-intents/:id/initiate", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const intent = await storage.getPaymentIntentById(id, user.organizationId);
+    if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const { method, payerPhone, payerEmail } = req.body;
+    try {
+      const result = await initiatePaynowPayment({
+        intentId: intent.id,
+        organizationId: user.organizationId,
+        method: method || "visa_mastercard",
+        payerPhone,
+        payerEmail,
+        actorType: "admin",
+        actorId: user.id,
+      });
+      if (!result.ok) return res.status(400).json({ message: result.error });
+      return res.json({
+        redirectUrl: result.redirectUrl,
+        pollUrl: result.pollUrl,
+        innbucksCode: result.innbucksCode,
+        innbucksExpiry: result.innbucksExpiry,
+        omariOtpReference: result.omariOtpReference,
+        needsOtp: !!result.omariOtpUrl,
+      });
+    } catch (err) {
+      structuredLog("error", "Staff initiate Paynow failed", { error: (err as Error).message });
+      return res.status(500).json({ message: "Failed to initiate payment" });
+    }
+  });
+
+  app.post("/api/payment-intents/:id/otp", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const intent = await storage.getPaymentIntentById(id, user.organizationId);
+    if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const { otp } = req.body;
+    if (!otp || typeof otp !== "string" || otp.trim().length < 4) return res.status(400).json({ message: "Enter a valid OTP" });
+    try {
+      const { submitOmariOtp } = await import("./payment-service");
+      const result = await submitOmariOtp(id, user.organizationId, otp.trim(), "admin", user.id);
+      if (!result.ok) return res.status(400).json({ message: result.error });
+      return res.json({ paid: result.paid });
+    } catch (err) {
+      structuredLog("error", "Staff O'Mari OTP submit failed", { error: (err as Error).message });
+      return res.status(500).json({ message: "OTP verification failed" });
+    }
+  });
+
   app.get("/api/receipts/:id/download", requireAuth, async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
