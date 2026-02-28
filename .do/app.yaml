@@ -43,22 +43,22 @@ envs:
     value: SET_IN_DASHBOARD
     scope: RUN_AND_BUILD_TIME
   - key: APP_BASE_URL
-    value: ${APP_URL}
+    value: https://pol263-hl5ef.ondigitalocean.app
     scope: RUN_AND_BUILD_TIME
   - key: API_BASE_URL
-    value: ${APP_URL}
+    value: https://pol263-hl5ef.ondigitalocean.app
     scope: RUN_AND_BUILD_TIME
   - key: VITE_APP_PUBLIC_URL
-    value: ${APP_URL}
+    value: https://pol263-hl5ef.ondigitalocean.app
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_RETURN_URL
-    value: ${APP_URL}/client/payments/return
+    value: https://pol263-hl5ef.ondigitalocean.app/client/payments/return
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_RESULT_URL
-    value: ${APP_URL}/api/payments/paynow/result
+    value: https://pol263-hl5ef.ondigitalocean.app/api/payments/paynow/result
     scope: RUN_AND_BUILD_TIME
   - key: GOOGLE_CALLBACK_URL
-    value: ${APP_URL}/api/auth/google/callback
+    value: https://pol263-hl5ef.ondigitalocean.app/api/auth/google/callback
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_INTEGRATION_ID
     value: "22462"
