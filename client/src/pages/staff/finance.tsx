@@ -1206,23 +1206,73 @@ export default function StaffFinance() {
                 <SelectContent>
                   <SelectItem value="cash">Cash</SelectItem>
                   <SelectItem value="ecocash">EcoCash</SelectItem>
-                  <SelectItem value="innbucks">InnBucks</SelectItem>
                   <SelectItem value="onemoney">OneMoney</SelectItem>
+                  <SelectItem value="innbucks">InnBucks</SelectItem>
                   <SelectItem value="omari">O'Mari</SelectItem>
                   <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            <div>
-              <Label>Reference (optional)</Label>
-              <Input
-                placeholder="Transaction reference, receipt number, etc."
-                value={paymentReference}
-                onChange={(e) => setPaymentReference(e.target.value)}
-                data-testid="input-payment-reference"
-              />
-            </div>
+            {(paymentMethod === "ecocash" || paymentMethod === "onemoney") && (
+              <div>
+                <Label>Payer Mobile Number</Label>
+                <Input
+                  placeholder="e.g. 0771234567"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  data-testid="input-payment-reference"
+                />
+                <p className="text-xs text-muted-foreground mt-1">The mobile number used for the {paymentMethod === "ecocash" ? "EcoCash" : "OneMoney"} payment.</p>
+              </div>
+            )}
+            {paymentMethod === "innbucks" && (
+              <div>
+                <Label>InnBucks Authorization Code</Label>
+                <Input
+                  placeholder="e.g. 123456"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  data-testid="input-payment-reference"
+                />
+                <p className="text-xs text-muted-foreground mt-1">The authorization code used for the InnBucks payment.</p>
+              </div>
+            )}
+            {paymentMethod === "omari" && (
+              <div>
+                <Label>O'Mari Transaction Reference</Label>
+                <Input
+                  placeholder="Transaction reference..."
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  data-testid="input-payment-reference"
+                />
+                <p className="text-xs text-muted-foreground mt-1">The reference from the O'Mari payment.</p>
+              </div>
+            )}
+            {paymentMethod === "visa_mastercard" && (
+              <div>
+                <Label>Card Transaction Reference</Label>
+                <Input
+                  placeholder="e.g. TXN-123456"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  data-testid="input-payment-reference"
+                />
+                <p className="text-xs text-muted-foreground mt-1">The transaction reference from the card payment.</p>
+              </div>
+            )}
+            {paymentMethod === "cash" && (
+              <div>
+                <Label>Reference (optional)</Label>
+                <Input
+                  placeholder="Receipt number, etc."
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  data-testid="input-payment-reference"
+                />
+              </div>
+            )}
 
             <div>
               <Label>Notes (optional)</Label>

@@ -950,21 +950,69 @@ export default function StaffPolicies() {
                   <SelectContent>
                     <SelectItem value="cash">Cash</SelectItem>
                     <SelectItem value="ecocash">EcoCash</SelectItem>
-                    <SelectItem value="innbucks">InnBucks</SelectItem>
                     <SelectItem value="onemoney">OneMoney</SelectItem>
+                    <SelectItem value="innbucks">InnBucks</SelectItem>
                     <SelectItem value="omari">O'Mari</SelectItem>
                     <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label className="text-xs">Reference (optional)</Label>
-                <Input
-                  placeholder="Transaction reference..."
-                  value={inPolicyReceiptRef}
-                  onChange={(e) => setInPolicyReceiptRef(e.target.value)}
-                />
-              </div>
+
+              {(inPolicyReceiptMethod === "ecocash" || inPolicyReceiptMethod === "onemoney") && (
+                <div>
+                  <Label className="text-xs">Payer Mobile Number</Label>
+                  <Input
+                    placeholder="e.g. 0771234567"
+                    value={inPolicyReceiptRef}
+                    onChange={(e) => setInPolicyReceiptRef(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">The mobile number used for the {inPolicyReceiptMethod === "ecocash" ? "EcoCash" : "OneMoney"} payment.</p>
+                </div>
+              )}
+              {inPolicyReceiptMethod === "innbucks" && (
+                <div>
+                  <Label className="text-xs">InnBucks Authorization Code</Label>
+                  <Input
+                    placeholder="e.g. 123456"
+                    value={inPolicyReceiptRef}
+                    onChange={(e) => setInPolicyReceiptRef(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">The authorization code used for the InnBucks payment.</p>
+                </div>
+              )}
+              {inPolicyReceiptMethod === "omari" && (
+                <div>
+                  <Label className="text-xs">O'Mari Transaction Reference</Label>
+                  <Input
+                    placeholder="Transaction reference..."
+                    value={inPolicyReceiptRef}
+                    onChange={(e) => setInPolicyReceiptRef(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">The reference from the O'Mari payment.</p>
+                </div>
+              )}
+              {inPolicyReceiptMethod === "visa_mastercard" && (
+                <div>
+                  <Label className="text-xs">Card Transaction Reference</Label>
+                  <Input
+                    placeholder="e.g. TXN-123456"
+                    value={inPolicyReceiptRef}
+                    onChange={(e) => setInPolicyReceiptRef(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">The transaction reference from the card payment.</p>
+                </div>
+              )}
+              {inPolicyReceiptMethod === "cash" && (
+                <div>
+                  <Label className="text-xs">Reference (optional)</Label>
+                  <Input
+                    placeholder="Receipt number, etc."
+                    value={inPolicyReceiptRef}
+                    onChange={(e) => setInPolicyReceiptRef(e.target.value)}
+                  />
+                </div>
+              )}
+
               <div>
                 <Label className="text-xs">Notes (optional)</Label>
                 <Input
