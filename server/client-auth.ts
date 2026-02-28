@@ -685,4 +685,123 @@ export function setupClientAuth(app: Express) {
     await storage.removeClientDeviceToken(clientOrgId, token.trim());
     return res.status(204).send();
   });
+
+  // ─── Dependents (client self-service) ─────────────────────
+  app.get("/api/client-auth/dependents", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const deps = await storage.getDependentsByClient(clientId, clientOrgId);
+    return res.json(deps);
+  });
+
+  app.post("/api/client-auth/dependents", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { firstName, lastName, relationship, dateOfBirth, nationalId, gender } = req.body || {};
+    if (!firstName || !lastName || !relationship) {
+      return res.status(400).json({ message: "First name, last name, and relationship are required" });
+    }
+    try {
+      const dep = await storage.createDependent({
+        organizationId: clientOrgId,
+        clientId,
+        firstName: String(firstName).trim(),
+        lastName: String(lastName).trim(),
+        relationship: String(relationship).trim(),
+        dateOfBirth: dateOfBirth || null,
+        nationalId: nationalId ? String(nationalId).trim() : null,
+        gender: gender || null,
+      });
+      return res.status(201).json(dep);
+    } catch (err) {
+      structuredLog("error", "Client add dependent error", { error: (err as Error).message });
+      return res.status(500).json({ message: "Failed to add dependent" });
+    }
+  });
+
+  app.delete("/api/client-auth/dependents/:id", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const deps = await storage.getDependentsByClient(clientId, clientOrgId);
+    const dep = deps.find((d) => d.id === req.params.id);
+    if (!dep) return res.status(404).json({ message: "Dependent not found" });
+    await storage.deleteDependent(dep.id, clientOrgId);
+    return res.json({ message: "Dependent removed" });
+  });
+
+  // ─── Beneficiary per policy (client self-service) ──────────
+  app.get("/api/client-auth/policies/:id/beneficiary", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
+    if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
+    if (!policy.beneficiaryFirstName) return res.json(null);
+    return res.json({
+      firstName: policy.beneficiaryFirstName,
+      lastName: policy.beneficiaryLastName,
+      relationship: policy.beneficiaryRelationship,
+      nationalId: policy.beneficiaryNationalId,
+      phone: policy.beneficiaryPhone,
+      dependentId: policy.beneficiaryDependentId,
+    });
+  });
+
+  app.put("/api/client-auth/policies/:id/beneficiary", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
+    if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
+
+    const { dependentId, firstName, lastName, relationship, nationalId, phone } = req.body || {};
+
+    if (dependentId) {
+      const deps = await storage.getDependentsByClient(clientId, clientOrgId);
+      const dep = deps.find((d) => d.id === dependentId);
+      if (!dep) return res.status(400).json({ message: "Dependent not found" });
+      await storage.updatePolicy(policy.id, {
+        beneficiaryFirstName: dep.firstName,
+        beneficiaryLastName: dep.lastName,
+        beneficiaryRelationship: dep.relationship,
+        beneficiaryNationalId: dep.nationalId || null,
+        beneficiaryPhone: null,
+        beneficiaryDependentId: dep.id,
+      }, clientOrgId);
+      return res.json({ message: "Dependent appointed as beneficiary" });
+    }
+
+    if (!firstName || !lastName) {
+      return res.status(400).json({ message: "Beneficiary first name and last name are required" });
+    }
+    await storage.updatePolicy(policy.id, {
+      beneficiaryFirstName: String(firstName).trim(),
+      beneficiaryLastName: String(lastName).trim(),
+      beneficiaryRelationship: relationship ? String(relationship).trim() : null,
+      beneficiaryNationalId: nationalId ? String(nationalId).trim() : null,
+      beneficiaryPhone: phone ? String(phone).trim() : null,
+      beneficiaryDependentId: null,
+    }, clientOrgId);
+    return res.json({ message: "Beneficiary set" });
+  });
+
+  app.delete("/api/client-auth/policies/:id/beneficiary", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
+    if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
+    await storage.updatePolicy(policy.id, {
+      beneficiaryFirstName: null,
+      beneficiaryLastName: null,
+      beneficiaryRelationship: null,
+      beneficiaryNationalId: null,
+      beneficiaryPhone: null,
+      beneficiaryDependentId: null,
+    }, clientOrgId);
+    return res.json({ message: "Beneficiary removed" });
+  });
 }

@@ -190,6 +190,7 @@ export const clients = pgTable(
     isEnrolled: boolean("is_enrolled").default(false).notNull(),
     failedLoginAttempts: integer("failed_login_attempts").default(0).notNull(),
     lockedUntil: timestamp("locked_until"),
+    agentId: uuid("agent_id").references(() => users.id),
     isActive: boolean("is_active").default(true).notNull(),
     /** Notification sound preference: default | silent | high */
     notificationTone: text("notification_tone").default("default"),
@@ -200,6 +201,7 @@ export const clients = pgTable(
   (t) => [
     index("clients_org_idx").on(t.organizationId),
     index("clients_branch_idx").on(t.branchId),
+    index("clients_agent_idx").on(t.agentId),
   ]
 );
 
@@ -458,6 +460,12 @@ export const policies = pgTable(
     graceEndDate: date("grace_end_date"),
     cancelledAt: timestamp("cancelled_at"),
     cancelReason: text("cancel_reason"),
+    beneficiaryFirstName: text("beneficiary_first_name"),
+    beneficiaryLastName: text("beneficiary_last_name"),
+    beneficiaryRelationship: text("beneficiary_relationship"),
+    beneficiaryNationalId: text("beneficiary_national_id"),
+    beneficiaryPhone: text("beneficiary_phone"),
+    beneficiaryDependentId: uuid("beneficiary_dependent_id").references(() => dependents.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [

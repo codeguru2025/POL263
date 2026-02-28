@@ -404,27 +404,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/clients", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
     const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const userRolesForCreate = await storage.getUserRoles(user.id, user.organizationId);
+    const creatorIsAgent = userRolesForCreate.some((r: { name?: string }) => r?.name === "agent");
     const parsed = insertClientSchema.parse({
       ...req.body,
       organizationId: user.organizationId,
       branchId: req.body.branchId || user.branchId,
       activationCode,
+      agentId: creatorIsAgent ? user.id : undefined,
     });
     const client = await storage.createClient(parsed);
     await auditLog(req, "CREATE_CLIENT", "Client", client.id, null, client);
-    // Add client to sales pipeline as a lead
+    const roleNames = userRolesForCreate.map((r: any) => r?.name);
+    console.log(`[POST /api/clients] userId=${user.id} creatorIsAgent=${creatorIsAgent} roles=${JSON.stringify(roleNames)} clientId=${client.id}`);
     const lead = await storage.createLead({
       organizationId: user.organizationId,
       branchId: user.branchId || undefined,
-      agentId: undefined,
+      agentId: creatorIsAgent ? user.id : undefined,
       clientId: client.id,
       firstName: client.firstName,
       lastName: client.lastName,
       phone: client.phone || undefined,
       email: client.email || undefined,
-      source: "walk_in",
+      source: creatorIsAgent ? "agent_capture" : "walk_in",
       stage: "lead",
     });
+    console.log(`[POST /api/clients] lead created id=${lead.id} agentId=${lead.agentId} clientId=${lead.clientId}`);
     await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
     return res.status(201).json(client);
   });
@@ -655,8 +660,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const members = Array.isArray(req.body.members) ? req.body.members : [];
     const addOnIds = Array.isArray(req.body.addOnIds) ? req.body.addOnIds : [];
 
-    // Premium is always computed from product version and add-ons; never use client-sent premiumAmount
-    let premiumAmount = req.body.premiumAmount;
+    let premiumAmount = "0";
     if (req.body.productVersionId) {
       premiumAmount = await computePolicyPremium(
         user.organizationId,
@@ -667,13 +671,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       );
     }
 
+    const body = { ...req.body };
+    delete body.premiumAmount;
+
+    const beneficiary = req.body.beneficiary || null;
     const parsed = insertPolicySchema.parse({
-      ...req.body,
+      ...body,
       organizationId: user.organizationId,
       policyNumber,
       status: "draft",
       agentId,
-      premiumAmount: premiumAmount ?? "0",
+      premiumAmount,
+      beneficiaryFirstName: beneficiary?.firstName || null,
+      beneficiaryLastName: beneficiary?.lastName || null,
+      beneficiaryRelationship: beneficiary?.relationship || null,
+      beneficiaryNationalId: beneficiary?.nationalId || null,
+      beneficiaryPhone: beneficiary?.phone || null,
+      beneficiaryDependentId: beneficiary?.dependentId || null,
     });
     const policy = await storage.createPolicy(parsed);
     await storage.createPolicyStatusHistory(policy.id, null, "draft", "Policy created", user.id);
@@ -689,7 +703,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           policyId: policy.id,
           clientId: m.clientId || null,
           dependentId: m.dependentId || null,
-          role: m.role || "beneficiary",
+          role: m.role || "dependent",
         });
       }
     }
@@ -1590,9 +1604,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/public/register-policy", express.json(), async (req, res) => {
-    const { referralCode, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, premiumAmount, currency, paymentSchedule } = req.body;
-    if (!referralCode || !firstName || !lastName || !productVersionId) {
-      return res.status(400).json({ error: "referralCode, firstName, lastName, and productVersionId are required" });
+    const { referralCode, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, premiumAmount, currency, paymentSchedule, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
+    const missingFields: string[] = [];
+    if (!referralCode) missingFields.push("referralCode");
+    if (!firstName) missingFields.push("firstName");
+    if (!lastName) missingFields.push("lastName");
+    if (!productVersionId) missingFields.push("productVersionId");
+    if (missingFields.length > 0) {
+      return res.status(400).json({ error: `Missing required fields: ${missingFields.join(", ")}` });
     }
     const orgs = await storage.getOrganizations();
     if (orgs.length === 0) return res.status(503).json({ error: "System not configured" });
@@ -1621,6 +1640,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!client.activationCode) {
         updates.activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
       }
+      if (!(client as any).agentId) updates.agentId = agent.id;
       if (Object.keys(updates).length > 0) {
         const updated = await storage.updateClient(client.id, updates, orgId);
         if (updated) client = updated;
@@ -1638,6 +1658,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         nationalId: nationalIdTrim || null,
         activationCode,
         isEnrolled: false,
+        agentId: agent.id,
       });
       client = await storage.createClient(clientParsed);
     }
@@ -1651,6 +1672,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         paymentSchedule || "monthly",
         [],
       );
+      const depsList = Array.isArray(rawDeps) ? rawDeps : [];
+      const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
+      for (const d of depsList) {
+        if (d.firstName && d.lastName && d.relationship) {
+          const dep = await storage.createDependent({
+            organizationId: orgId,
+            clientId: client.id,
+            firstName: String(d.firstName).trim(),
+            lastName: String(d.lastName).trim(),
+            relationship: String(d.relationship).trim(),
+            dateOfBirth: d.dateOfBirth || null,
+            nationalId: d.nationalId ? String(d.nationalId).trim() : null,
+            gender: d.gender || null,
+          });
+          createdDeps.push(dep);
+        }
+      }
+
+      const ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
       const policyParsed = insertPolicySchema.parse({
         organizationId: orgId,
         branchId: effectiveBranchId,
@@ -1663,6 +1703,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         currency: currency || "USD",
         paymentSchedule: paymentSchedule || "monthly",
         effectiveDate: new Date().toISOString().split("T")[0],
+        beneficiaryFirstName: ben?.firstName ? String(ben.firstName).trim() : null,
+        beneficiaryLastName: ben?.lastName ? String(ben.lastName).trim() : null,
+        beneficiaryRelationship: ben?.relationship ? String(ben.relationship).trim() : null,
+        beneficiaryNationalId: ben?.nationalId ? String(ben.nationalId).trim() : null,
+        beneficiaryPhone: ben?.phone ? String(ben.phone).trim() : null,
+        beneficiaryDependentId: null,
       });
       const policy = await storage.createPolicy(policyParsed);
       await storage.createPolicyStatusHistory(policy.id, null, "pending", "Registered via agent link");
@@ -1671,6 +1717,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         clientId: client.id,
         role: "policy_holder",
       });
+      for (const dep of createdDeps) {
+        await storage.createPolicyMember({
+          policyId: policy.id,
+          dependentId: dep.id,
+          role: "dependent",
+        });
+      }
       const lead = await storage.createLead({
         organizationId: orgId,
         branchId: effectiveBranchId || undefined,

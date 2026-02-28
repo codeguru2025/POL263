@@ -14,6 +14,7 @@ interface State {
 
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false, error: null };
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
@@ -21,6 +22,16 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught an error", error, errorInfo);
+    if (!this.retryTimer) {
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        this.setState({ hasError: false, error: null });
+      }, 2000);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
   }
 
   render() {

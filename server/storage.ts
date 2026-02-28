@@ -604,7 +604,17 @@ export class DatabaseStorage implements IStorage {
   async getClientsByAgent(agentId: string, organizationId: string, limit = 50, offset = 0, search?: string): Promise<Client[]> {
     const tdb = await getDbForOrg(organizationId);
     const policyRows = await tdb.select({ clientId: policies.clientId }).from(policies).where(eq(policies.agentId, agentId));
-    const clientIds = Array.from(new Set(policyRows.map((r) => r.clientId).filter(Boolean))) as string[];
+    const leadRows = await tdb.select({ clientId: leads.clientId }).from(leads).where(eq(leads.agentId, agentId));
+    let directRows: { id: string }[] = [];
+    try {
+      directRows = await tdb.select({ id: clients.id }).from(clients).where(and(eq(clients.agentId, agentId), eq(clients.organizationId, organizationId)));
+    } catch { /* agentId column may not exist yet before migration */ }
+    const clientIds = Array.from(new Set([
+      ...policyRows.map((r) => r.clientId),
+      ...leadRows.map((r) => r.clientId),
+      ...directRows.map((r) => r.id),
+    ].filter(Boolean))) as string[];
+    console.log(`[getClientsByAgent] agentId=${agentId} policies=${policyRows.length} leads=${leadRows.length} direct=${directRows.length} total_unique=${clientIds.length} search=${search || "(none)"}`);
     if (clientIds.length === 0) return [];
     const conditions = [eq(clients.organizationId, organizationId), inArray(clients.id, clientIds)];
     if (search && search.trim()) {

@@ -17,6 +17,7 @@ import { useState, useMemo, useEffect } from "react";
 import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download } from "lucide-react";
 import { useSearch } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useAuth } from "@/hooks/use-auth";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,6 +61,9 @@ function getStatusColor(status: string) {
 export default function StaffPolicies() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user, roles } = useAuth();
+  const isAgent = roles.some((r) => r.name === "agent");
+
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -92,6 +96,12 @@ export default function StaffPolicies() {
       setCreateForm((f) => ({ ...f, clientId }));
     }
   }, [searchString]);
+
+  useEffect(() => {
+    if (isAgent && user?.id) {
+      setCreateForm((f) => ({ ...f, agentId: user.id }));
+    }
+  }, [isAgent, user?.id]);
 
   const { data: policies, isLoading: policiesLoading } = useQuery<any[]>({
     queryKey: ["/api/policies"],
@@ -229,7 +239,7 @@ export default function StaffPolicies() {
       setCreateStep(1);
       setCreateForm({
         clientId: "",
-        agentId: "",
+        agentId: isAgent && user?.id ? user.id : "",
         beneficiaryDependentIds: [],
         selectedProductId: "",
         productVersionId: "",
@@ -709,24 +719,39 @@ export default function StaffPolicies() {
                   )}
                 </div>
                 <div>
-                  <Label>Agent (optional)</Label>
-                  <Select
-                    value={createForm.agentId || "walk-in"}
-                    onValueChange={(v) => setCreateForm({ ...createForm, agentId: v === "walk-in" ? "" : v })}
-                  >
-                    <SelectTrigger data-testid="select-agent">
-                      <SelectValue placeholder="Walk-in" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="walk-in">Walk-in</SelectItem>
-                      {agents.map((a: any) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.displayName || a.email} {a.referralCode ? `(${a.referralCode})` : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground mt-1">Default: Walk-in. Select an agent to attribute this policy.</p>
+                  <Label>Agent</Label>
+                  {isAgent ? (
+                    <>
+                      <Input
+                        value={user?.displayName || user?.email || ""}
+                        readOnly
+                        disabled
+                        className="bg-muted"
+                        data-testid="select-agent"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">Auto-assigned to you as the issuing agent.</p>
+                    </>
+                  ) : (
+                    <>
+                      <Select
+                        value={createForm.agentId || "walk-in"}
+                        onValueChange={(v) => setCreateForm({ ...createForm, agentId: v === "walk-in" ? "" : v })}
+                      >
+                        <SelectTrigger data-testid="select-agent">
+                          <SelectValue placeholder="Walk-in" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="walk-in">Walk-in (no agent)</SelectItem>
+                          {agents.map((a: any) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.displayName || a.email} {a.referralCode ? `(${a.referralCode})` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground mt-1">Default: Walk-in. Select an agent to attribute this policy.</p>
+                    </>
+                  )}
                 </div>
                 {createForm.clientId && dependents && dependents.length > 0 && (
                   <div>

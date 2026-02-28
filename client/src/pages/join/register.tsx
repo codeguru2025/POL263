@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getApiBase } from "@/lib/queryClient";
-import { UserPlus, CheckCircle2, Loader2, ArrowRight } from "lucide-react";
+import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface ProductWithVersions {
@@ -53,6 +53,16 @@ export default function JoinRegisterPage() {
     premiumAmount: "",
   });
 
+  interface DependentEntry { firstName: string; lastName: string; relationship: string; dateOfBirth: string; nationalId: string }
+  const [dependentsList, setDependentsList] = useState<DependentEntry[]>([]);
+  const [showDepForm, setShowDepForm] = useState(false);
+  const [depDraft, setDepDraft] = useState<DependentEntry>({ firstName: "", lastName: "", relationship: "", dateOfBirth: "", nationalId: "" });
+
+  const [beneficiary, setBeneficiary] = useState<{ firstName: string; lastName: string; relationship: string; nationalId: string; phone: string; fromDependentIndex: number | null }>({
+    firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null,
+  });
+  const [showBenForm, setShowBenForm] = useState(false);
+
   useEffect(() => {
     if (!refCode) {
       setLoading(false);
@@ -92,39 +102,60 @@ export default function JoinRegisterPage() {
   const versions = selectedProduct?.versions || [];
 
   useEffect(() => {
-    if (versions.length && !versions.some((v) => v.id === form.productVersionId)) {
+    if (!versions.length) return;
+    const currentValid = versions.some((v) => v.id === form.productVersionId);
+    if (!currentValid) {
+      const first = versions[0];
       setForm((f) => ({
         ...f,
-        productVersionId: versions[0]?.id || "",
-        premiumAmount: versions[0]?.premiumMonthlyUsd || versions[0]?.premiumMonthlyZar || "",
+        productVersionId: first?.id || "",
+        premiumAmount: first?.premiumMonthlyUsd || first?.premiumMonthlyZar || "",
       }));
     }
-  }, [form.productId, form.productVersionId, versions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.productId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!refCode || !options) return;
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.productVersionId) {
-      toast({ title: "Missing fields", description: "First name, last name, and product are required.", variant: "destructive" });
+    const missing: string[] = [];
+    if (!form.firstName.trim()) missing.push("First name");
+    if (!form.lastName.trim()) missing.push("Last name");
+    if (!form.productVersionId) missing.push("Product");
+    if (missing.length > 0) {
+      toast({ title: "Missing fields", description: `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required.`, variant: "destructive" });
       return;
     }
     setSubmitLoading(true);
     try {
+      const payload: Record<string, unknown> = {
+        referralCode: options.referralCode,
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        email: form.email.trim() || undefined,
+        phone: form.phone.trim() || undefined,
+        dateOfBirth: form.dateOfBirth || undefined,
+        nationalId: form.nationalId.trim() || undefined,
+        productVersionId: form.productVersionId,
+        branchId: form.branchId || undefined,
+        premiumAmount: form.premiumAmount ? String(form.premiumAmount) : undefined,
+      };
+      if (dependentsList.length > 0) {
+        payload.dependents = dependentsList;
+      }
+      if (beneficiary.firstName && beneficiary.lastName) {
+        payload.beneficiary = {
+          firstName: beneficiary.firstName.trim(),
+          lastName: beneficiary.lastName.trim(),
+          relationship: beneficiary.relationship.trim() || undefined,
+          nationalId: beneficiary.nationalId.trim() || undefined,
+          phone: beneficiary.phone.trim() || undefined,
+        };
+      }
       const res = await fetch(getApiBase() + "/api/public/register-policy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          referralCode: options.referralCode,
-          firstName: form.firstName.trim(),
-          lastName: form.lastName.trim(),
-          email: form.email.trim() || undefined,
-          phone: form.phone.trim() || undefined,
-          dateOfBirth: form.dateOfBirth || undefined,
-          nationalId: form.nationalId.trim() || undefined,
-          productVersionId: form.productVersionId,
-          branchId: form.branchId || undefined,
-          premiumAmount: form.premiumAmount ? String(form.premiumAmount) : undefined,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -309,16 +340,23 @@ export default function JoinRegisterPage() {
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 value={form.productId}
                 onChange={(e) => setForm((f) => ({ ...f, productId: e.target.value }))}
+                required
                 data-testid="select-product"
               >
+                {options.products.length === 0 && (
+                  <option value="">No products available</option>
+                )}
+                {options.products.length > 1 && (
+                  <option value="">Select a product</option>
+                )}
                 {options.products.map((p) => (
                   <option key={p.id} value={p.id}>{p.name} ({p.code})</option>
                 ))}
               </select>
             </div>
-            {versions.length > 1 && (
+            {versions.length > 0 && (
               <div>
-                <Label>Plan / version</Label>
+                <Label>Plan / version *</Label>
                 <select
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={form.productVersionId}
@@ -330,26 +368,177 @@ export default function JoinRegisterPage() {
                       premiumAmount: v?.premiumMonthlyUsd || v?.premiumMonthlyZar || "",
                     }));
                   }}
+                  required
                   data-testid="select-version"
                 >
+                  {versions.length > 1 && (
+                    <option value="">Select a plan</option>
+                  )}
                   {versions.map((v) => (
-                    <option key={v.id} value={v.id}>Version {v.version} {v.premiumMonthlyUsd ? `— ${v.premiumMonthlyUsd} USD/mo` : ""} {v.premiumMonthlyZar ? `— ${v.premiumMonthlyZar} ZAR/mo` : ""}</option>
+                    <option key={v.id} value={v.id}>
+                      Version {v.version}
+                      {v.premiumMonthlyUsd ? ` — ${v.premiumMonthlyUsd} USD/mo` : ""}
+                      {v.premiumMonthlyZar ? ` — ${v.premiumMonthlyZar} ZAR/mo` : ""}
+                    </option>
                   ))}
                 </select>
               </div>
             )}
-            <div>
-              <Label htmlFor="premiumAmount">Premium amount (optional)</Label>
-              <Input
-                id="premiumAmount"
-                type="number"
-                step="0.01"
-                value={form.premiumAmount}
-                onChange={(e) => setForm((f) => ({ ...f, premiumAmount: e.target.value }))}
-                placeholder="Leave blank to use default"
-                data-testid="input-premium"
-              />
+            {form.premiumAmount && (
+              <div>
+                <Label htmlFor="premiumAmount">Monthly premium</Label>
+                <Input
+                  id="premiumAmount"
+                  type="text"
+                  value={`${form.premiumAmount} USD/mo`}
+                  readOnly
+                  disabled
+                  className="bg-muted"
+                  data-testid="input-premium"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Automatically set from the selected product.</p>
+              </div>
+            )}
+            {/* ── Dependents ────────────────────────────── */}
+            <div className="border-t pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">Dependents (optional)</Label>
+                </div>
+                <Button type="button" size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={() => setShowDepForm(true)}>
+                  <Plus className="h-3 w-3" /> Add
+                </Button>
+              </div>
+              {dependentsList.map((dep, i) => (
+                <div key={i} className="flex items-center gap-2 p-2 border rounded-md bg-muted/30 text-sm">
+                  <span className="flex-1">{dep.firstName} {dep.lastName} <span className="text-muted-foreground capitalize">({dep.relationship})</span></span>
+                  {beneficiary.fromDependentIndex !== i ? (
+                    <Button type="button" size="sm" variant="ghost" className="h-6 text-xs text-primary" onClick={() => {
+                      setBeneficiary({ firstName: dep.firstName, lastName: dep.lastName, relationship: dep.relationship, nationalId: dep.nationalId, phone: "", fromDependentIndex: i });
+                      setShowBenForm(false);
+                    }}>
+                      <Star className="h-3 w-3 mr-1" /> Appoint
+                    </Button>
+                  ) : (
+                    <span className="text-xs text-amber-600 font-medium">Beneficiary</span>
+                  )}
+                  <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => {
+                    setDependentsList((prev) => prev.filter((_, idx) => idx !== i));
+                    if (beneficiary.fromDependentIndex === i) setBeneficiary({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null });
+                  }}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+              {showDepForm && (
+                <div className="p-3 border rounded-md bg-muted/20 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">First Name *</Label>
+                      <Input className="h-8 text-sm" value={depDraft.firstName} onChange={(e) => setDepDraft({ ...depDraft, firstName: e.target.value })} />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Last Name *</Label>
+                      <Input className="h-8 text-sm" value={depDraft.lastName} onChange={(e) => setDepDraft({ ...depDraft, lastName: e.target.value })} />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Relationship *</Label>
+                    <select className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm" value={depDraft.relationship} onChange={(e) => setDepDraft({ ...depDraft, relationship: e.target.value })}>
+                      <option value="">Select...</option>
+                      <option value="spouse">Spouse</option>
+                      <option value="child">Child</option>
+                      <option value="parent">Parent</option>
+                      <option value="sibling">Sibling</option>
+                      <option value="extended">Extended Family</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">Date of Birth</Label>
+                      <Input className="h-8 text-sm" type="date" value={depDraft.dateOfBirth} onChange={(e) => setDepDraft({ ...depDraft, dateOfBirth: e.target.value })} />
+                    </div>
+                    <div>
+                      <Label className="text-xs">National ID</Label>
+                      <Input className="h-8 text-sm" value={depDraft.nationalId} onChange={(e) => setDepDraft({ ...depDraft, nationalId: e.target.value })} />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" className="h-7 text-xs" disabled={!depDraft.firstName || !depDraft.lastName || !depDraft.relationship} onClick={() => {
+                      setDependentsList((prev) => [...prev, { ...depDraft }]);
+                      setDepDraft({ firstName: "", lastName: "", relationship: "", dateOfBirth: "", nationalId: "" });
+                      setShowDepForm(false);
+                    }}>
+                      Add Dependent
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowDepForm(false)}>Cancel</Button>
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* ── Beneficiary ─────────────────────────────── */}
+            <div className="border-t pt-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Star className="h-4 w-4 text-amber-500" />
+                <Label className="text-sm font-medium">Beneficiary (optional, max 1)</Label>
+              </div>
+              {beneficiary.firstName && beneficiary.lastName ? (
+                <div className="flex items-center gap-2 p-3 border rounded-md bg-amber-50/50 border-amber-200 text-sm">
+                  <span className="flex-1 font-medium">{beneficiary.firstName} {beneficiary.lastName} <span className="text-muted-foreground capitalize">({beneficiary.relationship || "Beneficiary"})</span></span>
+                  <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => setBeneficiary({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null })}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ) : !showBenForm ? (
+                <Button type="button" size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={() => setShowBenForm(true)}>
+                  <Plus className="h-3 w-3" /> Enter beneficiary details
+                </Button>
+              ) : (
+                <div className="p-3 border rounded-md bg-muted/20 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">First Name *</Label>
+                      <Input className="h-8 text-sm" value={beneficiary.firstName} onChange={(e) => setBeneficiary({ ...beneficiary, firstName: e.target.value, fromDependentIndex: null })} />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Last Name *</Label>
+                      <Input className="h-8 text-sm" value={beneficiary.lastName} onChange={(e) => setBeneficiary({ ...beneficiary, lastName: e.target.value, fromDependentIndex: null })} />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Relationship</Label>
+                    <select className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm" value={beneficiary.relationship} onChange={(e) => setBeneficiary({ ...beneficiary, relationship: e.target.value })}>
+                      <option value="">Select...</option>
+                      <option value="spouse">Spouse</option>
+                      <option value="child">Child</option>
+                      <option value="parent">Parent</option>
+                      <option value="sibling">Sibling</option>
+                      <option value="extended">Extended Family</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">National ID</Label>
+                      <Input className="h-8 text-sm" value={beneficiary.nationalId} onChange={(e) => setBeneficiary({ ...beneficiary, nationalId: e.target.value })} />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Phone</Label>
+                      <Input className="h-8 text-sm" value={beneficiary.phone} onChange={(e) => setBeneficiary({ ...beneficiary, phone: e.target.value })} />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" className="h-7 text-xs" disabled={!beneficiary.firstName || !beneficiary.lastName} onClick={() => setShowBenForm(false)}>
+                      Confirm Beneficiary
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowBenForm(false); setBeneficiary({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null }); }}>Cancel</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {options.branches.length > 0 && (
               <div>
                 <Label>Branch (optional)</Label>

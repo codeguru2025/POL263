@@ -8,11 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import {
   FileText,
   AlertCircle,
@@ -33,6 +31,9 @@ import {
   Heart,
   KeyRound,
   Loader2,
+  Trash2,
+  Star,
+  UserCheck,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { getApiBase } from "@/lib/queryClient";
@@ -265,16 +266,6 @@ interface Payment {
   receiptNumber?: string;
 }
 
-interface PolicyMember {
-  id: string;
-  role: string;
-  firstName: string;
-  lastName: string;
-  dateOfBirth: string | null;
-  relationship: string | null;
-  isActive: boolean;
-}
-
 const statusColors: Record<string, string> = {
   active: "bg-green-100 text-green-700 border-green-200",
   draft: "bg-gray-100 text-gray-700 border-gray-200",
@@ -319,8 +310,6 @@ export default function ClientDashboard() {
   const qc = useQueryClient();
   const [expandedPolicy, setExpandedPolicy] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
-  const [depRequestOpen, setDepRequestOpen] = useState(false);
-  const [depForm, setDepForm] = useState({ firstName: "", lastName: "", relationship: "", dateOfBirth: "", nationalId: "", notes: "" });
 
   const { data: meData, isLoading: meLoading, error: meError } = useQuery<ClientInfo>({
     queryKey: ["/api/client-auth/me"],
@@ -591,26 +580,17 @@ export default function ClientDashboard() {
           </TabsContent>
 
           <TabsContent value="members" className="space-y-6 mt-6">
-            <Card className="shadow-sm">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-5 w-5" />
-                  Covered Members
-                </CardTitle>
-                <Button size="sm" variant="outline" className="gap-2" onClick={() => setDepRequestOpen(true)} data-testid="btn-add-dependent">
-                  <UserPlus className="h-4 w-4" />
-                  Request to Add Dependent
-                </Button>
-              </CardHeader>
-              <CardContent>
-                {policies?.map((policy) => (
-                  <MemberSection key={policy.id} policy={policy} />
-                ))}
-                {(!policies || policies.length === 0) && (
+            <DependentsSection clientId={client.id} />
+            {policies?.map((policy) => (
+              <BeneficiarySection key={policy.id} policy={policy} clientId={client.id} />
+            ))}
+            {(!policies || policies.length === 0) && (
+              <Card className="shadow-sm">
+                <CardContent className="pt-6">
                   <p className="text-muted-foreground text-center py-8">No policies found.</p>
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           <TabsContent value="notifications" className="space-y-6 mt-6">
@@ -672,60 +652,6 @@ export default function ClientDashboard() {
         </Tabs>
       </div>
 
-      <Dialog open={depRequestOpen} onOpenChange={setDepRequestOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Request to Add Dependent</DialogTitle>
-            <DialogDescription>Submit a request to add a new dependent. An administrator will review and approve your request.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>First Name</Label>
-                <Input value={depForm.firstName} onChange={(e) => setDepForm({ ...depForm, firstName: e.target.value })} data-testid="input-dep-first-name" />
-              </div>
-              <div>
-                <Label>Last Name</Label>
-                <Input value={depForm.lastName} onChange={(e) => setDepForm({ ...depForm, lastName: e.target.value })} data-testid="input-dep-last-name" />
-              </div>
-            </div>
-            <div>
-              <Label>Relationship</Label>
-              <Select value={depForm.relationship} onValueChange={(v) => setDepForm({ ...depForm, relationship: v })}>
-                <SelectTrigger data-testid="select-dep-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="spouse">Spouse</SelectItem>
-                  <SelectItem value="child">Child</SelectItem>
-                  <SelectItem value="parent">Parent</SelectItem>
-                  <SelectItem value="sibling">Sibling</SelectItem>
-                  <SelectItem value="extended">Extended Family</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Date of Birth</Label>
-                <Input type="date" value={depForm.dateOfBirth} onChange={(e) => setDepForm({ ...depForm, dateOfBirth: e.target.value })} data-testid="input-dep-dob" />
-              </div>
-              <div>
-                <Label>National ID</Label>
-                <Input value={depForm.nationalId} onChange={(e) => setDepForm({ ...depForm, nationalId: e.target.value })} data-testid="input-dep-national-id" />
-              </div>
-            </div>
-            <div>
-              <Label>Notes</Label>
-              <Textarea value={depForm.notes} onChange={(e) => setDepForm({ ...depForm, notes: e.target.value })} placeholder="Any additional information..." data-testid="input-dep-notes" />
-            </div>
-            <Button className="w-full" data-testid="btn-submit-dep-request" onClick={() => {
-              toast({ title: "Request Submitted", description: "Your dependent request has been submitted for review." });
-              setDepRequestOpen(false);
-              setDepForm({ firstName: "", lastName: "", relationship: "", dateOfBirth: "", nationalId: "", notes: "" });
-            }}>
-              Submit Request
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </ClientLayout>
   );
 }
@@ -896,39 +822,373 @@ function PaymentSection({ policy }: { policy: Policy }) {
   );
 }
 
-function MemberSection({ policy }: { policy: Policy }) {
-  const { data: members, isLoading } = useQuery<PolicyMember[]>({
-    queryKey: [`/api/client-auth/policies/${policy.id}/members`],
+interface DependentItem {
+  id: string;
+  firstName: string;
+  lastName: string;
+  relationship: string;
+  dateOfBirth: string | null;
+  nationalId: string | null;
+  gender: string | null;
+  isActive: boolean;
+}
+
+interface Beneficiary {
+  firstName: string;
+  lastName: string;
+  relationship: string | null;
+  nationalId: string | null;
+  phone: string | null;
+  dependentId: string | null;
+}
+
+function DependentsSection({ clientId }: { clientId: string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ firstName: "", lastName: "", relationship: "", dateOfBirth: "", nationalId: "" });
+
+  const { data: dependents = [], isLoading } = useQuery<DependentItem[]>({
+    queryKey: ["/api/client-auth/dependents"],
     retry: false,
   });
 
+  const addMutation = useMutation({
+    mutationFn: async (body: typeof form) => {
+      const res = await fetch(getApiBase() + "/api/client-auth/dependents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.message || "Failed to add dependent");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/dependents"] });
+      setShowForm(false);
+      setForm({ firstName: "", lastName: "", relationship: "", dateOfBirth: "", nationalId: "" });
+      toast({ title: "Dependent added" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(getApiBase() + `/api/client-auth/dependents/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to remove dependent");
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/dependents"] });
+      toast({ title: "Dependent removed" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   return (
-    <div className="mb-6">
-      <div className="flex items-center gap-2 mb-3">
-        <Badge variant="outline" className={statusColors[policy.status] || "bg-gray-100"}>{formatStatus(policy.status)}</Badge>
-        <span className="font-medium text-sm">{policy.policyNumber}</span>
-      </div>
-      {isLoading ? (
-        <Skeleton className="h-20 w-full" />
-      ) : !members || members.length === 0 ? (
-        <p className="text-muted-foreground text-sm py-4 text-center">No members on this policy.</p>
-      ) : (
-        <div className="grid sm:grid-cols-2 gap-3">
-          {members.map((m) => (
-            <div key={m.id} className="p-3 border rounded-lg flex items-center gap-3" data-testid={`member-${m.id}`}>
-              <div className={`p-2 rounded-full ${m.role === "primary" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
-                <Users className="h-4 w-4" />
+    <Card className="shadow-sm">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5" />
+            Dependents
+          </CardTitle>
+          <CardDescription>People covered under your policies</CardDescription>
+        </div>
+        <Button size="sm" variant="outline" className="gap-2" onClick={() => setShowForm(!showForm)} data-testid="btn-add-dependent">
+          <UserPlus className="h-4 w-4" />
+          Add Dependent
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {showForm && (
+          <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
+            <p className="text-sm font-medium">Add a new dependent</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>First Name *</Label>
+                <Input value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} data-testid="input-dep-first-name" />
               </div>
               <div>
-                <p className="font-medium text-sm">{m.firstName} {m.lastName}</p>
-                <p className="text-xs text-muted-foreground capitalize">{m.role}{m.relationship ? ` — ${m.relationship}` : ""}</p>
-                {m.dateOfBirth && <p className="text-xs text-muted-foreground">DOB: {formatDate(m.dateOfBirth)}</p>}
+                <Label>Last Name *</Label>
+                <Input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} data-testid="input-dep-last-name" />
               </div>
-              {!m.isActive && <Badge variant="outline" className="ml-auto text-xs bg-red-50 text-red-600">Inactive</Badge>}
             </div>
-          ))}
+            <div>
+              <Label>Relationship *</Label>
+              <Select value={form.relationship} onValueChange={(v) => setForm({ ...form, relationship: v })}>
+                <SelectTrigger data-testid="select-dep-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="spouse">Spouse</SelectItem>
+                  <SelectItem value="child">Child</SelectItem>
+                  <SelectItem value="parent">Parent</SelectItem>
+                  <SelectItem value="sibling">Sibling</SelectItem>
+                  <SelectItem value="extended">Extended Family</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Date of Birth</Label>
+                <Input type="date" value={form.dateOfBirth} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} data-testid="input-dep-dob" />
+              </div>
+              <div>
+                <Label>National ID</Label>
+                <Input value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} data-testid="input-dep-national-id" />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={!form.firstName || !form.lastName || !form.relationship || addMutation.isPending}
+                onClick={() => addMutation.mutate(form)}
+                data-testid="btn-save-dependent"
+              >
+                {addMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                Save Dependent
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
+            </div>
+          </div>
+        )}
+
+        {isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : dependents.length === 0 ? (
+          <p className="text-muted-foreground text-sm text-center py-6">No dependents added yet. Click "Add Dependent" to get started.</p>
+        ) : (
+          <div className="grid sm:grid-cols-2 gap-3">
+            {dependents.map((dep) => (
+              <div key={dep.id} className="p-3 border rounded-lg flex items-center gap-3" data-testid={`dependent-${dep.id}`}>
+                <div className="p-2 rounded-full bg-muted text-muted-foreground">
+                  <Users className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm">{dep.firstName} {dep.lastName}</p>
+                  <p className="text-xs text-muted-foreground capitalize">{dep.relationship}</p>
+                  {dep.dateOfBirth && <p className="text-xs text-muted-foreground">DOB: {formatDate(dep.dateOfBirth)}</p>}
+                </div>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  onClick={() => removeMutation.mutate(dep.id)}
+                  disabled={removeMutation.isPending}
+                  data-testid={`btn-remove-dep-${dep.id}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [showForm, setShowForm] = useState(false);
+  const [benForm, setBenForm] = useState({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "" });
+
+  const { data: beneficiary, isLoading: benLoading } = useQuery<Beneficiary | null>({
+    queryKey: [`/api/client-auth/policies/${policy.id}/beneficiary`],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/client-auth/policies/${policy.id}/beneficiary`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    retry: false,
+  });
+
+  const { data: dependents = [] } = useQuery<DependentItem[]>({
+    queryKey: ["/api/client-auth/dependents"],
+    retry: false,
+  });
+
+  const setBeneficiaryMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch(getApiBase() + `/api/client-auth/policies/${policy.id}/beneficiary`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.message || "Failed to set beneficiary");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [`/api/client-auth/policies/${policy.id}/beneficiary`] });
+      setShowForm(false);
+      setBenForm({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "" });
+      toast({ title: "Beneficiary updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const removeBeneficiaryMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(getApiBase() + `/api/client-auth/policies/${policy.id}/beneficiary`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to remove beneficiary");
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [`/api/client-auth/policies/${policy.id}/beneficiary`] });
+      toast({ title: "Beneficiary removed" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const appointDependent = (depId: string) => {
+    setBeneficiaryMutation.mutate({ dependentId: depId });
+  };
+
+  return (
+    <Card className="shadow-sm">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Star className="h-5 w-5 text-amber-500" />
+              Beneficiary — {policy.policyNumber}
+            </CardTitle>
+            <CardDescription>The person who receives the payout for this policy (max 1)</CardDescription>
+          </div>
+          <Badge variant="outline" className={statusColors[policy.status] || "bg-gray-100"}>{formatStatus(policy.status)}</Badge>
         </div>
-      )}
-    </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {benLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : beneficiary ? (
+          <div className="p-4 border rounded-lg bg-amber-50/50 border-amber-200 flex items-center gap-3">
+            <div className="p-2 rounded-full bg-amber-100 text-amber-700">
+              <UserCheck className="h-5 w-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-medium">{beneficiary.firstName} {beneficiary.lastName}</p>
+              <p className="text-sm text-muted-foreground capitalize">
+                {beneficiary.relationship || "Beneficiary"}
+                {beneficiary.dependentId ? " (from dependents)" : ""}
+              </p>
+              {beneficiary.nationalId && <p className="text-xs text-muted-foreground">ID: {beneficiary.nationalId}</p>}
+              {beneficiary.phone && <p className="text-xs text-muted-foreground">Phone: {beneficiary.phone}</p>}
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground hover:text-destructive"
+              onClick={() => removeBeneficiaryMutation.mutate()}
+              disabled={removeBeneficiaryMutation.isPending}
+              data-testid={`btn-remove-beneficiary-${policy.id}`}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-sm text-center py-4">No beneficiary set for this policy.</p>
+        )}
+
+        {!beneficiary && dependents.length > 0 && (
+          <div>
+            <p className="text-sm font-medium mb-2">Appoint a dependent as beneficiary</p>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {dependents.map((dep) => (
+                <button
+                  key={dep.id}
+                  className="p-3 border rounded-lg text-left hover:bg-primary/5 hover:border-primary/30 transition-colors flex items-center gap-3"
+                  onClick={() => appointDependent(dep.id)}
+                  disabled={setBeneficiaryMutation.isPending}
+                  data-testid={`btn-appoint-dep-${dep.id}`}
+                >
+                  <div className="p-1.5 rounded-full bg-muted text-muted-foreground">
+                    <UserCheck className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{dep.firstName} {dep.lastName}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{dep.relationship}</p>
+                  </div>
+                  <span className="text-xs text-primary font-medium">Appoint</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!beneficiary && (
+          <>
+            {!showForm ? (
+              <Button size="sm" variant="outline" className="gap-2" onClick={() => setShowForm(true)} data-testid={`btn-add-beneficiary-${policy.id}`}>
+                <UserPlus className="h-4 w-4" />
+                {dependents.length > 0 ? "Or enter beneficiary manually" : "Add Beneficiary"}
+              </Button>
+            ) : (
+              <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
+                <p className="text-sm font-medium">Enter beneficiary details</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>First Name *</Label>
+                    <Input value={benForm.firstName} onChange={(e) => setBenForm({ ...benForm, firstName: e.target.value })} data-testid="input-ben-first-name" />
+                  </div>
+                  <div>
+                    <Label>Last Name *</Label>
+                    <Input value={benForm.lastName} onChange={(e) => setBenForm({ ...benForm, lastName: e.target.value })} data-testid="input-ben-last-name" />
+                  </div>
+                </div>
+                <div>
+                  <Label>Relationship</Label>
+                  <Select value={benForm.relationship} onValueChange={(v) => setBenForm({ ...benForm, relationship: v })}>
+                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="spouse">Spouse</SelectItem>
+                      <SelectItem value="child">Child</SelectItem>
+                      <SelectItem value="parent">Parent</SelectItem>
+                      <SelectItem value="sibling">Sibling</SelectItem>
+                      <SelectItem value="extended">Extended Family</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>National ID</Label>
+                    <Input value={benForm.nationalId} onChange={(e) => setBenForm({ ...benForm, nationalId: e.target.value })} data-testid="input-ben-national-id" />
+                  </div>
+                  <div>
+                    <Label>Phone</Label>
+                    <Input value={benForm.phone} onChange={(e) => setBenForm({ ...benForm, phone: e.target.value })} data-testid="input-ben-phone" />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    disabled={!benForm.firstName || !benForm.lastName || setBeneficiaryMutation.isPending}
+                    onClick={() => setBeneficiaryMutation.mutate(benForm)}
+                    data-testid="btn-save-beneficiary"
+                  >
+                    {setBeneficiaryMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                    Save Beneficiary
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
