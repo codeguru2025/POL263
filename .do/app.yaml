@@ -40,22 +40,22 @@ envs:
     value: SET_IN_DASHBOARD
     scope: RUN_AND_BUILD_TIME
   - key: APP_BASE_URL
-    value: https://pol263.com
+    value: ${APP_URL}
     scope: RUN_AND_BUILD_TIME
   - key: API_BASE_URL
-    value: https://pol263.com
+    value: ${APP_URL}
     scope: RUN_AND_BUILD_TIME
   - key: VITE_APP_PUBLIC_URL
-    value: https://pol263.com
+    value: ${APP_URL}
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_RETURN_URL
-    value: https://pol263.com/client/payments/return
+    value: ${APP_URL}/client/payments/return
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_RESULT_URL
-    value: https://pol263.com/api/payments/paynow/result
+    value: ${APP_URL}/api/payments/paynow/result
     scope: RUN_AND_BUILD_TIME
   - key: GOOGLE_CALLBACK_URL
-    value: https://pol263.com/api/auth/google/callback
+    value: ${APP_URL}/api/auth/google/callback
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_INTEGRATION_ID
     value: "22462"
