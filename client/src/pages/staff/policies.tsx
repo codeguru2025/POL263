@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock } from "lucide-react";
 import { useSearch } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
@@ -27,21 +27,17 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
-  draft: ["pending"],
-  pending: ["active"],
+  inactive: ["cancelled"],
   active: ["grace", "cancelled"],
-  grace: ["active", "lapsed"],
-  lapsed: ["reinstatement_pending", "cancelled"],
-  reinstatement_pending: ["active"],
+  grace: ["lapsed"],
+  lapsed: ["cancelled"],
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  draft: "Draft",
-  pending: "Pending",
+  inactive: "Inactive",
   active: "Active",
   grace: "Grace",
   lapsed: "Lapsed",
-  reinstatement_pending: "Reinstatement Pending",
   cancelled: "Cancelled",
 };
 
@@ -50,9 +46,7 @@ function getStatusColor(status: string) {
     case "active": return "bg-emerald-500/15 text-emerald-700 border-emerald-200";
     case "grace": return "bg-amber-500/15 text-amber-700 border-amber-200";
     case "lapsed": return "bg-destructive/15 text-destructive border-destructive/30";
-    case "pending": return "bg-blue-500/15 text-blue-700 border-blue-200";
-    case "draft": return "bg-muted text-muted-foreground border-border";
-    case "reinstatement_pending": return "bg-purple-500/15 text-purple-700 border-purple-200";
+    case "inactive": return "bg-blue-500/15 text-blue-700 border-blue-200";
     case "cancelled": return "bg-gray-500/15 text-gray-600 border-gray-200";
     default: return "bg-muted text-muted-foreground";
   }
@@ -68,6 +62,9 @@ export default function StaffPolicies() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showTransitionDialog, setShowTransitionDialog] = useState(false);
+  const [docLang, setDocLang] = useState("en");
+
+  const { data: languages } = useQuery<{ code: string; name: string }[]>({ queryKey: ["/api/languages"] });
   const [showDetailView, setShowDetailView] = useState(false);
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
   const [transitionTarget, setTransitionTarget] = useState("");
@@ -77,6 +74,8 @@ export default function StaffPolicies() {
     clientId: "",
     agentId: "",
     beneficiaryDependentIds: [] as string[],
+    beneficiaryId: "" as string,
+    beneficiaryManual: { firstName: "", lastName: "", relationship: "", nationalId: "", phone: "" },
     selectedProductId: "",
     productVersionId: "",
     premiumAmount: "",
@@ -84,8 +83,11 @@ export default function StaffPolicies() {
     paymentSchedule: "monthly",
     effectiveDate: "",
     selectedAddOns: [] as string[],
+    memberAddOns: {} as Record<string, string[]>,
+    newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
   });
   const [createStep, setCreateStep] = useState(1);
+  const [clientMode, setClientMode] = useState<"search" | "new">("search");
 
   const searchString = useSearch();
   useEffect(() => {
@@ -110,10 +112,9 @@ export default function StaffPolicies() {
   const { data: clients } = useQuery<any[]>({
     queryKey: ["/api/clients"],
   });
-  const { data: usersList } = useQuery<any[]>({
-    queryKey: ["/api/users"],
+  const { data: agents = [] } = useQuery<any[]>({
+    queryKey: ["/api/agents"],
   });
-  const agents = usersList?.filter((u: any) => u.referralCode) || [];
 
   const { data: selectedClient } = useQuery<any>({
     queryKey: ["/api/clients", createForm.clientId],
@@ -143,6 +144,64 @@ export default function StaffPolicies() {
     enabled: !!createForm.clientId,
   });
 
+  useEffect(() => {
+    if (dependents && dependents.length > 0) {
+      setCreateForm((f) => ({ ...f, beneficiaryDependentIds: dependents.map((d: any) => d.id) }));
+    }
+  }, [dependents]);
+
+  const [showAddDep, setShowAddDep] = useState(false);
+  const [newDep, setNewDep] = useState({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
+
+  const [detailAddDepOpen, setDetailAddDepOpen] = useState(false);
+  const [detailDepForm, setDetailDepForm] = useState({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
+  const detailAddDepMutation = useMutation({
+    mutationFn: async (data: typeof detailDepForm) => {
+      if (!selectedPolicy) throw new Error("No policy selected");
+      const res = await apiRequest("POST", `/api/clients/${selectedPolicy.clientId}/dependents`, data);
+      const dep = await res.json();
+      await apiRequest("POST", `/api/policies/${selectedPolicy.id}/members`, { dependentId: dep.id, role: "dependent" });
+      return dep;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "members"] });
+      setDetailAddDepOpen(false);
+      toast({ title: "Dependent added to policy" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+  const syncMembersMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedPolicy) throw new Error("No policy selected");
+      const res = await apiRequest("POST", `/api/policies/${selectedPolicy.id}/sync-members`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "members"] });
+      toast({ title: data.synced > 0 ? `${data.synced} dependent(s) synced to policy` : "All dependents already on policy" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    },
+  });
+  const addDepMutation = useMutation({
+    mutationFn: async (data: typeof newDep) => {
+      const res = await apiRequest("POST", `/api/clients/${createForm.clientId}/dependents`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", createForm.clientId, "dependents"] });
+      setShowAddDep(false);
+      setNewDep({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
+      toast({ title: "Dependent added" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   const { data: productVersions } = useQuery<any[]>({
     queryKey: ["/api/products", createForm.selectedProductId, "versions"],
     queryFn: async () => {
@@ -170,7 +229,7 @@ export default function StaffPolicies() {
 
   const calculatedPremium = useMemo(() => {
     if (!selectedVersion) return null;
-    const { currency, paymentSchedule } = createForm;
+    const { currency, paymentSchedule, memberAddOns } = createForm;
     let base = 0;
     if (paymentSchedule === "monthly") {
       base = currency === "ZAR" ? parseFloat(selectedVersion.premiumMonthlyZar || "0") : parseFloat(selectedVersion.premiumMonthlyUsd || "0");
@@ -181,12 +240,20 @@ export default function StaffPolicies() {
     }
     if (base === 0) return null;
 
+    const getAoPrice = (ao: any) => {
+      if (ao.pricingMode === "percentage") return parseFloat(ao.priceAmount || ao.priceMonthly || "0");
+      if (paymentSchedule === "weekly" && ao.priceWeekly) return parseFloat(ao.priceWeekly);
+      if (paymentSchedule === "biweekly" && ao.priceBiweekly) return parseFloat(ao.priceBiweekly);
+      return parseFloat(ao.priceMonthly || ao.priceAmount || "0");
+    };
+
     let addOnTotal = 0;
-    if (addOns && createForm.selectedAddOns.length > 0) {
-      for (const aoId of createForm.selectedAddOns) {
+    const allMemberAddOns = Object.values(memberAddOns).flat();
+    if (addOns && allMemberAddOns.length > 0) {
+      for (const aoId of allMemberAddOns) {
         const ao = addOns.find((a: any) => a.id === aoId);
         if (!ao) continue;
-        const price = parseFloat(ao.priceAmount || "0");
+        const price = getAoPrice(ao);
         if (ao.pricingMode === "percentage") {
           addOnTotal += base * (price / 100);
         } else {
@@ -195,7 +262,18 @@ export default function StaffPolicies() {
       }
     }
     return (base + addOnTotal).toFixed(2);
-  }, [selectedVersion, createForm.currency, createForm.paymentSchedule, createForm.selectedAddOns, addOns]);
+  }, [selectedVersion, createForm.currency, createForm.paymentSchedule, createForm.memberAddOns, addOns]);
+
+  const { data: policyDetail } = useQuery<any>({
+    queryKey: ["/api/policies", selectedPolicy?.id, "detail"],
+    enabled: !!selectedPolicy?.id && showDetailView,
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load policy detail");
+      return res.json();
+    },
+  });
+  const displayPolicy = policyDetail || selectedPolicy;
 
   const { data: policyMembers, isLoading: membersLoading } = useQuery<any[]>({
     queryKey: ["/api/policies", selectedPolicy?.id, "members"],
@@ -219,9 +297,53 @@ export default function StaffPolicies() {
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
-      const members = (data.beneficiaryDependentIds || []).map((dependentId: string) => ({ dependentId, role: "beneficiary" }));
+      let clientId = data.clientId;
+
+      if (clientMode === "new" && !clientId) {
+        if (!data.newClient.firstName || !data.newClient.lastName) {
+          throw new Error("First name and last name are required to create a new client.");
+        }
+        const clientRes = await apiRequest("POST", "/api/clients", {
+          firstName: data.newClient.firstName,
+          lastName: data.newClient.lastName,
+          phone: data.newClient.phone || undefined,
+          email: data.newClient.email || undefined,
+          nationalId: data.newClient.nationalId || undefined,
+          dateOfBirth: data.newClient.dateOfBirth || undefined,
+          gender: data.newClient.gender || undefined,
+        });
+        const newClient = await clientRes.json();
+        clientId = newClient.id;
+      }
+
+      const members = (data.beneficiaryDependentIds || []).map((dependentId: string) => ({ dependentId, role: "dependent" }));
+
+      const memberAddOns: { memberRef: string; addOnId: string }[] = [];
+      for (const [memberRef, aoIds] of Object.entries(data.memberAddOns || {})) {
+        for (const addOnId of aoIds) {
+          memberAddOns.push({ memberRef, addOnId });
+        }
+      }
+
+      let beneficiary: any = undefined;
+      if (data.beneficiaryId) {
+        const dep = dependents?.find((d: any) => d.id === data.beneficiaryId);
+        if (dep) {
+          beneficiary = {
+            dependentId: dep.id,
+            firstName: dep.firstName,
+            lastName: dep.lastName,
+            relationship: dep.relationship,
+            nationalId: dep.nationalId || "",
+            phone: "",
+          };
+        }
+      } else if (data.beneficiaryManual.firstName && data.beneficiaryManual.lastName) {
+        beneficiary = { ...data.beneficiaryManual };
+      }
+
       const res = await apiRequest("POST", "/api/policies", {
-        clientId: data.clientId,
+        clientId,
         agentId: data.agentId || undefined,
         productVersionId: data.productVersionId,
         premiumAmount: data.premiumAmount,
@@ -229,18 +351,23 @@ export default function StaffPolicies() {
         paymentSchedule: data.paymentSchedule,
         effectiveDate: data.effectiveDate || undefined,
         members,
-        addOnIds: data.selectedAddOns || [],
+        memberAddOns,
+        beneficiary,
       });
       return res.json();
     },
     onSuccess: (policy: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       setShowCreateDialog(false);
       setCreateStep(1);
+      setClientMode("search");
       setCreateForm({
         clientId: "",
         agentId: isAgent && user?.id ? user.id : "",
         beneficiaryDependentIds: [],
+        beneficiaryId: "",
+        beneficiaryManual: { firstName: "", lastName: "", relationship: "", nationalId: "", phone: "" },
         selectedProductId: "",
         productVersionId: "",
         premiumAmount: "",
@@ -248,6 +375,8 @@ export default function StaffPolicies() {
         paymentSchedule: "monthly",
         effectiveDate: "",
         selectedAddOns: [],
+        memberAddOns: {},
+        newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
       });
       toast({ title: "Policy created", description: `Policy ${policy.policyNumber} has been created in draft status.` });
     },
@@ -309,7 +438,7 @@ export default function StaffPolicies() {
   };
 
   if (showDetailView && selectedPolicy) {
-    const allowedTransitions = VALID_POLICY_TRANSITIONS[selectedPolicy.status] || [];
+    const allowedTransitions = VALID_POLICY_TRANSITIONS[displayPolicy.status] || [];
     return (
       <StaffLayout>
         <div className="space-y-6">
@@ -318,11 +447,11 @@ export default function StaffPolicies() {
               <ChevronLeft className="h-5 w-5" />
             </Button>
             <div className="flex-1">
-              <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-policy-number">{selectedPolicy.policyNumber}</h1>
+              <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-policy-number">{displayPolicy.policyNumber}</h1>
               <p className="text-muted-foreground mt-1">Policy details, members, and payment history</p>
             </div>
-            <Badge variant="outline" className={`font-medium text-sm px-3 py-1 ${getStatusColor(selectedPolicy.status)}`} data-testid="badge-policy-status">
-              {STATUS_LABELS[selectedPolicy.status] || selectedPolicy.status}
+            <Badge variant="outline" className={`font-medium text-sm px-3 py-1 ${getStatusColor(displayPolicy.status)}`} data-testid="badge-policy-status">
+              {STATUS_LABELS[displayPolicy.status] || displayPolicy.status}
             </Badge>
             {allowedTransitions.length > 0 && (
               <DropdownMenu>
@@ -340,10 +469,20 @@ export default function StaffPolicies() {
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
+            <Select value={docLang} onValueChange={setDocLang}>
+              <SelectTrigger className="w-[140px] h-9">
+                <SelectValue placeholder="Language" />
+              </SelectTrigger>
+              <SelectContent>
+                {(languages || [{ code: "en", name: "English" }]).map((l) => (
+                  <SelectItem key={l.code} value={l.code}>{l.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button
               variant="outline"
               className="gap-2"
-              onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/document`, "_blank", "noopener")}
+              onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/document?lang=${docLang}`, "_blank", "noopener")}
               data-testid="btn-download-policy-doc"
             >
               <Download className="h-4 w-4" /> Policy document
@@ -358,41 +497,92 @@ export default function StaffPolicies() {
             </Button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Premium</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold" data-testid="text-premium-amount">{selectedPolicy.currency} {Number(selectedPolicy.premiumAmount).toFixed(2)}</p>
-                <p className="text-xs text-muted-foreground">{selectedPolicy.paymentSchedule}</p>
-              </CardContent>
-            </Card>
-            <Card className="shadow-sm">
-              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Client</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-lg font-semibold" data-testid="text-policy-client">{getClientName(selectedPolicy.clientId)}</p>
-              </CardContent>
-            </Card>
-            <Card className="shadow-sm">
-              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Effective Date</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-lg font-semibold" data-testid="text-effective-date">{selectedPolicy.effectiveDate || "Not set"}</p>
-              </CardContent>
-            </Card>
-            <Card className="shadow-sm">
-              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Claimability</CardTitle></CardHeader>
-              <CardContent>
-                <Badge variant="outline" className={selectedPolicy.claimable ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}>
-                  {selectedPolicy.claimable ? "Claimable" : "Not claimable"}
-                </Badge>
-                {selectedPolicy.claimableReason && <p className="text-xs text-muted-foreground mt-1">{selectedPolicy.claimableReason}</p>}
-              </CardContent>
-            </Card>
-          </div>
+          <Card className="shadow-sm border-border/60">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2"><CalendarDays className="h-4 w-4 text-primary" /> Policy Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground text-xs">Premium</p>
+                  <p className="text-lg font-bold" data-testid="text-premium-amount">{displayPolicy.currency} {Number(displayPolicy.premiumAmount).toFixed(2)}</p>
+                  <p className="text-xs text-muted-foreground capitalize">{displayPolicy.paymentSchedule}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Client</p>
+                  <p className="font-semibold" data-testid="text-policy-client">{getClientName(displayPolicy.clientId)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Product</p>
+                  <p className="font-semibold">{displayPolicy.productName || "—"}</p>
+                  {displayPolicy.productVersionLabel && <p className="text-xs text-muted-foreground">{displayPolicy.productVersionLabel}</p>}
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Capture Date</p>
+                  <p className="font-semibold">{displayPolicy.createdAt ? new Date(displayPolicy.createdAt).toLocaleDateString() : "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Effective Date</p>
+                  <p className="font-semibold" data-testid="text-effective-date">{displayPolicy.effectiveDate || "Not set"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Inception Date</p>
+                  <p className="font-semibold">{displayPolicy.inceptionDate || "Not set"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Waiting Period</p>
+                  <p className="font-semibold">{displayPolicy.waitingPeriodDays != null ? `${displayPolicy.waitingPeriodDays} days` : "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Waiting Period End</p>
+                  <p className="font-semibold">{displayPolicy.waitingPeriodEndDate || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Grace End</p>
+                  <p className="font-semibold">{displayPolicy.graceEndDate || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Claimability</p>
+                  <Badge variant="outline" className={displayPolicy.claimable ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}>
+                    {displayPolicy.claimable ? "Claimable" : "Not claimable"}
+                  </Badge>
+                  {displayPolicy.claimableReason && <p className="text-xs text-muted-foreground mt-1">{displayPolicy.claimableReason}</p>}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <Card className="shadow-sm border-border/60">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-primary" /> Policy Members</CardTitle>
-              <CardDescription>People covered under this policy</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-primary" /> Policy Members</CardTitle>
+                  <CardDescription>People covered under this policy</CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1"
+                    onClick={() => syncMembersMutation.mutate()}
+                    disabled={syncMembersMutation.isPending}
+                  >
+                    {syncMembersMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Users className="h-3.5 w-3.5" />}
+                    Sync from client
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1"
+                    onClick={() => {
+                      setDetailAddDepOpen(true);
+                      setDetailDepForm({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
+                    }}
+                  >
+                    <UserPlus className="h-3.5 w-3.5" /> Add Dependent
+                  </Button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               {membersLoading ? (
@@ -401,12 +591,20 @@ export default function StaffPolicies() {
                   <Skeleton className="h-10 w-full" />
                 </div>
               ) : policyMembers && policyMembers.length > 0 ? (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader className="bg-muted/50">
                     <TableRow>
-                      <TableHead className="pl-6">Member ID</TableHead>
                       <TableHead className="pl-6">Member</TableHead>
-                      <TableHead>Role</TableHead>
+                      <TableHead>Relationship</TableHead>
+                      <TableHead>National ID</TableHead>
+                      <TableHead>DOB</TableHead>
+                      <TableHead>Age</TableHead>
+                      <TableHead>Gender</TableHead>
+                      <TableHead>Capture Date</TableHead>
+                      <TableHead>Inception</TableHead>
+                      <TableHead>Cover Date</TableHead>
+                      <TableHead>Waiting</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Claimable</TableHead>
                     </TableRow>
@@ -414,30 +612,79 @@ export default function StaffPolicies() {
                   <TableBody>
                     {policyMembers.map((m: any) => (
                       <TableRow key={m.id} data-testid={`row-member-${m.id}`}>
-                        <TableCell className="pl-6 font-mono text-sm">{m.memberNumber || "—"}</TableCell>
-                        <TableCell className="pl-6 font-medium">
-                          {m.clientId ? getClientName(m.clientId) : m.dependentId?.slice(0, 8) + "..."}
+                        <TableCell className="pl-6 font-medium whitespace-nowrap">
+                          {m.memberName || (m.clientId ? getClientName(m.clientId) : "—")}
+                          {m.memberNumber && <span className="block text-xs text-muted-foreground font-mono">{m.memberNumber}</span>}
                         </TableCell>
-                        <TableCell>{m.role}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{m.relationship || m.role}</Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">{m.nationalId || "—"}</TableCell>
+                        <TableCell className="text-sm whitespace-nowrap">{m.dateOfBirth || "—"}</TableCell>
+                        <TableCell className="text-sm">{m.age != null ? m.age : "—"}</TableCell>
+                        <TableCell className="text-sm capitalize">{m.gender || "—"}</TableCell>
+                        <TableCell className="text-sm whitespace-nowrap">{m.captureDate || "—"}</TableCell>
+                        <TableCell className="text-sm whitespace-nowrap">{m.inceptionDate || "—"}</TableCell>
+                        <TableCell className="text-sm whitespace-nowrap">
+                          {m.coverDate || "—"}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {m.waitingPeriodDays != null ? (
+                            <span className="text-xs">{m.waitingPeriodDays}d</span>
+                          ) : "—"}
+                        </TableCell>
                         <TableCell>
                           <Badge variant="outline" className={m.isActive ? "bg-emerald-500/15 text-emerald-700" : "bg-gray-500/15 text-gray-600"}>
                             {m.isActive ? "Active" : "Inactive"}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={m.claimable ? "bg-emerald-500/15 text-emerald-700" : "bg-muted text-muted-foreground"}>
-                            {m.claimable ? "Yes" : "No"}
-                          </Badge>
+                          <div className="flex flex-col gap-1">
+                            <Badge variant="outline" className={m.claimable ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/15 text-amber-700"}>
+                              {m.claimable ? "Yes" : "No"}
+                            </Badge>
+                            {m.claimableReason && <span className="text-[10px] text-muted-foreground leading-tight max-w-[140px]">{m.claimableReason}</span>}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               ) : (
                 <div className="p-6 text-center text-muted-foreground" data-testid="text-no-members">No members found for this policy.</div>
               )}
             </CardContent>
           </Card>
+
+          {displayPolicy.beneficiaryFirstName && (
+            <Card className="shadow-sm border-border/60">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-primary" /> Beneficiary</CardTitle>
+                <CardDescription>Designated beneficiary for this policy</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <p className="text-muted-foreground text-xs">Name</p>
+                    <p className="font-medium">{displayPolicy.beneficiaryFirstName} {displayPolicy.beneficiaryLastName}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Relationship</p>
+                    <p className="font-medium">{displayPolicy.beneficiaryRelationship || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">National ID</p>
+                    <p className="font-medium font-mono">{displayPolicy.beneficiaryNationalId || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Phone</p>
+                    <p className="font-medium">{displayPolicy.beneficiaryPhone || "—"}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="shadow-sm border-border/60">
             <CardHeader>
@@ -563,6 +810,65 @@ export default function StaffPolicies() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <Dialog open={detailAddDepOpen} onOpenChange={setDetailAddDepOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Add Dependent to Policy</DialogTitle>
+              <DialogDescription>This dependent will be added to the client record and linked to this policy.</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-xs">First Name *</Label>
+                <Input value={detailDepForm.firstName} onChange={(e) => setDetailDepForm({ ...detailDepForm, firstName: e.target.value })} placeholder="First name" />
+              </div>
+              <div>
+                <Label className="text-xs">Last Name *</Label>
+                <Input value={detailDepForm.lastName} onChange={(e) => setDetailDepForm({ ...detailDepForm, lastName: e.target.value })} placeholder="Last name" />
+              </div>
+              <div>
+                <Label className="text-xs">Relationship *</Label>
+                <Select value={detailDepForm.relationship} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, relationship: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                  <SelectContent>
+                    {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
+                      <SelectItem key={r} value={r}>{r}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">National ID</Label>
+                <Input value={detailDepForm.nationalId} onChange={(e) => setDetailDepForm({ ...detailDepForm, nationalId: e.target.value })} placeholder="ID number" />
+              </div>
+              <div>
+                <Label className="text-xs">Date of Birth</Label>
+                <Input type="date" value={detailDepForm.dateOfBirth} onChange={(e) => setDetailDepForm({ ...detailDepForm, dateOfBirth: e.target.value })} />
+              </div>
+              <div>
+                <Label className="text-xs">Gender</Label>
+                <Select value={detailDepForm.gender} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, gender: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="male">Male</SelectItem>
+                    <SelectItem value="female">Female</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDetailAddDepOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => detailAddDepMutation.mutate(detailDepForm)}
+                disabled={!detailDepForm.firstName || !detailDepForm.lastName || !detailDepForm.relationship || detailAddDepMutation.isPending}
+              >
+                {detailAddDepMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Add Dependent
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </StaffLayout>
     );
   }
@@ -602,12 +908,10 @@ export default function StaffPolicies() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="draft">Draft</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
                     <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="grace">Grace</SelectItem>
                     <SelectItem value="lapsed">Lapsed</SelectItem>
-                    <SelectItem value="reinstatement_pending">Reinstatement Pending</SelectItem>
                     <SelectItem value="cancelled">Cancelled</SelectItem>
                   </SelectContent>
                 </Select>
@@ -694,7 +998,7 @@ export default function StaffPolicies() {
           <DialogHeader>
             <DialogTitle>Issue New Policy</DialogTitle>
             <DialogDescription>
-              {createStep === 1 && "Enter policy holder and beneficiaries."}
+              {createStep === 1 && "Select an existing lead or create a new client. A client record is auto-created if needed."}
               {createStep === 2 && "Select product and version for this tenant."}
               {createStep === 3 && "Select add-ons (optional)."}
               {createStep === 4 && "Review premium and save. A unique policy number will be generated."}
@@ -704,18 +1008,113 @@ export default function StaffPolicies() {
             {createStep === 1 && (
               <>
                 <div>
-                  <Label>Policy holder (client)</Label>
-                  <ClientSearchInput
-                    value={createForm.clientId}
-                    onChange={(id) => setCreateForm({ ...createForm, clientId: id, beneficiaryDependentIds: [] })}
-                    placeholder="Search client by name, email, or phone..."
-                    data-testid="select-client"
-                  />
-                  {selectedClient && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {selectedClient.firstName} {selectedClient.lastName}
-                      {clientAge != null && ` · Age: ${clientAge}`}
-                    </p>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label>Policy holder</Label>
+                    <div className="flex gap-1">
+                      <Button
+                        type="button"
+                        variant={clientMode === "search" ? "default" : "outline"}
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setClientMode("search")}
+                      >
+                        Existing Lead
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={clientMode === "new" ? "default" : "outline"}
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => { setClientMode("new"); setCreateForm((f) => ({ ...f, clientId: "" })); }}
+                      >
+                        New Client
+                      </Button>
+                    </div>
+                  </div>
+                  {clientMode === "search" ? (
+                    <>
+                      <ClientSearchInput
+                        value={createForm.clientId}
+                        onChange={(id) => setCreateForm({ ...createForm, clientId: id, beneficiaryDependentIds: [] })}
+                        placeholder="Search lead by name, email, or phone..."
+                        data-testid="select-client"
+                      />
+                      {selectedClient && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {selectedClient.firstName} {selectedClient.lastName}
+                          {clientAge != null && ` · Age: ${clientAge}`}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <div className="border rounded-md p-3 space-y-3 bg-muted/20">
+                      <p className="text-xs text-muted-foreground">A client record will be auto-created when the policy is saved.</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <Label className="text-xs">First Name *</Label>
+                          <Input
+                            value={createForm.newClient.firstName}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, firstName: e.target.value } })}
+                            placeholder="First name"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Last Name *</Label>
+                          <Input
+                            value={createForm.newClient.lastName}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, lastName: e.target.value } })}
+                            placeholder="Last name"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Phone</Label>
+                          <Input
+                            value={createForm.newClient.phone}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, phone: e.target.value } })}
+                            placeholder="Phone number"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Email</Label>
+                          <Input
+                            type="email"
+                            value={createForm.newClient.email}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, email: e.target.value } })}
+                            placeholder="Email address"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">National ID</Label>
+                          <Input
+                            value={createForm.newClient.nationalId}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, nationalId: e.target.value } })}
+                            placeholder="ID number"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Date of Birth</Label>
+                          <Input
+                            type="date"
+                            value={createForm.newClient.dateOfBirth}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, dateOfBirth: e.target.value } })}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Gender</Label>
+                          <Select
+                            value={createForm.newClient.gender}
+                            onValueChange={(v) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, gender: v } })}
+                          >
+                            <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="male">Male</SelectItem>
+                              <SelectItem value="female">Female</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </div>
                 <div>
@@ -753,112 +1152,309 @@ export default function StaffPolicies() {
                     </>
                   )}
                 </div>
-                {createForm.clientId && dependents && dependents.length > 0 && (
+                {createForm.clientId && (
                   <div>
-                    <Label>Beneficiaries (dependents)</Label>
-                    <div className="border rounded-md p-3 space-y-2 max-h-40 overflow-y-auto">
-                      {dependents.map((d: any) => {
-                        const depAge = d.dateOfBirth ? (() => {
-                          const dob = new Date(d.dateOfBirth);
-                          const today = new Date();
-                          let age = today.getFullYear() - dob.getFullYear();
-                          const m = today.getMonth() - dob.getMonth();
-                          if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
-                          return age;
-                        })() : null;
-                        return (
-                        <div key={d.id} className="flex items-center gap-2">
-                          <Checkbox
-                            id={`dep-${d.id}`}
-                            checked={createForm.beneficiaryDependentIds.includes(d.id)}
-                            onCheckedChange={(checked) => {
-                              const next = checked
-                                ? [...createForm.beneficiaryDependentIds, d.id]
-                                : createForm.beneficiaryDependentIds.filter((id) => id !== d.id);
-                              setCreateForm({ ...createForm, beneficiaryDependentIds: next });
-                            }}
-                          />
-                          <label htmlFor={`dep-${d.id}`} className="text-sm cursor-pointer">
-                            {d.firstName} {d.lastName}
-                            {d.relationship ? ` (${d.relationship})` : ""}
-                            {depAge != null && ` · Age: ${depAge}`}
-                          </label>
-                        </div>
-                        );
-                      })}
+                    <div className="flex items-center justify-between mb-2">
+                      <Label>Dependents</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1 h-7 text-xs"
+                        onClick={() => setShowAddDep(true)}
+                      >
+                        <UserPlus className="h-3 w-3" /> Add Dependent
+                      </Button>
                     </div>
+                    {dependents && dependents.length > 0 ? (
+                      <div className="border rounded-md p-3 space-y-2 max-h-40 overflow-y-auto">
+                        {dependents.map((d: any) => {
+                          const depAge = d.dateOfBirth ? (() => {
+                            const dob = new Date(d.dateOfBirth);
+                            const today = new Date();
+                            let age = today.getFullYear() - dob.getFullYear();
+                            const m = today.getMonth() - dob.getMonth();
+                            if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+                            return age;
+                          })() : null;
+                          return (
+                          <div key={d.id} className="flex items-center gap-2">
+                            <Checkbox
+                              id={`dep-${d.id}`}
+                              checked={createForm.beneficiaryDependentIds.includes(d.id)}
+                              onCheckedChange={(checked) => {
+                                const next = checked
+                                  ? [...createForm.beneficiaryDependentIds, d.id]
+                                  : createForm.beneficiaryDependentIds.filter((id) => id !== d.id);
+                                setCreateForm({ ...createForm, beneficiaryDependentIds: next });
+                              }}
+                            />
+                            <label htmlFor={`dep-${d.id}`} className="text-sm cursor-pointer">
+                              {d.firstName} {d.lastName}
+                              {d.relationship ? ` (${d.relationship})` : ""}
+                              {depAge != null && ` · Age: ${depAge}`}
+                            </label>
+                          </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No dependents yet. Add dependents to include them on the policy.</p>
+                    )}
+                    {showAddDep && (
+                      <div className="border rounded-md p-3 mt-2 space-y-3 bg-muted/20">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <Label className="text-xs">First Name *</Label>
+                            <Input value={newDep.firstName} onChange={(e) => setNewDep({ ...newDep, firstName: e.target.value })} placeholder="First name" />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Last Name *</Label>
+                            <Input value={newDep.lastName} onChange={(e) => setNewDep({ ...newDep, lastName: e.target.value })} placeholder="Last name" />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Relationship *</Label>
+                            <Select value={newDep.relationship} onValueChange={(v) => setNewDep({ ...newDep, relationship: v })}>
+                              <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                              <SelectContent>
+                                {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
+                                  <SelectItem key={r} value={r}>{r}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-xs">National ID</Label>
+                            <Input value={newDep.nationalId} onChange={(e) => setNewDep({ ...newDep, nationalId: e.target.value })} placeholder="ID number" />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Date of Birth</Label>
+                            <Input type="date" value={newDep.dateOfBirth} onChange={(e) => setNewDep({ ...newDep, dateOfBirth: e.target.value })} />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Gender</Label>
+                            <Select value={newDep.gender} onValueChange={(v) => setNewDep({ ...newDep, gender: v })}>
+                              <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="male">Male</SelectItem>
+                                <SelectItem value="female">Female</SelectItem>
+                                <SelectItem value="other">Other</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => addDepMutation.mutate(newDep)}
+                            disabled={!newDep.firstName || !newDep.lastName || !newDep.relationship || addDepMutation.isPending}
+                          >
+                            {addDepMutation.isPending && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                            Save Dependent
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => { setShowAddDep(false); setNewDep({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" }); }}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {(createForm.clientId || clientMode === "new") && (
+                  <div>
+                    <Label>Beneficiary (required — max 1)</Label>
+                    {clientMode === "search" && createForm.clientId ? (
+                      <Select
+                        value={createForm.beneficiaryId || "__manual__"}
+                        onValueChange={(v) => {
+                          if (v === "__manual__") {
+                            setCreateForm({ ...createForm, beneficiaryId: "" });
+                          } else {
+                            setCreateForm({ ...createForm, beneficiaryId: v, beneficiaryManual: { firstName: "", lastName: "", relationship: "", nationalId: "", phone: "" } });
+                          }
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select beneficiary..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__manual__">Enter manually</SelectItem>
+                          {dependents?.map((d: any) => (
+                            <SelectItem key={d.id} value={d.id}>
+                              {d.firstName} {d.lastName} ({d.relationship})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1">Enter beneficiary details below.</p>
+                    )}
+                    {!createForm.beneficiaryId && (
+                      <div className="border rounded-md p-3 mt-2 space-y-3 bg-muted/20">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <Label className="text-xs">First Name *</Label>
+                            <Input value={createForm.beneficiaryManual.firstName} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, firstName: e.target.value } })} placeholder="First name" />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Last Name *</Label>
+                            <Input value={createForm.beneficiaryManual.lastName} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, lastName: e.target.value } })} placeholder="Last name" />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Relationship *</Label>
+                            <Select value={createForm.beneficiaryManual.relationship} onValueChange={(v) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, relationship: v } })}>
+                              <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                              <SelectContent>
+                                {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
+                                  <SelectItem key={r} value={r}>{r}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-xs">National ID</Label>
+                            <Input value={createForm.beneficiaryManual.nationalId} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, nationalId: e.target.value } })} placeholder="ID number" />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Phone</Label>
+                            <Input value={createForm.beneficiaryManual.phone} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, phone: e.target.value } })} placeholder="Phone number" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </>
             )}
-            {createStep === 2 && (
-              <>
-                <div>
-                  <Label>Product</Label>
-                  <Select
-                    value={createForm.selectedProductId}
-                    onValueChange={(v) => setCreateForm({ ...createForm, selectedProductId: v, productVersionId: "" })}
-                  >
-                    <SelectTrigger data-testid="select-product">
-                      <SelectValue placeholder="Select product..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {products?.map((p: any) => (
-                        <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {createForm.selectedProductId && (
+            {createStep === 2 && (() => {
+              const activeVersion = productVersions?.find((v: any) => v.isActive);
+              if (activeVersion && !createForm.productVersionId) {
+                setTimeout(() => setCreateForm((f) => ({ ...f, productVersionId: activeVersion.id })), 0);
+              }
+              return (
+                <>
                   <div>
-                    <Label>Product version</Label>
+                    <Label>Product</Label>
                     <Select
-                      value={createForm.productVersionId}
-                      onValueChange={(v) => setCreateForm({ ...createForm, productVersionId: v })}
+                      value={createForm.selectedProductId}
+                      onValueChange={(v) => setCreateForm({ ...createForm, selectedProductId: v, productVersionId: "" })}
                     >
-                      <SelectTrigger data-testid="select-product-version">
-                        <SelectValue placeholder="Select version..." />
+                      <SelectTrigger data-testid="select-product">
+                        <SelectValue placeholder="Select product..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {productVersions?.map((v: any) => (
-                          <SelectItem key={v.id} value={v.id}>
-                            {`Version ${v.version ?? v.versionNumber ?? ""}${v.effectiveFrom ? ` (${v.effectiveFrom})` : ""}`.trim() || v.id}
-                          </SelectItem>
+                        {products?.map((p: any) => (
+                          <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                )}
-              </>
-            )}
-            {createStep === 3 && (
-              <div>
-                <Label>Add-ons (optional)</Label>
-                {addOns && addOns.length > 0 ? (
-                  <div className="border rounded-md p-3 space-y-2 max-h-48 overflow-y-auto">
-                    {addOns.filter((a: any) => a.isActive !== false).map((a: any) => (
-                      <div key={a.id} className="flex items-center gap-2">
-                        <Checkbox
-                          id={`ao-${a.id}`}
-                          checked={createForm.selectedAddOns.includes(a.id)}
-                          onCheckedChange={(checked) => {
-                            const next = checked
-                              ? [...createForm.selectedAddOns, a.id]
-                              : createForm.selectedAddOns.filter((id) => id !== a.id);
-                            setCreateForm({ ...createForm, selectedAddOns: next });
-                          }}
-                        />
-                        <label htmlFor={`ao-${a.id}`} className="text-sm cursor-pointer flex-1">
-                          {a.name} {a.priceAmount != null ? `— ${a.pricingMode === "percentage" ? `${a.priceAmount}%` : createForm.currency + " " + a.priceAmount}` : ""}
-                        </label>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No add-ons configured for this tenant.</p>
-                )}
-              </div>
-            )}
+                  {createForm.selectedProductId && (
+                    <div>
+                      <Label>Product version</Label>
+                      {activeVersion ? (
+                        <>
+                          <Input
+                            readOnly
+                            disabled
+                            className="bg-muted"
+                            value={`Version ${activeVersion.version ?? activeVersion.versionNumber ?? ""}${activeVersion.effectiveFrom ? ` (from ${activeVersion.effectiveFrom})` : ""} — Active`}
+                            data-testid="select-product-version"
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">Only the active version can be used for new policies.</p>
+                        </>
+                      ) : (
+                        <>
+                          <Select
+                            value={createForm.productVersionId}
+                            onValueChange={(v) => setCreateForm({ ...createForm, productVersionId: v })}
+                          >
+                            <SelectTrigger data-testid="select-product-version">
+                              <SelectValue placeholder="Select version..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {productVersions?.map((v: any) => (
+                                <SelectItem key={v.id} value={v.id}>
+                                  {`Version ${v.version ?? v.versionNumber ?? ""}${v.effectiveFrom ? ` (${v.effectiveFrom})` : ""}`.trim() || v.id}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-amber-600 mt-1">No active version found. Select a version manually.</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+            {createStep === 3 && (() => {
+              const activeAddOns = addOns?.filter((a: any) => a.isActive !== false) || [];
+              const policyMembers: { ref: string; label: string }[] = [];
+              if (selectedClient) {
+                policyMembers.push({ ref: "holder", label: `${selectedClient.firstName} ${selectedClient.lastName} (Policy holder)` });
+              } else if (clientMode === "new" && createForm.newClient.firstName) {
+                policyMembers.push({ ref: "holder", label: `${createForm.newClient.firstName} ${createForm.newClient.lastName} (Policy holder — new)` });
+              }
+              if (dependents) {
+                for (const d of dependents) {
+                  if (createForm.beneficiaryDependentIds.includes(d.id)) {
+                    policyMembers.push({ ref: d.id, label: `${d.firstName} ${d.lastName}${d.relationship ? ` (${d.relationship})` : " (Dependent)"}` });
+                  }
+                }
+              }
+
+              const toggleMemberAddOn = (memberRef: string, addOnId: string, checked: boolean) => {
+                setCreateForm((f) => {
+                  const current = f.memberAddOns[memberRef] || [];
+                  const next = checked ? [...current, addOnId] : current.filter((id) => id !== addOnId);
+                  return { ...f, memberAddOns: { ...f.memberAddOns, [memberRef]: next } };
+                });
+              };
+
+              if (activeAddOns.length === 0) {
+                return <p className="text-sm text-muted-foreground">No add-ons configured for this tenant.</p>;
+              }
+
+              return (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">Select which add-ons apply to each member. Price shown matches the policy's billing schedule.</p>
+                  {policyMembers.map((member) => (
+                    <div key={member.ref} className="border rounded-md p-3 space-y-2">
+                      <p className="text-sm font-semibold">{member.label}</p>
+                      {activeAddOns.map((a: any) => {
+                        const memberAo = createForm.memberAddOns[member.ref] || [];
+                        const scheduleLabel = createForm.paymentSchedule === "weekly" ? "/wk" : createForm.paymentSchedule === "biweekly" ? "/2wk" : "/mo";
+                        let displayPrice: string | null = null;
+                        if (a.pricingMode === "percentage") {
+                          displayPrice = `${a.priceAmount || a.priceMonthly || "0"}%`;
+                        } else {
+                          const p = createForm.paymentSchedule === "weekly" && a.priceWeekly ? a.priceWeekly
+                            : createForm.paymentSchedule === "biweekly" && a.priceBiweekly ? a.priceBiweekly
+                            : (a.priceMonthly || a.priceAmount);
+                          if (p) displayPrice = `${createForm.currency} ${p}${scheduleLabel}`;
+                        }
+                        return (
+                          <div key={a.id} className="flex items-center gap-2 pl-2">
+                            <Checkbox
+                              id={`ao-${member.ref}-${a.id}`}
+                              checked={memberAo.includes(a.id)}
+                              onCheckedChange={(checked) => toggleMemberAddOn(member.ref, a.id, !!checked)}
+                            />
+                            <label htmlFor={`ao-${member.ref}-${a.id}`} className="text-sm cursor-pointer flex-1">
+                              {a.name}
+                              {displayPrice && (
+                                <span className="text-muted-foreground ml-1">— {displayPrice}</span>
+                              )}
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
             {createStep === 4 && (
               <>
                 <div className="rounded-md bg-muted/50 p-3">
@@ -918,7 +1514,11 @@ export default function StaffPolicies() {
               <Button
                 onClick={() => setCreateStep((s) => s + 1)}
                 disabled={
-                  (createStep === 1 && !createForm.clientId) ||
+                  (createStep === 1 && (
+                    (clientMode === "search" && !createForm.clientId) ||
+                    (clientMode === "new" && (!createForm.newClient.firstName || !createForm.newClient.lastName)) ||
+                    (!createForm.beneficiaryId && (!createForm.beneficiaryManual.firstName || !createForm.beneficiaryManual.lastName || !createForm.beneficiaryManual.relationship))
+                  )) ||
                   (createStep === 2 && (!createForm.selectedProductId || !createForm.productVersionId))
                 }
               >
@@ -930,7 +1530,13 @@ export default function StaffPolicies() {
                   ...createForm,
                   premiumAmount: calculatedPremium ?? "",
                 })}
-                disabled={createMutation.isPending || !createForm.clientId || !createForm.productVersionId || !calculatedPremium}
+                disabled={
+                  createMutation.isPending ||
+                  (clientMode === "search" && !createForm.clientId) ||
+                  (clientMode === "new" && (!createForm.newClient.firstName || !createForm.newClient.lastName)) ||
+                  !createForm.productVersionId ||
+                  !calculatedPremium
+                }
                 data-testid="btn-submit-policy"
               >
                 {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

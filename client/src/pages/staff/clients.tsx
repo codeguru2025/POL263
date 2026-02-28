@@ -30,6 +30,8 @@ import {
   Trash2,
   UserPlus,
   Heart,
+  TrendingUp,
+  ArrowRight,
 } from "lucide-react";
 
 interface Client {
@@ -60,6 +62,7 @@ interface Client {
 
 interface Policy {
   id: string;
+  clientId: string;
   policyNumber: string;
   status: string;
   premiumAmount: string;
@@ -189,6 +192,14 @@ export default function StaffClients() {
     queryKey: ["/api/clients"],
   });
 
+  const { data: allPolicies } = useQuery<Policy[]>({
+    queryKey: ["/api/policies"],
+  });
+
+  const clientsWithPolicies = new Set(
+    (allPolicies || []).map((p) => p.clientId).filter(Boolean)
+  );
+
   const { data: selectedClient, isLoading: isLoadingDetail } = useQuery<Client>({
     queryKey: ["/api/clients", selectedClientId],
     queryFn: async () => {
@@ -310,12 +321,13 @@ export default function StaffClients() {
       (client.phone || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       (client.nationalId || "").toLowerCase().includes(searchQuery.toLowerCase());
 
+    const hasPolicy = clientsWithPolicies.has(client.id);
     const matchesStatus =
       statusFilter === "all" ||
+      (statusFilter === "leads" && !hasPolicy) ||
+      (statusFilter === "converted" && hasPolicy) ||
       (statusFilter === "active" && client.isActive) ||
-      (statusFilter === "inactive" && !client.isActive) ||
-      (statusFilter === "enrolled" && client.isEnrolled) ||
-      (statusFilter === "not_enrolled" && !client.isEnrolled);
+      (statusFilter === "inactive" && !client.isActive);
 
     return matchesSearch && matchesStatus;
   });
@@ -384,25 +396,47 @@ export default function StaffClients() {
               <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-client-name">
                 {isLoadingDetail ? "Loading..." : `${selectedClient?.firstName} ${selectedClient?.lastName}`}
               </h1>
-              <p className="text-muted-foreground mt-1">Client Details</p>
+              <p className="text-muted-foreground mt-1">{linkedPolicies.length > 0 ? "Converted Client" : "Lead — No policy issued yet"}</p>
             </div>
             {selectedClient && (
               <div className="ml-auto flex items-center gap-2">
                 <Badge variant={selectedClient.isActive ? "default" : "secondary"} data-testid="badge-client-status">
                   {selectedClient.isActive ? "Active" : "Inactive"}
                 </Badge>
-                <Badge variant={selectedClient.isEnrolled ? "default" : "outline"} data-testid="badge-client-enrolled">
-                  {selectedClient.isEnrolled ? "Enrolled" : "Not Enrolled"}
-                </Badge>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                  onClick={() => openEdit(selectedClient)}
-                  data-testid="btn-edit-client"
-                >
-                  <Pencil className="h-3.5 w-3.5" /> Edit
-                </Button>
+                {linkedPolicies.length > 0 ? (
+                  <Badge variant="default" className="bg-emerald-600" data-testid="badge-client-converted">
+                    Converted
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200" data-testid="badge-client-lead">
+                    Lead
+                  </Badge>
+                )}
+                {linkedPolicies.length === 0 ? (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => openEdit(selectedClient)}
+                      data-testid="btn-edit-client"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${selectedClient.id}`; }}
+                      data-testid="btn-issue-policy-detail"
+                    >
+                      <ArrowRight className="h-3.5 w-3.5" /> Issue Policy
+                    </Button>
+                  </div>
+                ) : (
+                  <Badge variant="outline" className="text-xs text-muted-foreground">
+                    Locked — edit via policy
+                  </Badge>
+                )}
               </div>
             )}
           </div>
@@ -700,32 +734,84 @@ export default function StaffClients() {
     );
   }
 
+  const totalClients = (clientsList || []).length;
+  const convertedCount = (clientsList || []).filter((c) => clientsWithPolicies.has(c.id)).length;
+  const leadCount = totalClients - convertedCount;
+  const conversionRate = totalClients > 0 ? ((convertedCount / totalClients) * 100).toFixed(1) : "0";
+
   return (
     <StaffLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight">Clients</h1>
-            <p className="text-muted-foreground mt-1">Manage policyholders and their communication preferences.</p>
+            <h1 className="text-3xl font-display font-bold tracking-tight">Leads &amp; Clients</h1>
+            <p className="text-muted-foreground mt-1">Track prospects and conversions. Clients are your leads — policies are your source of truth.</p>
           </div>
           <Button
             className="gap-2 shadow-sm"
             onClick={() => { setFormData(emptyForm); setPendingDependents([]); setShowCreateDialog(true); }}
             data-testid="btn-add-client"
           >
-            <Plus className="h-4 w-4" /> Add New Client
+            <Plus className="h-4 w-4" /> Capture Lead
           </Button>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Card className="shadow-sm">
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-blue-50"><Users className="h-4 w-4 text-blue-600" /></div>
+                <div>
+                  <p className="text-2xl font-bold">{totalClients}</p>
+                  <p className="text-xs text-muted-foreground">Total Records</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-sm">
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-amber-50"><Users className="h-4 w-4 text-amber-600" /></div>
+                <div>
+                  <p className="text-2xl font-bold">{leadCount}</p>
+                  <p className="text-xs text-muted-foreground">Leads (no policy)</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-sm">
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-emerald-50"><FileStack className="h-4 w-4 text-emerald-600" /></div>
+                <div>
+                  <p className="text-2xl font-bold">{convertedCount}</p>
+                  <p className="text-xs text-muted-foreground">Converted (has policy)</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-sm">
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-indigo-50"><TrendingUp className="h-4 w-4 text-indigo-600" /></div>
+                <div>
+                  <p className="text-2xl font-bold">{conversionRate}%</p>
+                  <p className="text-xs text-muted-foreground">Conversion Rate</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         <Card className="shadow-sm border-border/60">
           <CardHeader className="pb-4">
             <div className="flex items-center justify-between flex-wrap gap-3">
-              <CardTitle>Client Registry</CardTitle>
+              <CardTitle>Lead &amp; Client Registry</CardTitle>
               <div className="flex items-center gap-2">
                 <div className="relative w-64">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search clients..."
+                    placeholder="Search leads & clients..."
                     className="pl-9 bg-background"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
@@ -733,16 +819,16 @@ export default function StaffClients() {
                   />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-36" data-testid="select-status-filter">
+                  <SelectTrigger className="w-40" data-testid="select-status-filter">
                     <Filter className="h-4 w-4 mr-2" />
                     <SelectValue placeholder="Filter" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="leads">Leads Only</SelectItem>
+                    <SelectItem value="converted">Converted Only</SelectItem>
                     <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="inactive">Inactive</SelectItem>
-                    <SelectItem value="enrolled">Enrolled</SelectItem>
-                    <SelectItem value="not_enrolled">Not Enrolled</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -766,6 +852,7 @@ export default function StaffClients() {
                     <TableHead className="pl-6">Client</TableHead>
                     <TableHead>Contact Info</TableHead>
                     <TableHead>National ID</TableHead>
+                    <TableHead>Conversion</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right pr-6">Actions</TableHead>
                   </TableRow>
@@ -818,13 +905,31 @@ export default function StaffClients() {
                         </span>
                       </TableCell>
                       <TableCell>
+                        {(() => {
+                          const cp = (allPolicies || []).filter((p) => p.clientId === client.id);
+                          if (cp.length === 0) {
+                            return (
+                              <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200">
+                                Lead
+                              </Badge>
+                            );
+                          }
+                          return (
+                            <div className="space-y-1">
+                              {cp.map((p) => (
+                                <Badge key={p.id} variant="outline" className="font-mono text-xs block w-fit bg-emerald-500/10 text-emerald-700 border-emerald-200">
+                                  {p.policyNumber}
+                                </Badge>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </TableCell>
+                      <TableCell>
                         <div className="flex items-center gap-2">
                           <Badge variant={client.isActive ? "default" : "secondary"}>
                             {client.isActive ? "Active" : "Inactive"}
                           </Badge>
-                          {client.isEnrolled && (
-                            <Badge variant="outline" className="text-xs">Enrolled</Badge>
-                          )}
                         </div>
                       </TableCell>
                       <TableCell className="text-right pr-6">
@@ -835,18 +940,34 @@ export default function StaffClients() {
                             className="h-8 w-8"
                             onClick={() => openDetail(client.id)}
                             data-testid={`btn-view-client-${client.id}`}
+                            title="View details"
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => openEdit(client)}
-                            data-testid={`btn-edit-client-${client.id}`}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
+                          {!clientsWithPolicies.has(client.id) && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => openEdit(client)}
+                                data-testid={`btn-edit-client-${client.id}`}
+                                title="Edit lead"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-primary"
+                                onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${client.id}`; }}
+                                data-testid={`btn-issue-policy-${client.id}`}
+                                title="Issue policy"
+                              >
+                                <ArrowRight className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

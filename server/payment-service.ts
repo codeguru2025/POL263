@@ -16,6 +16,31 @@ const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction"
 const REINSTATEMENT_PURPOSE = "reinstatement";
 const GROUP_PAYMENT_STATUS_PAID = "paid";
 
+async function rollbackClawbacksForPolicy(orgId: string, policy: any) {
+  if (!policy.agentId) return;
+  try {
+    const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
+    const clawbacks = entries.filter((e: any) => e.entryType === "clawback" && e.status === "earned");
+    const existingRollbacks = entries.filter((e: any) => e.entryType === "rollback");
+    const clawbackTotal = clawbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
+    const rollbackTotal = existingRollbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
+    const unreversed = clawbackTotal + rollbackTotal;
+    if (unreversed >= 0) return;
+    await storage.createCommissionLedgerEntry({
+      organizationId: orgId,
+      agentId: policy.agentId,
+      policyId: policy.id,
+      entryType: "rollback",
+      amount: Math.abs(unreversed).toFixed(2),
+      currency: policy.currency || "USD",
+      description: `Rollback — policy reinstated, clawback reversed`,
+      status: "earned",
+    });
+  } catch (err) {
+    structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId: policy.id });
+  }
+}
+
 /** actor_id in payment_events references users.id; clients are not in users. Use null when actor is client. */
 function eventActorId(actorType: string, actorId: string | null | undefined): string | null {
   return actorType === "client" ? null : (actorId ?? null);
@@ -147,6 +172,11 @@ function buildRemoteParams(
     onemoney: "onemoney",
   };
   const paynowMethod = methodMap[method.toLowerCase()] || "ecocash";
+  let cleanPhone = phone.replace(/\D/g, "").trim();
+  if (cleanPhone.startsWith("0") && cleanPhone.length === 10) {
+    cleanPhone = "263" + cleanPhone.slice(1);
+  }
+  structuredLog("info", "Paynow remote initiate", { method: paynowMethod, phone: cleanPhone, merchantReference, amount });
   const params: Record<string, string> = {
     id,
     reference: merchantReference,
@@ -155,7 +185,7 @@ function buildRemoteParams(
     resulturl: resultUrl,
     status: "Message",
     method: paynowMethod,
-    phone: phone.replace(/\D/g, "").trim(),
+    phone: cleanPhone,
   };
   const hashKeyOrder = ["id", "reference", "amount", "returnurl", "resulturl", "status", "method", "phone"];
   params.hash = generatePaynowHash(params, hashKeyOrder);
@@ -225,6 +255,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
   }
 
   const text = await res.text();
+  structuredLog("info", "Paynow response raw", { text: text.slice(0, 500), isRemote, method });
   const parsed = new URLSearchParams(text);
   const status = parsed.get("status") ?? "";
   const pollUrl = parsed.get("pollurl") ?? undefined;
@@ -233,7 +264,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
 
   if (status.toLowerCase() !== "ok") {
     const errMsg = parsed.get("error") ?? text.slice(0, 200);
-    structuredLog("warn", "Paynow init non-OK", { status, error: errMsg });
+    structuredLog("warn", "Paynow init non-OK", { status, error: errMsg, isRemote, method });
     await storage.updatePaymentIntent(intent.id, { status: "failed" }, intent.organizationId);
     await storage.createPaymentEvent({
       paymentIntentId: intent.id,
@@ -451,19 +482,20 @@ export async function applyPaymentToPolicy(
     actorId: eventActorId(actorType, actorId),
   });
 
-  if (policy.status === "grace") {
-    await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null }, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "grace", "active", "Payment received", effectiveUserId ?? undefined);
-  } else if (policy.status === "reinstatement_pending" && intent.purpose === REINSTATEMENT_PURPOSE) {
-    await storage.updatePolicy(intent.policyId, { status: "active" }, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "reinstatement_pending", "active", "Reinstatement payment received", effectiveUserId ?? undefined);
-  } else if (policy.status === "pending") {
+  if (policy.status === "inactive") {
     const today = new Date().toISOString().split("T")[0];
     const update: { status: string; inceptionDate?: string; effectiveDate?: string } = { status: "active" };
     update.inceptionDate = today;
     if (!policy.effectiveDate) update.effectiveDate = today;
     await storage.updatePolicy(intent.policyId, update, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "pending", "active", "First premium paid", effectiveUserId ?? undefined);
+    await storage.createPolicyStatusHistory(intent.policyId, "inactive", "active", "First premium paid — conversion", effectiveUserId ?? undefined);
+  } else if (policy.status === "grace") {
+    await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null }, orgId);
+    await storage.createPolicyStatusHistory(intent.policyId, "grace", "active", "Payment received", effectiveUserId ?? undefined);
+  } else if (policy.status === "lapsed") {
+    await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null }, orgId);
+    await storage.createPolicyStatusHistory(intent.policyId, "lapsed", "active", "Reinstatement — payment received", effectiveUserId ?? undefined);
+    await rollbackClawbacksForPolicy(orgId, policy);
   }
 
   const { generateReceiptPdf } = await import("./receipt-pdf");
@@ -489,6 +521,41 @@ export async function applyPaymentToPolicy(
     body: `Payment of ${intent.currency} ${intent.amount} received for policy ${policy.policyNumber}. Receipt #${receiptNumber}.`,
     status: "sent",
   });
+
+  if (policy.agentId) {
+    try {
+      const plans = await storage.getCommissionPlans(orgId);
+      const activePlan = plans.find((p) => p.isActive);
+      if (activePlan) {
+        const existingPayments = await storage.getPaymentsByPolicy(policy.id!, orgId);
+        const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
+        const firstMonths = Number(activePlan.firstMonthsCount) || 2;
+        const firstRate = Number(activePlan.firstMonthsRate) || 50;
+        const recurringStart = Number(activePlan.recurringStartMonth) || 5;
+        const recurringRate = Number(activePlan.recurringRate) || 10;
+        let rate = 0;
+        let entryType = "recurring";
+        if (clearedCount <= firstMonths) { rate = firstRate; entryType = "first_months"; }
+        else { rate = recurringRate; entryType = "recurring"; }
+        if (rate > 0) {
+          const commAmount = (parseFloat(String(intent.amount)) * rate / 100).toFixed(2);
+          await storage.createCommissionLedgerEntry({
+            organizationId: orgId,
+            agentId: policy.agentId,
+            policyId: policy.id!,
+            transactionId: transaction.id,
+            entryType,
+            amount: commAmount,
+            currency: intent.currency || "USD",
+            description: `${rate}% commission on Paynow payment (${entryType === "first_months" ? "initial" : "recurring"})`,
+            status: "earned",
+          });
+        }
+      }
+    } catch (err) {
+      structuredLog("error", "Commission calculation failed (Paynow)", { error: (err as Error).message });
+    }
+  }
 
   return { ok: true, transactionId: transaction.id, receiptId: receipt.id };
 }
@@ -551,12 +618,16 @@ export async function applyGroupPaymentToPolicies(
       status: "issued",
       metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference },
     });
-    if (policy.status === "grace") {
+    if (policy.status === "inactive") {
+      await storage.updatePolicy(alloc.policyId, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, orgId);
+      await storage.createPolicyStatusHistory(alloc.policyId, "inactive", "active", "First premium paid — conversion (group PayNow)", actorId ?? undefined);
+    } else if (policy.status === "grace") {
       await storage.updatePolicy(alloc.policyId, { status: "active", graceEndDate: null }, orgId);
       await storage.createPolicyStatusHistory(alloc.policyId, "grace", "active", "Payment received (group PayNow)", actorId ?? undefined);
-    } else if (policy.status === "pending") {
-      await storage.updatePolicy(alloc.policyId, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, orgId);
-      await storage.createPolicyStatusHistory(alloc.policyId, "pending", "active", "First premium paid (group PayNow)", actorId ?? undefined);
+    } else if (policy.status === "lapsed") {
+      await storage.updatePolicy(alloc.policyId, { status: "active", graceEndDate: null }, orgId);
+      await storage.createPolicyStatusHistory(alloc.policyId, "lapsed", "active", "Reinstatement — payment received (group PayNow)", actorId ?? undefined);
+      await rollbackClawbacksForPolicy(orgId, policy);
     }
     if (!notifiedClients.has(policy.clientId!)) {
       notifiedClients.add(policy.clientId!);

@@ -36,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ThemeSwitcher } from "@/components/theme-switcher";
 
 function ReferralLinkBox({ referralCode }: { referralCode: string }) {
   const [copied, setCopied] = useState(false);
@@ -128,7 +129,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       title: "Core Operations",
       items: [
         { href: "/staff/policies", label: "Policies", icon: FileStack, permission: "read:policy" },
-        { href: "/staff/clients", label: "Clients", icon: Users, permission: "read:client" },
+        { href: "/staff/clients", label: "Leads & Clients", icon: Users, permission: "read:client" },
         { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim" },
         { href: "/staff/funerals", label: "Funeral Ops", icon: Truck, permission: "read:funeral_ops" },
         { href: "/staff/leads", label: "Lead Pipeline", icon: Target, permission: "read:lead" },
@@ -344,6 +345,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
               <Clock className="h-4 w-4 hidden sm:block" />
               {dateTimeStr}
             </span>
+            <ThemeSwitcher />
           </div>
         </header>
 

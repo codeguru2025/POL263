@@ -4,6 +4,32 @@ import fs from "fs";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 
+const SUPPORTED_LANGUAGES: Record<string, string> = {
+  en: "English", sn: "Shona", nd: "Ndebele", zu: "Zulu", xh: "Xhosa",
+  af: "Afrikaans", fr: "French", pt: "Portuguese", sw: "Swahili",
+  st: "Sesotho", tn: "Setswana", ny: "Chichewa", es: "Spanish",
+};
+
+async function translateText(text: string, targetLang: string): Promise<string> {
+  if (!targetLang || targetLang === "en") return text;
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url, { headers: { "User-Agent": "POL263" } });
+    if (!res.ok) return text;
+    const data = await res.json() as any[];
+    if (!data?.[0]) return text;
+    return data[0].map((s: any) => s?.[0] || "").join("");
+  } catch {
+    return text;
+  }
+}
+
+async function translateBatch(texts: string[], targetLang: string): Promise<string[]> {
+  if (!targetLang || targetLang === "en") return texts;
+  const results = await Promise.all(texts.map((t) => translateText(t, targetLang)));
+  return results;
+}
+
 /** Resolve logo or signature image for PDF: tenant setting can be a path (/uploads/... or /assets/...) or full URL. */
 async function resolveImageForPdf(url: string | null | undefined): Promise<Buffer | null> {
   if (!url || !url.trim()) return null;
@@ -48,7 +74,7 @@ function ageFromDob(dob: string | null | undefined): number | null {
   return age;
 }
 
-export async function streamPolicyDocumentToResponse(policyId: string, orgId: string, res: Response, options?: { inline?: boolean }): Promise<void> {
+export async function streamPolicyDocumentToResponse(policyId: string, orgId: string, res: Response, options?: { inline?: boolean; lang?: string }): Promise<void> {
   const policy = await storage.getPolicy(policyId, orgId);
   if (!policy || policy.organizationId !== orgId) {
     res.status(404).json({ message: "Policy not found" });
@@ -56,17 +82,53 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   }
   const org = await storage.getOrganization(policy.organizationId);
   const client = await storage.getClient(policy.clientId, policy.organizationId);
-  const dependentsList = await storage.getDependentsByClient(policy.clientId, policy.organizationId);
-  const terms = await storage.getTermsByOrg(policy.organizationId);
+  const lang = options?.lang || "en";
+  let terms = await storage.getTermsByOrg(policy.organizationId);
+  const policyMemberRows = await storage.getPolicyMembers(policy.id, policy.organizationId);
   let productName = "N/A";
   let productVersion: any = null;
+  let waitingPeriodDays = 90;
   if (policy.productVersionId) {
     const pv = await storage.getProductVersion(policy.productVersionId, policy.organizationId);
     if (pv) {
       productVersion = pv;
+      waitingPeriodDays = pv.waitingPeriodDays ?? 90;
       const prod = await storage.getProduct(pv.productId, policy.organizationId);
       if (prod) productName = `${prod.name} (${prod.code})`;
+      const pvTerms = await storage.getTermsByProductVersion(pv.id, policy.organizationId);
+      if (pvTerms.length > 0) terms = pvTerms;
     }
+  }
+
+  const today = new Date().toISOString().split("T")[0];
+  const policyStatusOk = policy.status === "active" || policy.status === "grace";
+
+  interface EnrichedMember {
+    name: string; relationship: string; nationalId: string;
+    dateOfBirth: string; age: number | null; gender: string;
+    captureDate: string; inceptionDate: string; coverDate: string;
+    waitingDays: number; claimable: boolean; claimableReason: string;
+  }
+  const enrichedMembers: EnrichedMember[] = [];
+  for (const m of policyMemberRows as any[]) {
+    let name = ""; let relationship = ""; let dateOfBirth = "";
+    let gender = ""; let nationalId = "";
+    if (m.dependentId) {
+      const dep = await storage.getDependent(m.dependentId, policy.organizationId);
+      if (dep) { name = `${dep.firstName} ${dep.lastName}`; relationship = dep.relationship; dateOfBirth = dep.dateOfBirth || ""; gender = dep.gender || ""; nationalId = dep.nationalId || ""; }
+    } else if (m.clientId) {
+      const cl = await storage.getClient(m.clientId, policy.organizationId);
+      if (cl) { name = `${cl.firstName} ${cl.lastName}`; relationship = "Policy Holder"; dateOfBirth = cl.dateOfBirth || ""; gender = cl.gender || ""; nationalId = cl.nationalId || ""; }
+    }
+    const age = ageFromDob(dateOfBirth);
+    const captureDate = m.createdAt ? new Date(m.createdAt).toISOString().split("T")[0] : "";
+    const inceptionDate = policy.inceptionDate || policy.effectiveDate || captureDate;
+    let coverDate = "";
+    if (inceptionDate) { const d = new Date(inceptionDate); d.setDate(d.getDate() + waitingPeriodDays); coverDate = d.toISOString().split("T")[0]; }
+    const waitingOver = !coverDate || coverDate <= today;
+    const claimable = policyStatusOk && waitingOver;
+    const claimableReason = !policyStatusOk ? `Policy ${policy.status}` : !waitingOver ? `Waiting until ${coverDate}` : "Eligible";
+    enrichedMembers.push({ name, relationship, nationalId, dateOfBirth, age, gender, captureDate, inceptionDate: inceptionDate || "", coverDate, waitingDays: waitingPeriodDays, claimable, claimableReason });
   }
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   res.setHeader("Content-Type", "application/pdf");
@@ -130,7 +192,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   y += 20;
   const policyFields = [
     ["Policy Number", policy.policyNumber],
-    ["Status", (policy.status || "draft").toUpperCase()],
+    ["Status", (policy.status || "inactive").toUpperCase()],
     ["Product", productName],
     ["Currency", policy.currency],
     ["Premium Amount", `${policy.currency} ${parseFloat(policy.premiumAmount).toFixed(2)}`],
@@ -139,7 +201,10 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() +
         (policy.paymentSchedule || "monthly").slice(1),
     ],
+    ["Capture Date", policy.createdAt ? new Date(policy.createdAt).toLocaleDateString("en-GB") : "—"],
     ["Effective Date", policy.effectiveDate || "Not set"],
+    ["Inception Date", policy.inceptionDate || "Not set"],
+    ["Waiting Period", `${waitingPeriodDays} days`],
     ["Waiting Period End", policy.waitingPeriodEndDate || "N/A"],
   ];
   doc.font("Helvetica").fontSize(9).fillColor("#000000");
@@ -224,8 +289,8 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     }
     y += 10;
   }
-  if (dependentsList.length > 0) {
-    if (y > 620) {
+  if (enrichedMembers.length > 0) {
+    if (y > 550) {
       doc.addPage();
       y = 50;
     }
@@ -233,7 +298,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       .fillColor(primaryColor)
       .fontSize(12)
       .font("Helvetica-Bold")
-      .text("Dependents / Beneficiaries", 50, y);
+      .text("Policy Members", 50, y);
     y += 5;
     doc
       .moveTo(50, y + 12)
@@ -242,14 +307,17 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       .lineWidth(1)
       .stroke();
     y += 20;
-    doc.font("Helvetica-Bold").fontSize(8).fillColor("#333333");
-    doc.text("Name", 50, y, { width: 120 });
-    doc.text("Relationship", 175, y, { width: 70 });
-    doc.text("National ID", 250, y, { width: 75 });
-    doc.text("DOB", 330, y, { width: 65 });
-    doc.text("Age", 400, y, { width: 35 });
-    doc.text("Gender", 440, y, { width: 60 });
-    y += 14;
+    doc.font("Helvetica-Bold").fontSize(7).fillColor("#333333");
+    doc.text("Name", 50, y, { width: 85 });
+    doc.text("Role", 138, y, { width: 55 });
+    doc.text("ID No.", 196, y, { width: 60 });
+    doc.text("DOB", 259, y, { width: 52 });
+    doc.text("Age", 314, y, { width: 22 });
+    doc.text("Cover Date", 339, y, { width: 58 });
+    doc.text("Wait", 400, y, { width: 30 });
+    doc.text("Claimable", 433, y, { width: 48 });
+    doc.text("Status", 484, y, { width: 55 });
+    y += 12;
     doc
       .moveTo(50, y)
       .lineTo(545, y)
@@ -257,25 +325,43 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       .lineWidth(0.5)
       .stroke();
     y += 4;
-    doc.font("Helvetica").fontSize(8).fillColor("#000000");
-    for (const dep of dependentsList) {
-      if (y > 750) {
+    doc.font("Helvetica").fontSize(7).fillColor("#000000");
+    for (const mem of enrichedMembers) {
+      if (y > 740) {
         doc.addPage();
         y = 50;
       }
-      const depAge = ageFromDob(dep.dateOfBirth);
-      doc.text(`${dep.firstName} ${dep.lastName}`, 50, y, { width: 120 });
-      doc.text(dep.relationship, 175, y, { width: 70 });
-      doc.text(dep.nationalId || "—", 250, y, { width: 75 });
-      doc.text(dep.dateOfBirth || "—", 330, y, { width: 65 });
-      doc.text(depAge != null ? String(depAge) : "—", 400, y, { width: 35 });
-      doc.text(
-        dep.gender ? dep.gender.charAt(0).toUpperCase() + dep.gender.slice(1) : "—",
-        440,
-        y,
-        { width: 60 },
-      );
-      y += 14;
+      doc.text(mem.name || "—", 50, y, { width: 85 });
+      doc.text(mem.relationship || "—", 138, y, { width: 55 });
+      doc.text(mem.nationalId || "—", 196, y, { width: 60 });
+      doc.text(mem.dateOfBirth || "—", 259, y, { width: 52 });
+      doc.text(mem.age != null ? String(mem.age) : "—", 314, y, { width: 22 });
+      doc.text(mem.coverDate || "—", 339, y, { width: 58 });
+      doc.text(`${mem.waitingDays}d`, 400, y, { width: 30 });
+      doc.fillColor(mem.claimable ? "#059669" : "#D97706").text(mem.claimable ? "Yes" : "No", 433, y, { width: 48 });
+      doc.fillColor("#000000").text(mem.claimableReason, 484, y, { width: 55 });
+      y += 13;
+    }
+    y += 10;
+  }
+  const bp = policy as any;
+  if (bp.beneficiaryFirstName) {
+    if (y > 680) { doc.addPage(); y = 50; }
+    doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Designated Beneficiary", 50, y);
+    y += 5;
+    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+    y += 20;
+    const bFields = [
+      ["Name", `${bp.beneficiaryFirstName} ${bp.beneficiaryLastName || ""}`],
+      ["Relationship", bp.beneficiaryRelationship || "—"],
+      ["National ID", bp.beneficiaryNationalId || "—"],
+      ["Phone", bp.beneficiaryPhone || "—"],
+    ];
+    doc.font("Helvetica").fontSize(9).fillColor("#000000");
+    for (const [label, value] of bFields) {
+      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
+      doc.font("Helvetica").text(`  ${value}`, { width: 350 });
+      y += 15;
     }
     y += 10;
   }
@@ -319,11 +405,20 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       doc.addPage();
       y = 50;
     }
+
+    const allTitles = terms.map((t) => t.title);
+    const allContents = terms.map((t) => t.content);
+    const [translatedTitles, translatedContents, sectionHeader] = await Promise.all([
+      translateBatch(allTitles, lang),
+      translateBatch(allContents, lang),
+      translateText("Terms and Conditions", lang),
+    ]);
+
     doc
       .fillColor(primaryColor)
       .fontSize(12)
       .font("Helvetica-Bold")
-      .text("Terms and Conditions", 50, y);
+      .text(sectionHeader, 50, y);
     y += 5;
     doc
       .moveTo(50, y + 12)
@@ -332,7 +427,13 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       .lineWidth(1)
       .stroke();
     y += 20;
-    for (const term of terms) {
+
+    if (lang !== "en") {
+      doc.font("Helvetica").fontSize(7).fillColor("#888888").text(`Translated to ${SUPPORTED_LANGUAGES[lang] || lang} from English`, 50, y);
+      y += 12;
+    }
+
+    for (let i = 0; i < terms.length; i++) {
       if (y > 700) {
         doc.addPage();
         y = 50;
@@ -341,13 +442,13 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
         .font("Helvetica-Bold")
         .fontSize(9)
         .fillColor("#000000")
-        .text(term.title, 50, y);
+        .text(translatedTitles[i], 50, y);
       y += 14;
       doc
         .font("Helvetica")
         .fontSize(8)
         .fillColor("#333333")
-        .text(term.content, 50, y, {
+        .text(translatedContents[i], 50, y, {
           width: 495,
           lineGap: 3,
         });
@@ -385,7 +486,13 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   doc.end();
 }
 
+export { SUPPORTED_LANGUAGES };
+
 export function registerPolicyDocumentRoute(app: Express) {
+  app.get("/api/languages", (_req: Request, res: Response) => {
+    return res.json(Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => ({ code, name })));
+  });
+
   app.get("/api/policies/:id/document", async (req: Request, res: Response) => {
     const user = req.user as any;
     if (!user?.organizationId) {
@@ -397,7 +504,8 @@ export function registerPolicyDocumentRoute(app: Express) {
       return res.status(404).json({ message: "Policy not found" });
     }
 
-    await streamPolicyDocumentToResponse(policy.id, policy.organizationId, res);
+    const lang = (req.query.lang as string || "en").toLowerCase();
+    await streamPolicyDocumentToResponse(policy.id, policy.organizationId, res, { lang });
   });
 
   // E-Statement PDF: premium summary + payment history (optionally date-filtered)

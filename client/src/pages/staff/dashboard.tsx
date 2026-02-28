@@ -77,13 +77,11 @@ interface ProductPerformance {
 
 const FUNNEL_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#ddd6fe", "#ede9fe"];
 const STATUS_COLORS: Record<string, string> = {
+  inactive: "#3b82f6",
   active: "#10b981",
-  draft: "#6b7280",
-  pending: "#f59e0b",
   grace: "#f97316",
   lapsed: "#ef4444",
   cancelled: "#94a3b8",
-  reinstatement_pending: "#3b82f6",
 };
 
 export default function StaffDashboard() {
@@ -190,9 +188,9 @@ export default function StaffDashboard() {
       bgColor: "bg-rose-50",
     },
     {
-      title: "Clients",
+      title: "Leads & Clients",
       value: stats?.totalClients ?? 0,
-      subtitle: "Registered policyholders",
+      subtitle: `${stats?.totalPolicies ? Math.min(stats.totalPolicies, stats.totalClients) : 0} converted`,
       icon: Users,
       color: "text-emerald-600",
       bgColor: "bg-emerald-50",
@@ -214,9 +212,11 @@ export default function StaffDashboard() {
       bgColor: "bg-purple-50",
     },
     {
-      title: "Leads",
-      value: stats?.totalLeads ?? 0,
-      subtitle: "Pipeline entries",
+      title: "Lead Conversion",
+      value: stats?.totalClients
+        ? `${((Math.min(stats.totalPolicies ?? 0, stats.totalClients) / stats.totalClients) * 100).toFixed(0)}%`
+        : "0%",
+      subtitle: `${stats?.totalLeads ?? 0} pipeline leads`,
       icon: Target,
       color: "text-pink-600",
       bgColor: "bg-pink-50",
@@ -286,9 +286,8 @@ export default function StaffDashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
                     <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="draft">Draft</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
                     <SelectItem value="grace">Grace</SelectItem>
                     <SelectItem value="lapsed">Lapsed</SelectItem>
                     <SelectItem value="cancelled">Cancelled</SelectItem>

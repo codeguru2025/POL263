@@ -23,6 +23,9 @@ const statements = [
   `ALTER TABLE policies ADD COLUMN IF NOT EXISTS beneficiary_dependent_id uuid REFERENCES dependents(id)`,
   `ALTER TABLE clients ADD COLUMN IF NOT EXISTS agent_id uuid REFERENCES users(id)`,
   `CREATE INDEX IF NOT EXISTS clients_agent_idx ON clients(agent_id)`,
+  `ALTER TABLE policy_add_ons ADD COLUMN IF NOT EXISTS policy_member_id uuid REFERENCES policy_members(id) ON DELETE CASCADE`,
+  `CREATE INDEX IF NOT EXISTS pao_member_idx ON policy_add_ons(policy_member_id)`,
+  `ALTER TABLE policy_add_ons DROP CONSTRAINT IF EXISTS policy_add_on_unique_idx`,
 ];
 
 (async () => {

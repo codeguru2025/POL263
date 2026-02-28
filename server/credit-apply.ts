@@ -5,6 +5,7 @@
  */
 
 import { storage } from "./storage";
+import { structuredLog } from "./logger";
 import type { InsertPaymentTransaction, InsertPaymentReceipt } from "@shared/schema";
 
 export async function runApplyCreditBalances(orgId: string): Promise<{ applied: number; errors: string[] }> {
@@ -22,7 +23,7 @@ export async function runApplyCreditBalances(orgId: string): Promise<{ applied: 
 
     const dueDate = policy.currentCycleEnd ? String(policy.currentCycleEnd) : null;
     const isDue = dueDate && dueDate <= today;
-    const isPendingOrGrace = policy.status === "pending" || policy.status === "grace";
+    const isPendingOrGrace = policy.status === "inactive" || policy.status === "grace" || policy.status === "lapsed";
     if (!isDue && !isPendingOrGrace) continue;
 
     try {
@@ -91,12 +92,39 @@ export async function applyCreditBalanceToPolicy(
   };
   await storage.createPaymentReceipt(receiptData);
 
-  if (policy.status === "grace") {
+  if (policy.status === "inactive") {
+    await storage.updatePolicy(policyId, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, orgId);
+    await storage.createPolicyStatusHistory(policyId, "inactive", "active", "First premium paid — conversion (credit balance)", undefined);
+  } else if (policy.status === "grace") {
     await storage.updatePolicy(policyId, { status: "active", graceEndDate: null }, orgId);
     await storage.createPolicyStatusHistory(policyId, "grace", "active", "Premium paid from credit balance", undefined);
-  } else if (policy.status === "pending") {
-    await storage.updatePolicy(policyId, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, orgId);
-    await storage.createPolicyStatusHistory(policyId, "pending", "active", "First premium paid from credit balance", undefined);
+  } else if (policy.status === "lapsed") {
+    await storage.updatePolicy(policyId, { status: "active", graceEndDate: null }, orgId);
+    await storage.createPolicyStatusHistory(policyId, "lapsed", "active", "Reinstatement — premium paid from credit balance", undefined);
+    if (policy.agentId) {
+      try {
+        const entries = await storage.getCommissionEntriesByPolicy(policyId, orgId);
+        const clawbacks = entries.filter((e: any) => e.entryType === "clawback" && e.status === "earned");
+        const existingRollbacks = entries.filter((e: any) => e.entryType === "rollback");
+        const clawbackTotal = clawbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
+        const rollbackTotal = existingRollbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
+        const unreversed = clawbackTotal + rollbackTotal;
+        if (unreversed < 0) {
+          await storage.createCommissionLedgerEntry({
+            organizationId: orgId,
+            agentId: policy.agentId,
+            policyId,
+            entryType: "rollback",
+            amount: Math.abs(unreversed).toFixed(2),
+            currency: policy.currency || "USD",
+            description: `Rollback — policy reinstated, clawback reversed`,
+            status: "earned",
+          });
+        }
+      } catch (err) {
+        structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId });
+      }
+    }
   }
 
   await storage.createNotificationLog(orgId, {

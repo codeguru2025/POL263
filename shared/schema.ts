@@ -336,6 +336,12 @@ export const productVersions = pgTable(
     reinstatementNewWaitingPeriod: boolean("reinstatement_new_waiting_period").default(true),
     coverageRules: jsonb("coverage_rules"),
     exclusions: jsonb("exclusions"),
+    commissionFirstMonthsCount: integer("commission_first_months_count"),
+    commissionFirstMonthsRate: numeric("commission_first_months_rate"),
+    commissionRecurringStartMonth: integer("commission_recurring_start_month"),
+    commissionRecurringRate: numeric("commission_recurring_rate"),
+    commissionClawbackThreshold: integer("commission_clawback_threshold"),
+    commissionFuneralIncentive: numeric("commission_funeral_incentive"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -404,6 +410,9 @@ export const addOns = pgTable(
     description: text("description"),
     pricingMode: text("pricing_mode").default("flat").notNull(),
     priceAmount: numeric("price_amount"),
+    priceMonthly: numeric("price_monthly"),
+    priceWeekly: numeric("price_weekly"),
+    priceBiweekly: numeric("price_biweekly"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -1393,6 +1402,7 @@ export const termsAndConditions = pgTable(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id),
+    productVersionId: uuid("product_version_id").references(() => productVersions.id),
     title: text("title").notNull(),
     content: text("content").notNull(),
     category: text("category").default("general").notNull(),
@@ -1400,7 +1410,7 @@ export const termsAndConditions = pgTable(
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("tc_org_idx").on(t.organizationId)]
+  (t) => [index("tc_org_idx").on(t.organizationId), index("tc_pv_idx").on(t.productVersionId)]
 );
 
 export const insertTermsSchema = createInsertSchema(termsAndConditions).omit({ id: true, createdAt: true });
@@ -1587,16 +1597,14 @@ export type InsertCashup = z.infer<typeof insertCashupSchema>;
 
 // ─── POLICY STATUS ENUM ────────────────────────────────────
 
-export const POLICY_STATUSES = ["draft", "pending", "active", "grace", "lapsed", "reinstatement_pending", "cancelled"] as const;
+export const POLICY_STATUSES = ["inactive", "active", "grace", "lapsed", "cancelled"] as const;
 export type PolicyStatus = typeof POLICY_STATUSES[number];
 
 export const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
-  draft: ["pending"],
-  pending: ["active"],
+  inactive: ["active", "cancelled"],
   active: ["grace", "cancelled"],
   grace: ["active", "lapsed"],
-  lapsed: ["reinstatement_pending", "cancelled"],
-  reinstatement_pending: ["active"],
+  lapsed: ["active", "cancelled"],
 };
 
 export const CLAIM_STATUSES = ["submitted", "verified", "approved", "scheduled", "payable", "completed", "paid", "closed", "rejected"] as const;

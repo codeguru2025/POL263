@@ -232,6 +232,7 @@ export default function StaffFinance() {
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
   const { data: cashups = [] } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
   const { data: commissionPlans = [] } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
+  const { data: commissionLedger = [] } = useQuery<any[]>({ queryKey: ["/api/commission-ledger"] });
   const { data: expenditures = [] } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
   const { data: policies = [] } = useQuery<any[]>({ queryKey: ["/api/policies"] });
   const { data: clients = [] } = useQuery<any[]>({ queryKey: ["/api/clients"] });
@@ -317,9 +318,10 @@ export default function StaffFinance() {
 
   const cashReceiptMutation = useMutation({
     mutationFn: async () => {
+      const autoAmount = cashReceiptDialogPolicy?.premiumAmount ? parseFloat(cashReceiptDialogPolicy.premiumAmount).toFixed(2) : cashReceiptAmount;
       const res = await apiRequest("POST", "/api/admin/receipts/cash", {
         policyId: cashReceiptDialogPolicy?.id,
-        amount: cashReceiptAmount,
+        amount: autoAmount,
         currency: cashReceiptCurrency,
         notes: cashReceiptNotes || undefined,
         receivedAt: cashReceiptReceivedAt ? new Date(cashReceiptReceivedAt).toISOString() : undefined,
@@ -448,14 +450,15 @@ export default function StaffFinance() {
       toast({ title: "Select a policy", description: "Search and select the policy you're receipting.", variant: "destructive" });
       return;
     }
-    if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
-      toast({ title: "Enter amount", description: "Payment amount must be greater than zero.", variant: "destructive" });
+    const autoAmount = receiptDialogPolicy.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : paymentAmount;
+    if (!autoAmount || parseFloat(autoAmount) <= 0) {
+      toast({ title: "No premium", description: "Policy has no premium set.", variant: "destructive" });
       return;
     }
     createPaymentMutation.mutate({
       policyId: receiptDialogPolicy.id,
       clientId: receiptDialogPolicy.clientId,
-      amount: paymentAmount,
+      amount: autoAmount,
       currency: paymentCurrency,
       paymentMethod: paymentMethod,
       status: "cleared",
@@ -579,7 +582,7 @@ export default function StaffFinance() {
                           <TableRow key={p.id} data-testid={`row-payment-${p.id}`}>
                             <TableCell className="font-mono text-sm">{p.policyId ? getPolicyNumber(p.policyId) : "—"}</TableCell>
                             <TableCell>{client ? `${client.firstName} ${client.lastName}` : "—"}</TableCell>
-                            <TableCell className="font-semibold">{p.currency} {parseFloat(p.amount).toFixed(2)}</TableCell>
+                            <TableCell className="font-semibold">{p.currency} {parseFloat(p.amount || "0").toFixed(2)}</TableCell>
                             <TableCell><Badge variant="outline">{p.paymentMethod}</Badge></TableCell>
                             <TableCell>
                               <Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>
@@ -587,7 +590,7 @@ export default function StaffFinance() {
                               </Badge>
                             </TableCell>
                             <TableCell className="font-mono text-xs text-muted-foreground">{p.reference || "—"}</TableCell>
-                            <TableCell className="text-sm text-muted-foreground">{new Date(p.receivedAt).toLocaleDateString()}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</TableCell>
                           </TableRow>
                         );
                       })}
@@ -695,35 +698,172 @@ export default function StaffFinance() {
           </TabsContent>
 
           <TabsContent value="commissions">
-            <Card>
-              <CardHeader><CardTitle>Commission Plans</CardTitle></CardHeader>
-              <CardContent>
-                {commissionPlans.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No commission plans configured yet</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>First Months Rate</TableHead>
-                        <TableHead>Recurring Rate</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {commissionPlans.map((cp: any) => (
-                        <TableRow key={cp.id}>
-                          <TableCell className="font-medium">{cp.name}</TableCell>
-                          <TableCell>{cp.firstMonthsRate}% for {cp.firstMonthsCount} months</TableCell>
-                          <TableCell>{cp.recurringRate}% from month {cp.recurringStartMonth}</TableCell>
-                          <TableCell><Badge variant={cp.isActive ? "default" : "secondary"}>{cp.isActive ? "Active" : "Inactive"}</Badge></TableCell>
+            <div className="space-y-6">
+              {(() => {
+                const newBusiness = commissionLedger.filter((e: any) => e.entryType === "first_months");
+                const existingBusiness = commissionLedger.filter((e: any) => e.entryType === "recurring");
+                const clawbacks = commissionLedger.filter((e: any) => e.entryType === "clawback");
+                const rollbacks = commissionLedger.filter((e: any) => e.entryType === "rollback");
+                const sumOf = (arr: any[]) => arr.reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
+                const newBizTotal = sumOf(newBusiness);
+                const existBizTotal = sumOf(existingBusiness);
+                const clawbackTotal = sumOf(clawbacks);
+                const rollbackTotal = sumOf(rollbacks);
+                const netTotal = newBizTotal + existBizTotal + clawbackTotal + rollbackTotal;
+                const defaultCurrency = commissionLedger[0]?.currency || "USD";
+                const fmt = (v: number) => `${defaultCurrency} ${Math.abs(v).toFixed(2)}`;
+
+                return (
+                  <>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                      <Card className="bg-blue-50 dark:bg-blue-950/20 border-blue-200">
+                        <CardContent className="pt-4 text-center">
+                          <p className="text-xs text-muted-foreground mb-1">New Business</p>
+                          <p className="text-xl font-bold text-blue-700" data-testid="stat-comm-new-biz">{fmt(newBizTotal)}</p>
+                          <p className="text-[10px] text-muted-foreground">{newBusiness.length} entries</p>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200">
+                        <CardContent className="pt-4 text-center">
+                          <p className="text-xs text-muted-foreground mb-1">Existing Business</p>
+                          <p className="text-xl font-bold text-emerald-700" data-testid="stat-comm-existing-biz">{fmt(existBizTotal)}</p>
+                          <p className="text-[10px] text-muted-foreground">{existingBusiness.length} entries</p>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-red-50 dark:bg-red-950/20 border-red-200">
+                        <CardContent className="pt-4 text-center">
+                          <p className="text-xs text-muted-foreground mb-1">Clawbacks</p>
+                          <p className="text-xl font-bold text-red-700" data-testid="stat-comm-clawbacks">{clawbackTotal !== 0 ? `−${fmt(clawbackTotal)}` : fmt(0)}</p>
+                          <p className="text-[10px] text-muted-foreground">{clawbacks.length} entries</p>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-amber-50 dark:bg-amber-950/20 border-amber-200">
+                        <CardContent className="pt-4 text-center">
+                          <p className="text-xs text-muted-foreground mb-1">Rollbacks</p>
+                          <p className="text-xl font-bold text-amber-700" data-testid="stat-comm-rollbacks">{fmt(rollbackTotal)}</p>
+                          <p className="text-[10px] text-muted-foreground">{rollbacks.length} entries</p>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200">
+                        <CardContent className="pt-4 text-center">
+                          <p className="text-xs text-muted-foreground mb-1">Total Commissions</p>
+                          <p className={`text-xl font-bold ${netTotal < 0 ? "text-red-600" : "text-indigo-700"}`} data-testid="stat-comm-total">{netTotal < 0 ? `−${fmt(netTotal)}` : fmt(netTotal)}</p>
+                          <p className="text-[10px] text-muted-foreground">{commissionLedger.length} entries</p>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </>
+                );
+              })()}
+
+              <Card>
+                <CardHeader><CardTitle>Commission Plans</CardTitle></CardHeader>
+                <CardContent>
+                  {commissionPlans.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-8">No commission plans configured yet</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead>New Business Rate</TableHead>
+                          <TableHead>Existing Business Rate</TableHead>
+                          <TableHead>Clawback Threshold</TableHead>
+                          <TableHead>Status</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                      </TableHeader>
+                      <TableBody>
+                        {commissionPlans.map((cp: any) => (
+                          <TableRow key={cp.id}>
+                            <TableCell className="font-medium">{cp.name}</TableCell>
+                            <TableCell>{cp.firstMonthsRate}% for {cp.firstMonthsCount} months</TableCell>
+                            <TableCell>{cp.recurringRate}% from month {cp.recurringStartMonth}</TableCell>
+                            <TableCell>{cp.clawbackThresholdPayments ?? 4} payments</TableCell>
+                            <TableCell><Badge variant={cp.isActive ? "default" : "secondary"}>{cp.isActive ? "Active" : "Inactive"}</Badge></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="h-5 w-5" />
+                    Commission Ledger
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {commissionLedger.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-8">No commission entries yet. Commissions are auto-calculated when payments are receipted for policies with agents.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Client</TableHead>
+                          <TableHead>Policy</TableHead>
+                          <TableHead>Agent</TableHead>
+                          <TableHead>Payment Date</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {commissionLedger.map((entry: any) => {
+                          const typeLabel =
+                            entry.entryType === "first_months" ? "New Business" :
+                            entry.entryType === "recurring" ? "Existing Business" :
+                            entry.entryType === "clawback" ? "Clawback" :
+                            entry.entryType === "rollback" ? "Rollback" :
+                            entry.entryType;
+                          const typeBadgeVariant =
+                            entry.entryType === "clawback" ? "destructive" as const :
+                            entry.entryType === "rollback" ? "secondary" as const :
+                            "outline" as const;
+                          const amountVal = parseFloat(entry.amount || "0");
+                          const isNegative = amountVal < 0;
+                          return (
+                            <TableRow key={entry.id}>
+                              <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(entry.createdAt).toLocaleDateString()}</TableCell>
+                              <TableCell>
+                                {entry.clientFirstName ? (
+                                  <div>
+                                    <p className="text-sm font-medium">{entry.clientFirstName} {entry.clientLastName}</p>
+                                    {entry.clientPhone && <p className="text-[10px] text-muted-foreground">{entry.clientPhone}</p>}
+                                  </div>
+                                ) : "—"}
+                              </TableCell>
+                              <TableCell className="font-mono text-sm">{entry.policyNumber || (entry.policyId ? entry.policyId.slice(0, 8) : "—")}</TableCell>
+                              <TableCell className="text-sm">{entry.agentDisplayName || entry.agentEmail || "—"}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                                {entry.paymentDate ? new Date(entry.paymentDate).toLocaleDateString() : "—"}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={typeBadgeVariant}>{typeLabel}</Badge>
+                              </TableCell>
+                              <TableCell className={`font-semibold ${isNegative ? "text-red-600" : ""}`}>
+                                {isNegative ? "−" : ""}{entry.currency} {Math.abs(amountVal).toFixed(2)}
+                              </TableCell>
+                              <TableCell className="text-sm max-w-[200px] truncate">{entry.description || "—"}</TableCell>
+                              <TableCell>
+                                <Badge variant={entry.status === "earned" ? "default" : entry.status === "paid" ? "default" : "secondary"}>
+                                  {entry.status}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
 
           <TabsContent value="expenditures">
@@ -1018,26 +1158,16 @@ export default function StaffFinance() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Amount</Label>
+                <Label>Amount (auto from policy premium)</Label>
                 <Input
                   type="number"
                   step="0.01"
                   min="0.01"
-                  placeholder={receiptDialogPolicy?.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : "0.00"}
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  value={receiptDialogPolicy?.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : paymentAmount}
+                  readOnly
+                  className="bg-muted cursor-not-allowed"
                   data-testid="input-payment-amount"
                 />
-                {selectedPolicy?.premiumAmount && !paymentAmount && (
-                  <button
-                    type="button"
-                    className="text-xs text-primary mt-1 hover:underline"
-                    onClick={() => setPaymentAmount(parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2))}
-                    data-testid="button-use-premium"
-                  >
-                    Use premium amount ({parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2)})
-                  </button>
-                )}
               </div>
               <div>
                 <Label>Currency</Label>
@@ -1093,7 +1223,7 @@ export default function StaffFinance() {
             <Button variant="outline" onClick={() => setShowPaymentDialog(false)}>Cancel</Button>
             <Button
               onClick={handleSubmitPayment}
-              disabled={!receiptDialogPolicy || !paymentAmount || createPaymentMutation.isPending}
+              disabled={!receiptDialogPolicy || (!receiptDialogPolicy?.premiumAmount && !paymentAmount) || createPaymentMutation.isPending}
               data-testid="button-submit-payment"
             >
               {createPaymentMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
@@ -1124,8 +1254,8 @@ export default function StaffFinance() {
               {cashReceiptDialogPolicy && <p className="text-xs text-muted-foreground mt-1">Selected: {cashReceiptDialogPolicy.policyNumber}</p>}
             </div>
             <div>
-              <Label>Amount</Label>
-              <Input type="number" step="0.01" placeholder="0.00" value={cashReceiptAmount} onChange={(e) => setCashReceiptAmount(e.target.value)} />
+              <Label>Amount (auto from policy premium)</Label>
+              <Input type="number" step="0.01" placeholder="0.00" value={cashReceiptDialogPolicy?.premiumAmount ? parseFloat(cashReceiptDialogPolicy.premiumAmount).toFixed(2) : cashReceiptAmount} readOnly className="bg-muted cursor-not-allowed" />
             </div>
             <div>
               <Label>Currency</Label>
@@ -1151,7 +1281,7 @@ export default function StaffFinance() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCashReceiptDialog(false)}>Cancel</Button>
             <Button
-              disabled={!cashReceiptDialogPolicy || !cashReceiptAmount || parseFloat(cashReceiptAmount) <= 0 || cashReceiptMutation.isPending}
+              disabled={!cashReceiptDialogPolicy || (!cashReceiptDialogPolicy.premiumAmount && (!cashReceiptAmount || parseFloat(cashReceiptAmount) <= 0)) || cashReceiptMutation.isPending}
               onClick={() => cashReceiptMutation.mutate()}
             >
               {cashReceiptMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}

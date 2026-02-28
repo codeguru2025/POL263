@@ -30,6 +30,136 @@ import {
 } from "@shared/schema";
 import PDFDocument from "pdfkit";
 
+async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
+  if (!policy.agentId) return;
+  try {
+    // Product-version-level commission takes priority over org-wide plan
+    let firstMonths = 0, firstRate = 0, recurringStart = 0, recurringRate = 0;
+    let sourceLabel = "org plan";
+
+    if (policy.productVersionId) {
+      const pv = await storage.getProductVersion(policy.productVersionId, orgId);
+      if (pv?.commissionFirstMonthsRate != null) {
+        firstMonths = Number(pv.commissionFirstMonthsCount) || 2;
+        firstRate = Number(pv.commissionFirstMonthsRate) || 0;
+        recurringStart = Number(pv.commissionRecurringStartMonth) || firstMonths + 1;
+        recurringRate = Number(pv.commissionRecurringRate) || 0;
+        sourceLabel = "product version";
+      }
+    }
+
+    if (firstRate === 0 && recurringRate === 0) {
+      const plans = await storage.getCommissionPlans(orgId);
+      const activePlan = plans.find((p) => p.isActive);
+      if (!activePlan) return;
+      firstMonths = Number(activePlan.firstMonthsCount) || 2;
+      firstRate = Number(activePlan.firstMonthsRate) || 50;
+      recurringStart = Number(activePlan.recurringStartMonth) || 5;
+      recurringRate = Number(activePlan.recurringRate) || 10;
+      sourceLabel = "org plan";
+    }
+
+    const existingPayments = await storage.getPaymentsByPolicy(policy.id, orgId);
+    const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
+
+    let rate = 0;
+    let entryType = "recurring";
+    if (clearedCount <= firstMonths) {
+      rate = firstRate;
+      entryType = "first_months";
+    } else {
+      rate = recurringRate;
+      entryType = "recurring";
+    }
+
+    if (rate <= 0) return;
+
+    const amount = (parseFloat(paymentAmount) * rate / 100).toFixed(2);
+    await storage.createCommissionLedgerEntry({
+      organizationId: orgId,
+      agentId: policy.agentId,
+      policyId: policy.id,
+      transactionId,
+      entryType,
+      amount,
+      currency: policy.currency || "USD",
+      description: `${rate}% commission on payment #${clearedCount} (${entryType === "first_months" ? "initial" : "recurring"}, ${sourceLabel})`,
+      status: "earned",
+    });
+  } catch (err) {
+    structuredLog("error", "Commission calculation failed", { error: (err as Error).message, policyId: policy.id });
+  }
+}
+
+async function recordClawback(orgId: string, policy: any, reason: string) {
+  if (!policy.agentId) return;
+  try {
+    let clawbackThreshold = 4;
+    if (policy.productVersionId) {
+      const pv = await storage.getProductVersion(policy.productVersionId, orgId);
+      if (pv?.commissionClawbackThreshold != null) {
+        clawbackThreshold = Number(pv.commissionClawbackThreshold);
+      }
+    }
+    if (clawbackThreshold <= 0) {
+      const plans = await storage.getCommissionPlans(orgId);
+      const activePlan = plans.find((p) => p.isActive);
+      if (activePlan) clawbackThreshold = Number(activePlan.clawbackThresholdPayments) || 4;
+    }
+
+    const existingPayments = await storage.getPaymentsByPolicy(policy.id, orgId);
+    const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
+    if (clearedCount >= clawbackThreshold) return;
+
+    const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
+    const earnedEntries = entries.filter((e) => e.status === "earned" && (e.entryType === "first_months" || e.entryType === "recurring"));
+    if (earnedEntries.length === 0) return;
+
+    const totalClawback = earnedEntries.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0);
+    if (totalClawback <= 0) return;
+
+    await storage.createCommissionLedgerEntry({
+      organizationId: orgId,
+      agentId: policy.agentId,
+      policyId: policy.id,
+      entryType: "clawback",
+      amount: (-totalClawback).toFixed(2),
+      currency: policy.currency || "USD",
+      description: `Clawback — ${reason} (${clearedCount} of ${clawbackThreshold} threshold payments)`,
+      status: "earned",
+    });
+  } catch (err) {
+    structuredLog("error", "Clawback recording failed", { error: (err as Error).message, policyId: policy.id });
+  }
+}
+
+async function rollbackClawbacks(orgId: string, policy: any) {
+  if (!policy.agentId) return;
+  try {
+    const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
+    const clawbacks = entries.filter((e) => e.entryType === "clawback" && e.status === "earned");
+    const existingRollbacks = entries.filter((e) => e.entryType === "rollback");
+
+    const clawbackTotal = clawbacks.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0);
+    const rollbackTotal = existingRollbacks.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0);
+    const unreversed = clawbackTotal + rollbackTotal;
+    if (unreversed >= 0) return;
+
+    await storage.createCommissionLedgerEntry({
+      organizationId: orgId,
+      agentId: policy.agentId,
+      policyId: policy.id,
+      entryType: "rollback",
+      amount: Math.abs(unreversed).toFixed(2),
+      currency: policy.currency || "USD",
+      description: `Rollback — policy reinstated, clawback reversed`,
+      status: "earned",
+    });
+  } catch (err) {
+    structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId: policy.id });
+  }
+}
+
 function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any) {
   const user = req.user as any;
   return storage.createAuditLog({
@@ -45,13 +175,32 @@ function auditLog(req: any, action: string, entityType: string, entityId: string
   });
 }
 
-/** Compute policy premium from product version and add-ons (never use client-sent premium). */
+function getAddOnPrice(ao: any, paymentSchedule: string): number {
+  if (ao.pricingMode === "percentage") {
+    return parseFloat(String(ao.priceAmount ?? ao.priceMonthly ?? 0));
+  }
+  if (paymentSchedule === "weekly" && ao.priceWeekly) {
+    return parseFloat(String(ao.priceWeekly));
+  }
+  if (paymentSchedule === "biweekly" && ao.priceBiweekly) {
+    return parseFloat(String(ao.priceBiweekly));
+  }
+  return parseFloat(String(ao.priceMonthly ?? ao.priceAmount ?? 0));
+}
+
+/**
+ * Compute policy premium from product version and per-member add-ons.
+ * Add-on prices are matched to the policy's payment schedule using explicit
+ * priceMonthly / priceWeekly / priceBiweekly fields set in the product builder.
+ */
 async function computePolicyPremium(
   orgId: string,
   productVersionId: string,
   currency: string,
   paymentSchedule: string,
-  addOnIds: string[]
+  addOnIds: string[],
+  memberAddOns?: { memberRef: string; addOnId: string }[],
+  memberCount?: number,
 ): Promise<string> {
   const pv = await storage.getProductVersion(productVersionId, orgId);
   if (!pv) return "0";
@@ -63,20 +212,36 @@ async function computePolicyPremium(
   } else if (paymentSchedule === "biweekly") {
     base = parseFloat(String(pv.premiumBiweeklyUsd ?? 0));
   }
-  if (addOnIds.length > 0) {
-    const addOns = await storage.getAddOns(orgId);
-    for (const id of addOnIds) {
-      const ao = addOns.find((a: any) => a.id === id);
+
+  let addOnTotal = 0;
+  const orgAddOns = await storage.getAddOns(orgId);
+
+  if (memberAddOns && memberAddOns.length > 0) {
+    for (const ma of memberAddOns) {
+      const ao = orgAddOns.find((a: any) => a.id === ma.addOnId);
       if (!ao) continue;
-      const price = parseFloat(String(ao.priceAmount ?? 0));
+      const price = getAddOnPrice(ao, paymentSchedule);
       if (ao.pricingMode === "percentage") {
-        base += base * (price / 100);
+        addOnTotal += base * (price / 100);
       } else {
-        base += price;
+        addOnTotal += price;
+      }
+    }
+  } else if (addOnIds.length > 0) {
+    const count = memberCount || 1;
+    for (const id of addOnIds) {
+      const ao = orgAddOns.find((a: any) => a.id === id);
+      if (!ao) continue;
+      const price = getAddOnPrice(ao, paymentSchedule);
+      if (ao.pricingMode === "percentage") {
+        addOnTotal += base * (price / 100) * count;
+      } else {
+        addOnTotal += price * count;
       }
     }
   }
-  const total = Number.isFinite(base) && base >= 0 ? base : 0;
+
+  const total = Number.isFinite(base + addOnTotal) && (base + addOnTotal) >= 0 ? base + addOnTotal : 0;
   return total.toFixed(2);
 }
 
@@ -229,6 +394,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
     }));
     return res.json(usersWithRoles);
+  });
+
+  app.get("/api/agents", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const usersList = await storage.getUsersByOrg(user.organizationId, 500, 0);
+    const agentsList = [];
+    for (const u of usersList) {
+      const userRoles = await storage.getUserRoles(u.id, user.organizationId);
+      if (userRoles.some(r => r.name === "agent")) {
+        agentsList.push({
+          id: u.id, email: u.email, displayName: u.displayName,
+          referralCode: u.referralCode,
+        });
+      }
+    }
+    return res.json(agentsList);
   });
 
   app.get("/api/users/:id", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
@@ -523,6 +704,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  app.get("/api/product-versions", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getAllProductVersions(user.organizationId));
+  });
+
   app.get("/api/products/:id/versions", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
     const user = req.user as any;
     const product = await storage.getProduct(req.params.id as string, user.organizationId);
@@ -545,6 +731,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(pv);
   });
 
+  app.patch("/api/product-versions/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const before = await storage.getProductVersion(req.params.id as string, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Version not found" });
+    const updated = await storage.updateProductVersion(req.params.id as string, req.body, user.organizationId);
+    await auditLog(req, "UPDATE_PRODUCT_VERSION", "ProductVersion", req.params.id as string, before, updated);
+    return res.json(updated);
+  });
+
   // ─── Benefits & Add-ons ─────────────────────────────────────
 
   app.get("/api/benefit-catalog", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -559,6 +754,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(item);
   });
 
+  app.patch("/api/benefit-catalog/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const updated = await storage.updateBenefitCatalogItem(req.params.id as string, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    await auditLog(req, "UPDATE_BENEFIT_CATALOG_ITEM", "BenefitCatalogItem", req.params.id as string, null, updated);
+    return res.json(updated);
+  });
+
   app.get("/api/benefit-bundles", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getBenefitBundles(user.organizationId));
@@ -569,6 +772,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = insertBenefitBundleSchema.parse({ ...req.body, organizationId: user.organizationId });
     const bundle = await storage.createBenefitBundle(parsed);
     return res.status(201).json(bundle);
+  });
+
+  app.patch("/api/benefit-bundles/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const updated = await storage.updateBenefitBundle(req.params.id as string, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    await auditLog(req, "UPDATE_BENEFIT_BUNDLE", "BenefitBundle", req.params.id as string, null, updated);
+    return res.json(updated);
   });
 
   app.get("/api/add-ons", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -583,6 +794,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(addon);
   });
 
+  app.patch("/api/add-ons/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const updated = await storage.updateAddOn(req.params.id as string, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    await auditLog(req, "UPDATE_ADD_ON", "AddOn", req.params.id as string, null, updated);
+    return res.json(updated);
+  });
+
   app.get("/api/age-bands", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getAgeBandConfigs(user.organizationId));
@@ -593,6 +812,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = insertAgeBandConfigSchema.parse({ ...req.body, organizationId: user.organizationId });
     const config = await storage.createAgeBandConfig(parsed);
     return res.status(201).json(config);
+  });
+
+  app.patch("/api/age-bands/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const updated = await storage.updateAgeBandConfig(req.params.id as string, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    await auditLog(req, "UPDATE_AGE_BAND", "AgeBandConfig", req.params.id as string, null, updated);
+    return res.json(updated);
   });
 
   // ─── Policies ───────────────────────────────────────────────
@@ -642,7 +869,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       : !waitingOver
         ? `Waiting period ends ${policy.waitingPeriodEndDate}. Claims allowed after that date.`
         : "Policy and covered members are eligible for claims.";
-    return res.json({ ...policy, claimable, claimableReason });
+
+    let productName = "";
+    let productVersionLabel = "";
+    let waitingPeriodDays: number | null = null;
+    if (policy.productVersionId) {
+      const pv = await storage.getProductVersion(policy.productVersionId, user.organizationId);
+      if (pv) {
+        waitingPeriodDays = pv.waitingPeriodDays ?? 90;
+        productVersionLabel = `v${pv.version}`;
+        const prod = await storage.getProduct(pv.productId, user.organizationId);
+        if (prod) productName = prod.name;
+      }
+    }
+
+    return res.json({
+      ...policy,
+      claimable,
+      claimableReason,
+      productName,
+      productVersionLabel,
+      waitingPeriodDays,
+    });
   });
 
   app.post("/api/policies", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -659,6 +907,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const members = Array.isArray(req.body.members) ? req.body.members : [];
     const addOnIds = Array.isArray(req.body.addOnIds) ? req.body.addOnIds : [];
+    const memberAddOns: { memberRef: string; addOnId: string }[] =
+      Array.isArray(req.body.memberAddOns) ? req.body.memberAddOns : [];
 
     let premiumAmount = "0";
     if (req.body.productVersionId) {
@@ -668,6 +918,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         req.body.currency || "USD",
         req.body.paymentSchedule || "monthly",
         addOnIds,
+        memberAddOns,
+        1 + members.length,
       );
     }
 
@@ -679,7 +931,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ...body,
       organizationId: user.organizationId,
       policyNumber,
-      status: "draft",
+      status: "inactive",
       agentId,
       premiumAmount,
       beneficiaryFirstName: beneficiary?.firstName || null,
@@ -690,14 +942,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       beneficiaryDependentId: beneficiary?.dependentId || null,
     });
     const policy = await storage.createPolicy(parsed);
-    await storage.createPolicyStatusHistory(policy.id, null, "draft", "Policy created", user.id);
+    await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Policy created", user.id);
 
     await storage.createPolicyMember({
       policyId: policy.id,
       clientId: policy.clientId,
       role: "policy_holder",
     });
-    for (const m of members) {
+
+    let dependentsToAdd = members;
+    if (dependentsToAdd.length === 0 && policy.clientId) {
+      const clientDeps = await storage.getDependentsByClient(policy.clientId, user.organizationId);
+      dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
+    }
+    for (const m of dependentsToAdd) {
       if (m.clientId || m.dependentId) {
         await storage.createPolicyMember({
           policyId: policy.id,
@@ -707,8 +965,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
     }
-    if (addOnIds.length > 0) {
-      await storage.addPolicyAddOns(policy.id, addOnIds, user.organizationId);
+
+    const uniqueAddOnIds = Array.from(new Set(memberAddOns.map((ma) => ma.addOnId)));
+    const allAddOnIds = uniqueAddOnIds.length > 0 ? uniqueAddOnIds : addOnIds;
+    if (allAddOnIds.length > 0) {
+      await storage.addPolicyAddOns(policy.id, allAddOnIds, user.organizationId);
     }
 
     await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
@@ -752,6 +1013,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       body: `Policy ${policy.policyNumber} status has been updated to ${toStatus}.${reason ? ` Reason: ${reason}` : ""}`,
       status: "sent",
     });
+    if (toStatus === "lapsed" || toStatus === "cancelled") {
+      await recordClawback(user.organizationId, policy, `Policy ${toStatus}`);
+    }
     await auditLog(req, "TRANSITION_POLICY", "Policy", policy.id, before, updated);
     return res.json(updated);
   });
@@ -762,13 +1026,134 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
     const today = new Date().toISOString().split("T")[0];
-    const policyClaimable = (policy.status === "active" || policy.status === "grace") && (!policy.waitingPeriodEndDate || policy.waitingPeriodEndDate <= today);
-    const withClaimable = members.map((m: any) => ({
-      ...m,
-      claimable: policyClaimable,
-      claimableReason: policyClaimable ? "Eligible for claim (policy in force and waiting period ended)." : "Policy not yet claimable (check status or waiting period).",
+    const todayDate = new Date();
+    const policyStatusOk = policy.status === "active" || policy.status === "grace";
+
+    let waitingPeriodDays = 90;
+    if (policy.productVersionId) {
+      const pv = await storage.getProductVersion(policy.productVersionId, user.organizationId);
+      if (pv?.waitingPeriodDays != null) waitingPeriodDays = pv.waitingPeriodDays;
+    }
+
+    const enriched = await Promise.all(members.map(async (m: any) => {
+      let memberName = "";
+      let relationship = "";
+      let dateOfBirth = "";
+      let gender = "";
+      let nationalId = "";
+
+      if (m.dependentId) {
+        const dep = await storage.getDependent(m.dependentId, user.organizationId);
+        if (dep) {
+          memberName = `${dep.firstName} ${dep.lastName}`;
+          relationship = dep.relationship;
+          dateOfBirth = dep.dateOfBirth || "";
+          gender = dep.gender || "";
+          nationalId = dep.nationalId || "";
+        }
+      } else if (m.clientId) {
+        const client = await storage.getClient(m.clientId, user.organizationId);
+        if (client) {
+          memberName = `${client.firstName} ${client.lastName}`;
+          relationship = "Policy Holder";
+          dateOfBirth = client.dateOfBirth || "";
+          gender = client.gender || "";
+          nationalId = client.nationalId || "";
+        }
+      }
+
+      let age: number | null = null;
+      if (dateOfBirth) {
+        const dob = new Date(dateOfBirth);
+        age = todayDate.getFullYear() - dob.getFullYear();
+        const monthDiff = todayDate.getMonth() - dob.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && todayDate.getDate() < dob.getDate())) age--;
+      }
+
+      const memberCreatedAt = m.createdAt ? new Date(m.createdAt).toISOString().split("T")[0] : null;
+      const inceptionDate = policy.inceptionDate || policy.effectiveDate || memberCreatedAt;
+
+      let coverDate: string | null = null;
+      if (inceptionDate) {
+        const inception = new Date(inceptionDate);
+        inception.setDate(inception.getDate() + waitingPeriodDays);
+        coverDate = inception.toISOString().split("T")[0];
+      }
+
+      const memberWaitingOver = !coverDate || coverDate <= today;
+      const memberClaimable = policyStatusOk && memberWaitingOver;
+
+      let claimableReason = "";
+      if (!policyStatusOk) {
+        claimableReason = `Policy status is "${policy.status}"; must be active or in grace period.`;
+      } else if (!memberWaitingOver) {
+        claimableReason = `Waiting period ends ${coverDate}. Covered after that date.`;
+      } else {
+        claimableReason = "Eligible for claim — waiting period completed.";
+      }
+
+      return {
+        ...m,
+        memberName,
+        relationship,
+        dateOfBirth,
+        gender,
+        nationalId,
+        age,
+        captureDate: memberCreatedAt,
+        inceptionDate: inceptionDate || null,
+        coverDate,
+        waitingPeriodDays,
+        claimable: memberClaimable,
+        claimableReason,
+      };
     }));
-    return res.json(withClaimable);
+
+    return res.json(enriched);
+  });
+
+  app.post("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+
+    const { dependentId, clientId, role } = req.body;
+    if (!dependentId && !clientId) return res.status(400).json({ message: "dependentId or clientId is required" });
+
+    const member = await storage.createPolicyMember({
+      policyId: policy.id,
+      organizationId: user.organizationId,
+      dependentId: dependentId || null,
+      clientId: clientId || null,
+      role: role || "dependent",
+    });
+    await auditLog(req, "ADD_POLICY_MEMBER", "PolicyMember", member.id, null, member);
+    return res.status(201).json(member);
+  });
+
+  app.post("/api/policies/:id/sync-members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+
+    const existingMembers = await storage.getPolicyMembers(policy.id, user.organizationId);
+    const existingDepIds = new Set(existingMembers.filter((m: any) => m.dependentId).map((m: any) => m.dependentId));
+    const existingClientIds = new Set(existingMembers.filter((m: any) => m.clientId).map((m: any) => m.clientId));
+
+    if (!existingClientIds.has(policy.clientId)) {
+      await storage.createPolicyMember({ policyId: policy.id, clientId: policy.clientId, role: "policy_holder" });
+    }
+
+    const clientDeps = await storage.getDependentsByClient(policy.clientId, user.organizationId);
+    let added = 0;
+    for (const dep of clientDeps) {
+      if (!existingDepIds.has(dep.id)) {
+        await storage.createPolicyMember({ policyId: policy.id, dependentId: dep.id, role: "dependent" });
+        added++;
+      }
+    }
+
+    return res.json({ synced: added, total: existingMembers.length + added + (existingClientIds.has(policy.clientId) ? 0 : 1) });
   });
 
   // ─── Payments ───────────────────────────────────────────────
@@ -828,6 +1213,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", tx.id, null, tx);
+    if (tx.status === "cleared" && tx.policyId) {
+      const commPolicy = await storage.getPolicy(tx.policyId, user.organizationId);
+      if (commPolicy) await recordAgentCommission(user.organizationId, commPolicy, tx.id, tx.amount);
+    }
     return res.status(201).json({ ...tx, receipt });
   });
 
@@ -915,18 +1304,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { generateReceiptPdf } = await import("./receipt-pdf");
     const pdfPath = await generateReceiptPdf(receipt.id);
     if (pdfPath) await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath }, receipt.organizationId);
-    if (policy.status === "pending") {
+    if (policy.status === "inactive") {
       const todayDate = new Date().toISOString().split("T")[0];
       const update: { status: string; inceptionDate?: string; effectiveDate?: string } = { status: "active" };
       update.inceptionDate = todayDate;
       if (!policy.effectiveDate) update.effectiveDate = todayDate;
       await storage.updatePolicy(policyId, update, user.organizationId);
-      await storage.createPolicyStatusHistory(policyId, "pending", "active", "First premium paid (cash)", user.id);
+      await storage.createPolicyStatusHistory(policyId, "inactive", "active", "First premium paid — conversion (cash)", user.id);
     } else if (policy.status === "grace") {
       await storage.updatePolicy(policyId, { status: "active", graceEndDate: null }, user.organizationId);
-      await storage.createPolicyStatusHistory(policyId, "grace", "active", "Payment received", user.id);
+      await storage.createPolicyStatusHistory(policyId, "grace", "active", "Payment received (cash)", user.id);
+    } else if (policy.status === "lapsed") {
+      const todayDate = new Date().toISOString().split("T")[0];
+      await storage.updatePolicy(policyId, { status: "active", graceEndDate: null }, user.organizationId);
+      await storage.createPolicyStatusHistory(policyId, "lapsed", "active", "Reinstatement — payment received (cash)", user.id);
+      await rollbackClawbacks(user.organizationId, policy);
     }
     await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", receipt.id, null, receipt);
+    await recordAgentCommission(user.organizationId, policy, tx.id, amount);
     return res.status(201).json({ transaction: tx, receipt });
   });
 
@@ -1023,12 +1418,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           metadataJson: { monthEndRunId: run.id },
         });
         receipted++;
-        if (policy.status === "pending") {
+        if (policy.status === "inactive") {
           await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, user.organizationId);
-          await storage.createPolicyStatusHistory(policy.id, "pending", "active", "First premium paid (month-end run)", user.id);
+          await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "First premium paid — conversion (month-end)", user.id);
         } else if (policy.status === "grace") {
           await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
-          await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received", user.id);
+          await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received (month-end)", user.id);
+        } else if (policy.status === "lapsed") {
+          await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
+          await storage.createPolicyStatusHistory(policy.id, "lapsed", "active", "Reinstatement — payment received (month-end)", user.id);
+          await rollbackClawbacks(user.organizationId, policy);
         }
         if (amount > premium) {
           await storage.addPolicyCreditBalance(user.organizationId, policy.id, (amount - premium).toFixed(2), currency);
@@ -1125,12 +1524,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         status: "issued",
         metadataJson: { groupId },
       });
-      if (policy.status === "pending") {
+      if (policy.status === "inactive") {
         await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, user.organizationId);
-        await storage.createPolicyStatusHistory(policy.id, "pending", "active", "First premium paid (group receipt)", user.id);
+        await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "First premium paid — conversion (group receipt)", user.id);
       } else if (policy.status === "grace") {
         await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
-        await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received", user.id);
+        await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received (group receipt)", user.id);
+      } else if (policy.status === "lapsed") {
+        await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
+        await storage.createPolicyStatusHistory(policy.id, "lapsed", "active", "Reinstatement — payment received (group receipt)", user.id);
+        await rollbackClawbacks(user.organizationId, policy);
       }
       results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum });
     }
@@ -1401,6 +1804,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const plan = await storage.createCommissionPlan(parsed);
     await auditLog(req, "CREATE_COMMISSION_PLAN", "CommissionPlan", plan.id, null, plan);
     return res.status(201).json(plan);
+  });
+
+  app.get("/api/commission-ledger", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
+    const user = req.user as any;
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const agentId = req.query.agentId as string | undefined;
+    const filterAgent = isAgent ? user.id : agentId;
+    return res.json(await storage.getCommissionLedgerDetailedByOrg(user.organizationId, filterAgent));
   });
 
   // ─── Leads / Pipeline ──────────────────────────────────────
@@ -1698,7 +2110,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         clientId: client.id,
         productVersionId: pv.id,
         agentId: agent.id,
-        status: "pending",
+        status: "inactive",
         premiumAmount: premium,
         currency: currency || "USD",
         paymentSchedule: paymentSchedule || "monthly",
@@ -1711,7 +2123,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         beneficiaryDependentId: null,
       });
       const policy = await storage.createPolicy(policyParsed);
-      await storage.createPolicyStatusHistory(policy.id, null, "pending", "Registered via agent link");
+      await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Registered via agent link");
       await storage.createPolicyMember({
         policyId: policy.id,
         clientId: client.id,
@@ -1910,13 +2322,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const activePolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
-    const active = activePolicies.filter((p: any) => p.status === "active");
-    let totalMembers = 0;
-    for (const p of active) {
-      totalMembers += (p as any).numberOfMembers || 1;
-    }
-    return res.json({ coveredLives: totalMembers, activePolicyCount: active.length });
+    const result = await storage.countCoveredLives(user.organizationId);
+    return res.json(result);
   });
 
   app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, async (req, res) => {
@@ -1976,40 +2383,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/terms", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     const all = req.query.all === "true";
+    const pvId = req.query.productVersionId as string | undefined;
+    if (pvId) {
+      const terms = await storage.getTermsByProductVersion(pvId, user.organizationId);
+      return res.json(terms);
+    }
     const terms = all
       ? await storage.getTermsByOrgAll(user.organizationId)
       : await storage.getTermsByOrg(user.organizationId);
     return res.json(terms);
   });
 
-  app.post("/api/terms", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
+  app.post("/api/terms", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
     const parsed = insertTermsSchema.parse({ ...req.body, organizationId: user.organizationId });
     const created = await storage.createTerms(parsed);
     return res.status(201).json(created);
   });
 
-  app.patch("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
+  app.patch("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
     const updated = await storage.updateTerms(req.params.id as string, req.body, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Not found" });
     return res.json(updated);
   });
 
-  app.delete("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:settings"), async (req, res) => {
+  app.delete("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
     await storage.deleteTerms(req.params.id as string, user.organizationId);
     return res.status(204).send();
   });
 
   registerPolicyDocumentRoute(app);
-
-  // ─── Add-ons by org ─────────────────────────────────────────
-
-  app.get("/api/add-ons", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
-    const user = req.user as any;
-    return res.json(await storage.getAddOns(user.organizationId));
-  });
 
   // ─── Reports CSV Export ────────────────────────────────────
 
@@ -2031,7 +2436,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
     const rows = await storage.getPolicyReportByOrg(user.organizationId, limit, offset, filters);
-    return res.json(rows);
+    const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter(Boolean)));
+    const depsByClient: Record<string, { firstName: string; lastName: string; nationalId: string | null; dateOfBirth: string | null; gender: string | null; relationship: string }[]> = {};
+    await Promise.all(clientIds.map(async (cid) => {
+      const deps = await storage.getDependentsByClient(cid, user.organizationId);
+      depsByClient[cid] = deps.map((d: any) => ({ firstName: d.firstName, lastName: d.lastName, nationalId: d.nationalId ?? null, dateOfBirth: d.dateOfBirth ?? null, gender: d.gender ?? null, relationship: d.relationship }));
+    }));
+    const enriched = rows.map((r) => ({ ...r, dependents: depsByClient[r.clientId] || [] }));
+    return res.json(enriched);
   });
 
   app.get("/api/reports/finance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -2048,6 +2460,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const filters = parseReportFilters(req.query);
     const list = await storage.getReinstatementHistory(user.organizationId, filters);
     return res.json(list);
+  });
+
+  app.get("/api/reports/conversions", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await storage.getConversionHistory(user.organizationId, filters));
   });
 
   app.get("/api/reports/activations", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -2083,7 +2501,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/issued-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = parseReportFilters(req.query);
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["pending", "active", "grace", "lapsed", "reinstatement_pending", "cancelled"] }));
+    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["inactive", "active", "grace", "lapsed", "cancelled"] }));
   });
   app.get("/api/reports/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
@@ -2091,7 +2509,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...filters, preparedBy: filters.userId }));
   });
 
-  app.get("/api/reports/export/:type", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/reports/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
+    const offset = parseInt(String(req.query.offset)) || 0;
+    return res.json(await storage.getReceiptReportByOrg(user.organizationId, limit, offset, filters));
+  });
+
+  app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const reportType = req.params.type as string;
     const reportFilters = parseReportFilters(req.query);
@@ -2109,16 +2535,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "policy-details": {
           const reportRows = await storage.getPolicyReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const clientIds = Array.from(new Set(reportRows.map((r) => r.clientId).filter(Boolean)));
+          const depsByClient: Record<string, any[]> = {};
+          await Promise.all(clientIds.map(async (cid) => {
+            const deps = await storage.getDependentsByClient(cid, user.organizationId);
+            depsByClient[cid] = deps;
+          }));
+          const maxDeps = Math.max(1, ...Object.values(depsByClient).map((d) => d.length));
+          const depHeaders: string[] = [];
+          for (let i = 1; i <= maxDeps; i++) {
+            depHeaders.push(`Dependent ${i} Name`, `Dependent ${i} National ID`, `Dependent ${i} DOB`, `Dependent ${i} Gender`, `Dependent ${i} Relationship`);
+          }
           headers = [
-            "Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Capture Date", "Inception Date", "Effective Date", "Cover Date", "Current Cycle Start", "Current Cycle End", "Grace End",
-            "Client First Name", "Client Last Name", "Title", "National ID", "Date of Birth", "Gender", "Marital Status", "Phone", "Email", "Address", "Preferred Comm", "Location",
-            "Product Name", "Product Code", "Branch", "Group", "Agent Email", "Agent Name",
+            "Branch", "Member No", "Policy Number", "National ID", "First Name", "Surname", "Full Name",
+            "Address", "Location", "Phone", "Email", "Date of Birth", "Gender", "Marital Status",
+            "Product Name", "Product Code", "Cover Amount", "Cover Currency",
+            "Inception Date", "Effective Date", "Cover Date", "Premium", "Currency", "Payment Schedule",
+            "Status", "Capture Date", "Current Cycle Start", "Current Cycle End", "Grace End",
+            "Group", "Agent Name", "Agent Email",
+            "Beneficiary Name", "Beneficiary National ID", "Beneficiary Phone", "Beneficiary Relationship",
+            ...depHeaders,
           ];
-          rows = reportRows.map((r: any) => [
-            r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.effectiveDate ?? "", r.waitingPeriodEndDate ?? "", r.currentCycleStart ?? "", r.currentCycleEnd ?? "", r.graceEndDate ?? "",
-            r.clientFirstName, r.clientLastName, r.clientTitle ?? "", r.clientNationalId ?? "", r.clientDateOfBirth ?? "", r.clientGender ?? "", r.clientMaritalStatus ?? "", r.clientPhone ?? "", r.clientEmail ?? "", r.clientAddress ?? "", r.clientPreferredCommMethod ?? "", r.clientLocation ?? "",
-            r.productName ?? "", r.productCode ?? "", r.branchName ?? "", r.groupName ?? "", r.agentEmail ?? "", r.agentDisplayName ?? "",
-          ]);
+          rows = reportRows.map((r: any) => {
+            const deps = depsByClient[r.clientId] || [];
+            const depCols: string[] = [];
+            for (let i = 0; i < maxDeps; i++) {
+              const d = deps[i];
+              depCols.push(
+                d ? `${d.firstName} ${d.lastName}` : "",
+                d?.nationalId ?? "",
+                d?.dateOfBirth ?? "",
+                d?.gender ?? "",
+                d?.relationship ?? "",
+              );
+            }
+            return [
+              r.branchName ?? "", r.memberNumber ?? "", r.policyNumber, r.clientNationalId ?? "",
+              r.clientFirstName, r.clientLastName, [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "),
+              r.clientAddress ?? "", r.clientLocation ?? "", r.clientPhone ?? "", r.clientEmail ?? "",
+              r.clientDateOfBirth ?? "", r.clientGender ?? "", r.clientMaritalStatus ?? "",
+              r.productName ?? "", r.productCode ?? "", r.coverAmount ?? "", r.coverCurrency ?? "",
+              r.inceptionDate ?? "", r.effectiveDate ?? "", r.waitingPeriodEndDate ?? "",
+              r.premiumAmount, r.currency, r.paymentSchedule,
+              r.status, r.policyCreatedAt ?? "", r.currentCycleStart ?? "", r.currentCycleEnd ?? "", r.graceEndDate ?? "",
+              r.groupName ?? "", r.agentDisplayName ?? "", r.agentEmail ?? "",
+              [r.beneficiaryFirstName, r.beneficiaryLastName].filter(Boolean).join(" ") || "",
+              r.beneficiaryNationalId ?? "", r.beneficiaryPhone ?? "", r.beneficiaryRelationship ?? "",
+              ...depCols,
+            ];
+          });
           break;
         }
         case "finance": {
@@ -2187,6 +2652,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           rows = reinstatements.map((r: any) => [r.policyNumber, r.clientName, r.fromStatus || "", r.reinstatedAt, r.reason || "", r.currentStatus]);
           break;
         }
+        case "conversions": {
+          const conversions = await storage.getConversionHistory(user.organizationId, reportFilters);
+          headers = ["Policy Number", "Client", "Converted At", "Reason", "Current Status"];
+          rows = conversions.map((r: any) => [r.policyNumber, r.clientName, r.convertedAt, r.reason || "", r.currentStatus]);
+          break;
+        }
         case "activations": {
           const activations = await storage.getActivationHistory(user.organizationId, reportFilters);
           headers = ["Policy Number", "Client", "Previous Status", "Activated At", "Reason", "Current Status"];
@@ -2219,7 +2690,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "issued-policies": {
-          const issued = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["pending", "active", "grace", "lapsed", "reinstatement_pending", "cancelled"] });
+          const issued = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["inactive", "active", "grace", "lapsed", "cancelled"] });
           headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
           rows = issued.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
           break;
@@ -2228,6 +2699,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const cashupsList = await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...reportFilters, preparedBy: reportFilters.userId });
           headers = ["Cashup Date", "Total Amount", "Transaction Count", "Locked", "Prepared By", "Created"];
           rows = cashupsList.map((r: any) => [r.cashupDate, r.totalAmount, r.transactionCount, r.isLocked ? "Yes" : "No", r.preparedBy, r.createdAt]);
+          break;
+        }
+        case "receipts": {
+          const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = [
+            "Receipt Number", "Date Paid", "Timestamp", "Payment Method", "Total",
+            "Premium Amount", "Remarks", "Agent", "Months Paid", "Policy / Surname",
+            "Reference", "Product", "Inception Date", "Month Number", "Year Number",
+            "Receipt Counter", "Receipt Branch", "Payment Branch", "Policy Status",
+          ];
+          rows = receiptRows.map((r: any, idx: number) => [
+            r.receiptNumber,
+            r.issuedAt ? new Date(r.issuedAt).toISOString().split("T")[0] : "",
+            r.issuedAt ? new Date(r.issuedAt).toISOString() : "",
+            r.paymentChannel || r.txPaymentMethod || "",
+            r.amount,
+            r.premiumAmount || "",
+            r.txNotes || "",
+            r.agentDisplayName || r.agentEmail || "",
+            r.paymentSchedule || "",
+            `${r.policyNumber || ""} / ${[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}`,
+            r.txReference || "",
+            r.productName || "",
+            r.inceptionDate || "",
+            r.monthNumber ?? "",
+            r.yearNumber ?? "",
+            idx + 1,
+            r.receiptBranchName || "",
+            r.paymentBranchName || r.policyBranchName || "",
+            r.policyStatus || "",
+          ]);
           break;
         }
         default:
@@ -2351,6 +2853,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         actorEmail: r.actor_email, timestamp: r.timestamp,
       }));
       return res.json(rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/admin/migrate-tc-pv", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    try {
+      const { sql } = await import("drizzle-orm");
+      const { db } = await import("./db");
+      await (db as any).execute(sql`ALTER TABLE terms_and_conditions ADD COLUMN IF NOT EXISTS product_version_id UUID REFERENCES product_versions(id)`);
+      await (db as any).execute(sql`CREATE INDEX IF NOT EXISTS tc_pv_idx ON terms_and_conditions(product_version_id)`);
+      return res.json({ success: true, message: "Migration complete: product_version_id column added to terms_and_conditions" });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/admin/sync-permissions", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    try {
+      const { seedDatabase } = await import("./seed");
+      await seedDatabase();
+      return res.json({ success: true, message: "Permissions and roles synchronized" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

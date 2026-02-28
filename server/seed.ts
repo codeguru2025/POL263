@@ -71,6 +71,7 @@ const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:organization", "read:branch", "write:branch", "read:user", "write:user",
     "read:role", "read:audit_log", "read:policy", "write:policy", "read:claim",
     "write:claim", "approve:claim", "read:client", "write:client", "read:product",
+    "write:product", "manage:settings",
     "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
     "read:commission", "read:report", "write:report", "read:lead", "write:lead",
     "read:notification", "manage:approvals",
