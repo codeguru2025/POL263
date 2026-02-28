@@ -174,7 +174,6 @@ function buildRemoteParams(
   const methodMap: Record<string, string> = {
     ecocash: "ecocash",
     onemoney: "onemoney",
-    telecash: "telecash",
     innbucks: "innbucks",
     omari: "omari",
   };
@@ -205,12 +204,17 @@ function toFormUrlEncoded(params: Record<string, string>): string {
     .join("&");
 }
 
-/** Initiate Paynow payment; persist poll/redirect URLs and emit events. */
+/** Initiate Paynow payment; persist poll/redirect URLs and emit events.
+ * Returns method-specific data: InnBucks auth code, O'Mari OTP reference, or redirect URL for cards. */
 export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise<{
   ok: boolean;
   redirectUrl?: string;
   pollUrl?: string;
   error?: string;
+  innbucksCode?: string;
+  innbucksExpiry?: string;
+  omariOtpUrl?: string;
+  omariOtpReference?: string;
 }> {
   const config = getPaynowConfig();
   if (!config.enabled) {
@@ -229,8 +233,8 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
   if (!returnUrl || !resultUrl) return { ok: false, error: "Paynow return/result URL not configured" };
 
   const method = (input.method || "visa_mastercard").toLowerCase();
-  const mobileMethods = ["ecocash", "onemoney", "telecash", "innbucks", "omari"];
-  const isRemote = mobileMethods.includes(method) && input.payerPhone;
+  const remoteMethods = ["ecocash", "onemoney", "innbucks", "omari"];
+  const isRemote = remoteMethods.includes(method) && input.payerPhone;
 
   let params: Record<string, string>;
   let url: string;
@@ -263,7 +267,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
   }
 
   const text = await res.text();
-  structuredLog("info", "Paynow response raw", { text: text.slice(0, 500), isRemote, method });
+  structuredLog("info", "Paynow response raw", { text: text.slice(0, 800), isRemote, method });
   const parsed = new URLSearchParams(text);
   const status = parsed.get("status") ?? "";
   const pollUrl = parsed.get("pollurl") ?? undefined;
@@ -285,10 +289,20 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
     return { ok: false, error: errMsg || "Initiation failed" };
   }
 
+  // InnBucks: extract authorization code + expiry
+  const innbucksCode = parsed.get("authorizationcode") ?? undefined;
+  const innbucksExpiry = parsed.get("authorizationexpires") ?? undefined;
+
+  // O'Mari: extract remote OTP URL + reference
+  const omariOtpUrl = parsed.get("remoteotpurl") ?? undefined;
+  const omariOtpReference = parsed.get("otpreference") ?? undefined;
+
+  const pendingStatus = method === "omari" ? "pending_otp" : "pending_paynow";
+
   await storage.updatePaymentIntent(intent.id, {
-    status: "pending_paynow",
+    status: pendingStatus,
     paynowPollUrl: pollUrl ?? undefined,
-    paynowRedirectUrl: redirectUrl ?? undefined,
+    paynowRedirectUrl: omariOtpUrl || redirectUrl || undefined,
     paynowReference: paynowRef ?? undefined,
     methodSelected: method,
   }, intent.organizationId);
@@ -296,7 +310,13 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
     paymentIntentId: intent.id,
     organizationId: intent.organizationId,
     type: "redirect_issued",
-    payloadJson: { pollUrl: !!pollUrl, hasRedirect: !!redirectUrl },
+    payloadJson: {
+      pollUrl: !!pollUrl,
+      hasRedirect: !!redirectUrl,
+      method,
+      innbucksCode: innbucksCode ?? null,
+      omariOtpReference: omariOtpReference ?? null,
+    },
     actorType: input.actorType,
     actorId: eventActorId(input.actorType, input.actorId),
   });
@@ -305,7 +325,84 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
     ok: true,
     redirectUrl: redirectUrl ?? undefined,
     pollUrl: pollUrl ?? undefined,
+    innbucksCode,
+    innbucksExpiry,
+    omariOtpUrl,
+    omariOtpReference,
   };
+}
+
+/** Submit O'Mari OTP to complete transaction. */
+export async function submitOmariOtp(intentId: string, orgId: string, otp: string, actorType: "client" | "admin" | "system", actorId: string | null): Promise<{
+  ok: boolean;
+  error?: string;
+  paid?: boolean;
+}> {
+  const intent = await storage.getPaymentIntentById(intentId, orgId);
+  if (!intent) return { ok: false, error: "Payment intent not found" };
+  if (intent.status === "paid") return { ok: true, paid: true };
+
+  if (intent.methodSelected !== "omari") return { ok: false, error: "This payment is not an O'Mari transaction" };
+  const otpUrl = intent.paynowRedirectUrl;
+  if (!otpUrl) return { ok: false, error: "No O'Mari OTP URL available for this payment" };
+
+  const id = getPaynowIntegrationId();
+  const params: Record<string, string> = {
+    id,
+    otp,
+    status: "Message",
+  };
+  const hashKeyOrder = ["id", "otp", "status"];
+  params.hash = generatePaynowHash(params, hashKeyOrder);
+
+  const body = toFormUrlEncoded(params);
+  let res: Response;
+  try {
+    res = await fetch(otpUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+  } catch (err) {
+    structuredLog("error", "O'Mari OTP submit failed", { error: (err as Error).message });
+    return { ok: false, error: "Payment gateway unavailable" };
+  }
+
+  const text = await res.text();
+  structuredLog("info", "O'Mari OTP response", { text: text.slice(0, 500) });
+  const parsed = new URLSearchParams(text);
+  const status = (parsed.get("status") ?? "").toLowerCase();
+
+  await storage.createPaymentEvent({
+    paymentIntentId: intent.id,
+    organizationId: orgId,
+    type: "otp_submitted",
+    payloadJson: { status },
+    actorType,
+    actorId: eventActorId(actorType, actorId),
+  });
+
+  if (status === "error" || status === "failed") {
+    const errMsg = parsed.get("error") ?? "Invalid OTP";
+    return { ok: false, error: errMsg };
+  }
+
+  // Successful OTP - payment may be paid or awaiting delivery
+  const pollUrl = parsed.get("pollurl") ?? intent.paynowPollUrl ?? undefined;
+  const paynowRef = parsed.get("paynowreference") ?? intent.paynowReference ?? undefined;
+
+  await storage.updatePaymentIntent(intent.id, {
+    status: "pending_paynow",
+    paynowPollUrl: pollUrl,
+    paynowReference: paynowRef,
+  }, orgId);
+
+  if (status === "paid" || status === "sent" || status === "awaiting delivery") {
+    await applyPaymentToPolicy(intent.id, actorType, actorId);
+    return { ok: true, paid: true };
+  }
+
+  return { ok: true, paid: false };
 }
 
 /** Handle Paynow result URL POST (webhook). Verify hash, update intent, apply payment if paid. */
@@ -685,8 +782,8 @@ export async function initiatePaynowForGroup(input: InitiatePaynowForGroupInput)
   if (!returnUrl || !resultUrl) return { ok: false, error: "Paynow return/result URL not configured" };
 
   const method = (input.method || "visa_mastercard").toLowerCase();
-  const mobileMethods = ["ecocash", "onemoney", "telecash", "innbucks", "omari"];
-  const isRemote = mobileMethods.includes(method) && input.payerPhone;
+  const remoteMethods = ["ecocash", "onemoney", "innbucks", "omari"];
+  const isRemote = remoteMethods.includes(method) && input.payerPhone;
   const amount = String(groupIntent.totalAmount);
 
   let params: Record<string, string>;

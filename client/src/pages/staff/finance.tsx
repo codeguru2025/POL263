@@ -1208,7 +1208,6 @@ export default function StaffFinance() {
                   <SelectItem value="ecocash">EcoCash</SelectItem>
                   <SelectItem value="innbucks">InnBucks</SelectItem>
                   <SelectItem value="onemoney">OneMoney</SelectItem>
-                  <SelectItem value="telecash">Telecash</SelectItem>
                   <SelectItem value="omari">O'Mari</SelectItem>
                   <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                 </SelectContent>
@@ -1348,7 +1347,6 @@ export default function StaffFinance() {
                   <SelectItem value="ecocash">EcoCash</SelectItem>
                   <SelectItem value="innbucks">InnBucks</SelectItem>
                   <SelectItem value="onemoney">OneMoney</SelectItem>
-                  <SelectItem value="telecash">Telecash</SelectItem>
                   <SelectItem value="omari">O'Mari</SelectItem>
                   <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                 </SelectContent>

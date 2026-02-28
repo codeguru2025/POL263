@@ -69,6 +69,11 @@ export default function ClientPayments() {
   const [currentIntent, setCurrentIntent] = useState<PaymentIntent | null>(null);
   const [polling, setPolling] = useState(false);
   const [payForPhone, setPayForPhone] = useState("");
+  const [innbucksCode, setInnbucksCode] = useState("");
+  const [innbucksExpiry, setInnbucksExpiry] = useState("");
+  const [omariOtp, setOmariOtp] = useState("");
+  const [omariOtpRef, setOmariOtpRef] = useState("");
+  const [needsOtp, setNeedsOtp] = useState(false);
   const [lookedUp, setLookedUp] = useState<{ clientName: string; policies: Policy[] } | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState("");
@@ -101,7 +106,7 @@ export default function ClientPayments() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const mobileMethods = ["ecocash", "onemoney", "telecash", "innbucks", "omari"];
+  const mobileMethods = ["ecocash", "onemoney", "innbucks", "omari"];
   const initiateMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/client-auth/payment-intents/${currentIntent!.id}/initiate`, {
@@ -109,21 +114,74 @@ export default function ClientPayments() {
         payerPhone: mobileMethods.includes(method) ? payerPhone : undefined,
         payerEmail: method === "visa_mastercard" ? payerEmail : undefined,
       });
-      return res.json() as Promise<{ redirectUrl?: string; pollUrl?: string; message?: string }>;
+      return res.json() as Promise<{
+        redirectUrl?: string;
+        pollUrl?: string;
+        message?: string;
+        innbucksCode?: string;
+        innbucksExpiry?: string;
+        omariOtpReference?: string;
+        needsOtp?: boolean;
+      }>;
     },
     onSuccess: (data) => {
       if (data.message) {
         toast({ title: "Error", description: data.message, variant: "destructive" });
         return;
       }
-      if (data.redirectUrl) {
-        openPaymentInSystemBrowser(data.redirectUrl);
+
+      if (method === "innbucks" && data.innbucksCode) {
+        setInnbucksCode(data.innbucksCode);
+        setInnbucksExpiry(data.innbucksExpiry || "");
+        setPolling(true);
+        toast({ title: "InnBucks code ready", description: "Open InnBucks app and enter the code shown below." });
         return;
       }
+
+      if (method === "omari" && data.needsOtp) {
+        setNeedsOtp(true);
+        setOmariOtpRef(data.omariOtpReference || "");
+        toast({ title: "OTP sent", description: "An OTP has been sent to your phone. Enter it below." });
+        return;
+      }
+
+      if (data.redirectUrl) {
+        openPaymentInSystemBrowser(data.redirectUrl);
+        setPolling(true);
+        return;
+      }
+
       setPolling(true);
-      toast({ title: "Pending", description: "Check your phone for USSD prompt. We'll update status shortly." });
+      toast({ title: "Pending", description: "Check your phone for the payment prompt. We'll update status shortly." });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const otpMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/client-auth/payment-intents/${currentIntent!.id}/otp`, {
+        otp: omariOtp,
+      });
+      return res.json() as Promise<{ paid?: boolean; message?: string }>;
+    },
+    onSuccess: (data) => {
+      if (data.message) {
+        toast({ title: "Error", description: data.message, variant: "destructive" });
+        return;
+      }
+      if (data.paid) {
+        setNeedsOtp(false);
+        setPolling(false);
+        qc.invalidateQueries({ queryKey: ["/api/client-auth/payment-intents"] });
+        qc.invalidateQueries({ queryKey: ["/api/client-auth/policies"] });
+        qc.invalidateQueries({ queryKey: ["/api/client-auth/receipts"] });
+        toast({ title: "Payment successful", description: "You can download your receipt below." });
+      } else {
+        setPolling(true);
+        toast({ title: "OTP accepted", description: "Payment is being processed..." });
+      }
+    },
+    onError: (e: Error) => toast({ title: "OTP failed", description: e.message, variant: "destructive" }),
   });
 
   const { data: paymentStatusData } = useQuery({
@@ -195,7 +253,7 @@ export default function ClientPayments() {
     );
   }
 
-  const canInitiatePay = currentIntent && currentIntent.status !== "paid" && (
+  const canInitiatePay = currentIntent && currentIntent.status !== "paid" && !needsOtp && !innbucksCode && (
     method === "visa_mastercard"
       ? (payerEmail && payerEmail.trim().length > 3)
       : mobileMethods.includes(method)
@@ -318,39 +376,44 @@ export default function ClientPayments() {
 
             <div>
               <Label>Payment method</Label>
-              <Select value={method} onValueChange={setMethod}>
+              <Select value={method} onValueChange={(v) => { setMethod(v); setInnbucksCode(""); setNeedsOtp(false); }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ecocash">EcoCash</SelectItem>
-                  <SelectItem value="innbucks">InnBucks</SelectItem>
                   <SelectItem value="onemoney">OneMoney</SelectItem>
-                  <SelectItem value="telecash">Telecash</SelectItem>
+                  <SelectItem value="innbucks">InnBucks</SelectItem>
                   <SelectItem value="omari">O'Mari</SelectItem>
                   <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {mobileMethods.includes(method) && (
+
+            {(method === "ecocash" || method === "onemoney") && (
               <div>
                 <Label>Mobile number</Label>
-                <Input
-                  placeholder="0771234567"
-                  value={payerPhone}
-                  onChange={(e) => setPayerPhone(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground mt-1">A USSD prompt will appear; enter PIN to approve.</p>
+                <Input placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
+                <p className="text-xs text-muted-foreground mt-1">A USSD prompt will be sent to your phone. Enter your PIN to approve the payment.</p>
+              </div>
+            )}
+            {method === "innbucks" && (
+              <div>
+                <Label>Mobile number</Label>
+                <Input placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
+                <p className="text-xs text-muted-foreground mt-1">You will receive an authorization code. Open the InnBucks app and enter the code to approve.</p>
+              </div>
+            )}
+            {method === "omari" && (
+              <div>
+                <Label>Mobile number</Label>
+                <Input placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
+                <p className="text-xs text-muted-foreground mt-1">An OTP will be sent to your phone via SMS. You will need to enter it below to complete the payment.</p>
               </div>
             )}
             {method === "visa_mastercard" && (
               <div>
                 <Label>Email address</Label>
-                <Input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={payerEmail}
-                  onChange={(e) => setPayerEmail(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground mt-1">Required for card payment verification.</p>
+                <Input type="email" placeholder="you@example.com" value={payerEmail} onChange={(e) => setPayerEmail(e.target.value)} />
+                <p className="text-xs text-muted-foreground mt-1">You will be redirected to Paynow's secure payment page to enter your card details.</p>
               </div>
             )}
 
@@ -371,54 +434,72 @@ export default function ClientPayments() {
                     This payment was already completed.
                   </div>
                 )}
-                {currentIntent.status !== "paid" && (
-                  <>
-                    <div>
-                      <Label>Payment method</Label>
-                      <Select value={method} onValueChange={setMethod}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="ecocash">EcoCash</SelectItem>
-                          <SelectItem value="innbucks">InnBucks</SelectItem>
-                          <SelectItem value="onemoney">OneMoney</SelectItem>
-                          <SelectItem value="telecash">Telecash</SelectItem>
-                          <SelectItem value="omari">O'Mari</SelectItem>
-                          <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
-                        </SelectContent>
-                      </Select>
+
+                {innbucksCode && (
+                  <div className="p-4 rounded-lg border-2 border-blue-300 bg-blue-50 space-y-3">
+                    <p className="font-semibold text-blue-900">InnBucks Authorization Code</p>
+                    <p className="text-3xl font-mono font-bold text-center tracking-widest text-blue-800">{innbucksCode}</p>
+                    {innbucksExpiry && (
+                      <p className="text-xs text-blue-700 text-center">Expires: {innbucksExpiry}</p>
+                    )}
+                    <div className="space-y-2 text-sm text-blue-800">
+                      <p className="font-medium">How to complete payment:</p>
+                      <ol className="list-decimal list-inside space-y-1">
+                        <li>Open the <strong>InnBucks</strong> app on your phone</li>
+                        <li>Go to <strong>Payments</strong></li>
+                        <li>Enter the authorization code shown above</li>
+                        <li>Confirm the payment</li>
+                      </ol>
                     </div>
-                    {mobileMethods.includes(method) && (
-                      <div>
-                        <Label>Mobile number</Label>
-                        <Input
-                          placeholder="0771234567"
-                          value={payerPhone}
-                          onChange={(e) => setPayerPhone(e.target.value)}
-                        />
-                        <p className="text-xs text-muted-foreground mt-1">A USSD prompt will appear; enter PIN to approve.</p>
+                    <a
+                      href={`schinn.wbpycode://innbucks.co.zw?pymInnCode=${innbucksCode}`}
+                      className="block text-center text-sm font-medium text-blue-700 underline"
+                    >
+                      Open InnBucks app directly
+                    </a>
+                    {polling && (
+                      <div className="flex items-center justify-center gap-2 text-sm text-blue-700">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Waiting for payment confirmation...
                       </div>
                     )}
-                    {method === "visa_mastercard" && (
-                      <div>
-                        <Label>Email address</Label>
-                        <Input
-                          type="email"
-                          placeholder="you@example.com"
-                          value={payerEmail}
-                          onChange={(e) => setPayerEmail(e.target.value)}
-                        />
-                        <p className="text-xs text-muted-foreground mt-1">Required for card payment verification.</p>
-                      </div>
+                  </div>
+                )}
+
+                {needsOtp && (
+                  <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 space-y-3">
+                    <p className="font-semibold text-amber-900">Enter O'Mari OTP</p>
+                    <p className="text-sm text-amber-800">An OTP has been sent to your phone via SMS. Enter it below to complete payment.</p>
+                    {omariOtpRef && (
+                      <p className="text-xs text-amber-700">Reference: {omariOtpRef}</p>
                     )}
+                    <Input
+                      placeholder="Enter OTP"
+                      value={omariOtp}
+                      onChange={(e) => setOmariOtp(e.target.value)}
+                      maxLength={10}
+                      className="text-center text-lg font-mono tracking-widest"
+                    />
                     <Button
                       className="w-full"
-                      disabled={!canInitiatePay || initiateMutation.isPending || polling}
-                      onClick={() => initiateMutation.mutate()}
+                      disabled={!omariOtp || omariOtp.trim().length < 4 || otpMutation.isPending}
+                      onClick={() => otpMutation.mutate()}
                     >
-                      {initiateMutation.isPending || polling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                      {polling ? "Waiting for approval…" : "Pay now"}
+                      {otpMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Verify OTP
                     </Button>
-                  </>
+                  </div>
+                )}
+
+                {currentIntent.status !== "paid" && !innbucksCode && !needsOtp && (
+                  <Button
+                    className="w-full"
+                    disabled={!canInitiatePay || initiateMutation.isPending || polling}
+                    onClick={() => initiateMutation.mutate()}
+                  >
+                    {initiateMutation.isPending || polling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    {polling ? "Waiting for approval…" : "Pay now"}
+                  </Button>
                 )}
               </>
             )}

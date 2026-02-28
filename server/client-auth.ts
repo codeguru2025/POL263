@@ -539,7 +539,14 @@ export function setupClientAuth(app: Express) {
         actorId: clientId,
       });
       if (!result.ok) return res.status(400).json({ message: result.error });
-      return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
+      return res.json({
+        redirectUrl: result.redirectUrl,
+        pollUrl: result.pollUrl,
+        innbucksCode: result.innbucksCode,
+        innbucksExpiry: result.innbucksExpiry,
+        omariOtpReference: result.omariOtpReference,
+        needsOtp: !!result.omariOtpUrl,
+      });
     } catch (err) {
       structuredLog("error", "Client PayNow initiate failed", {
         error: (err as Error).message,
@@ -548,6 +555,32 @@ export function setupClientAuth(app: Express) {
         intentId,
       });
       return res.status(500).json({ message: "Could not start payment. Please try again or contact support." });
+    }
+  });
+
+  app.post("/api/client-auth/payment-intents/:id/otp", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    try {
+      const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
+      if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+      const { otp } = req.body;
+      if (!otp || typeof otp !== "string" || otp.trim().length < 4) {
+        return res.status(400).json({ message: "Please enter a valid OTP" });
+      }
+      const { submitOmariOtp } = await import("./payment-service");
+      const result = await submitOmariOtp(intentId, clientOrgId, otp.trim(), "client", clientId);
+      if (!result.ok) return res.status(400).json({ message: result.error });
+      return res.json({ paid: result.paid });
+    } catch (err) {
+      structuredLog("error", "Client O'Mari OTP submit failed", {
+        error: (err as Error).message,
+        clientId,
+        intentId,
+      });
+      return res.status(500).json({ message: "Could not verify OTP. Please try again." });
     }
   });
 
