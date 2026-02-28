@@ -63,8 +63,9 @@ export default function ClientPayments() {
 
   const [selectedPolicyId, setSelectedPolicyId] = useState(policyIdParam || "");
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState("visa_mastercard");
+  const [method, setMethod] = useState("ecocash");
   const [payerPhone, setPayerPhone] = useState("");
+  const [payerEmail, setPayerEmail] = useState("");
   const [currentIntent, setCurrentIntent] = useState<PaymentIntent | null>(null);
   const [polling, setPolling] = useState(false);
   const [payForPhone, setPayForPhone] = useState("");
@@ -100,11 +101,13 @@ export default function ClientPayments() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const mobileMethods = ["ecocash", "onemoney", "telecash", "innbucks", "omari"];
   const initiateMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/client-auth/payment-intents/${currentIntent!.id}/initiate`, {
         method,
-        payerPhone: method === "ecocash" || method === "onemoney" ? payerPhone : undefined,
+        payerPhone: mobileMethods.includes(method) ? payerPhone : undefined,
+        payerEmail: method === "visa_mastercard" ? payerEmail : undefined,
       });
       return res.json() as Promise<{ redirectUrl?: string; pollUrl?: string; message?: string }>;
     },
@@ -192,8 +195,13 @@ export default function ClientPayments() {
     );
   }
 
-  // For Pay now: require phone when method is ecocash/onemoney
-  const canInitiatePay = currentIntent && currentIntent.status !== "paid" && (method !== "ecocash" && method !== "onemoney" || (payerPhone && payerPhone.trim().length >= 9));
+  const canInitiatePay = currentIntent && currentIntent.status !== "paid" && (
+    method === "visa_mastercard"
+      ? (payerEmail && payerEmail.trim().length > 3)
+      : mobileMethods.includes(method)
+        ? (payerPhone && payerPhone.trim().length >= 9)
+        : true
+  );
 
   const handleLookupByPhone = async () => {
     const phone = payForPhone.trim();
@@ -313,15 +321,16 @@ export default function ClientPayments() {
               <Select value={method} onValueChange={setMethod}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                   <SelectItem value="ecocash">EcoCash</SelectItem>
-                  <SelectItem value="onemoney">One Money</SelectItem>
                   <SelectItem value="innbucks">InnBucks</SelectItem>
-                  <SelectItem value="omari">O Mari</SelectItem>
+                  <SelectItem value="onemoney">OneMoney</SelectItem>
+                  <SelectItem value="telecash">Telecash</SelectItem>
+                  <SelectItem value="omari">O'Mari</SelectItem>
+                  <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {(method === "ecocash" || method === "onemoney") && (
+            {mobileMethods.includes(method) && (
               <div>
                 <Label>Mobile number</Label>
                 <Input
@@ -330,6 +339,18 @@ export default function ClientPayments() {
                   onChange={(e) => setPayerPhone(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">A USSD prompt will appear; enter PIN to approve.</p>
+              </div>
+            )}
+            {method === "visa_mastercard" && (
+              <div>
+                <Label>Email address</Label>
+                <Input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={payerEmail}
+                  onChange={(e) => setPayerEmail(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">Required for card payment verification.</p>
               </div>
             )}
 
@@ -357,15 +378,16 @@ export default function ClientPayments() {
                       <Select value={method} onValueChange={setMethod}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                           <SelectItem value="ecocash">EcoCash</SelectItem>
-                          <SelectItem value="onemoney">One Money</SelectItem>
                           <SelectItem value="innbucks">InnBucks</SelectItem>
-                          <SelectItem value="omari">O Mari</SelectItem>
+                          <SelectItem value="onemoney">OneMoney</SelectItem>
+                          <SelectItem value="telecash">Telecash</SelectItem>
+                          <SelectItem value="omari">O'Mari</SelectItem>
+                          <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
-                    {(method === "ecocash" || method === "onemoney") && (
+                    {mobileMethods.includes(method) && (
                       <div>
                         <Label>Mobile number</Label>
                         <Input
@@ -374,6 +396,18 @@ export default function ClientPayments() {
                           onChange={(e) => setPayerPhone(e.target.value)}
                         />
                         <p className="text-xs text-muted-foreground mt-1">A USSD prompt will appear; enter PIN to approve.</p>
+                      </div>
+                    )}
+                    {method === "visa_mastercard" && (
+                      <div>
+                        <Label>Email address</Label>
+                        <Input
+                          type="email"
+                          placeholder="you@example.com"
+                          value={payerEmail}
+                          onChange={(e) => setPayerEmail(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">Required for card payment verification.</p>
                       </div>
                     )}
                     <Button

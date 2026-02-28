@@ -933,7 +933,7 @@ export default function StaffReports() {
                           <TableCell className="font-mono text-sm">{p.reference || "—"}</TableCell>
                           <TableCell className="font-semibold">{p.currency} {p.amount}</TableCell>
                           <TableCell>{p.paymentMethod}</TableCell>
-                          <TableCell><Badge>{p.status}</Badge></TableCell>
+                          <TableCell><Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>{p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}</Badge></TableCell>
                           <TableCell className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</TableCell>
                         </TableRow>
                       ))}

@@ -563,7 +563,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/stats", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getDashboardStats(user.organizationId));
+    const filters: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string } = {};
+    if (req.query.dateFrom) filters.dateFrom = String(req.query.dateFrom);
+    if (req.query.dateTo) filters.dateTo = String(req.query.dateTo);
+    if (req.query.status) filters.status = String(req.query.status);
+    if (req.query.branchId) filters.branchId = String(req.query.branchId);
+    return res.json(await storage.getDashboardStats(user.organizationId, filters));
   });
 
   // ─── Clients ────────────────────────────────────────────────
@@ -2334,8 +2339,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const payments = await storage.getPaymentsByOrg(user.organizationId, 1000, 0);
-    const cleared = payments.filter((p: any) => p.status === "cleared");
+    const payments = await storage.getPaymentsByOrg(user.organizationId, 5000, 0);
+    const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
+    const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
+    const cleared = payments.filter((p: any) => {
+      if (p.status !== "cleared") return false;
+      const day = new Date(p.receivedAt || p.createdAt).toISOString().slice(0, 10);
+      if (dateFrom && day < dateFrom) return false;
+      if (dateTo && day > dateTo) return false;
+      return true;
+    });
     const daily: Record<string, number> = {};
     cleared.forEach((p: any) => {
       const day = new Date(p.receivedAt || p.createdAt).toISOString().slice(0, 10);
@@ -2348,8 +2361,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
+    const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
+    const branchId = req.query.branchId ? String(req.query.branchId) : undefined;
     const breakdown: Record<string, number> = {};
     allPolicies.forEach((p: any) => {
+      if (dateFrom && p.createdAt && new Date(p.createdAt).toISOString().slice(0, 10) < dateFrom) return;
+      if (dateTo && p.createdAt && new Date(p.createdAt).toISOString().slice(0, 10) > dateTo) return;
+      if (branchId && branchId !== "all" && p.branchId !== branchId) return;
       breakdown[p.status] = (breakdown[p.status] || 0) + 1;
     });
     return res.json(breakdown);
@@ -2413,11 +2432,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
-    const total = allPolicies.length;
-    const active = allPolicies.filter((p: any) => p.status === "active").length;
-    const lapsed = allPolicies.filter((p: any) => p.status === "lapsed").length;
-    const grace = allPolicies.filter((p: any) => p.status === "grace").length;
-    const cancelled = allPolicies.filter((p: any) => p.status === "cancelled").length;
+    const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
+    const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
+    const branchId = req.query.branchId ? String(req.query.branchId) : undefined;
+    const filtered = allPolicies.filter((p: any) => {
+      if (dateFrom && p.createdAt && new Date(p.createdAt).toISOString().slice(0, 10) < dateFrom) return false;
+      if (dateTo && p.createdAt && new Date(p.createdAt).toISOString().slice(0, 10) > dateTo) return false;
+      if (branchId && branchId !== "all" && p.branchId !== branchId) return false;
+      return true;
+    });
+    const total = filtered.length;
+    const active = filtered.filter((p: any) => p.status === "active").length;
+    const lapsed = filtered.filter((p: any) => p.status === "lapsed").length;
+    const grace = filtered.filter((p: any) => p.status === "grace").length;
+    const cancelled = filtered.filter((p: any) => p.status === "cancelled").length;
     const retentionRate = total > 0 ? ((active / total) * 100).toFixed(1) : "0";
     const lapseRate = total > 0 ? ((lapsed / total) * 100).toFixed(1) : "0";
     return res.json({ total, active, lapsed, grace, cancelled, retentionRate, lapseRate });

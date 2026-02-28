@@ -2,6 +2,7 @@ import StaffLayout from "@/components/layout/staff-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
+import { getApiBase } from "@/lib/queryClient";
 import {
   Users,
   Building2,
@@ -96,9 +97,28 @@ export default function StaffDashboard() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [branchFilter, setBranchFilter] = useState("all");
 
+  const filterParams = useMemo(() => {
+    const p = new URLSearchParams();
+    if (dateFrom) p.set("dateFrom", dateFrom);
+    if (dateTo) p.set("dateTo", dateTo);
+    if (statusFilter && statusFilter !== "all") p.set("status", statusFilter);
+    if (branchFilter && branchFilter !== "all") p.set("branchId", branchFilter);
+    return p.toString();
+  }, [dateFrom, dateTo, statusFilter, branchFilter]);
+
+  const filterKey = { dateFrom, dateTo, statusFilter, branchFilter };
+
+  const base = getApiBase();
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ["/api/dashboard/stats"],
+    queryKey: ["/api/dashboard/stats", filterKey],
+    queryFn: async () => {
+      const url = base + "/api/dashboard/stats" + (filterParams ? `?${filterParams}` : "");
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load stats");
+      return res.json();
+    },
   });
 
   const { data: coveredLives } = useQuery<CoveredLives>({
@@ -107,12 +127,31 @@ export default function StaffDashboard() {
   });
 
   const { data: revenueTrend } = useQuery<{ date: string; total: number }[]>({
-    queryKey: ["/api/dashboard/revenue-trend"],
+    queryKey: ["/api/dashboard/revenue-trend", filterKey],
+    queryFn: async () => {
+      const p = new URLSearchParams();
+      if (dateFrom) p.set("dateFrom", dateFrom);
+      if (dateTo) p.set("dateTo", dateTo);
+      const url = base + "/api/dashboard/revenue-trend" + (p.toString() ? `?${p}` : "");
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load revenue trend");
+      return res.json();
+    },
     enabled: canReadFinance,
   });
 
   const { data: policyBreakdown } = useQuery<Record<string, number>>({
-    queryKey: ["/api/dashboard/policy-status-breakdown"],
+    queryKey: ["/api/dashboard/policy-status-breakdown", filterKey],
+    queryFn: async () => {
+      const p = new URLSearchParams();
+      if (dateFrom) p.set("dateFrom", dateFrom);
+      if (dateTo) p.set("dateTo", dateTo);
+      if (branchFilter && branchFilter !== "all") p.set("branchId", branchFilter);
+      const url = base + "/api/dashboard/policy-status-breakdown" + (p.toString() ? `?${p}` : "");
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load breakdown");
+      return res.json();
+    },
   });
 
   const { data: leadFunnel } = useQuery<Record<string, number>>({
@@ -121,7 +160,17 @@ export default function StaffDashboard() {
   });
 
   const { data: lapseRetention } = useQuery<LapseRetention>({
-    queryKey: ["/api/dashboard/lapse-retention"],
+    queryKey: ["/api/dashboard/lapse-retention", filterKey],
+    queryFn: async () => {
+      const p = new URLSearchParams();
+      if (dateFrom) p.set("dateFrom", dateFrom);
+      if (dateTo) p.set("dateTo", dateTo);
+      if (branchFilter && branchFilter !== "all") p.set("branchId", branchFilter);
+      const url = base + "/api/dashboard/lapse-retention" + (p.toString() ? `?${p}` : "");
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load lapse retention");
+      return res.json();
+    },
     enabled: !isAgent,
   });
 
@@ -151,14 +200,7 @@ export default function StaffDashboard() {
   const currentOrg = orgs?.[0];
   const primaryRole = roles[0]?.name || "—";
 
-  const filteredRevenueTrend = useMemo(() => {
-    if (!revenueTrend) return [];
-    return revenueTrend.filter((item) => {
-      if (dateFrom && item.date < dateFrom) return false;
-      if (dateTo && item.date > dateTo) return false;
-      return true;
-    });
-  }, [revenueTrend, dateFrom, dateTo]);
+  const filteredRevenueTrend = revenueTrend || [];
 
   const policyStatusData = useMemo(() => {
     if (!policyBreakdown) return [];
@@ -320,7 +362,7 @@ export default function StaffDashboard() {
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Branch</Label>
-                <Select defaultValue="all">
+                <Select value={branchFilter} onValueChange={setBranchFilter}>
                   <SelectTrigger className="h-9" data-testid="filter-branch">
                     <SelectValue placeholder="All branches" />
                   </SelectTrigger>

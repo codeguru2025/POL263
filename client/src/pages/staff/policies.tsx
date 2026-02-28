@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt } from "lucide-react";
 import { useSearch } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
@@ -55,8 +55,9 @@ function getStatusColor(status: string) {
 export default function StaffPolicies() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { user, roles } = useAuth();
+  const { user, roles, permissions } = useAuth();
   const isAgent = roles.some((r) => r.name === "agent");
+  const canWriteFinance = permissions.includes("write:finance");
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -69,6 +70,11 @@ export default function StaffPolicies() {
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
   const [transitionTarget, setTransitionTarget] = useState("");
   const [transitionReason, setTransitionReason] = useState("");
+  const [showInPolicyReceiptDialog, setShowInPolicyReceiptDialog] = useState(false);
+  const [inPolicyReceiptMethod, setInPolicyReceiptMethod] = useState("cash");
+  const [inPolicyReceiptCurrency, setInPolicyReceiptCurrency] = useState("USD");
+  const [inPolicyReceiptRef, setInPolicyReceiptRef] = useState("");
+  const [inPolicyReceiptNotes, setInPolicyReceiptNotes] = useState("");
 
   const [createForm, setCreateForm] = useState({
     clientId: "",
@@ -403,6 +409,26 @@ export default function StaffPolicies() {
     },
   });
 
+  const inPolicyReceiptMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/payments", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+      if (selectedPolicy) {
+        queryClient.invalidateQueries({ queryKey: [`/api/policies/${selectedPolicy.id}/payments`] });
+      }
+      setShowInPolicyReceiptDialog(false);
+      setInPolicyReceiptMethod("cash");
+      setInPolicyReceiptRef("");
+      setInPolicyReceiptNotes("");
+      toast({ title: "Payment recorded", description: "Receipt generated successfully." });
+    },
+    onError: (err: Error) => toast({ title: "Payment failed", description: err.message, variant: "destructive" }),
+  });
+
   const filteredPolicies = useMemo(() => {
     if (!policies) return [];
     return policies.filter((p: any) => {
@@ -495,6 +521,21 @@ export default function StaffPolicies() {
             >
               <FileText className="h-4 w-4" /> E-Statement
             </Button>
+            {canWriteFinance && (
+              <Button
+                className="gap-2"
+                onClick={() => {
+                  setInPolicyReceiptMethod("cash");
+                  setInPolicyReceiptCurrency(displayPolicy.premiumCurrency || "USD");
+                  setInPolicyReceiptRef("");
+                  setInPolicyReceiptNotes("");
+                  setShowInPolicyReceiptDialog(true);
+                }}
+                data-testid="btn-receipt-policy"
+              >
+                <Receipt className="h-4 w-4" /> Receipt Payment
+              </Button>
+            )}
           </div>
 
           <Card className="shadow-sm border-border/60">
@@ -716,7 +757,7 @@ export default function StaffPolicies() {
                         <TableCell>{p.paymentMethod}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={p.status === "cleared" ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/15 text-amber-700"}>
-                            {p.status}
+                            {p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-muted-foreground">{p.reference || "—"}</TableCell>
@@ -865,6 +906,95 @@ export default function StaffPolicies() {
               >
                 {detailAddDepMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Add Dependent
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={showInPolicyReceiptDialog} onOpenChange={setShowInPolicyReceiptDialog}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Receipt Payment</DialogTitle>
+              <DialogDescription>
+                Record a payment for policy <strong>{displayPolicy.policyNumber}</strong>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs">Amount</Label>
+                  <Input
+                    type="number"
+                    value={displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "0.00"}
+                    readOnly
+                    className="bg-muted cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Currency</Label>
+                  <Select value={inPolicyReceiptCurrency} onValueChange={setInPolicyReceiptCurrency}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="USD">USD</SelectItem>
+                      <SelectItem value="ZAR">ZAR</SelectItem>
+                      <SelectItem value="ZWL">ZWL</SelectItem>
+                      <SelectItem value="BWP">BWP</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Payment Method</Label>
+                <Select value={inPolicyReceiptMethod} onValueChange={setInPolicyReceiptMethod}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="ecocash">EcoCash</SelectItem>
+                    <SelectItem value="innbucks">InnBucks</SelectItem>
+                    <SelectItem value="onemoney">OneMoney</SelectItem>
+                    <SelectItem value="telecash">Telecash</SelectItem>
+                    <SelectItem value="omari">O'Mari</SelectItem>
+                    <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Reference (optional)</Label>
+                <Input
+                  placeholder="Transaction reference..."
+                  value={inPolicyReceiptRef}
+                  onChange={(e) => setInPolicyReceiptRef(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Notes (optional)</Label>
+                <Input
+                  placeholder="Additional notes..."
+                  value={inPolicyReceiptNotes}
+                  onChange={(e) => setInPolicyReceiptNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowInPolicyReceiptDialog(false)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  inPolicyReceiptMutation.mutate({
+                    policyId: selectedPolicy.id,
+                    clientId: displayPolicy.clientId,
+                    amount: displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "0",
+                    currency: inPolicyReceiptCurrency,
+                    paymentMethod: inPolicyReceiptMethod,
+                    status: "cleared",
+                    reference: inPolicyReceiptRef || undefined,
+                    notes: inPolicyReceiptNotes || undefined,
+                  });
+                }}
+                disabled={!displayPolicy.premiumAmount || inPolicyReceiptMutation.isPending}
+              >
+                {inPolicyReceiptMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <Receipt className="h-4 w-4 mr-2" />
+                Record Payment
               </Button>
             </DialogFooter>
           </DialogContent>

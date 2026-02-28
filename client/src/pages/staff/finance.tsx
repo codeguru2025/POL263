@@ -602,7 +602,7 @@ export default function StaffFinance() {
                             <TableCell><Badge variant="outline">{p.paymentMethod}</Badge></TableCell>
                             <TableCell>
                               <Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>
-                                {p.status}
+                                {p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}
                               </Badge>
                             </TableCell>
                             <TableCell className="font-mono text-xs text-muted-foreground">{p.reference || "—"}</TableCell>
@@ -1205,11 +1205,12 @@ export default function StaffFinance() {
                 <SelectTrigger data-testid="select-payment-method"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="bank">Bank Transfer</SelectItem>
-                  <SelectItem value="paynow">Paynow</SelectItem>
                   <SelectItem value="ecocash">EcoCash</SelectItem>
                   <SelectItem value="innbucks">InnBucks</SelectItem>
-                  <SelectItem value="mukuru">Mukuru</SelectItem>
+                  <SelectItem value="onemoney">OneMoney</SelectItem>
+                  <SelectItem value="telecash">Telecash</SelectItem>
+                  <SelectItem value="omari">O'Mari</SelectItem>
+                  <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1342,10 +1343,14 @@ export default function StaffFinance() {
               <Select value={settlementMethod} onValueChange={setSettlementMethod}>
                 <SelectTrigger data-testid="select-settlement-method"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="bank">Bank Transfer</SelectItem>
                   <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="bank">Bank Transfer</SelectItem>
                   <SelectItem value="ecocash">EcoCash</SelectItem>
-                  <SelectItem value="paynow">Paynow</SelectItem>
+                  <SelectItem value="innbucks">InnBucks</SelectItem>
+                  <SelectItem value="onemoney">OneMoney</SelectItem>
+                  <SelectItem value="telecash">Telecash</SelectItem>
+                  <SelectItem value="omari">O'Mari</SelectItem>
+                  <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
                 </SelectContent>
               </Select>
             </div>

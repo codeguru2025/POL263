@@ -141,18 +141,22 @@ export async function createPaymentIntent(input: CreateIntentInput): Promise<{
   return { intent, created: true };
 }
 
-/** Build form body for Paynow init (standard redirect). Hash uses field order per PayNow docs: id, reference, amount, returnurl, resulturl, status. */
-function buildInitParams(merchantReference: string, amount: string, returnUrl: string, resultUrl: string): Record<string, string> {
+/** Build form body for Paynow init (standard redirect). Hash uses field order per PayNow docs: id, reference, amount, returnurl, resulturl, authemail, status. */
+function buildInitParams(merchantReference: string, amount: string, returnUrl: string, resultUrl: string, authEmail?: string): Record<string, string> {
   const id = getPaynowIntegrationId();
+  const email = authEmail || process.env.PAYNOW_AUTH_EMAIL || "";
   const params: Record<string, string> = {
     id,
     reference: merchantReference,
     amount: String(parseFloat(amount).toFixed(2)),
     returnurl: returnUrl,
     resulturl: resultUrl,
+    ...(email ? { authemail: email } : {}),
     status: "Message",
   };
-  const hashKeyOrder = ["id", "reference", "amount", "returnurl", "resulturl", "status"];
+  const hashKeyOrder = email
+    ? ["id", "reference", "amount", "returnurl", "resulturl", "authemail", "status"]
+    : ["id", "reference", "amount", "returnurl", "resulturl", "status"];
   params.hash = generatePaynowHash(params, hashKeyOrder);
   return params;
 }
@@ -170,6 +174,9 @@ function buildRemoteParams(
   const methodMap: Record<string, string> = {
     ecocash: "ecocash",
     onemoney: "onemoney",
+    telecash: "telecash",
+    innbucks: "innbucks",
+    omari: "omari",
   };
   const paynowMethod = methodMap[method.toLowerCase()] || "ecocash";
   let cleanPhone = phone.replace(/\D/g, "").trim();
@@ -222,7 +229,8 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
   if (!returnUrl || !resultUrl) return { ok: false, error: "Paynow return/result URL not configured" };
 
   const method = (input.method || "visa_mastercard").toLowerCase();
-  const isRemote = ["ecocash", "onemoney"].includes(method) && input.payerPhone;
+  const mobileMethods = ["ecocash", "onemoney", "telecash", "innbucks", "omari"];
+  const isRemote = mobileMethods.includes(method) && input.payerPhone;
 
   let params: Record<string, string>;
   let url: string;
@@ -237,7 +245,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
     );
     url = PAYNOW_REMOTE_URL;
   } else {
-    params = buildInitParams(intent.merchantReference, String(intent.amount), returnUrl, resultUrl);
+    params = buildInitParams(intent.merchantReference, String(intent.amount), returnUrl, resultUrl, input.payerEmail);
     url = PAYNOW_INIT_URL;
   }
 
@@ -677,7 +685,8 @@ export async function initiatePaynowForGroup(input: InitiatePaynowForGroupInput)
   if (!returnUrl || !resultUrl) return { ok: false, error: "Paynow return/result URL not configured" };
 
   const method = (input.method || "visa_mastercard").toLowerCase();
-  const isRemote = ["ecocash", "onemoney"].includes(method) && input.payerPhone;
+  const mobileMethods = ["ecocash", "onemoney", "telecash", "innbucks", "omari"];
+  const isRemote = mobileMethods.includes(method) && input.payerPhone;
   const amount = String(groupIntent.totalAmount);
 
   let params: Record<string, string>;

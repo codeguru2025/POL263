@@ -351,7 +351,7 @@ export interface IStorage {
   createCashup(cashup: InsertCashup): Promise<Cashup>;
   updateCashup(id: string, data: Partial<InsertCashup>, orgId: string): Promise<Cashup | undefined>;
   getSecurityQuestions(orgId: string): Promise<{ id: string; question: string }[]>;
-  getDashboardStats(orgId: string): Promise<any>;
+  getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }): Promise<any>;
   generatePolicyNumber(orgId: string): Promise<string>;
   generateClaimNumber(orgId: string): Promise<string>;
   getNextMemberNumber(orgId: string): Promise<string>;
@@ -1950,18 +1950,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── Dashboard Stats ──────────────────────────────────────
-  async getDashboardStats(orgId: string): Promise<any> {
+  async getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }): Promise<any> {
     const tdb = await getDbForOrg(orgId);
-    const [policyCount] = await tdb.select({ cnt: count() }).from(policies).where(eq(policies.organizationId, orgId));
-    const [activePolicies] = await tdb.select({ cnt: count() }).from(policies)
-      .where(and(eq(policies.organizationId, orgId), eq(policies.status, "active")));
-    const [clientCount] = await tdb.select({ cnt: count() }).from(clients).where(eq(clients.organizationId, orgId));
-    const [claimCount] = await tdb.select({ cnt: count() }).from(claims).where(eq(claims.organizationId, orgId));
+
+    const pConds: any[] = [eq(policies.organizationId, orgId)];
+    if (filters?.dateFrom) pConds.push(gte(policies.createdAt, new Date(filters.dateFrom)));
+    if (filters?.dateTo) pConds.push(lte(policies.createdAt, new Date(filters.dateTo + "T23:59:59")));
+    if (filters?.status && filters.status !== "all") pConds.push(eq(policies.status, filters.status));
+    if (filters?.branchId && filters.branchId !== "all") pConds.push(eq(policies.branchId, filters.branchId));
+
+    const [policyCount] = await tdb.select({ cnt: count() }).from(policies).where(and(...pConds));
+    const activeConds = [...pConds, eq(policies.status, "active")];
+    const [activePolicies] = await tdb.select({ cnt: count() }).from(policies).where(and(...activeConds));
+
+    const cConds: any[] = [eq(clients.organizationId, orgId)];
+    if (filters?.dateFrom) cConds.push(gte(clients.createdAt, new Date(filters.dateFrom)));
+    if (filters?.dateTo) cConds.push(lte(clients.createdAt, new Date(filters.dateTo + "T23:59:59")));
+    if (filters?.branchId && filters.branchId !== "all") cConds.push(eq(clients.branchId, filters.branchId));
+    const [clientCount] = await tdb.select({ cnt: count() }).from(clients).where(and(...cConds));
+
+    const clConds: any[] = [eq(claims.organizationId, orgId)];
+    if (filters?.dateFrom) clConds.push(gte(claims.createdAt, new Date(filters.dateFrom)));
+    if (filters?.dateTo) clConds.push(lte(claims.createdAt, new Date(filters.dateTo + "T23:59:59")));
+    const [claimCount] = await tdb.select({ cnt: count() }).from(claims).where(and(...clConds));
     const [openClaims] = await tdb.select({ cnt: count() }).from(claims)
-      .where(and(eq(claims.organizationId, orgId), inArray(claims.status, ["submitted", "verified"])));
-    const [funeralCount] = await tdb.select({ cnt: count() }).from(funeralCases).where(eq(funeralCases.organizationId, orgId));
+      .where(and(...clConds, inArray(claims.status, ["submitted", "verified"])));
+
+    const fConds: any[] = [eq(funeralCases.organizationId, orgId)];
+    if (filters?.dateFrom) fConds.push(gte(funeralCases.createdAt, new Date(filters.dateFrom)));
+    if (filters?.dateTo) fConds.push(lte(funeralCases.createdAt, new Date(filters.dateTo + "T23:59:59")));
+    const [funeralCount] = await tdb.select({ cnt: count() }).from(funeralCases).where(and(...fConds));
+
     const [leadCount] = await tdb.select({ cnt: count() }).from(leads).where(eq(leads.organizationId, orgId));
-    const [txCount] = await tdb.select({ cnt: count() }).from(paymentTransactions).where(eq(paymentTransactions.organizationId, orgId));
+
+    const txConds: any[] = [eq(paymentTransactions.organizationId, orgId)];
+    if (filters?.dateFrom) txConds.push(gte(paymentTransactions.createdAt, new Date(filters.dateFrom)));
+    if (filters?.dateTo) txConds.push(lte(paymentTransactions.createdAt, new Date(filters.dateTo + "T23:59:59")));
+    const [txCount] = await tdb.select({ cnt: count() }).from(paymentTransactions).where(and(...txConds));
 
     return {
       totalPolicies: policyCount?.cnt || 0,
