@@ -32,8 +32,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 
 export default function StaffSettings() {
-  const { user } = useAuth();
+  const { user, permissions: userPerms } = useAuth();
   const queryClient = useQueryClient();
+  const canEditRbac = userPerms.includes("write:role") || userPerms.includes("create:tenant");
   const search = useSearch();
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
@@ -287,10 +288,10 @@ export default function StaffSettings() {
                         className="object-contain max-h-full max-w-full"
                       />
                     </div>
-                    <label className="cursor-pointer">
-                      <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
-                      <Button type="button" variant="outline">Upload Logo</Button>
-                    </label>
+                    <div>
+                      <input id="logo-upload" type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                      <Button type="button" variant="outline" onClick={() => document.getElementById("logo-upload")?.click()}>Upload Logo</Button>
+                    </div>
                   </div>
                 </div>
 
@@ -308,10 +309,10 @@ export default function StaffSettings() {
                         <span className="text-xs text-muted-foreground">No signature</span>
                       )}
                     </div>
-                    <label className="cursor-pointer">
-                      <input type="file" accept="image/*" className="hidden" onChange={handleSignatureUpload} />
-                      <Button type="button" variant="outline">Upload Signature</Button>
-                    </label>
+                    <div>
+                      <input id="sig-upload" type="file" accept="image/*" className="hidden" onChange={handleSignatureUpload} />
+                      <Button type="button" variant="outline" onClick={() => document.getElementById("sig-upload")?.click()}>Upload Signature</Button>
+                    </div>
                   </div>
                 </div>
 
@@ -683,7 +684,9 @@ export default function StaffSettings() {
               <CardHeader>
                 <CardTitle>Role Permissions Mapping</CardTitle>
                 <CardDescription>
-                  Live DB-driven RBAC configuration. Roles and permissions are fetched from the database.
+                  {canEditRbac
+                    ? "Click a cell to toggle permissions for each role. Superuser always has all permissions."
+                    : "Live DB-driven RBAC configuration. Roles and permissions are fetched from the database."}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -702,7 +705,7 @@ export default function StaffSettings() {
                       </TableHeader>
                       <TableBody>
                         {permsList.map((perm: any) => (
-                          <RBACPermissionRow key={perm.id} permission={perm} roles={rolesList} />
+                          <RBACPermissionRow key={perm.id} permission={perm} roles={rolesList} canEdit={canEditRbac} />
                         ))}
                       </TableBody>
                     </Table>
@@ -721,7 +724,22 @@ export default function StaffSettings() {
   );
 }
 
-function RBACPermissionRow({ permission, roles }: { permission: any; roles: any[] }) {
+function RBACPermissionRow({ permission, roles, canEdit }: { permission: any; roles: any[]; canEdit: boolean }) {
+  const queryClient = useQueryClient();
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ roleId, permId, grant }: { roleId: string; permId: string; grant: boolean }) => {
+      if (grant) {
+        await apiRequest("POST", `/api/roles/${roleId}/permissions/${permId}`);
+      } else {
+        await apiRequest("DELETE", `/api/roles/${roleId}/permissions/${permId}`);
+      }
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/roles/${variables.roleId}/permissions`] });
+    },
+  });
+
   const rolePermQueries = roles.map((role: any) => {
     const { data: rolePerms } = useQuery<any[]>({
       queryKey: [`/api/roles/${role.id}/permissions`],
@@ -742,8 +760,16 @@ function RBACPermissionRow({ permission, roles }: { permission: any; roles: any[
           );
         }
         const hasPerm = perms?.some((p: any) => p.id === permission.id);
+        const handleToggle = () => {
+          if (!canEdit) return;
+          toggleMutation.mutate({ roleId: role.id, permId: permission.id, grant: !hasPerm });
+        };
         return (
-          <TableCell key={role.id} className="text-center">
+          <TableCell
+            key={role.id}
+            className={`text-center ${canEdit ? "cursor-pointer hover:bg-muted/50 transition-colors" : ""}`}
+            onClick={handleToggle}
+          >
             {perms === undefined ? (
               <Loader2 className="h-3 w-3 animate-spin mx-auto" />
             ) : hasPerm ? (

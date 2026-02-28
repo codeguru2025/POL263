@@ -531,6 +531,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getRolePermissions(req.params.id as string, user.organizationId));
   });
 
+  app.post("/api/roles/:id/permissions/:permId", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
+    await storage.addRolePermission(req.params.id as string, req.params.permId as string);
+    return res.json({ ok: true });
+  });
+
+  app.delete("/api/roles/:id/permissions/:permId", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
+    await storage.removeRolePermission(req.params.id as string, req.params.permId as string);
+    return res.json({ ok: true });
+  });
+
   // ─── Permissions ────────────────────────────────────────────
 
   app.get("/api/permissions", requireAuth, requirePermission("read:role"), async (_req, res) => {

@@ -205,6 +205,7 @@ export interface IStorage {
   createPermission(perm: InsertPermission): Promise<Permission>;
   getRolePermissions(roleId: string, organizationId: string): Promise<Permission[]>;
   addRolePermission(roleId: string, permissionId: string): Promise<void>;
+  removeRolePermission(roleId: string, permissionId: string): Promise<void>;
   getUserRoles(userId: string, organizationId: string): Promise<(Role & { branchId: string | null })[]>;
   addUserRole(userId: string, roleId: string, branchId?: string): Promise<void>;
   removeUserRole(userId: string, roleId: string): Promise<void>;
@@ -498,6 +499,18 @@ export class DatabaseStorage implements IStorage {
       }
     }
     await db.insert(rolePermissions).values({ roleId, permissionId }).onConflictDoNothing();
+  }
+  async removeRolePermission(roleId: string, permissionId: string): Promise<void> {
+    const orgs = await db.select({ id: organizations.id }).from(organizations);
+    for (const org of orgs) {
+      const tdb = await getDbForOrg(org.id);
+      const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+      if (role) {
+        await tdb.delete(rolePermissions).where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)));
+        return;
+      }
+    }
+    await db.delete(rolePermissions).where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)));
   }
   async getUserRoles(userId: string, organizationId: string): Promise<(Role & { branchId: string | null })[]> {
     const tdb = await getDbForOrg(organizationId);
