@@ -241,13 +241,20 @@ export default function StaffFinance() {
   const [paynowOtp, setPaynowOtp] = useState("");
   const [paynowPhase, setPaynowPhase] = useState<"select" | "waiting">("select");
 
-  const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
-  const { data: cashups = [] } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
-  const { data: commissionPlans = [] } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
-  const { data: commissionLedger = [] } = useQuery<any[]>({ queryKey: ["/api/commission-ledger"] });
-  const { data: expenditures = [] } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
-  const { data: policies = [] } = useQuery<any[]>({ queryKey: ["/api/policies"] });
-  const { data: clients = [] } = useQuery<any[]>({ queryKey: ["/api/clients"] });
+  const { data: rawPayments, isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
+  const { data: rawCashups } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
+  const { data: rawCommissionPlans } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
+  const { data: rawCommissionLedger } = useQuery<any[]>({ queryKey: ["/api/commission-ledger"] });
+  const { data: rawExpenditures } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
+  const { data: rawPolicies } = useQuery<any[]>({ queryKey: ["/api/policies"] });
+  const { data: rawClients } = useQuery<any[]>({ queryKey: ["/api/clients"] });
+  const payments = Array.isArray(rawPayments) ? rawPayments : [];
+  const cashups = Array.isArray(rawCashups) ? rawCashups : [];
+  const commissionPlans = Array.isArray(rawCommissionPlans) ? rawCommissionPlans : [];
+  const commissionLedger = Array.isArray(rawCommissionLedger) ? rawCommissionLedger : [];
+  const expenditures = Array.isArray(rawExpenditures) ? rawExpenditures : [];
+  const policies = Array.isArray(rawPolicies) ? rawPolicies : [];
+  const clients = Array.isArray(rawClients) ? rawClients : [];
   const { data: selectedPolicyData } = useQuery<any>({
     queryKey: ["/api/policies", selectedPolicyId],
     queryFn: async () => {
@@ -266,10 +273,13 @@ export default function StaffFinance() {
     },
     enabled: !!cashReceiptSelectedPolicyId,
   });
-  const { data: chibReceivables = [] } = useQuery<any[]>({ queryKey: ["/api/chibikhulu/receivables"] });
+  const { data: rawChibReceivables } = useQuery<any[]>({ queryKey: ["/api/chibikhulu/receivables"] });
   const { data: chibSummary } = useQuery<{ totalDue: string; totalSettled: string; outstanding: string }>({ queryKey: ["/api/chibikhulu/summary"] });
-  const { data: settlements = [] } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
-  const { data: paymentIntents = [], isLoading: loadingIntents, refetch: refetchIntents } = useQuery<any[]>({ queryKey: ["/api/payment-intents"] });
+  const { data: rawSettlements } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
+  const { data: rawPaymentIntents, isLoading: loadingIntents, refetch: refetchIntents } = useQuery<any[]>({ queryKey: ["/api/payment-intents"] });
+  const chibReceivables = Array.isArray(rawChibReceivables) ? rawChibReceivables : [];
+  const settlements = Array.isArray(rawSettlements) ? rawSettlements : [];
+  const paymentIntents = Array.isArray(rawPaymentIntents) ? rawPaymentIntents : [];
 
   const clientMap = useMemo(() => {
     const map: Record<string, any> = {};
