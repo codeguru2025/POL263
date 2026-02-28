@@ -20,6 +20,7 @@ export default function StaffUsers() {
   const queryClient = useQueryClient();
   const canEditUsers = permissions.includes("write:user");
   const canDeleteUsers = permissions.includes("delete:user");
+  const isSuperuser = permissions.includes("create:tenant");
   const [searchTerm, setSearchTerm] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -150,7 +151,7 @@ export default function StaffUsers() {
                 <div className="space-y-2">
                   <Label>Assign Roles</Label>
                   <div className="flex flex-wrap gap-2">
-                    {roles.filter((r: any) => r.name !== "superuser").map((role: any) => {
+                    {roles.filter((r: any) => isSuperuser || r.name !== "superuser").map((role: any) => {
                       const isSelected = newUser.roleIds.includes(role.id);
                       return (
                         <Badge key={role.id} variant={isSelected ? "default" : "outline"} className={`cursor-pointer select-none ${isSelected ? "" : "opacity-60 hover:opacity-100"}`} onClick={() => setNewUser(p => ({ ...p, roleIds: toggleRole(role.id, p.roleIds) }))} data-testid={`badge-role-${role.name}`}>
@@ -341,7 +342,7 @@ export default function StaffUsers() {
                 <div className="space-y-2">
                   <Label>Roles</Label>
                   <div className="flex flex-wrap gap-2">
-                    {roles.filter((r: any) => r.name !== "superuser").map((role: any) => {
+                    {roles.filter((r: any) => isSuperuser || r.name !== "superuser").map((role: any) => {
                       const isSelected = editingUser.roleIds?.includes(role.id);
                       return (
                         <Badge key={role.id} variant={isSelected ? "default" : "outline"} className={`cursor-pointer select-none ${isSelected ? "" : "opacity-60 hover:opacity-100"} ${!canEditUsers ? "pointer-events-none" : ""}`} onClick={() => canEditUsers && setEditingUser((p: any) => ({ ...p, roleIds: toggleRole(role.id, p.roleIds || []) }))} data-testid={`badge-edit-role-${role.name}`}>
