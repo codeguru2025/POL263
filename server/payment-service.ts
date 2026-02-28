@@ -182,6 +182,7 @@ function buildRemoteParams(
   if (cleanPhone.startsWith("0") && cleanPhone.length === 10) {
     cleanPhone = "263" + cleanPhone.slice(1);
   }
+  const email = process.env.PAYNOW_AUTH_EMAIL || "";
   structuredLog("info", "Paynow remote initiate", { method: paynowMethod, phone: cleanPhone, merchantReference, amount });
   const params: Record<string, string> = {
     id,
@@ -189,11 +190,12 @@ function buildRemoteParams(
     amount: String(parseFloat(amount).toFixed(2)),
     returnurl: returnUrl,
     resulturl: resultUrl,
+    authemail: email,
     status: "Message",
     method: paynowMethod,
     phone: cleanPhone,
   };
-  const hashKeyOrder = ["id", "reference", "amount", "returnurl", "resulturl", "status", "method", "phone"];
+  const hashKeyOrder = ["id", "reference", "amount", "returnurl", "resulturl", "authemail", "status", "method", "phone"];
   params.hash = generatePaynowHash(params, hashKeyOrder);
   return params;
 }

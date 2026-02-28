@@ -66,6 +66,9 @@ envs:
   - key: PAYNOW_INTEGRATION_KEY
     value: SET_IN_DASHBOARD
     scope: RUN_AND_BUILD_TIME
+  - key: PAYNOW_AUTH_EMAIL
+    value: SET_IN_DASHBOARD
+    scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_MODE
     value: live
     scope: RUN_AND_BUILD_TIME
