@@ -274,6 +274,7 @@ export interface IStorage {
   getPaymentsByPolicy(policyId: string, orgId: string): Promise<PaymentTransaction[]>;
   getPaymentsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PaymentTransaction[]>;
   getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined>;
+  getPaymentTransactionByIdempotencyKey(key: string, orgId: string): Promise<PaymentTransaction | undefined>;
   createReceipt(receipt: InsertReceipt): Promise<Receipt>;
   getReceiptsByPolicy(policyId: string, orgId: string): Promise<Receipt[]>;
   getNextReceiptNumber(orgId: string): Promise<string>;
@@ -1322,6 +1323,12 @@ export class DatabaseStorage implements IStorage {
     const [tx] = await tdb.select().from(paymentTransactions).where(eq(paymentTransactions.id, id));
     return tx;
   }
+  async getPaymentTransactionByIdempotencyKey(key: string, orgId: string): Promise<PaymentTransaction | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [tx] = await tdb.select().from(paymentTransactions)
+      .where(and(eq(paymentTransactions.idempotencyKey, key), eq(paymentTransactions.organizationId, orgId)));
+    return tx;
+  }
   async createReceipt(receipt: InsertReceipt): Promise<Receipt> {
     const tdb = await getDbForOrg(receipt.organizationId);
     const [created] = await tdb.insert(receipts).values(receipt).returning();
@@ -1333,9 +1340,13 @@ export class DatabaseStorage implements IStorage {
   }
   async getNextReceiptNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);
-    const [result] = await tdb.select({ cnt: count() }).from(receipts).where(eq(receipts.organizationId, orgId));
-    const num = (result?.cnt || 0) as number;
-    return String(num + 1);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, receipt_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET receipt_next = org_policy_sequences.receipt_next + 1
+      RETURNING receipt_next
+    `);
+    const nextVal = (result as unknown as { rows?: { receipt_next: number }[] }).rows?.[0]?.receipt_next ?? 1;
+    return String(nextVal);
   }
   async getReceiptReportByOrg(orgId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
     const tdb = await getDbForOrg(orgId);
@@ -1514,9 +1525,13 @@ export class DatabaseStorage implements IStorage {
   }
   async getNextPaymentReceiptNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);
-    const [result] = await tdb.select({ cnt: count() }).from(paymentReceipts).where(eq(paymentReceipts.organizationId, orgId));
-    const num = (result?.cnt || 0) as number;
-    return String(num + 1);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, payment_receipt_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET payment_receipt_next = org_policy_sequences.payment_receipt_next + 1
+      RETURNING payment_receipt_next
+    `);
+    const nextVal = (result as unknown as { rows?: { payment_receipt_next: number }[] }).rows?.[0]?.payment_receipt_next ?? 1;
+    return String(nextVal);
   }
   async updatePaymentReceipt(id: string, data: Partial<InsertPaymentReceipt>, orgId: string): Promise<PaymentReceipt | undefined> {
     const tdb = await getDbForOrg(orgId);
@@ -1977,26 +1992,33 @@ export class DatabaseStorage implements IStorage {
   }
   async generateClaimNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);
-    const [result] = await tdb.select({ cnt: count() }).from(claims).where(eq(claims.organizationId, orgId));
-    const num = ((result?.cnt || 0) as number) + 1;
-    return `CLM-${String(num).padStart(6, "0")}`;
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, claim_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET claim_next = org_policy_sequences.claim_next + 1
+      RETURNING claim_next
+    `);
+    const nextVal = (result as unknown as { rows?: { claim_next: number }[] }).rows?.[0]?.claim_next ?? 1;
+    return `CLM-${String(nextVal).padStart(6, "0")}`;
   }
   async getNextMemberNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);
-    const [row] = await tdb.select().from(orgMemberSequences).where(eq(orgMemberSequences.organizationId, orgId));
-    const nextVal = row ? row.memberNext + 1 : 1;
-    if (row) {
-      await tdb.update(orgMemberSequences).set({ memberNext: nextVal }).where(eq(orgMemberSequences.organizationId, orgId));
-    } else {
-      await tdb.insert(orgMemberSequences).values({ organizationId: orgId, memberNext: nextVal });
-    }
+    const result = await tdb.execute(sql`
+      INSERT INTO org_member_sequences (organization_id, member_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET member_next = org_member_sequences.member_next + 1
+      RETURNING member_next
+    `);
+    const nextVal = (result as unknown as { rows?: { member_next: number }[] }).rows?.[0]?.member_next ?? 1;
     return `MEM-${String(nextVal).padStart(6, "0")}`;
   }
   async generateCaseNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);
-    const [result] = await tdb.select({ cnt: count() }).from(funeralCases).where(eq(funeralCases.organizationId, orgId));
-    const num = ((result?.cnt || 0) as number) + 1;
-    return `FNC-${String(num).padStart(6, "0")}`;
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, case_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET case_next = org_policy_sequences.case_next + 1
+      RETURNING case_next
+    `);
+    const nextVal = (result as unknown as { rows?: { case_next: number }[] }).rows?.[0]?.case_next ?? 1;
+    return `FNC-${String(nextVal).padStart(6, "0")}`;
   }
 
   // ─── Groups ──────────────────────────────────────────────

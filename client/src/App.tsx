@@ -5,46 +5,58 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { ThemeProvider } from "@/components/theme-provider";
-import NotFound from "@/pages/not-found";
-
-import Home from "@/pages/home";
-
-import StaffLogin from "@/pages/staff/login";
-import AgentLogin from "@/pages/agent/login";
-import StaffDashboard from "@/pages/staff/dashboard";
-import AuditLogs from "@/pages/staff/audit";
-import StaffSettings from "@/pages/staff/settings";
-import ProductBuilder from "@/pages/staff/products";
-import StaffPolicies from "@/pages/staff/policies";
-import StaffClients from "@/pages/staff/clients";
-import StaffClaims from "@/pages/staff/claims";
-import StaffFunerals from "@/pages/staff/funerals";
-import StaffFinance from "@/pages/staff/finance";
-import StaffReports from "@/pages/staff/reports";
-import StaffLeads from "@/pages/staff/leads";
-import StaffNotifications from "@/pages/staff/notifications";
-import StaffGroups from "@/pages/staff/groups";
-import StaffApprovals from "@/pages/staff/approvals";
-import StaffDiagnostics from "@/pages/staff/diagnostics";
-import StaffPriceBook from "@/pages/staff/pricebook";
-import StaffPayroll from "@/pages/staff/payroll";
-import StaffUsers from "@/pages/staff/users";
-import StaffTenants from "@/pages/staff/tenants";
-
-import ClientLogin from "@/pages/client/login";
-import ClientClaim from "@/pages/client/claim";
-import ClientResetPassword from "@/pages/client/reset-password";
-import ClientDashboard from "@/pages/client/dashboard";
-import ClientPayments from "@/pages/client/payments";
-import ClientDocuments from "@/pages/client/documents";
-import ClientDocumentView from "@/pages/client/document-view";
-import ClientClaims from "@/pages/client/claims";
-import ClientFeedback from "@/pages/client/feedback";
-import JoinPage from "@/pages/join";
-import JoinRegisterPage from "@/pages/join/register";
+import { lazy, Suspense } from "react";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
 import { isNativeMobile } from "@/lib/mobile-payment";
+import { Loader2 } from "lucide-react";
+
+// Eagerly loaded: landing + login pages (first paint)
+import Home from "@/pages/home";
+import NotFound from "@/pages/not-found";
+
+// Lazily loaded: all other pages (route-based code splitting)
+const StaffLogin = lazy(() => import("@/pages/staff/login"));
+const AgentLogin = lazy(() => import("@/pages/agent/login"));
+const StaffDashboard = lazy(() => import("@/pages/staff/dashboard"));
+const AuditLogs = lazy(() => import("@/pages/staff/audit"));
+const StaffSettings = lazy(() => import("@/pages/staff/settings"));
+const ProductBuilder = lazy(() => import("@/pages/staff/products"));
+const StaffPolicies = lazy(() => import("@/pages/staff/policies"));
+const StaffClients = lazy(() => import("@/pages/staff/clients"));
+const StaffClaims = lazy(() => import("@/pages/staff/claims"));
+const StaffFunerals = lazy(() => import("@/pages/staff/funerals"));
+const StaffFinance = lazy(() => import("@/pages/staff/finance"));
+const StaffReports = lazy(() => import("@/pages/staff/reports"));
+const StaffLeads = lazy(() => import("@/pages/staff/leads"));
+const StaffNotifications = lazy(() => import("@/pages/staff/notifications"));
+const StaffGroups = lazy(() => import("@/pages/staff/groups"));
+const StaffApprovals = lazy(() => import("@/pages/staff/approvals"));
+const StaffDiagnostics = lazy(() => import("@/pages/staff/diagnostics"));
+const StaffPriceBook = lazy(() => import("@/pages/staff/pricebook"));
+const StaffPayroll = lazy(() => import("@/pages/staff/payroll"));
+const StaffUsers = lazy(() => import("@/pages/staff/users"));
+const StaffTenants = lazy(() => import("@/pages/staff/tenants"));
+
+const ClientLogin = lazy(() => import("@/pages/client/login"));
+const ClientClaim = lazy(() => import("@/pages/client/claim"));
+const ClientResetPassword = lazy(() => import("@/pages/client/reset-password"));
+const ClientDashboard = lazy(() => import("@/pages/client/dashboard"));
+const ClientPayments = lazy(() => import("@/pages/client/payments"));
+const ClientDocuments = lazy(() => import("@/pages/client/documents"));
+const ClientDocumentView = lazy(() => import("@/pages/client/document-view"));
+const ClientClaims = lazy(() => import("@/pages/client/claims"));
+const ClientFeedback = lazy(() => import("@/pages/client/feedback"));
+const JoinPage = lazy(() => import("@/pages/join"));
+const JoinRegisterPage = lazy(() => import("@/pages/join/register"));
+
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
 
 function PaynowReturnRedirect() {
   const [, setLocation] = useLocation();
@@ -52,7 +64,6 @@ function PaynowReturnRedirect() {
   return null;
 }
 
-/** When app is opened via deep link (e.g. pol263://client/payments?returned=1), navigate to that path. */
 function DeepLinkHandler() {
   const [, setLocation] = useLocation();
   useEffect(() => {
@@ -87,6 +98,7 @@ function Router() {
   return (
     <>
       <DeepLinkHandler />
+    <Suspense fallback={<PageLoader />}>
     <Switch>
       <Route path="/" component={Home} />
       
@@ -131,6 +143,7 @@ function Router() {
       
       <Route component={NotFound} />
     </Switch>
+    </Suspense>
     </>
   );
 }

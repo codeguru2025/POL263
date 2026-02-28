@@ -9,6 +9,7 @@ import { seedDatabase } from "./seed";
 import { requestIdMiddleware, structuredLog } from "./logger";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import compression from "compression";
 import cookieParser from "cookie-parser";
 import { pool } from "./db";
 import csurf from "csurf";
@@ -38,6 +39,7 @@ app.use(
   })
 );
 
+app.use(compression());
 app.use(cookieParser());
 app.use(requestIdMiddleware);
 
@@ -79,6 +81,18 @@ if (process.env.ENABLE_CSRF_PROTECTION === "true") {
   });
 }
 
+// Global API rate limit: 200 requests per minute per IP
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 200,
+  message: { message: "Too many requests, please slow down" },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !req.path.startsWith("/api"),
+});
+app.use("/api", apiLimiter);
+
+// Stricter rate limit on auth endpoints: 20 per 15 min
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -87,8 +101,8 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use("/api/auth", authLimiter);
-  app.use("/api/agent-auth", authLimiter);
-  app.use("/api/client-auth", authLimiter);
+app.use("/api/agent-auth", authLimiter);
+app.use("/api/client-auth", authLimiter);
 app.use("/api/security-questions", authLimiter);
 app.use("/api/agents/by-referral", authLimiter);
 

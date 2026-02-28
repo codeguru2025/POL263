@@ -2,6 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import argon2 from "argon2";
 import { storage, findPaymentReceiptById } from "./storage";
+import { withOrgTransaction } from "./tenant-db";
 import { requireAuth, requirePermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { z } from "zod";
@@ -27,7 +28,9 @@ import {
   insertGroupSchema, insertChibikhuluReceivableSchema, insertSettlementSchema,
   insertDependentSchema, insertTermsSchema,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
+  policies, paymentTransactions, paymentReceipts,
 } from "@shared/schema";
+import { sql, eq } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 
 async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
@@ -1275,64 +1278,96 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const { policyId, amount, currency, notes, receivedAt } = req.body;
+    const { policyId, amount, currency, notes, receivedAt, idempotencyKey } = req.body;
     if (!policyId || amount == null) return res.status(400).json({ message: "policyId and amount required" });
+
+    // Idempotency: reject if a cleared transaction for this policy with the same idempotency key exists
+    if (idempotencyKey) {
+      const existing = await storage.getPaymentTransactionByIdempotencyKey(idempotencyKey, user.organizationId);
+      if (existing) return res.status(200).json({ transaction: existing, receipt: null, duplicate: true });
+    }
+
     const policy = await storage.getPolicy(policyId, user.organizationId);
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
-    const today = new Date().toISOString().split("T")[0];
-    const tx = await storage.createPaymentTransaction({
-      organizationId: user.organizationId,
-      policyId,
-      clientId: policy.clientId,
-      amount: String(amount),
-      currency: currency || policy.currency,
-      paymentMethod: "cash",
-      status: "cleared",
-      reference: `CASH-${Date.now()}`,
-      receivedAt: receivedAt ? new Date(receivedAt) : new Date(),
-      postedDate: today,
-      valueDate: today,
-      notes: notes || null,
-      recordedBy: user.id,
+
+    // Use a database transaction so payment + receipt + status change are atomic
+    const result = await withOrgTransaction(user.organizationId, async (txDb) => {
+      // Lock the policy row to prevent concurrent modifications
+      await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
+
+      const today = new Date().toISOString().split("T")[0];
+      const [tx] = await txDb.insert(paymentTransactions).values({
+        organizationId: user.organizationId,
+        policyId,
+        clientId: policy.clientId,
+        amount: String(amount),
+        currency: currency || policy.currency,
+        paymentMethod: "cash",
+        status: "cleared",
+        reference: `CASH-${Date.now()}`,
+        idempotencyKey: idempotencyKey || `cash-${policyId}-${Date.now()}`,
+        receivedAt: receivedAt ? new Date(receivedAt) : new Date(),
+        postedDate: today,
+        valueDate: today,
+        notes: notes || null,
+        recordedBy: user.id,
+      }).returning();
+
+      const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+      const [receipt] = await txDb.insert(paymentReceipts).values({
+        organizationId: user.organizationId,
+        branchId: policy.branchId || user.branchId || undefined,
+        receiptNumber,
+        paymentIntentId: undefined,
+        policyId,
+        clientId: policy.clientId,
+        amount: String(amount),
+        currency: currency || policy.currency,
+        paymentChannel: "cash",
+        issuedByUserId: user.id,
+        status: "issued",
+        printFormat: "thermal_80mm",
+        metadataJson: { transactionId: tx.id, notes },
+      }).returning();
+
+      // Transition policy status atomically within the same transaction
+      if (policy.status === "inactive") {
+        const todayDate = new Date().toISOString().split("T")[0];
+        await txDb.update(policies).set({
+          status: "active",
+          inceptionDate: todayDate,
+          ...(!policy.effectiveDate ? { effectiveDate: todayDate } : {}),
+          version: sql`version + 1`,
+        }).where(eq(policies.id, policyId));
+        await storage.createPolicyStatusHistory(policyId, "inactive", "active", "First premium paid — conversion (cash)", user.id);
+      } else if (policy.status === "grace") {
+        await txDb.update(policies).set({
+          status: "active",
+          graceEndDate: null,
+          version: sql`version + 1`,
+        }).where(eq(policies.id, policyId));
+        await storage.createPolicyStatusHistory(policyId, "grace", "active", "Payment received (cash)", user.id);
+      } else if (policy.status === "lapsed") {
+        await txDb.update(policies).set({
+          status: "active",
+          graceEndDate: null,
+          version: sql`version + 1`,
+        }).where(eq(policies.id, policyId));
+        await storage.createPolicyStatusHistory(policyId, "lapsed", "active", "Reinstatement — payment received (cash)", user.id);
+        await rollbackClawbacks(user.organizationId, policy);
+      }
+
+      return { tx, receipt };
     });
-    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
-    const receipt = await storage.createPaymentReceipt({
-      organizationId: user.organizationId,
-      branchId: policy.branchId || user.branchId || undefined,
-      receiptNumber,
-      paymentIntentId: null,
-      policyId,
-      clientId: policy.clientId,
-      amount: String(amount),
-      currency: currency || policy.currency,
-      paymentChannel: "cash",
-      issuedByUserId: user.id,
-      status: "issued",
-      printFormat: "thermal_80mm",
-      metadataJson: { transactionId: tx.id, notes },
-    });
+
+    // Non-transactional follow-ups (PDF generation, commission) — safe to do outside tx
     const { generateReceiptPdf } = await import("./receipt-pdf");
-    const pdfPath = await generateReceiptPdf(receipt.id);
-    if (pdfPath) await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath }, receipt.organizationId);
-    if (policy.status === "inactive") {
-      const todayDate = new Date().toISOString().split("T")[0];
-      const update: { status: string; inceptionDate?: string; effectiveDate?: string } = { status: "active" };
-      update.inceptionDate = todayDate;
-      if (!policy.effectiveDate) update.effectiveDate = todayDate;
-      await storage.updatePolicy(policyId, update, user.organizationId);
-      await storage.createPolicyStatusHistory(policyId, "inactive", "active", "First premium paid — conversion (cash)", user.id);
-    } else if (policy.status === "grace") {
-      await storage.updatePolicy(policyId, { status: "active", graceEndDate: null }, user.organizationId);
-      await storage.createPolicyStatusHistory(policyId, "grace", "active", "Payment received (cash)", user.id);
-    } else if (policy.status === "lapsed") {
-      const todayDate = new Date().toISOString().split("T")[0];
-      await storage.updatePolicy(policyId, { status: "active", graceEndDate: null }, user.organizationId);
-      await storage.createPolicyStatusHistory(policyId, "lapsed", "active", "Reinstatement — payment received (cash)", user.id);
-      await rollbackClawbacks(user.organizationId, policy);
-    }
-    await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", receipt.id, null, receipt);
-    await recordAgentCommission(user.organizationId, policy, tx.id, amount);
-    return res.status(201).json({ transaction: tx, receipt });
+    const pdfPath = await generateReceiptPdf(result.receipt.id);
+    if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, result.receipt.organizationId);
+
+    await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
+    await recordAgentCommission(user.organizationId, policy, result.tx.id, amount);
+    return res.status(201).json({ transaction: result.tx, receipt: result.receipt });
   });
 
   app.post("/api/admin/receipts/reprint", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

@@ -74,5 +74,29 @@ export async function getDbForOrg(orgId: string): Promise<ReturnType<typeof driz
   return tenantDb;
 }
 
+/**
+ * Execute a callback inside a database transaction for the given tenant.
+ * Rolls back on error; commits on success.
+ */
+export async function withOrgTransaction<T>(
+  orgId: string,
+  fn: (tx: ReturnType<typeof drizzle>) => Promise<T>,
+): Promise<T> {
+  const p = await getPoolForOrg(orgId);
+  const client = await p.connect();
+  try {
+    await client.query("BEGIN");
+    const txDb = drizzle(client as any, { schema });
+    const result = await fn(txDb);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /** Default pool (registry/organizations). Use for org and user lookups. */
 export { defaultPool };

@@ -58,10 +58,14 @@ export const orgMemberSequences = pgTable("org_member_sequences", {
   memberNext: integer("member_next").default(1).notNull(),
 });
 
-/** Per-org sequence for policy numbers (atomic under concurrency). */
+/** Per-org sequence for policy numbers, receipt numbers, claim numbers, etc. (atomic under concurrency). */
 export const orgPolicySequences = pgTable("org_policy_sequences", {
   organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
   policyNext: integer("policy_next").default(1).notNull(),
+  receiptNext: integer("receipt_next").default(0).notNull(),
+  paymentReceiptNext: integer("payment_receipt_next").default(0).notNull(),
+  claimNext: integer("claim_next").default(0).notNull(),
+  caseNext: integer("case_next").default(0).notNull(),
 });
 
 // ─── IDENTITY ───────────────────────────────────────────────
@@ -475,6 +479,7 @@ export const policies = pgTable(
     beneficiaryNationalId: text("beneficiary_national_id"),
     beneficiaryPhone: text("beneficiary_phone"),
     beneficiaryDependentId: uuid("beneficiary_dependent_id").references(() => dependents.id),
+    version: integer("version").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
