@@ -96,6 +96,12 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
 
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   // Redirect to login when not authenticated (in effect to avoid "update during render")
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -203,11 +209,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     setLocation("/");
   };
 
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(t);
-  }, []);
   const displayName = user?.displayName || user?.email || "User";
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 

@@ -57,19 +57,6 @@ export default function ClientClaims() {
     enabled: !!me?.client,
   });
 
-  if (meFetched && (meError || !me?.client)) {
-    return (
-      <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardContent className="pt-6 text-center space-y-4">
-            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
-            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   const createMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/client-auth/claims", {
@@ -90,6 +77,19 @@ export default function ClientClaims() {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  if (meFetched && (meError || !me?.client)) {
+    return (
+      <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md shadow-lg">
+          <CardContent className="pt-6 text-center space-y-4">
+            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const formatDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" }) : "—");
   const formatStatus = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
