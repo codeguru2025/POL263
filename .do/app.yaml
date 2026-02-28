@@ -27,13 +27,8 @@ ingress:
     - match:
         path:
           prefix: /
-        authority:
-          exact: ""
       component:
         name: pol263
-domains:
-  - domain: pol263.com
-    type: PRIMARY
 envs:
   - key: NODE_ENV
     value: production
