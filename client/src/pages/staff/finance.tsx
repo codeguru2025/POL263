@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { PolicySearchInput } from "@/components/policy-search-input";
+import { useAuth } from "@/hooks/use-auth";
 
 function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
@@ -201,6 +202,7 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
 export default function StaffFinance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { roles, permissions } = useAuth();
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
   const [policySearch, setPolicySearch] = useState("");
@@ -473,19 +475,32 @@ export default function StaffFinance() {
     return pol?.policyNumber || policyId?.slice(0, 8);
   };
 
+  const isAgent = roles.some((r) => r.name === "agent");
+  const canReadFinance = permissions.includes("read:finance");
+  const canWriteFinance = permissions.includes("write:finance");
+  const canReadCommission = permissions.includes("read:commission");
+  const commissionOnly = canReadCommission && !canReadFinance;
+
   return (
     <StaffLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold" data-testid="text-finance-title">Finance</h1>
-            <p className="text-muted-foreground">Payments, receipts, cashups, and commissions</p>
+            <h1 className="text-2xl font-bold" data-testid="text-finance-title">
+              {commissionOnly ? "My Commissions" : "Finance"}
+            </h1>
+            <p className="text-muted-foreground">
+              {commissionOnly ? "View your commission earnings and history" : "Payments, receipts, cashups, and commissions"}
+            </p>
           </div>
+          {canWriteFinance && (
           <Button onClick={handleOpenPaymentDialog} data-testid="button-new-payment">
             <Plus className="h-4 w-4 mr-2" />Receipt a Policy
           </Button>
+          )}
         </div>
 
+        {!commissionOnly && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
             <CardContent className="pt-6">
@@ -532,17 +547,18 @@ export default function StaffFinance() {
             </CardContent>
           </Card>
         </div>
+        )}
 
-        <Tabs defaultValue="payments">
+        <Tabs defaultValue={commissionOnly ? "commissions" : "payments"}>
           <TabsList>
-            <TabsTrigger value="payments" data-testid="tab-payments">Payments & Receipts</TabsTrigger>
-            <TabsTrigger value="paynow" data-testid="tab-paynow">Paynow & Cash</TabsTrigger>
-            <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>
-            <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>
-            <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>
-            <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu">POL263</TabsTrigger>
-            <TabsTrigger value="month-end" data-testid="tab-month-end">Month-end run</TabsTrigger>
-            <TabsTrigger value="group-receipt" data-testid="tab-group-receipt">Group receipt</TabsTrigger>
+            {!commissionOnly && <TabsTrigger value="payments" data-testid="tab-payments">Payments & Receipts</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow">Paynow & Cash</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>}
+            {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu">POL263</TabsTrigger>}
+            {canWriteFinance && <TabsTrigger value="month-end" data-testid="tab-month-end">Month-end run</TabsTrigger>}
+            {canWriteFinance && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt">Group receipt</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="payments">

@@ -94,7 +94,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   }, [sidebarOpen]);
 
   const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
+  const isAgent = roles.some((r) => r.name === "agent");
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
+  const hasAll = (perms: string[]) => perms.length === 0 || perms.every((p) => permissions.includes(p));
 
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -126,7 +128,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
   const pendingApprovalsCount = approvals?.filter((a: any) => a.status === "pending").length || 0;
 
-  const navGroupsRaw: { title: string; items: { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number }[] }[] = [
+  const navGroupsRaw: { title: string; items: { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number; hidden?: boolean }[] }[] = [
     {
       title: "Overview",
       items: [{ href: "/staff", label: "Dashboard", icon: LayoutDashboard }],
@@ -135,18 +137,18 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       title: "Core Operations",
       items: [
         { href: "/staff/policies", label: "Policies", icon: FileStack, permission: "read:policy" },
-        { href: "/staff/clients", label: "Leads & Clients", icon: Users, permission: "read:client" },
+        { href: "/staff/clients", label: isAgent ? "My Clients" : "Leads & Clients", icon: Users, permission: "read:client" },
         { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim" },
         { href: "/staff/funerals", label: "Funeral Ops", icon: Truck, permission: "read:funeral_ops" },
         { href: "/staff/leads", label: "Lead Pipeline", icon: Target, permission: "read:lead" },
-        { href: "/staff/groups", label: "Groups", icon: Layers, permission: "read:policy" },
+        { href: "/staff/groups", label: "Groups", icon: Layers, permissions: ["write:policy"] },
       ],
     },
     {
       title: "Finance",
       items: [
-        { href: "/staff/finance", label: "Finance", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "read:product" },
+        { href: "/staff/finance", label: isAgent ? "My Commissions" : "Finance", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
         { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
         { href: "/staff/reports", label: "Reports", icon: BarChart3, permission: "read:report" },
       ],
@@ -154,7 +156,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     {
       title: "Configuration",
       items: [
-        { href: "/staff/products", label: "Product Builder", icon: Box, permission: "read:product" },
+        { href: "/staff/products", label: "Product Builder", icon: Box, permission: "write:product" },
         { href: "/staff/notifications", label: "Notifications", icon: Bell, permission: "read:notification" },
       ],
     },
@@ -168,7 +170,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope, permission: "read:audit_log" },
         { href: "/staff/settings", label: "Tenant Settings", icon: Settings, permission: "manage:settings" },
         { href: "/staff/settings?tab=terms", label: "Terms & Conditions", icon: FileText, permission: "manage:settings" },
-      ].filter(Boolean) as { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number }[],
+      ].filter(Boolean) as { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number; hidden?: boolean }[],
     },
   ];
 

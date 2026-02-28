@@ -86,6 +86,12 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function StaffDashboard() {
   const { user, roles, permissions } = useAuth();
+  const isAgent = roles.some((r) => r.name === "agent");
+  const canReadFinance = permissions.includes("read:finance");
+  const canReadClaims = permissions.includes("read:claim");
+  const canReadFuneralOps = permissions.includes("read:funeral_ops");
+  const canReadAuditLog = permissions.includes("read:audit_log");
+  const canReadLead = permissions.includes("read:lead");
 
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -97,10 +103,12 @@ export default function StaffDashboard() {
 
   const { data: coveredLives } = useQuery<CoveredLives>({
     queryKey: ["/api/dashboard/covered-lives"],
+    enabled: !isAgent,
   });
 
   const { data: revenueTrend } = useQuery<{ date: string; total: number }[]>({
     queryKey: ["/api/dashboard/revenue-trend"],
+    enabled: canReadFinance,
   });
 
   const { data: policyBreakdown } = useQuery<Record<string, number>>({
@@ -109,14 +117,17 @@ export default function StaffDashboard() {
 
   const { data: leadFunnel } = useQuery<Record<string, number>>({
     queryKey: ["/api/dashboard/lead-funnel"],
+    enabled: canReadLead,
   });
 
   const { data: lapseRetention } = useQuery<LapseRetention>({
     queryKey: ["/api/dashboard/lapse-retention"],
+    enabled: !isAgent,
   });
 
   const { data: productPerformance } = useQuery<ProductPerformance[]>({
     queryKey: ["/api/dashboard/product-performance"],
+    enabled: !isAgent,
   });
 
   const { data: orgs } = useQuery<any[]>({
@@ -125,6 +136,7 @@ export default function StaffDashboard() {
 
   const { data: branchesList } = useQuery<any[]>({
     queryKey: ["/api/branches"],
+    enabled: !isAgent,
   });
 
   const { data: products } = useQuery<any[]>({
@@ -133,6 +145,7 @@ export default function StaffDashboard() {
 
   const { data: auditLogs } = useQuery<any[]>({
     queryKey: ["/api/audit-logs"],
+    enabled: canReadAuditLog,
   });
 
   const currentOrg = orgs?.[0];
@@ -170,7 +183,7 @@ export default function StaffDashboard() {
       }));
   }, [leadFunnel]);
 
-  const statCards = [
+  const allStatCards = [
     {
       title: "Total Policies",
       value: stats?.totalPolicies ?? 0,
@@ -178,6 +191,7 @@ export default function StaffDashboard() {
       icon: FileStack,
       color: "text-blue-600",
       bgColor: "bg-blue-50",
+      show: true,
     },
     {
       title: "Covered Lives",
@@ -186,14 +200,16 @@ export default function StaffDashboard() {
       icon: Heart,
       color: "text-rose-600",
       bgColor: "bg-rose-50",
+      show: !isAgent,
     },
     {
-      title: "Leads & Clients",
+      title: isAgent ? "My Clients" : "Leads & Clients",
       value: stats?.totalClients ?? 0,
       subtitle: `${stats?.totalPolicies ? Math.min(stats.totalPolicies, stats.totalClients) : 0} converted`,
       icon: Users,
       color: "text-emerald-600",
       bgColor: "bg-emerald-50",
+      show: true,
     },
     {
       title: "Claims",
@@ -202,6 +218,7 @@ export default function StaffDashboard() {
       icon: FileText,
       color: "text-amber-600",
       bgColor: "bg-amber-50",
+      show: canReadClaims,
     },
     {
       title: "Funeral Cases",
@@ -210,6 +227,7 @@ export default function StaffDashboard() {
       icon: Box,
       color: "text-purple-600",
       bgColor: "bg-purple-50",
+      show: canReadFuneralOps,
     },
     {
       title: "Lead Conversion",
@@ -220,6 +238,7 @@ export default function StaffDashboard() {
       icon: Target,
       color: "text-pink-600",
       bgColor: "bg-pink-50",
+      show: canReadLead,
     },
     {
       title: "Transactions",
@@ -228,6 +247,7 @@ export default function StaffDashboard() {
       icon: DollarSign,
       color: "text-teal-600",
       bgColor: "bg-teal-50",
+      show: canReadFinance,
     },
     {
       title: "Retention Rate",
@@ -236,8 +256,11 @@ export default function StaffDashboard() {
       icon: TrendingUp,
       color: "text-indigo-600",
       bgColor: "bg-indigo-50",
+      show: !isAgent,
     },
   ];
+
+  const statCards = allStatCards.filter((c) => c.show);
 
   return (
     <StaffLayout>
@@ -249,6 +272,7 @@ export default function StaffDashboard() {
           </p>
         </div>
 
+        {!isAgent && (
         <Card className="shadow-sm">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -311,6 +335,7 @@ export default function StaffDashboard() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {statCards.map((card) => (
@@ -335,6 +360,7 @@ export default function StaffDashboard() {
           ))}
         </div>
 
+        {canReadFinance && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card className="shadow-sm">
             <CardHeader>
@@ -402,8 +428,11 @@ export default function StaffDashboard() {
             </CardContent>
           </Card>
         </div>
+        )}
 
+        {!isAgent && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {canReadLead && (
           <Card className="shadow-sm">
             <CardHeader>
               <CardTitle className="font-display text-base">Lead Conversion Funnel</CardTitle>
@@ -430,6 +459,7 @@ export default function StaffDashboard() {
               )}
             </CardContent>
           </Card>
+          )}
 
           <Card className="shadow-sm">
             <CardHeader>
@@ -476,8 +506,9 @@ export default function StaffDashboard() {
             </CardContent>
           </Card>
         </div>
+        )}
 
-        {productPerformance && productPerformance.length > 0 && (
+        {!isAgent && productPerformance && productPerformance.length > 0 && (
           <div>
             <h2 className="text-lg font-display font-semibold mb-3">Product Performance</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -512,6 +543,7 @@ export default function StaffDashboard() {
           </div>
         )}
 
+        {!isAgent && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card className="shadow-sm">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -543,7 +575,9 @@ export default function StaffDashboard() {
             </CardContent>
           </Card>
         </div>
+        )}
 
+        {canReadAuditLog && (
         <Card className="shadow-sm">
           <CardHeader>
             <CardTitle className="font-display">Recent Audit Activity</CardTitle>
@@ -573,6 +607,7 @@ export default function StaffDashboard() {
             )}
           </CardContent>
         </Card>
+        )}
       </div>
     </StaffLayout>
   );

@@ -453,7 +453,7 @@ export default function StaffPolicies() {
             <Badge variant="outline" className={`font-medium text-sm px-3 py-1 ${getStatusColor(displayPolicy.status)}`} data-testid="badge-policy-status">
               {STATUS_LABELS[displayPolicy.status] || displayPolicy.status}
             </Badge>
-            {allowedTransitions.length > 0 && (
+            {!isAgent && allowedTransitions.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" className="gap-2" data-testid="btn-transition-policy">
@@ -971,7 +971,7 @@ export default function StaffPolicies() {
                             <DropdownMenuItem onClick={() => openDetail(policy)} data-testid={`menu-view-${policy.id}`}>
                               <Eye className="h-4 w-4 mr-2" /> View Details
                             </DropdownMenuItem>
-                            {(VALID_POLICY_TRANSITIONS[policy.status] || []).length > 0 && (
+                            {!isAgent && (VALID_POLICY_TRANSITIONS[policy.status] || []).length > 0 && (
                               <>
                                 <DropdownMenuSeparator />
                                 {VALID_POLICY_TRANSITIONS[policy.status]?.map((t) => (

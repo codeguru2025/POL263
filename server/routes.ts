@@ -2440,9 +2440,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return { fromDate, toDate, userId, branchId, productId, agentId, status, statuses };
   };
 
+  async function enforceAgentScope(req: Request, filters: ReturnType<typeof parseReportFilters>) {
+    const user = req.user as any;
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent) {
+      filters.agentId = user.id;
+    }
+    return filters;
+  }
+
   app.get("/api/reports/policy-details", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
     const rows = await storage.getPolicyReportByOrg(user.organizationId, limit, offset, filters);
@@ -2458,7 +2468,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/finance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
     const rows = await storage.getFinanceReportByOrg(user.organizationId, limit, offset, filters);
@@ -2467,61 +2477,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/reinstatements", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     const list = await storage.getReinstatementHistory(user.organizationId, filters);
     return res.json(list);
   });
 
   app.get("/api/reports/conversions", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getConversionHistory(user.organizationId, filters));
   });
 
   app.get("/api/reports/activations", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getActivationHistory(user.organizationId, filters));
   });
   app.get("/api/reports/active-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "active" }));
   });
   app.get("/api/reports/awaiting-payments", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["active", "grace"] }));
   });
   app.get("/api/reports/overdue", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
   });
   app.get("/api/reports/pre-lapse", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
   });
   app.get("/api/reports/lapsed", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "lapsed" }));
   });
   app.get("/api/reports/issued-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["inactive", "active", "grace", "lapsed", "cancelled"] }));
   });
   app.get("/api/reports/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...filters, preparedBy: filters.userId }));
   });
 
   app.get("/api/reports/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
     return res.json(await storage.getReceiptReportByOrg(user.organizationId, limit, offset, filters));
@@ -2530,7 +2540,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const reportType = req.params.type as string;
-    const reportFilters = parseReportFilters(req.query);
+    const reportFilters = await enforceAgentScope(req, parseReportFilters(req.query));
 
     try {
       let rows: any[] = [];

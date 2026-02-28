@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getApiBase } from "@/lib/queryClient";
 import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 
 export type ReportFiltersState = {
   fromDate?: string;
@@ -48,6 +49,14 @@ function ExportButton({ reportType, filters }: { reportType: string; filters: Re
 }
 
 export default function StaffReports() {
+  const { permissions } = useAuth();
+  const canReadFinance = permissions.includes("read:finance");
+  const canReadClaim = permissions.includes("read:claim");
+  const canReadFuneralOps = permissions.includes("read:funeral_ops");
+  const canReadFleet = permissions.includes("read:fleet");
+  const canReadPayroll = permissions.includes("read:payroll");
+  const canReadCommission = permissions.includes("read:commission");
+
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [userId, setUserId] = useState("");
@@ -332,25 +341,29 @@ export default function StaffReports() {
               <p className="text-sm text-muted-foreground">Active Policies</p>
             </CardContent>
           </Card>
+          {canReadClaim && (
           <Card>
             <CardContent className="pt-6 text-center">
               <p className="text-3xl font-bold text-blue-600">{stats?.totalClaims || 0}</p>
               <p className="text-sm text-muted-foreground">Total Claims</p>
             </CardContent>
           </Card>
+          )}
+          {canReadFinance && (
           <Card>
             <CardContent className="pt-6 text-center">
               <p className="text-3xl font-bold text-orange-600">{stats?.totalTransactions || 0}</p>
               <p className="text-sm text-muted-foreground">Transactions</p>
             </CardContent>
           </Card>
+          )}
         </div>
 
         <Tabs defaultValue="policies">
           <TabsList className="flex-wrap h-auto gap-1">
             <TabsTrigger value="policies" data-testid="tab-policies-report">Policies</TabsTrigger>
             <TabsTrigger value="policy-details" data-testid="tab-policy-details">Policy report</TabsTrigger>
-            <TabsTrigger value="finance" data-testid="tab-finance-report">Finance</TabsTrigger>
+            {canReadFinance && <TabsTrigger value="finance" data-testid="tab-finance-report">Finance</TabsTrigger>}
             <TabsTrigger value="active-policies" data-testid="tab-active-policies">Active</TabsTrigger>
             <TabsTrigger value="awaiting-payments" data-testid="tab-awaiting-payments">Awaiting payments</TabsTrigger>
             <TabsTrigger value="overdue" data-testid="tab-overdue">Overdue</TabsTrigger>
@@ -360,16 +373,16 @@ export default function StaffReports() {
             <TabsTrigger value="activations" data-testid="tab-activations">Activations</TabsTrigger>
             <TabsTrigger value="conversions" data-testid="tab-conversions-report">Conversions</TabsTrigger>
             <TabsTrigger value="reinstatements" data-testid="tab-reinstatements-report">Reinstatements</TabsTrigger>
-            <TabsTrigger value="claims" data-testid="tab-claims-report">Claims</TabsTrigger>
-            <TabsTrigger value="receipts" data-testid="tab-receipts-report">Receipts</TabsTrigger>
-            <TabsTrigger value="payments" data-testid="tab-payments-report">Payments</TabsTrigger>
-            <TabsTrigger value="funerals" data-testid="tab-funerals-report">Funerals</TabsTrigger>
-            <TabsTrigger value="fleet" data-testid="tab-fleet-report">Fleet</TabsTrigger>
-            <TabsTrigger value="expenditures" data-testid="tab-expenditures-report">Expenditure</TabsTrigger>
-            <TabsTrigger value="cashups" data-testid="tab-cashups-report">Cashups by user</TabsTrigger>
-            <TabsTrigger value="payroll" data-testid="tab-payroll-report">Payroll</TabsTrigger>
-            <TabsTrigger value="commissions" data-testid="tab-commissions-report">Commissions</TabsTrigger>
-            <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu-report">POL263</TabsTrigger>
+            {canReadClaim && <TabsTrigger value="claims" data-testid="tab-claims-report">Claims</TabsTrigger>}
+            {canReadFinance && <TabsTrigger value="receipts" data-testid="tab-receipts-report">Receipts</TabsTrigger>}
+            {canReadFinance && <TabsTrigger value="payments" data-testid="tab-payments-report">Payments</TabsTrigger>}
+            {canReadFuneralOps && <TabsTrigger value="funerals" data-testid="tab-funerals-report">Funerals</TabsTrigger>}
+            {canReadFleet && <TabsTrigger value="fleet" data-testid="tab-fleet-report">Fleet</TabsTrigger>}
+            {canReadFinance && <TabsTrigger value="expenditures" data-testid="tab-expenditures-report">Expenditure</TabsTrigger>}
+            {canReadFinance && <TabsTrigger value="cashups" data-testid="tab-cashups-report">Cashups by user</TabsTrigger>}
+            {canReadPayroll && <TabsTrigger value="payroll" data-testid="tab-payroll-report">Payroll</TabsTrigger>}
+            {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions-report">Commissions</TabsTrigger>}
+            {canReadFinance && <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu-report">POL263</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="policies">
