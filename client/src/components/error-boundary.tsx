@@ -83,11 +83,9 @@ export class ErrorBoundary extends Component<Props, State> {
                 ? "A new version may be available. Reload the page to get the latest version."
                 : "An unexpected error occurred. You may need to sign in again or return to a safe page."}
             </p>
-            {(import.meta.env.DEV || isChunkOrNetwork) && (
-              <pre className="text-left text-xs bg-muted p-3 rounded overflow-auto max-h-32">
-                {this.state.error.message}
-              </pre>
-            )}
+            <pre className="text-left text-xs bg-muted p-3 rounded overflow-auto max-h-32">
+              {this.state.error.message}
+            </pre>
             <Button
               variant="outline"
               onClick={() => {
