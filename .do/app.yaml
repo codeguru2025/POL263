@@ -22,6 +22,9 @@ services:
       - key: DB_ACCEPT_SELF_SIGNED
         value: "true"
         scope: RUN_AND_BUILD_TIME
+      - key: HOST
+        value: "0.0.0.0"
+        scope: RUN_TIME
 ingress:
   rules:
     - match:
