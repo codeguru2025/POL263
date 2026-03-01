@@ -94,6 +94,7 @@ const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   agent: [
     "read:policy", "write:policy", "read:client", "write:client", "read:product",
     "read:lead", "write:lead", "read:commission", "read:report",
+    "read:finance", "write:finance",
   ],
   claims_officer: [
     "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",

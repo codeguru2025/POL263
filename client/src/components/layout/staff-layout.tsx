@@ -37,6 +37,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import { useBranding } from "@/hooks/use-branding";
 
 function ReferralLinkBox({ referralCode }: { referralCode: string }) {
   const [copied, setCopied] = useState(false);
@@ -95,6 +96,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
   const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
   const isAgent = roles.some((r) => r.name === "agent");
+  const { displayName: brandName, displayLogo: brandLogo, isWhitelabeled } = useBranding();
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
   const hasAll = (perms: string[]) => perms.length === 0 || perms.every((p) => permissions.includes(p));
 
@@ -235,11 +237,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         <div className="h-16 flex items-center justify-between px-4 border-b shrink-0">
           <div className="flex items-center min-w-0">
             <img
-              src={currentOrg?.logoUrl || "/assets/logo.png"}
-              alt="POL263"
+              src={isWhitelabeled ? (currentOrg?.logoUrl || brandLogo) : brandLogo}
+              alt={brandName}
               className="h-10 w-10 rounded-lg object-contain mr-2 shrink-0"
             />
-            <span className="font-display font-bold text-lg tracking-tight text-foreground truncate">POL263</span>
+            <span className="font-display font-bold text-lg tracking-tight text-foreground truncate">{isWhitelabeled ? (currentOrg?.name || brandName) : brandName}</span>
           </div>
           <Button
             variant="ghost"

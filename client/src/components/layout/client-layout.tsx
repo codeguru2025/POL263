@@ -22,10 +22,12 @@ interface ClientLayoutProps {
 interface TenantInfo {
   name: string;
   logoUrl: string | null;
+  primaryColor: string | null;
   address: string | null;
   phone: string | null;
   email: string | null;
   website: string | null;
+  isWhitelabeled: boolean;
 }
 
 export default function ClientLayout({ children, clientName = "Client", onLogout }: ClientLayoutProps) {

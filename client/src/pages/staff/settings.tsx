@@ -26,15 +26,17 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { Check, Loader2, Plus, Pencil, Trash2, KeyRound } from "lucide-react";
+import { Check, Loader2, Plus, Pencil, Trash2, KeyRound, Shield } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
+import { Switch } from "@/components/ui/switch";
 
 export default function StaffSettings() {
   const { user, permissions: userPerms } = useAuth();
   const queryClient = useQueryClient();
   const canEditRbac = userPerms.includes("write:role") || userPerms.includes("create:tenant");
+  const isPlatformOwner = userPerms.includes("manage:whitelabel");
   const search = useSearch();
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
@@ -80,6 +82,7 @@ export default function StaffSettings() {
   const [policyNumberPrefix, setPolicyNumberPrefix] = useState("");
   const [policyNumberPadding, setPolicyNumberPadding] = useState(5);
   const [databaseUrl, setDatabaseUrl] = useState("");
+  const [isWhitelabeled, setIsWhitelabeled] = useState(false);
 
   const [termDialogOpen, setTermDialogOpen] = useState(false);
   const [editingTermId, setEditingTermId] = useState<string | null>(null);
@@ -108,6 +111,7 @@ export default function StaffSettings() {
       setPolicyNumberPrefix(currentOrg.policyNumberPrefix ?? "");
       setPolicyNumberPadding(typeof currentOrg.policyNumberPadding === "number" ? currentOrg.policyNumberPadding : 5);
       setDatabaseUrl(currentOrg.databaseUrl ?? "");
+      setIsWhitelabeled(currentOrg.isWhitelabeled ?? false);
     }
   }, [currentOrg]);
 
@@ -147,6 +151,7 @@ export default function StaffSettings() {
     if (policyNumberPrefix !== undefined) updates.policyNumberPrefix = policyNumberPrefix || null;
     if (policyNumberPadding !== undefined) updates.policyNumberPadding = Math.max(1, Math.min(20, policyNumberPadding));
     if (databaseUrl !== undefined) updates.databaseUrl = databaseUrl.trim() || null;
+    updates.isWhitelabeled = isWhitelabeled;
     updateOrgMutation.mutate(updates);
   };
 
@@ -410,20 +415,45 @@ export default function StaffSettings() {
                       <p className="text-xs text-muted-foreground">e.g. 5 → 00001, 00002 (per tenant)</p>
                     </div>
                   </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="databaseUrl">Tenant database URL (optional)</Label>
-                    <Input
-                      id="databaseUrl"
-                      type="password"
-                      autoComplete="off"
-                      value={databaseUrl}
-                      onChange={(e) => setDatabaseUrl(e.target.value)}
-                      placeholder="postgresql://... (leave empty to use default)"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      When set, this tenant can use a dedicated database. Requires storage to use getDbForOrg(orgId) for tenant data.
-                    </p>
-                  </div>
+                  {isPlatformOwner && (
+                    <>
+                      <div className="border-t pt-6 mt-4">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Shield className="h-4 w-4 text-primary" />
+                          <span className="font-semibold text-sm">Platform Owner Settings</span>
+                        </div>
+                        <div className="grid gap-4">
+                          <div className="flex items-center justify-between rounded-lg border p-4">
+                            <div className="space-y-0.5">
+                              <Label htmlFor="whitelabel-toggle" className="font-medium">White-Label Mode</Label>
+                              <p className="text-xs text-muted-foreground">
+                                When enabled, POL263 branding is fully replaced with this tenant's name, logo, and colors across the entire app (login, sidebar, documents). When disabled, the app loads as POL263 but tenant details appear on documents and receipts.
+                              </p>
+                            </div>
+                            <Switch
+                              id="whitelabel-toggle"
+                              checked={isWhitelabeled}
+                              onCheckedChange={setIsWhitelabeled}
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <Label htmlFor="databaseUrl">Dedicated Database URL (optional)</Label>
+                            <Input
+                              id="databaseUrl"
+                              type="password"
+                              autoComplete="off"
+                              value={databaseUrl}
+                              onChange={(e) => setDatabaseUrl(e.target.value)}
+                              placeholder="postgresql://... (leave empty to use shared database)"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              When set, this tenant's data is stored in a separate database for full isolation. Leave empty to share the platform database.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <Button onClick={handleSaveBranding} disabled={updateOrgMutation.isPending}>

@@ -612,11 +612,11 @@ export default function StaffPolicies() {
             >
               <FileText className="h-4 w-4" /> E-Statement
             </Button>
-            {canWriteFinance && (
+            {(canWriteFinance || isAgent) && (
               <Button
                 className="gap-2"
                 onClick={() => {
-                  setInPolicyReceiptMethod("cash");
+                  setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
                   setInPolicyReceiptCurrency(displayPolicy.premiumCurrency || "USD");
                   setInPolicyReceiptRef("");
                   setInPolicyReceiptNotes("");
@@ -680,6 +680,26 @@ export default function StaffPolicies() {
                   </Badge>
                   {displayPolicy.claimableReason && <p className="text-xs text-muted-foreground mt-1">{displayPolicy.claimableReason}</p>}
                 </div>
+                {displayPolicy.clientActivationCode && (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Activation Code</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono font-bold text-primary" data-testid="text-activation-code">{displayPolicy.clientActivationCode}</p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        onClick={() => {
+                          navigator.clipboard.writeText(displayPolicy.clientActivationCode);
+                          toast({ title: "Copied", description: "Activation code copied to clipboard." });
+                        }}
+                      >
+                        Copy
+                      </Button>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Client has not yet claimed their portal account.</p>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1039,7 +1059,7 @@ export default function StaffPolicies() {
                 <Select value={inPolicyReceiptMethod} onValueChange={setInPolicyReceiptMethod}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="cash">Cash</SelectItem>
+                    {!isAgent && <SelectItem value="cash">Cash</SelectItem>}
                     <SelectItem value="ecocash">EcoCash</SelectItem>
                     <SelectItem value="onemoney">OneMoney</SelectItem>
                     <SelectItem value="innbucks">InnBucks</SelectItem>
@@ -1081,8 +1101,9 @@ export default function StaffPolicies() {
                   )}
                   {inPolicyReceiptMethod === "cash" && (
                     <div>
-                      <Label className="text-xs">Reference (optional)</Label>
-                      <Input placeholder="Receipt number, etc." value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
+                      <Label className="text-xs">Notes (optional)</Label>
+                      <Input placeholder="e.g. Walk-in payment" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
+                      <p className="text-xs text-muted-foreground mt-1">Receipt number is auto-generated.</p>
                     </div>
                   )}
                   <div>

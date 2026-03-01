@@ -607,8 +607,11 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (user?.email?.toLowerCase() === PLATFORM_SUPERUSER_EMAIL.toLowerCase()) {
+      const allPermsForOwner = await this.getPermissions();
+      for (const p of allPermsForOwner) permSet.add(p.name);
       permSet.add("create:tenant");
       permSet.add("delete:tenant");
+      permSet.add("manage:whitelabel");
     }
 
     return Array.from(permSet);

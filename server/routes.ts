@@ -14,6 +14,7 @@ import { registerPolicyDocumentRoute } from "./policy-document";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
+import { PLATFORM_OWNER_EMAIL } from "./constants";
 import { runApplyCreditBalances } from "./credit-apply";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
@@ -331,6 +332,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!canManageTenants && (id !== user.organizationId || !canWriteOrg)) {
       return res.status(403).json({ message: "Cross-tenant access denied or insufficient permissions" });
     }
+    const isPlatformOwner = user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+    if (!isPlatformOwner) {
+      delete req.body.databaseUrl;
+      delete req.body.isWhitelabeled;
+    }
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
     const updated = await storage.updateOrganization(id, req.body);
@@ -339,15 +345,122 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
-    const parsed = insertOrganizationSchema.parse(req.body);
+    const { adminEmail, adminPassword, adminDisplayName, ...orgData } = req.body;
+    if (!adminEmail || !adminPassword || String(adminPassword).length < 8) {
+      return res.status(400).json({ message: "adminEmail and adminPassword (min 8 chars) are required to create a tenant." });
+    }
+
+    const existingAdmin = await storage.getUserByEmail(adminEmail);
+    if (existingAdmin) {
+      return res.status(409).json({ message: "A user with this admin email already exists." });
+    }
+
+    const parsed = insertOrganizationSchema.parse(orgData);
     const org = await storage.createOrganization(parsed);
     const defaultBranch = await storage.createBranch({
       organizationId: org.id,
       name: "Head Office",
       isActive: true,
     });
-    await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, { ...org, defaultBranchId: defaultBranch.id });
-    return res.status(201).json(org);
+
+    const ROLE_PERMISSION_MAP: Record<string, string[]> = {
+      superuser: [],
+      executive: [
+        "read:organization", "read:branch", "read:user", "read:role", "read:audit_log",
+        "read:policy", "read:claim", "read:client", "read:product", "read:funeral_ops",
+        "read:finance", "read:fleet", "read:commission", "read:payroll", "read:report",
+        "read:lead", "read:notification",
+      ],
+      manager: [
+        "read:organization", "read:branch", "write:branch", "read:user", "write:user",
+        "read:role", "read:audit_log", "read:policy", "write:policy", "read:claim",
+        "write:claim", "approve:claim", "read:client", "write:client", "read:product",
+        "write:product", "manage:settings",
+        "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
+        "read:commission", "read:report", "write:report", "read:lead", "write:lead",
+        "read:notification", "manage:approvals",
+      ],
+      administrator: [
+        "read:organization", "write:organization", "read:branch", "write:branch",
+        "read:user", "write:user", "delete:user", "read:role", "write:role",
+        "manage:permissions", "read:audit_log", "read:policy", "write:policy",
+        "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
+        "read:product", "write:product", "manage:settings", "read:funeral_ops",
+        "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
+        "read:fleet", "write:fleet", "read:commission", "write:commission",
+        "read:payroll", "write:payroll", "read:report", "write:report",
+        "read:lead", "write:lead", "read:notification", "write:notification",
+        "manage:approvals", "backdate:payment",
+      ],
+      cashier: [
+        "read:policy", "read:client", "read:finance", "write:finance", "read:report",
+      ],
+      agent: [
+        "read:policy", "write:policy", "read:client", "write:client", "read:product",
+        "read:lead", "write:lead", "read:commission", "read:report",
+        "read:finance", "write:finance",
+      ],
+      claims_officer: [
+        "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
+        "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report",
+      ],
+      fleet_ops: [
+        "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
+      ],
+      staff: [
+        "read:organization", "read:branch", "read:policy", "read:claim",
+        "read:client", "read:product", "read:funeral_ops", "read:report",
+      ],
+    };
+
+    const allPerms = await storage.getPermissions();
+    const permMap = new Map<string, string>();
+    for (const p of allPerms) permMap.set(p.name, p.id);
+
+    const roleMap = new Map<string, string>();
+    for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
+      const role = await storage.createRole({
+        name: roleName,
+        organizationId: org.id,
+        description: `System ${roleName} role`,
+        isSystem: true,
+      });
+      roleMap.set(roleName, role.id);
+
+      if (roleName !== "superuser") {
+        for (const permName of permNames) {
+          const permId = permMap.get(permName);
+          if (permId) await storage.addRolePermission(role.id, permId);
+        }
+      }
+    }
+
+    const passwordHash = await argon2.hash(String(adminPassword), { type: argon2.argon2id });
+    const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const adminUser = await storage.createUser({
+      email: adminEmail,
+      displayName: adminDisplayName || adminEmail.split("@")[0],
+      organizationId: org.id,
+      branchId: defaultBranch.id,
+      referralCode: refCode,
+      isActive: true,
+      passwordHash,
+    });
+
+    const adminRoleId = roleMap.get("administrator");
+    if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId);
+
+    await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, {
+      ...org,
+      defaultBranchId: defaultBranch.id,
+      adminUserId: adminUser.id,
+      adminEmail,
+    });
+    return res.status(201).json({
+      ...org,
+      defaultBranchId: defaultBranch.id,
+      adminUser: { id: adminUser.id, email: adminUser.email, displayName: adminUser.displayName },
+    });
   });
 
   app.delete("/api/organizations/:id", requireAuth, requirePermission("delete:tenant"), async (req, res) => {
@@ -901,6 +1014,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    let clientActivationCode: string | null = null;
+    if (policy.clientId) {
+      const policyClient = await storage.getClient(policy.clientId, user.organizationId);
+      if (policyClient && policyClient.activationCode && !policyClient.isEnrolled) {
+        clientActivationCode = policyClient.activationCode;
+      }
+    }
+
     return res.json({
       ...policy,
       claimable,
@@ -908,6 +1029,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       productName,
       productVersionLabel,
       waitingPeriodDays,
+      clientActivationCode,
     });
   });
 
@@ -1193,6 +1315,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/payments", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
+    const userRolesForPayment = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgentPayment = userRolesForPayment.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgentPayment && req.body.paymentMethod === "cash") {
+      return res.status(403).json({ message: "Agents cannot process cash payments. Use a Paynow method instead." });
+    }
     const today = new Date().toISOString().split("T")[0];
     const parsed = insertPaymentTransactionSchema.parse({
       ...req.body,
@@ -1201,41 +1328,101 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       postedDate: req.body.postedDate || today,
       valueDate: req.body.valueDate || today,
     });
-    const tx = await storage.createPaymentTransaction(parsed);
 
-    let receipt = null;
-    if (tx.status === "cleared" && tx.policyId) {
-      const receiptNumber = await storage.getNextReceiptNumber(user.organizationId);
-      receipt = await storage.createReceipt({
-        organizationId: user.organizationId,
-        receiptNumber,
-        transactionId: tx.id,
-        policyId: tx.policyId,
-        clientId: tx.clientId,
-        amount: tx.amount,
-        currency: tx.currency,
-      });
-      await auditLog(req, "CREATE_RECEIPT", "Receipt", receipt.id, null, receipt);
+    const policyId = parsed.policyId;
+    const isClearedWithPolicy = parsed.status === "cleared" && !!policyId;
+
+    let policy: Awaited<ReturnType<typeof storage.getPolicy>> | null = null;
+    if (isClearedWithPolicy) {
+      policy = await storage.getPolicy(policyId!, user.organizationId) ?? null;
     }
 
-    if (tx.status === "cleared") {
-      const chibAmount = (parseFloat(tx.amount) * 0.025).toFixed(2);
-      await storage.createChibikhuluReceivable({
-        organizationId: user.organizationId,
-        sourceTransactionId: tx.id,
-        amount: chibAmount,
-        currency: tx.currency,
-        description: `2.5% on payment ${tx.id}`,
-        isSettled: false,
-      });
+    const result = await withOrgTransaction(user.organizationId, async (txDb) => {
+      if (isClearedWithPolicy && policyId) {
+        await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
+      }
+
+      const [tx] = await txDb.insert(paymentTransactions).values(parsed).returning();
+
+      let receipt = null;
+      if (tx.status === "cleared" && tx.policyId) {
+        const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+        const [newReceipt] = await txDb.insert(paymentReceipts).values({
+          organizationId: user.organizationId,
+          branchId: policy?.branchId || user.branchId || undefined,
+          receiptNumber,
+          policyId: tx.policyId,
+          clientId: tx.clientId,
+          amount: tx.amount,
+          currency: tx.currency,
+          paymentChannel: tx.paymentMethod || "cash",
+          issuedByUserId: user.id,
+          status: "issued",
+          printFormat: "thermal_80mm",
+          metadataJson: { transactionId: tx.id, notes: tx.notes },
+        }).returning();
+        receipt = newReceipt;
+      }
+
+      if (tx.status === "cleared" && tx.policyId && policy) {
+        if (policy.status === "inactive") {
+          const todayDate = new Date().toISOString().split("T")[0];
+          await txDb.update(policies).set({
+            status: "active",
+            inceptionDate: todayDate,
+            ...(!policy.effectiveDate ? { effectiveDate: todayDate } : {}),
+            version: sql`version + 1`,
+          }).where(eq(policies.id, tx.policyId));
+          await storage.createPolicyStatusHistory(tx.policyId, "inactive", "active", "First premium paid — conversion", user.id);
+        } else if (policy.status === "grace") {
+          await txDb.update(policies).set({
+            status: "active",
+            graceEndDate: null,
+            version: sql`version + 1`,
+          }).where(eq(policies.id, tx.policyId));
+          await storage.createPolicyStatusHistory(tx.policyId, "grace", "active", "Payment received", user.id);
+        } else if (policy.status === "lapsed") {
+          await txDb.update(policies).set({
+            status: "active",
+            graceEndDate: null,
+            version: sql`version + 1`,
+          }).where(eq(policies.id, tx.policyId));
+          await storage.createPolicyStatusHistory(tx.policyId, "lapsed", "active", "Reinstatement — payment received", user.id);
+        }
+      }
+
+      if (tx.status === "cleared") {
+        const chibAmount = (parseFloat(tx.amount) * 0.025).toFixed(2);
+        await storage.createChibikhuluReceivable({
+          organizationId: user.organizationId,
+          sourceTransactionId: tx.id,
+          amount: chibAmount,
+          currency: tx.currency,
+          description: `2.5% on payment ${tx.id}`,
+          isSettled: false,
+        });
+      }
+
+      return { tx, receipt };
+    });
+
+    if (result.tx.status === "cleared" && result.tx.policyId && policy?.status === "lapsed") {
+      await rollbackClawbacks(user.organizationId, policy);
     }
 
-    await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", tx.id, null, tx);
-    if (tx.status === "cleared" && tx.policyId) {
-      const commPolicy = await storage.getPolicy(tx.policyId, user.organizationId);
-      if (commPolicy) await recordAgentCommission(user.organizationId, commPolicy, tx.id, tx.amount);
+    if (result.receipt) {
+      const { generateReceiptPdf } = await import("./receipt-pdf");
+      const pdfPath = await generateReceiptPdf(result.receipt.id);
+      if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, user.organizationId);
     }
-    return res.status(201).json({ ...tx, receipt });
+
+    await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", result.tx.id, null, result.tx);
+    if (result.receipt) await auditLog(req, "CREATE_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
+    if (result.tx.status === "cleared" && result.tx.policyId) {
+      const commPolicy = await storage.getPolicy(result.tx.policyId, user.organizationId);
+      if (commPolicy) await recordAgentCommission(user.organizationId, commPolicy, result.tx.id, result.tx.amount);
+    }
+    return res.status(201).json({ ...result.tx, receipt: result.receipt });
   });
 
   app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -1356,6 +1543,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
+    const userRolesForCash = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgentCash = userRolesForCash.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgentCash) {
+      return res.status(403).json({ message: "Agents cannot process cash payments. Use a Paynow method instead." });
+    }
     const { policyId, amount, currency, notes, receivedAt, idempotencyKey } = req.body;
     if (!policyId || amount == null) return res.status(400).json({ message: "policyId and amount required" });
 
@@ -2112,6 +2304,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(code);
     if (!agent || agent.organizationId !== orgs[0].id) return res.status(404).json({ error: "Agent not found" });
     return res.json({ name: agent.displayName || agent.email, referralCode: code });
+  });
+
+  // ─── Public branding (no auth required, for login/splash screens) ──
+  app.get("/api/public/branding", async (req, res) => {
+    const orgs = await storage.getOrganizations();
+    const org = orgs[0];
+    if (!org) return res.json({ name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#D4AF37" });
+    return res.json({
+      name: org.name,
+      logoUrl: org.logoUrl || "/assets/logo.png",
+      primaryColor: org.primaryColor || "#D4AF37",
+      address: org.address,
+      phone: org.phone,
+      email: org.email,
+      website: org.website,
+      isWhitelabeled: org.isWhitelabeled,
+    });
   });
 
   // ─── Public policy registration (from agent referral link) ──

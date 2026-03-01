@@ -34,6 +34,8 @@ export const organizations = pgTable("organizations", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   /** Optional: when set, this tenant's data can use a dedicated database (see server/tenant-db). */
   databaseUrl: text("database_url"),
+  /** When true, the app is fully white-labeled: tenant branding replaces POL263 everywhere (splash, login, sidebar, etc.). When false, the app loads as POL263 but tenant details appear on documents and receipts. */
+  isWhitelabeled: boolean("is_whitelabeled").default(false).notNull(),
 });
 
 export const branches = pgTable(

@@ -8,10 +8,12 @@ import { useAuth } from "@/hooks/use-auth";
 import { getApiBase } from "@/lib/queryClient";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
+import { useBranding } from "@/hooks/use-branding";
 
 export default function AgentLogin() {
   const [, setLocation] = useLocation();
   const { isAuthenticated, isLoading } = useAuth();
+  const { displayName, displayLogo } = useBranding();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -74,9 +76,9 @@ export default function AgentLogin() {
       <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
-            <img src="/assets/logo.png" alt="POL263" className="w-10 h-10 rounded-lg object-contain" />
+            <img src={displayLogo} alt={displayName} className="w-10 h-10 rounded-lg object-contain" />
           </div>
-          <CardTitle className="text-2xl font-display">POL263 — Agent Login</CardTitle>
+          <CardTitle className="text-2xl font-display">{displayName} — Agent Login</CardTitle>
           <CardDescription className="text-base mt-2">
             Sign in with the email and password set by your administrator. Agents cannot use Google sign-in.
           </CardDescription>

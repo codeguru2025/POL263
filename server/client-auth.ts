@@ -233,10 +233,12 @@ export function setupClientAuth(app: Express) {
     return res.json({
       name: org.name,
       logoUrl: org.logoUrl,
+      primaryColor: org.primaryColor,
       address: org.address,
       phone: org.phone,
       email: org.email,
       website: org.website,
+      isWhitelabeled: org.isWhitelabeled,
     });
   });
 

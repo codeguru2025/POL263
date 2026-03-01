@@ -422,9 +422,14 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
 
   const orgs = await storage.getOrganizations();
   if (orgs.length === 0) return { ok: false, reason: "No tenant" };
-  const orgId = orgs[0].id;
 
-  const intent = await storage.getPaymentIntentByMerchantReference(orgId, reference);
+  // Search all tenants for the matching payment intent (multi-tenant safe)
+  let intent: Awaited<ReturnType<typeof storage.getPaymentIntentByMerchantReference>> = undefined;
+  for (const org of orgs) {
+    intent = await storage.getPaymentIntentByMerchantReference(org.id, reference);
+    if (intent) break;
+  }
+
   if (intent) {
     await storage.createPaymentEvent({
       paymentIntentId: intent.id,
@@ -436,7 +441,7 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
     });
 
     if (intent.status === "paid" || intent.status === "failed") {
-      return { ok: true }; // already processed
+      return { ok: true };
     }
 
     if (status === "paid" || status === "sent") {
@@ -457,19 +462,25 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
     return { ok: true };
   }
 
-  // Try group payment intent
-  const groupIntent = await storage.getGroupPaymentIntentByMerchantReference(orgId, reference);
+  // Try group payment intent across all tenants
+  let groupIntent: Awaited<ReturnType<typeof storage.getGroupPaymentIntentByMerchantReference>> = undefined;
+  let groupOrgId = "";
+  for (const org of orgs) {
+    groupIntent = await storage.getGroupPaymentIntentByMerchantReference(org.id, reference);
+    if (groupIntent) { groupOrgId = org.id; break; }
+  }
+
   if (!groupIntent) {
     structuredLog("warn", "Paynow result unknown reference", { reference });
-    return { ok: true }; // 200 so Paynow does not retry
+    return { ok: true };
   }
   if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) return { ok: true };
   if (status === "paid" || status === "sent") {
-    await applyGroupPaymentToPolicies(groupIntent.id, orgId, "system", null);
+    await applyGroupPaymentToPolicies(groupIntent.id, groupOrgId, "system", null);
     return { ok: true };
   }
   if (status === "cancelled" || status === "failed" || status === "disputed") {
-    await storage.updateGroupPaymentIntent(groupIntent.id, { status: "failed" }, orgId);
+    await storage.updateGroupPaymentIntent(groupIntent.id, { status: "failed" }, groupOrgId);
   }
   return { ok: true };
 }

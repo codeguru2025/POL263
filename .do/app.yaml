@@ -1,6 +1,25 @@
 # POL263 – DigitalOcean App Platform spec (template)
 # Set real secrets in the dashboard (Settings → App-Level Environment Variables).
 # Do not commit real values for: SESSION_SECRET, DATABASE_URL, GOOGLE_CLIENT_SECRET, PAYNOW_INTEGRATION_KEY.
+#
+# ENV VAR STRATEGY:
+# ─────────────────
+# Platform-level vars (this file / DO dashboard):
+#   DATABASE_URL       – central registry DB (organizations, users, roles)
+#   SUPERUSER_EMAIL    – platform owner (ausiziba@gmail.com) — highest authority
+#   SESSION_SECRET     – session encryption key
+#   GOOGLE_CLIENT_*    – OAuth for staff login
+#   PAYNOW_*           – payment gateway (shared across tenants)
+#
+# Tenant-level config is stored in the database (organizations table), NOT env vars:
+#   database_url       – optional dedicated DB per tenant
+#   logo_url, primary_color, address, phone, email, website – branding
+#   is_whitelabeled    – full white-label vs POL263-branded
+#   footer_text, signature_url – document branding
+#
+# This means adding a new tenant requires NO app restart or env var changes.
+# The platform owner creates tenants via the UI, sets their DB URL and branding,
+# and the system handles routing transparently.
 
 name: pol263
 region: lon
