@@ -11,6 +11,15 @@ import { PLATFORM_OWNER_EMAIL } from "./constants";
 
 const PgSession = connectPgSimple(session);
 
+function isPlatformOwnerEmail(email?: string | null) {
+  if (!email) return false;
+  return email.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+}
+
+function baseUrlFromEnv() {
+  return (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+}
+
 export function setupAuth(app: Express) {
   const rawSessionSecret = process.env.SESSION_SECRET;
 
@@ -19,7 +28,10 @@ export function setupAuth(app: Express) {
   }
 
   if (!rawSessionSecret && process.env.NODE_ENV !== "production") {
-    structuredLog("warn", "SESSION_SECRET is not set. Using a weak default; set SESSION_SECRET in your environment for better security.");
+    structuredLog(
+      "warn",
+      "SESSION_SECRET is not set. Using a weak default; set SESSION_SECRET in your environment for better security."
+    );
   }
 
   const sessionSecret = rawSessionSecret || "pol263-session-secret-change-in-dev-only";
@@ -64,17 +76,21 @@ export function setupAuth(app: Express) {
     }
   });
 
+  // Platform-owner tenant override:
+  // If platform owner has selected a tenant (session.activeTenantId), treat that as current org scope.
   app.use((req: Request, _res: Response, next: NextFunction) => {
     const user = req.user as any;
     if (!user) return next();
-    const isPlatformOwner = user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
-    if (isPlatformOwner) {
+
+    const isOwner = isPlatformOwnerEmail(user.email);
+    if (isOwner) {
       const activeTenantId = (req.session as any)?.activeTenantId;
       if (activeTenantId) {
         user.organizationId = activeTenantId;
       }
       user.isPlatformOwner = true;
     }
+
     next();
   });
 
@@ -100,18 +116,44 @@ export function setupAuth(app: Express) {
               return done(new Error("No email provided by Google"), undefined);
             }
 
+            const owner = isPlatformOwnerEmail(email);
+
             let user = await storage.getUserByGoogleId(profile.id);
 
             if (!user) {
+              // Try match by email first
               user = await storage.getUserByEmail(email);
+
+              // ✅ Fresh DB bootstrap: allow platform owner to be created automatically
+              if (!user && owner) {
+                user = await storage.createUser({
+                  email,
+                  displayName: profile.displayName,
+                  avatarUrl: profile.photos?.[0]?.value,
+                  googleId: profile.id,
+                  isActive: true,
+                  // organizationId intentionally not set here; owner can create/select tenant after login
+                });
+              }
+
               if (!user) {
-                return done(null, false, { message: "Not authorized. Ask your administrator to add your email to the system." });
+                return done(null, false, {
+                  message: "Not authorized. Ask your administrator to add your email to the system.",
+                });
               }
-              const roles = await storage.getUserRoles(user.id, user.organizationId ?? "");
-              const isAgent = roles.some((r) => r.name === "agent");
-              if (isAgent) {
-                return done(null, false, { message: "Agents must use the agent login page with email and password." });
+
+              // ✅ Only check roles if tenant-scoped (never pass "" as uuid)
+              if (user.organizationId) {
+                const roles = await storage.getUserRoles(user.id, user.organizationId);
+                const isAgent = roles.some((r) => r.name === "agent");
+                if (isAgent) {
+                  return done(null, false, {
+                    message: "Agents must use the agent login page with email and password.",
+                  });
+                }
               }
+
+              // Link Google identity to this user
               user = await storage.updateUser(user.id, {
                 googleId: profile.id,
                 displayName: profile.displayName,
@@ -126,6 +168,8 @@ export function setupAuth(app: Express) {
             structuredLog("info", "Google OAuth login", {
               userId: user!.id,
               email: user!.email,
+              isPlatformOwner: owner,
+              hasOrg: Boolean(user!.organizationId),
             });
 
             done(null, user!);
@@ -136,58 +180,78 @@ export function setupAuth(app: Express) {
       )
     );
 
-    app.get(
-      "/api/auth/google",
-      (req, res, next) => {
-        const returnTo = typeof req.query.returnTo === "string" && req.query.returnTo.startsWith("/")
+    app.get("/api/auth/google", (req, res, next) => {
+      const returnTo =
+        typeof req.query.returnTo === "string" && req.query.returnTo.startsWith("/")
           ? req.query.returnTo
           : undefined;
-        const origin = typeof req.query.origin === "string" && /^https?:\/\//.test(req.query.origin)
+
+      const origin =
+        typeof req.query.origin === "string" && /^https?:\/\//.test(req.query.origin)
           ? req.query.origin.replace(/\/$/, "")
           : (process.env.APP_BASE_URL || "").replace(/\/$/, "");
-        if (returnTo && (origin || returnTo.startsWith("/"))) {
-          (req.session as any).authReturnTo = origin ? `${origin}${returnTo}` : returnTo;
-        }
-        (req.session as any).save((err: Error | null) => {
-          if (err) return next(err);
-          passport.authenticate("google", { scope: ["profile", "email"] })(req, res, next);
-        });
-      }
-    );
 
-    app.get(
-      "/api/auth/google/callback",
-      (req, res, next) => {
-        passport.authenticate("google", (err: Error | null, user: any, info?: { message?: string }) => {
-          if (err) return next(err);
-          if (!user) {
-            const message = info?.message || "Authentication failed";
-            const baseUrl = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
-            const loginPath = "/staff/login";
-            const redirectUrl = baseUrl ? `${baseUrl}${loginPath}?error=${encodeURIComponent(message)}` : `${loginPath}?error=${encodeURIComponent(message)}`;
-            return res.redirect(redirectUrl);
-          }
-          req.login(user, (loginErr) => {
-            if (loginErr) return next(loginErr);
-            const session = req.session as any;
-            const returnTo = session?.authReturnTo;
-            if (returnTo) {
-              delete session.authReturnTo;
-              return res.redirect(returnTo);
-            }
-            const baseUrl = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
-            const staffPath = "/staff";
-            if (baseUrl) {
-              return res.redirect(`${baseUrl}${staffPath}`);
-            }
-            const host = req.get("host");
-            const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || (req as any).protocol || "http";
-            const sameOrigin = host ? `${proto}://${host}` : "";
-            return res.redirect(sameOrigin ? `${sameOrigin}${staffPath}` : staffPath);
-          });
-        })(req, res, next);
+      if (returnTo && (origin || returnTo.startsWith("/"))) {
+        (req.session as any).authReturnTo = origin ? `${origin}${returnTo}` : returnTo;
       }
-    );
+
+      (req.session as any).save((err: Error | null) => {
+        if (err) return next(err);
+        passport.authenticate("google", { scope: ["profile", "email"] })(req, res, next);
+      });
+    });
+
+    app.get("/api/auth/google/callback", (req, res, next) => {
+      passport.authenticate("google", (err: Error | null, user: any, info?: { message?: string }) => {
+        if (err) return next(err);
+
+        if (!user) {
+          const message = info?.message || "Authentication failed";
+          const baseUrl = baseUrlFromEnv();
+          const loginPath = "/staff/login";
+          const redirectUrl = baseUrl
+            ? `${baseUrl}${loginPath}?error=${encodeURIComponent(message)}`
+            : `${loginPath}?error=${encodeURIComponent(message)}`;
+          return res.redirect(redirectUrl);
+        }
+
+        req.login(user, (loginErr) => {
+          if (loginErr) return next(loginErr);
+
+          const sessionAny = req.session as any;
+          const returnTo = sessionAny?.authReturnTo;
+
+          if (returnTo) {
+            delete sessionAny.authReturnTo;
+            return res.redirect(returnTo);
+          }
+
+          const baseUrl = baseUrlFromEnv();
+          const staffPath = "/staff";
+
+          // ✅ If platform owner logged in but has no tenant selected/created yet, send them to tenant setup/selection.
+          // If you don't have this route in your frontend yet, change it to "/staff" and rely on NO_TENANT_SELECTED.
+          const loggedInUser = req.user as any;
+          if (loggedInUser?.isPlatformOwner && !loggedInUser?.organizationId) {
+            const tenantSetupPath = "/staff/tenants";
+            return res.redirect(baseUrl ? `${baseUrl}${tenantSetupPath}` : tenantSetupPath);
+          }
+
+          if (baseUrl) {
+            return res.redirect(`${baseUrl}${staffPath}`);
+          }
+
+          const host = req.get("host");
+          const proto =
+            (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
+            (req as any).protocol ||
+            "http";
+          const sameOrigin = host ? `${proto}://${host}` : "";
+
+          return res.redirect(sameOrigin ? `${sameOrigin}${staffPath}` : staffPath);
+        });
+      })(req, res, next);
+    });
   } else {
     structuredLog("warn", "Google OAuth credentials not configured.");
   }
@@ -198,7 +262,9 @@ export function setupAuth(app: Express) {
   if (demoLoginEnabled) {
     app.post("/api/auth/demo-login", async (req: Request, res: Response) => {
       if (googleClientId && googleClientSecret) {
-        return res.status(403).json({ message: "Demo login disabled when Google OAuth is configured" });
+        return res
+          .status(403)
+          .json({ message: "Demo login disabled when Google OAuth is configured" });
       }
 
       const { email } = req.body;
@@ -235,7 +301,10 @@ export function setupAuth(app: Express) {
       }
     });
   } else if (process.env.NODE_ENV !== "production") {
-    structuredLog("info", "Demo login endpoint disabled. Set ENABLE_DEMO_LOGIN=true to enable in non-production environments.");
+    structuredLog(
+      "info",
+      "Demo login endpoint disabled. Set ENABLE_DEMO_LOGIN=true to enable in non-production environments."
+    );
   }
 
   app.post("/api/agent-auth/login", async (req: Request, res: Response) => {
@@ -254,16 +323,23 @@ export function setupAuth(app: Express) {
       if (!user.passwordHash) {
         return res.status(401).json({ message: "Invalid email or password" });
       }
-      const orgId = user.organizationId ?? "";
-      const roles = await storage.getUserRoles(user.id, orgId);
+
+      // ✅ Never pass empty string as uuid
+      if (!user.organizationId) {
+        return res.status(403).json({ message: "No tenant scope assigned to this account." });
+      }
+
+      const roles = await storage.getUserRoles(user.id, user.organizationId);
       const isAgent = roles.some((r) => r.name === "agent");
       if (!isAgent) {
         return res.status(403).json({ message: "Use the staff login (Google) for this account." });
       }
+
       const valid = await argon2.verify(user.passwordHash, password);
       if (!valid) {
         return res.status(401).json({ message: "Invalid email or password" });
       }
+
       req.login(user, (err) => {
         if (err) {
           return res.status(500).json({ message: "Login failed" });
@@ -297,7 +373,9 @@ export function setupAuth(app: Express) {
     }
     const fullUser = await storage.getUser(user.id);
     if (!fullUser || !fullUser.passwordHash) {
-      return res.status(400).json({ message: "This account uses Google sign-in; there is no password to change." });
+      return res
+        .status(400)
+        .json({ message: "This account uses Google sign-in; there is no password to change." });
     }
     const valid = await argon2.verify(fullUser.passwordHash, currentPassword);
     if (!valid) {
@@ -316,9 +394,7 @@ export function setupAuth(app: Express) {
     const user = req.user as any;
     try {
       const orgId = user.organizationId ?? undefined;
-      const userRoles = orgId
-        ? await storage.getUserRoles(user.id, orgId)
-        : [];
+      const userRoles = orgId ? await storage.getUserRoles(user.id, orgId) : [];
       const effectivePermissions = await storage.getUserEffectivePermissions(user.id);
 
       return res.json({
