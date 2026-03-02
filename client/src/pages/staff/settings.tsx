@@ -26,28 +26,33 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { Check, Loader2, Plus, Pencil, Trash2, KeyRound, Shield } from "lucide-react";
+import { Check, Loader2, Plus, Pencil, Trash2, KeyRound, Shield, Building2, ArrowRightLeft, Globe, Settings as SettingsIcon, Users } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 
 export default function StaffSettings() {
-  const { user, permissions: userPerms } = useAuth();
+  const { user, permissions: userPerms, isPlatformOwner } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canEditRbac = userPerms.includes("write:role") || userPerms.includes("create:tenant");
-  const isPlatformOwner = userPerms.includes("manage:whitelabel");
+  const canManageTenants = userPerms.includes("create:tenant") || userPerms.includes("delete:tenant");
+  const canCreateTenant = userPerms.includes("create:tenant");
+  const canDeleteTenant = userPerms.includes("delete:tenant");
   const search = useSearch();
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const [activeTab, setActiveTab] = useState(tabParam === "terms" ? "terms" : tabParam === "rbac" ? "rbac" : tabParam === "account" ? "account" : "branding");
+  const defaultTab = tabParam === "tenants" && canManageTenants ? "tenants" : tabParam === "terms" ? "terms" : tabParam === "rbac" ? "rbac" : tabParam === "account" ? "account" : "branding";
+  const [activeTab, setActiveTab] = useState(defaultTab);
 
   useEffect(() => {
     const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
-    if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
-  }, [search]);
+    if (t === "tenants" && canManageTenants) setActiveTab(t);
+    else if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
+  }, [search, canManageTenants]);
 
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -99,6 +104,17 @@ export default function StaffSettings() {
   const [changePasswordNew, setChangePasswordNew] = useState("");
   const [changePasswordConfirm, setChangePasswordConfirm] = useState("");
 
+  const [tenantAddOpen, setTenantAddOpen] = useState(false);
+  const [tenantDeleteId, setTenantDeleteId] = useState<string | null>(null);
+  const [newTenant, setNewTenant] = useState({
+    name: "",
+    adminEmail: "",
+    adminPassword: "",
+    adminDisplayName: "",
+    phone: "",
+    email: "",
+  });
+
   useEffect(() => {
     if (currentOrg) {
       setOrgName(currentOrg.name || "");
@@ -138,6 +154,55 @@ export default function StaffSettings() {
       setChangePasswordConfirm("");
     },
   });
+
+  const createTenantMutation = useMutation({
+    mutationFn: async (data: typeof newTenant) => {
+      const res = await apiRequest("POST", "/api/organizations", data);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      setTenantAddOpen(false);
+      setNewTenant({ name: "", adminEmail: "", adminPassword: "", adminDisplayName: "", phone: "", email: "" });
+      toast({ title: "Tenant created", description: `${data.organization?.name || "New tenant"} is ready.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to create tenant", variant: "destructive" });
+    },
+  });
+
+  const deleteTenantMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/organizations/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      setTenantDeleteId(null);
+      toast({ title: "Tenant removed" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to remove tenant", variant: "destructive" });
+    },
+  });
+
+  const switchTenantMutation = useMutation({
+    mutationFn: async (tenantId: string) => {
+      const res = await apiRequest("POST", "/api/platform/switch-tenant", { tenantId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+    },
+  });
+
+  const handleCreateTenant = () => {
+    if (!newTenant.name.trim() || !newTenant.adminEmail.trim() || !newTenant.adminPassword.trim()) return;
+    if (newTenant.adminPassword.length < 8) {
+      toast({ title: "Validation error", description: "Admin password must be at least 8 characters", variant: "destructive" });
+      return;
+    }
+    createTenantMutation.mutate(newTenant);
+  };
 
   const handleSaveBranding = () => {
     const updates: any = {};
@@ -279,12 +344,248 @@ export default function StaffSettings() {
         </div>
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 max-w-2xl">
-            <TabsTrigger value="branding">Tenant Branding</TabsTrigger>
+          <TabsList className={`grid w-full max-w-2xl ${canManageTenants ? "grid-cols-5" : "grid-cols-4"}`}>
+            {canManageTenants && (
+              <TabsTrigger value="tenants">Tenants</TabsTrigger>
+            )}
+            <TabsTrigger value="branding">Branding</TabsTrigger>
             <TabsTrigger value="account">Account</TabsTrigger>
-            <TabsTrigger value="terms">Terms & Conditions</TabsTrigger>
-            <TabsTrigger value="rbac">RBAC Configuration</TabsTrigger>
+            <TabsTrigger value="terms">Terms</TabsTrigger>
+            <TabsTrigger value="rbac">RBAC</TabsTrigger>
           </TabsList>
+
+          {canManageTenants && (
+          <TabsContent value="tenants" className="mt-6">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+                    <Globe className="h-6 w-6 text-primary" />
+                    Platform Administration
+                  </h2>
+                  <p className="text-muted-foreground mt-1">Manage tenant organizations across the platform.</p>
+                </div>
+                {canCreateTenant && (
+                  <Button onClick={() => setTenantAddOpen(true)} data-testid="btn-add-tenant">
+                    <Plus className="h-4 w-4 mr-2" />
+                    New tenant
+                  </Button>
+                )}
+              </div>
+
+              {orgs === undefined ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : orgs.length === 0 ? (
+                <Card>
+                  <CardContent className="flex flex-col items-center justify-center py-16">
+                    <Building2 className="h-12 w-12 text-muted-foreground/40 mb-4" />
+                    <p className="text-muted-foreground font-medium">No tenants yet</p>
+                    <p className="text-sm text-muted-foreground mt-1">Create your first tenant to get started.</p>
+                    {canCreateTenant && (
+                      <Button className="mt-4" onClick={() => setTenantAddOpen(true)}>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Create tenant
+                      </Button>
+                    )}
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {orgs.map((org: any) => {
+                    const isActive = isPlatformOwner && org.id === user?.organizationId;
+                    return (
+                      <Card key={org.id} className={`relative transition-shadow hover:shadow-md ${isActive ? "ring-2 ring-primary" : ""}`}>
+                        {isActive && (
+                          <Badge className="absolute top-3 right-3 bg-primary/15 text-primary border-primary/30" variant="outline">
+                            Active
+                          </Badge>
+                        )}
+                        <CardHeader className="pb-3">
+                          <div className="flex items-start gap-3">
+                            {org.logoUrl ? (
+                              <img src={org.logoUrl} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background shrink-0" />
+                            ) : (
+                              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                                <Building2 className="h-5 w-5 text-primary" />
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <CardTitle className="text-base truncate">{org.name}</CardTitle>
+                              <CardDescription className="text-xs truncate">{org.email || "No contact email"}</CardDescription>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="pt-0">
+                          <div className="text-xs text-muted-foreground space-y-1 mb-4">
+                            {org.phone && <p>Phone: {org.phone}</p>}
+                            <p className="font-mono opacity-60">ID: {org.id.slice(0, 8)}...</p>
+                          </div>
+                          <div className="flex gap-2">
+                            {isPlatformOwner && (
+                              <Button
+                                variant={isActive ? "secondary" : "default"}
+                                size="sm"
+                                className="flex-1"
+                                disabled={isActive || switchTenantMutation.isPending}
+                                onClick={() => switchTenantMutation.mutate(org.id)}
+                              >
+                                <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
+                                {isActive ? "Current" : "Switch"}
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                if (isPlatformOwner) {
+                                  switchTenantMutation.mutate(org.id, {
+                                    onSuccess: () => {
+                                      queryClient.invalidateQueries();
+                                      handleTabChange("branding");
+                                    },
+                                  });
+                                } else {
+                                  handleTabChange("branding");
+                                }
+                              }}
+                            >
+                              <SettingsIcon className="h-3.5 w-3.5" />
+                            </Button>
+                            {canDeleteTenant && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => setTenantDeleteId(org.id)}
+                                data-testid={`btn-delete-tenant-${org.id}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <Dialog open={tenantAddOpen} onOpenChange={setTenantAddOpen}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Create new tenant</DialogTitle>
+                  <DialogDescription>
+                    Set up a new organization with its own admin account. A default branch "Head Office" will be created automatically.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="tenant-org-name">Organization name *</Label>
+                    <Input
+                      id="tenant-org-name"
+                      value={newTenant.name}
+                      onChange={(e) => setNewTenant((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="e.g. Acme Insurance"
+                      data-testid="input-tenant-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tenant-org-email">Organization email</Label>
+                    <Input
+                      id="tenant-org-email"
+                      type="email"
+                      value={newTenant.email}
+                      onChange={(e) => setNewTenant((p) => ({ ...p, email: e.target.value }))}
+                      placeholder="info@acme.com"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tenant-org-phone">Organization phone</Label>
+                    <Input
+                      id="tenant-org-phone"
+                      value={newTenant.phone}
+                      onChange={(e) => setNewTenant((p) => ({ ...p, phone: e.target.value }))}
+                      placeholder="+1 555 0100"
+                    />
+                  </div>
+                  <div className="border-t pt-4 space-y-4">
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      Tenant administrator account
+                    </p>
+                    <div className="space-y-2">
+                      <Label htmlFor="tenant-admin-name">Display name</Label>
+                      <Input
+                        id="tenant-admin-name"
+                        value={newTenant.adminDisplayName}
+                        onChange={(e) => setNewTenant((p) => ({ ...p, adminDisplayName: e.target.value }))}
+                        placeholder="John Doe"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="tenant-admin-email">Email *</Label>
+                      <Input
+                        id="tenant-admin-email"
+                        type="email"
+                        value={newTenant.adminEmail}
+                        onChange={(e) => setNewTenant((p) => ({ ...p, adminEmail: e.target.value }))}
+                        placeholder="admin@acme.com"
+                        data-testid="input-admin-email"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="tenant-admin-password">Password * (min 8 chars)</Label>
+                      <Input
+                        id="tenant-admin-password"
+                        type="password"
+                        value={newTenant.adminPassword}
+                        onChange={(e) => setNewTenant((p) => ({ ...p, adminPassword: e.target.value }))}
+                        placeholder="Minimum 8 characters"
+                        data-testid="input-admin-password"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setTenantAddOpen(false)}>Cancel</Button>
+                  <Button
+                    onClick={handleCreateTenant}
+                    disabled={!newTenant.name.trim() || !newTenant.adminEmail.trim() || newTenant.adminPassword.length < 8 || createTenantMutation.isPending}
+                    data-testid="btn-confirm-add-tenant"
+                  >
+                    {createTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    Create tenant
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <AlertDialog open={!!tenantDeleteId} onOpenChange={(open) => !open && setTenantDeleteId(null)}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Remove tenant?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will soft-delete <strong>{orgs?.find((o: any) => o.id === tenantDeleteId)?.name}</strong>. The tenant must have no active users. This action cannot be easily undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={() => tenantDeleteId && deleteTenantMutation.mutate(tenantDeleteId)}
+                    disabled={deleteTenantMutation.isPending}
+                  >
+                    {deleteTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    Remove
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </TabsContent>
+          )}
 
           <TabsContent value="branding" className="mt-6">
             <Card className="shadow-sm">

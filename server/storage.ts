@@ -213,7 +213,7 @@ export interface IStorage {
   getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]>;
   addUserPermissionOverride(userId: string, permissionId: string, isGranted: boolean): Promise<void>;
   getUserEffectivePermissions(userId: string): Promise<string[]>;
-  getAuditLogs(organizationId: string, limit?: number, offset?: number): Promise<AuditLog[]>;
+  getAuditLogs(organizationId: string, limit?: number, offset?: number, filters?: { search?: string; action?: string; from?: string; to?: string }): Promise<{ rows: AuditLog[]; total: number }>;
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getClientsByOrg(organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
   getClientsByAgent(agentId: string, organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
@@ -225,6 +225,8 @@ export interface IStorage {
   getClientByNationalId(orgId: string, nationalId: string): Promise<Client | undefined>;
   /** Find first client in org by phone (normalized digits match). */
   getClientByPhone(orgId: string, phone: string): Promise<Client | undefined>;
+  /** Return IDs of clients matching a search term (name, email, phone, nationalId). */
+  getClientIdsByOrgSearch(organizationId: string, search: string): Promise<string[]>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, data: Partial<InsertClient>, orgId: string): Promise<Client | undefined>;
   getDependentsByClient(clientId: string, orgId: string): Promise<Dependent[]>;
@@ -616,10 +618,36 @@ export class DatabaseStorage implements IStorage {
 
     return Array.from(permSet);
   }
-  async getAuditLogs(organizationId: string, limit = 50, offset = 0): Promise<AuditLog[]> {
+  async getAuditLogs(organizationId: string, limit = 50, offset = 0, filters?: { search?: string; action?: string; from?: string; to?: string }): Promise<{ rows: AuditLog[]; total: number }> {
     const tdb = await getDbForOrg(organizationId);
-    return tdb.select().from(auditLogs).where(eq(auditLogs.organizationId, organizationId))
+    const conditions: any[] = [eq(auditLogs.organizationId, organizationId)];
+
+    if (filters?.search) {
+      const term = `%${filters.search}%`;
+      conditions.push(or(
+        ilike(auditLogs.actorEmail, term),
+        ilike(auditLogs.action, term),
+        ilike(auditLogs.entityType, term),
+        ilike(auditLogs.entityId, term),
+      ));
+    }
+    if (filters?.action) {
+      conditions.push(eq(auditLogs.action, filters.action));
+    }
+    if (filters?.from) {
+      conditions.push(gte(auditLogs.timestamp, new Date(filters.from)));
+    }
+    if (filters?.to) {
+      const toDate = new Date(filters.to);
+      toDate.setHours(23, 59, 59, 999);
+      conditions.push(lte(auditLogs.timestamp, toDate));
+    }
+
+    const where = and(...conditions);
+    const [{ value: total }] = await tdb.select({ value: count() }).from(auditLogs).where(where);
+    const rows = await tdb.select().from(auditLogs).where(where)
       .orderBy(desc(auditLogs.timestamp)).limit(limit).offset(offset);
+    return { rows, total };
   }
   async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
     const orgId = log.organizationId;
@@ -637,14 +665,19 @@ export class DatabaseStorage implements IStorage {
       const raw = String(search).trim();
       const esc = raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
       const q = `%${esc}%`;
-      conditions.push(
-        or(
-          ilike(clients.firstName, q),
-          ilike(clients.lastName, q),
-          ilike(clients.email, q),
-          ilike(clients.phone, q)
-        )!
-      );
+      const digits = raw.replace(/\D/g, "");
+      const orClauses: any[] = [
+        ilike(clients.firstName, q),
+        ilike(clients.lastName, q),
+        ilike(clients.email, q),
+        ilike(clients.phone, q),
+        ilike(clients.nationalId, q),
+        sql`(${clients.firstName} || ' ' || ${clients.lastName}) ILIKE ${q}`,
+      ];
+      if (digits.length >= 9) {
+        orClauses.push(sql`regexp_replace(${clients.phone}, '\\D', '', 'g') LIKE ${'%' + digits.slice(-9)}`);
+      }
+      conditions.push(or(...orClauses)!);
     }
     return tdb.select().from(clients).where(and(...conditions))
       .orderBy(desc(clients.createdAt)).limit(limit).offset(offset);
@@ -669,14 +702,19 @@ export class DatabaseStorage implements IStorage {
       const raw = String(search).trim();
       const esc = raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
       const q = `%${esc}%`;
-      conditions.push(
-        or(
-          ilike(clients.firstName, q),
-          ilike(clients.lastName, q),
-          ilike(clients.email, q),
-          ilike(clients.phone, q)
-        )!
-      );
+      const digits = raw.replace(/\D/g, "");
+      const orClauses: any[] = [
+        ilike(clients.firstName, q),
+        ilike(clients.lastName, q),
+        ilike(clients.email, q),
+        ilike(clients.phone, q),
+        ilike(clients.nationalId, q),
+        sql`(${clients.firstName} || ' ' || ${clients.lastName}) ILIKE ${q}`,
+      ];
+      if (digits.length >= 9) {
+        orClauses.push(sql`regexp_replace(${clients.phone}, '\\D', '', 'g') LIKE ${'%' + digits.slice(-9)}`);
+      }
+      conditions.push(or(...orClauses)!);
     }
     return tdb.select().from(clients).where(and(...conditions))
       .orderBy(desc(clients.createdAt)).limit(limit).offset(offset);
@@ -727,15 +765,22 @@ export class DatabaseStorage implements IStorage {
     const raw = String(search).trim();
     const esc = raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
     const q = `%${esc}%`;
+    const digits = raw.replace(/\D/g, "");
+    const orClauses: any[] = [
+      ilike(clients.firstName, q),
+      ilike(clients.lastName, q),
+      ilike(clients.email, q),
+      ilike(clients.phone, q),
+      ilike(clients.nationalId, q),
+      sql`(${clients.firstName} || ' ' || ${clients.lastName}) ILIKE ${q}`,
+    ];
+    if (digits.length >= 9) {
+      orClauses.push(sql`regexp_replace(${clients.phone}, '\\D', '', 'g') LIKE ${'%' + digits.slice(-9)}`);
+    }
     const rows = await tdb.select({ id: clients.id }).from(clients)
       .where(and(
         eq(clients.organizationId, organizationId),
-        or(
-          ilike(clients.firstName, q),
-          ilike(clients.lastName, q),
-          ilike(clients.email, q),
-          ilike(clients.phone, q)
-        )!
+        or(...orClauses)!
       ));
     return rows.map((r) => r.id);
   }

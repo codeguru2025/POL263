@@ -103,7 +103,7 @@ function TenantPickerSplash({
       {orgs.length === 0 ? (
         <div className="text-center text-muted-foreground">
           <p>No tenants found.</p>
-          <Link href="/staff/tenants">
+          <Link href="/staff/settings?tab=tenants">
             <Button variant="default" className="mt-4">Create your first tenant</Button>
           </Link>
         </div>
@@ -163,7 +163,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const isAgent = roles.some((r) => r.name === "agent");
   const { displayName: brandName, displayLogo: brandLogo, isWhitelabeled } = useBranding();
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
-  const hasAll = (perms: string[]) => perms.length === 0 || perms.every((p) => permissions.includes(p));
 
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -242,14 +241,12 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     {
       title: "System & Audit",
       items: [
-        ...(canManageTenants ? [{ href: "/staff/tenants", label: "Tenants", icon: Building2 }] : []),
         { href: "/staff/users", label: "User Management", icon: UserCog, permission: "read:user" },
         { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals", badge: pendingApprovalsCount },
         { href: "/staff/audit", label: "Audit Logs", icon: History, permission: "read:audit_log" },
         { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope, permission: "read:audit_log" },
-        { href: "/staff/settings", label: "Tenant Settings", icon: Settings, permission: "manage:settings" },
-        { href: "/staff/settings?tab=terms", label: "Terms & Conditions", icon: FileText, permission: "manage:settings" },
-      ].filter(Boolean) as { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number; hidden?: boolean }[],
+        { href: "/staff/settings", label: "Settings", icon: Settings },
+      ],
     },
   ];
 
@@ -432,8 +429,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       className="flex items-center gap-2 cursor-pointer text-muted-foreground"
-                      onClick={() => setLocation("/staff/tenants")}
-                    >
+                      onClick={() => setLocation("/staff/settings?tab=tenants")}
+   >
                       <Building2 className="h-3.5 w-3.5 shrink-0" />
                       <span>Manage tenants</span>
                     </DropdownMenuItem>

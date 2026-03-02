@@ -122,7 +122,10 @@ export const rolePermissions = pgTable(
       .notNull()
       .references(() => permissions.id, { onDelete: "cascade" }),
   },
-  (t) => [index("rp_role_idx").on(t.roleId)]
+  (t) => [
+    index("rp_role_idx").on(t.roleId),
+    uniqueIndex("rp_role_perm_unique_idx").on(t.roleId, t.permissionId),
+  ]
 );
 
 export const userRoles = pgTable(

@@ -53,6 +53,15 @@ function getStatusColor(status: string) {
   }
 }
 
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
+
 export default function StaffPolicies() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -61,6 +70,7 @@ export default function StaffPolicies() {
   const canWriteFinance = permissions.includes("write:finance");
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, 300);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showTransitionDialog, setShowTransitionDialog] = useState(false);
@@ -120,8 +130,17 @@ export default function StaffPolicies() {
     }
   }, [isAgent, user?.id]);
 
+  const policiesQueryUrl = debouncedSearch
+    ? `/api/policies?q=${encodeURIComponent(debouncedSearch)}`
+    : "/api/policies";
+
   const { data: policies, isLoading: policiesLoading } = useQuery<any[]>({
-    queryKey: ["/api/policies"],
+    queryKey: ["/api/policies", { q: debouncedSearch }],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + policiesQueryUrl, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch policies");
+      return res.json();
+    },
   });
 
   const { data: clients } = useQuery<any[]>({
@@ -524,13 +543,10 @@ export default function StaffPolicies() {
   const filteredPolicies = useMemo(() => {
     if (!policies) return [];
     return policies.filter((p: any) => {
-      const matchesSearch = !search ||
-        p.policyNumber?.toLowerCase().includes(search.toLowerCase()) ||
-        p.clientId?.toLowerCase().includes(search.toLowerCase());
       const matchesStatus = statusFilter === "all" || p.status === statusFilter;
-      return matchesSearch && matchesStatus;
+      return matchesStatus;
     });
-  }, [policies, search, statusFilter]);
+  }, [policies, statusFilter]);
 
   const clientMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -1251,7 +1267,7 @@ export default function StaffPolicies() {
                 <div className="relative w-64">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search by policy number..."
+                    placeholder="Search by policy number, name, ID, phone..."
                     className="pl-9 bg-background"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}

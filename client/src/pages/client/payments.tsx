@@ -70,6 +70,7 @@ export default function ClientPayments() {
   const [currentIntent, setCurrentIntent] = useState<PaymentIntent | null>(null);
   const [polling, setPolling] = useState(false);
   const [payForPhone, setPayForPhone] = useState("");
+  const [lookupType, setLookupType] = useState<"phone" | "policy" | "id">("phone");
   const [innbucksCode, setInnbucksCode] = useState("");
   const [innbucksExpiry, setInnbucksExpiry] = useState("");
   const [omariOtp, setOmariOtp] = useState("");
@@ -262,9 +263,13 @@ export default function ClientPayments() {
         : true
   );
 
-  const handleLookupByPhone = async () => {
-    const phone = payForPhone.trim();
-    if (!phone || phone.length < 9) {
+  const handleLookup = async () => {
+    const q = payForPhone.trim();
+    if (!q) {
+      setLookupError("Enter a search value");
+      return;
+    }
+    if (lookupType === "phone" && q.replace(/\D/g, "").length < 9) {
       setLookupError("Enter a valid phone number");
       return;
     }
@@ -272,7 +277,8 @@ export default function ClientPayments() {
     setLookupLoading(true);
     try {
       const base = getApiBase();
-      const res = await fetch(base + `/api/client-auth/lookup-by-phone?phone=${encodeURIComponent(phone)}`, { credentials: "include" });
+      const params = new URLSearchParams({ type: lookupType, q });
+      const res = await fetch(base + `/api/client-auth/lookup-by-phone?${params}`, { credentials: "include" });
       const data = await res.json();
       if (!res.ok) {
         setLookedUp(null);
@@ -280,8 +286,7 @@ export default function ClientPayments() {
         return;
       }
       setLookedUp({ clientName: data.clientName, policies: data.policies });
-      if (data.policies?.length === 1) setSelectedPolicyId(data.policies[0].id);
-      else if (data.policies?.length > 0) setSelectedPolicyId(data.policies[0].id);
+      if (data.policies?.length >= 1) setSelectedPolicyId(data.policies[0].id);
       else setSelectedPolicyId("");
     } finally {
       setLookupLoading(false);
@@ -342,14 +347,22 @@ export default function ClientPayments() {
 
             <div className="space-y-2 rounded-lg border p-3 bg-muted/40">
               <Label>Pay for someone else</Label>
-              <p className="text-xs text-muted-foreground">Enter the client&apos;s phone number to find their policies and pay on their behalf.</p>
+              <p className="text-xs text-muted-foreground">Find a client by phone number, policy number, or national ID to pay on their behalf.</p>
               <div className="flex gap-2">
+                <Select value={lookupType} onValueChange={(v) => setLookupType(v as any)}>
+                  <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="phone">Phone</SelectItem>
+                    <SelectItem value="policy">Policy No.</SelectItem>
+                    <SelectItem value="id">National ID</SelectItem>
+                  </SelectContent>
+                </Select>
                 <Input
-                  placeholder="e.g. 0771234567"
+                  placeholder={lookupType === "phone" ? "e.g. 0771234567" : lookupType === "policy" ? "e.g. POL-001" : "e.g. 63-123456A78"}
                   value={payForPhone}
                   onChange={(e) => { setPayForPhone(e.target.value); setLookupError(""); }}
                 />
-                <Button type="button" variant="secondary" onClick={handleLookupByPhone} disabled={lookupLoading}>
+                <Button type="button" variant="secondary" onClick={handleLookup} disabled={lookupLoading}>
                   {lookupLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Look up"}
                 </Button>
               </div>

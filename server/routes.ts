@@ -1,4 +1,4 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import argon2 from "argon2";
 import { storage, findPaymentReceiptById } from "./storage";
@@ -32,7 +32,7 @@ import {
   policies, paymentTransactions, paymentReceipts,
 } from "@shared/schema";
 import { sql, eq } from "drizzle-orm";
-import PDFDocument from "pdfkit";
+
 
 async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
   if (!policy.agentId) return;
@@ -718,7 +718,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
-    return res.json(await storage.getAuditLogs(user.organizationId, limit, offset));
+    const filters: { search?: string; action?: string; from?: string; to?: string } = {};
+    if (req.query.search) filters.search = String(req.query.search);
+    if (req.query.action) filters.action = String(req.query.action);
+    if (req.query.from) filters.from = String(req.query.from);
+    if (req.query.to) filters.to = String(req.query.to);
+    return res.json(await storage.getAuditLogs(user.organizationId, limit, offset, filters));
   });
 
   // ─── Dashboard Stats ───────────────────────────────────────
@@ -764,6 +769,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/clients", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
+
+    if (req.body.nationalId && String(req.body.nationalId).trim()) {
+      const existing = await storage.getClientByNationalId(user.organizationId, String(req.body.nationalId).trim());
+      if (existing) {
+        return res.status(409).json({
+          message: "A client with this ID number already exists. Request admin approval to create another policy for this client.",
+          code: "DUPLICATE_CLIENT",
+          existingClient: {
+            id: existing.id,
+            firstName: existing.firstName,
+            lastName: existing.lastName,
+            nationalId: existing.nationalId,
+            phone: existing.phone,
+            email: existing.email,
+          },
+        });
+      }
+    }
+
     const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const userRolesForCreate = await storage.getUserRoles(user.id, user.organizationId);
     const creatorIsAgent = userRolesForCreate.some((r: { name?: string }) => r?.name === "agent");
@@ -776,8 +800,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     const client = await storage.createClient(parsed);
     await auditLog(req, "CREATE_CLIENT", "Client", client.id, null, client);
-    const roleNames = userRolesForCreate.map((r: any) => r?.name);
-    console.log(`[POST /api/clients] userId=${user.id} creatorIsAgent=${creatorIsAgent} roles=${JSON.stringify(roleNames)} clientId=${client.id}`);
     const lead = await storage.createLead({
       organizationId: user.organizationId,
       branchId: user.branchId || undefined,
@@ -790,7 +812,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       source: creatorIsAgent ? "agent_capture" : "walk_in",
       stage: "lead",
     });
-    console.log(`[POST /api/clients] lead created id=${lead.id} agentId=${lead.agentId} clientId=${lead.clientId}`);
     await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
     return res.status(201).json(client);
   });
@@ -1022,7 +1043,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (status) list = list.filter((p: any) => p.status === status);
       if (search && search.trim()) {
         const q = search.trim().toLowerCase();
-        list = list.filter((p: any) => (p.policyNumber && p.policyNumber.toLowerCase().includes(q)));
+        const matchingClientIds = new Set(await storage.getClientIdsByOrgSearch(user.organizationId, search));
+        list = list.filter((p: any) =>
+          (p.policyNumber && p.policyNumber.toLowerCase().includes(q)) ||
+          (p.clientId && matchingClientIds.has(p.clientId))
+        );
       }
       list = list.slice(offset, offset + limit);
     } else {
@@ -2355,6 +2380,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Security Questions (for client auth) ───────────────────
 
   app.get("/api/security-questions", async (req, res) => {
+    const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
+    if (orgIdParam) {
+      return res.json(await storage.getSecurityQuestions(orgIdParam));
+    }
     const orgs = await storage.getOrganizations();
     if (orgs.length > 0) {
       return res.json(await storage.getSecurityQuestions(orgs[0].id));
@@ -2366,17 +2395,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/agents/by-referral/:code", async (req, res) => {
     const code = String(req.params.code);
-    const orgs = await storage.getOrganizations();
-    if (orgs.length === 0) return res.status(404).json({ error: "Not found" });
     const agent = await storage.getUserByReferralCode(code);
-    if (!agent || agent.organizationId !== orgs[0].id) return res.status(404).json({ error: "Agent not found" });
+    if (!agent) return res.status(404).json({ message: "Agent not found" });
     return res.json({ name: agent.displayName || agent.email, referralCode: code });
   });
 
   // ─── Public branding (no auth required, for login/splash screens) ──
   app.get("/api/public/branding", async (req, res) => {
-    const orgs = await storage.getOrganizations();
-    const org = orgs[0];
+    const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
+    let org: Awaited<ReturnType<typeof storage.getOrganizations>>[number] | undefined;
+    if (orgIdParam) {
+      const found = await storage.getOrganization(orgIdParam);
+      if (found) org = found;
+    }
+    if (!org) {
+      const orgs = await storage.getOrganizations();
+      org = orgs[0];
+    }
     if (!org) return res.json({ name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#D4AF37" });
     return res.json({
       name: org.name,
@@ -2393,19 +2428,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Public policy registration (from agent referral link) ──
   app.get("/api/public/registration-options", async (req, res) => {
     const ref = typeof req.query.ref === "string" ? req.query.ref.trim() : "";
-    if (!ref) return res.status(400).json({ error: "Referral code (ref) required" });
-    const orgs = await storage.getOrganizations();
-    if (orgs.length === 0) return res.status(404).json({ error: "Not found" });
+    if (!ref) return res.status(400).json({ message: "Referral code (ref) required" });
     const agent = await storage.getUserByReferralCode(ref);
-    if (!agent || agent.organizationId !== orgs[0].id) return res.status(404).json({ error: "Agent not found" });
-    const products = await storage.getProductsByOrg(orgs[0].id);
+    if (!agent) return res.status(404).json({ message: "Agent not found" });
+    if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
+    const orgId = agent.organizationId;
+    const products = await storage.getProductsByOrg(orgId);
     const withVersions = await Promise.all(
       products.filter((p) => p.isActive).map(async (p) => {
-        const versions = await storage.getProductVersions(p.id, orgs[0].id);
+        const versions = await storage.getProductVersions(p.id, orgId);
         return { ...p, versions: versions.filter((v) => v.isActive !== false) };
       })
     );
-    const branches = await storage.getBranchesByOrg(orgs[0].id);
+    const branches = await storage.getBranchesByOrg(orgId);
     return res.json({
       agentName: agent.displayName || agent.email,
       referralCode: ref,
@@ -2422,17 +2457,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!lastName) missingFields.push("lastName");
     if (!productVersionId) missingFields.push("productVersionId");
     if (missingFields.length > 0) {
-      return res.status(400).json({ error: `Missing required fields: ${missingFields.join(", ")}` });
+      return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
     }
-    const orgs = await storage.getOrganizations();
-    if (orgs.length === 0) return res.status(503).json({ error: "System not configured" });
     const agent = await storage.getUserByReferralCode(referralCode);
-    if (!agent || agent.organizationId !== orgs[0].id) return res.status(400).json({ error: "Invalid referral code" });
-    const orgId = orgs[0].id;
+    if (!agent) return res.status(400).json({ message: "Invalid referral code" });
+    if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
+    const orgId = agent.organizationId;
     const pv = await storage.getProductVersion(productVersionId, orgId);
-    if (!pv) return res.status(400).json({ error: "Invalid product version" });
+    if (!pv) return res.status(400).json({ message: "Invalid product version" });
     const product = await storage.getProduct(pv.productId, orgId);
-    if (!product) return res.status(400).json({ error: "Product not found" });
+    if (!product) return res.status(400).json({ message: "Product not found" });
     const effectiveBranchId = branchId || agent.branchId || null;
 
     // Reuse existing client when identified by email or national ID (no duplicate clients)
@@ -2554,7 +2588,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         message: "Policy registered. Use your policy number and activation code to claim your account, then sign in.",
       });
     } catch (e) {
-      if (e instanceof z.ZodError) return res.status(400).json({ error: "Validation failed", details: e.errors });
+      if (e instanceof z.ZodError) return res.status(400).json({ message: "Validation failed", details: e.errors });
       throw e;
     }
   });
@@ -3311,6 +3345,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
+  });
+
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: err.errors[0]?.message || "Validation failed", errors: err.errors });
+    }
+    structuredLog("error", "Unhandled route error", { error: err.message, stack: err.stack, path: req.path, method: req.method });
+    return res.status(500).json({ message: "Internal server error" });
   });
 
   return httpServer;

@@ -271,21 +271,42 @@ export function setupClientAuth(app: Express) {
     return res.json(clientPolicies);
   });
 
-  /** Look up another client by phone to pay for their policy. Requires login. Sets session so next payment-intent can be for that client. */
+  /** Look up another client to pay for their policy. Supports phone, policy number, and national ID lookup. */
   app.get("/api/client-auth/lookup-by-phone", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
-    const phone = typeof req.query.phone === "string" ? req.query.phone.trim() : "";
-    if (!phone || phone.length < 9) {
-      return res.status(400).json({ message: "Valid phone number is required" });
+
+    const searchType = typeof req.query.type === "string" ? req.query.type : "phone";
+    const q = typeof req.query.q === "string" ? req.query.q.trim()
+      : typeof req.query.phone === "string" ? req.query.phone.trim() : "";
+    if (!q) return res.status(400).json({ message: "Search query is required" });
+
+    let client: any = null;
+    let matchedPolicies: any[] = [];
+
+    if (searchType === "policy") {
+      const policy = await storage.getPolicyByNumber(q, clientOrgId);
+      if (policy && policy.clientId) {
+        client = await storage.getClient(policy.clientId, clientOrgId);
+        matchedPolicies = [policy];
+      }
+    } else if (searchType === "id") {
+      client = await storage.getClientByNationalId(clientOrgId, q);
+    } else {
+      if (q.length < 9) return res.status(400).json({ message: "Valid phone number is required" });
+      client = await storage.getClientByPhone(clientOrgId, q);
     }
-    const client = await storage.getClientByPhone(clientOrgId, phone);
+
     if (!client) {
-      return res.status(404).json({ message: "No client found with this phone number" });
+      return res.status(404).json({ message: "No client found" });
     }
-    const policies = await storage.getPoliciesByClient(client.id, clientOrgId);
-    const payables = policies.filter((p) => p.policyNumber != null && String(p.policyNumber).trim() !== "");
+
+    if (matchedPolicies.length === 0) {
+      const allPolicies = await storage.getPoliciesByClient(client.id, clientOrgId);
+      matchedPolicies = allPolicies;
+    }
+    const payables = matchedPolicies.filter((p) => p.policyNumber != null && String(p.policyNumber).trim() !== "");
     (req.session as any).lookedUpClientId = client.id;
     (req.session as any).lookedUpClientIdAt = Date.now();
     return res.json({

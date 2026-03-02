@@ -182,7 +182,6 @@ export default function StaffClients() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [formData, setFormData] = useState<ClientFormData>(emptyForm);
-  const [pendingDependents, setPendingDependents] = useState<DependentFormData[]>([]);
 
   const [showAddDepDialog, setShowAddDepDialog] = useState(false);
   const [editingDep, setEditingDep] = useState<Dependent | null>(null);
@@ -232,19 +231,29 @@ export default function StaffClients() {
       const res = await apiRequest("POST", "/api/clients", data);
       return res.json() as Promise<Client>;
     },
-    onSuccess: async (client) => {
-      if (pendingDependents.length > 0) {
-        for (const dep of pendingDependents) {
-          await apiRequest("POST", `/api/clients/${client.id}/dependents`, dep);
-        }
-      }
+    onSuccess: (client) => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       setShowCreateDialog(false);
       setFormData(emptyForm);
-      setPendingDependents([]);
       setLastCreatedClient(client);
     },
     onError: (err: Error) => {
+      try {
+        const jsonStr = err.message.replace(/^\d+:\s*/, "");
+        const body = JSON.parse(jsonStr);
+        if (body.code === "DUPLICATE_CLIENT" && body.existingClient) {
+          const ec = body.existingClient;
+          toast({
+            title: "Duplicate Client Found",
+            description: `${ec.firstName} ${ec.lastName} (ID: ${ec.nationalId || "—"}, Phone: ${ec.phone || "—"}) already exists. Request admin approval to create another policy for this client.`,
+            variant: "destructive",
+            duration: 12000,
+          });
+          return;
+        }
+      } catch {
+        // not JSON — fall through to generic toast
+      }
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
@@ -749,7 +758,7 @@ export default function StaffClients() {
           </div>
           <Button
             className="gap-2 shadow-sm"
-            onClick={() => { setFormData(emptyForm); setPendingDependents([]); setShowCreateDialog(true); }}
+            onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }}
             data-testid="btn-add-client"
           >
             <Plus className="h-4 w-4" /> Capture Lead
@@ -984,8 +993,6 @@ export default function StaffClients() {
         onOpenChange={setShowCreateDialog}
         formData={formData}
         setFormData={setFormData}
-        pendingDependents={pendingDependents}
-        setPendingDependents={setPendingDependents}
         onSubmit={handleCreate}
         isPending={createMutation.isPending}
       />
@@ -1046,8 +1053,6 @@ function CreateClientDialog({
   onOpenChange,
   formData,
   setFormData,
-  pendingDependents,
-  setPendingDependents,
   onSubmit,
   isPending,
 }: {
@@ -1055,21 +1060,9 @@ function CreateClientDialog({
   onOpenChange: (open: boolean) => void;
   formData: ClientFormData;
   setFormData: (data: ClientFormData) => void;
-  pendingDependents: DependentFormData[];
-  setPendingDependents: (deps: DependentFormData[]) => void;
   onSubmit: () => void;
   isPending: boolean;
 }) {
-  const [showInlineDepForm, setShowInlineDepForm] = useState(false);
-  const [inlineDepForm, setInlineDepForm] = useState<DependentFormData>(emptyDependent);
-
-  const addInlineDependent = () => {
-    if (!inlineDepForm.firstName || !inlineDepForm.lastName || !inlineDepForm.relationship) return;
-    setPendingDependents([...pendingDependents, { ...inlineDepForm }]);
-    setInlineDepForm(emptyDependent);
-    setShowInlineDepForm(false);
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -1081,95 +1074,6 @@ function CreateClientDialog({
           <div>
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Client Details</h3>
             <ClientForm formData={formData} setFormData={setFormData} />
-          </div>
-
-          <div className="border-t pt-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                Dependents & Beneficiaries
-              </h3>
-              {!showInlineDepForm && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1"
-                  onClick={() => setShowInlineDepForm(true)}
-                  data-testid="btn-add-inline-dependent"
-                >
-                  <UserPlus className="h-3.5 w-3.5" /> Add
-                </Button>
-              )}
-            </div>
-
-            {pendingDependents.length > 0 && (
-              <div className="space-y-2 mb-3">
-                {pendingDependents.map((dep, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
-                    data-testid={`card-pending-dep-${idx}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-8 w-8">
-                        <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                          {dep.firstName[0]}{dep.lastName[0]}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="font-medium text-sm">{dep.firstName} {dep.lastName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {dep.relationship}
-                          {dep.dateOfBirth ? ` · DOB: ${dep.dateOfBirth}` : ""}
-                          {dep.gender ? ` · ${dep.gender}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={() => setPendingDependents(pendingDependents.filter((_, i) => i !== idx))}
-                      data-testid={`btn-remove-pending-dep-${idx}`}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {showInlineDepForm && (
-              <div className="border rounded-lg p-4 space-y-3 bg-muted/20">
-                <DependentFormFields depForm={inlineDepForm} setDepForm={setInlineDepForm} />
-                <div className="flex items-center gap-2 pt-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={addInlineDependent}
-                    disabled={!inlineDepForm.firstName || !inlineDepForm.lastName || !inlineDepForm.relationship}
-                    data-testid="btn-confirm-inline-dep"
-                  >
-                    Add to List
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => { setShowInlineDepForm(false); setInlineDepForm(emptyDependent); }}
-                    data-testid="btn-cancel-inline-dep"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {pendingDependents.length === 0 && !showInlineDepForm && (
-              <p className="text-sm text-muted-foreground text-center py-3">
-                No dependents added yet. You can add them now or later from the client detail view.
-              </p>
-            )}
           </div>
         </div>
 
