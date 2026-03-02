@@ -55,6 +55,12 @@ const SYSTEM_PERMISSIONS = [
   { name: "write:notification", description: "Manage notification templates", category: "notifications" },
   { name: "manage:approvals", description: "Handle maker-checker approvals", category: "approvals" },
   { name: "backdate:payment", description: "Backdate payment value dates", category: "finance" },
+  { name: "receipt:cash", description: "Create cash payment receipts", category: "finance" },
+  { name: "receipt:mobile", description: "Create mobile money receipts", category: "finance" },
+  { name: "receipt:transfer", description: "Create bank transfer receipts", category: "finance" },
+  { name: "receipt:group", description: "Create group receipts", category: "finance" },
+  { name: "view:own_clients", description: "View only own assigned clients", category: "clients" },
+  { name: "view:all_clients", description: "View all clients in organization", category: "clients" },
   { name: "create:tenant", description: "Add new tenants (organizations)", category: "platform" },
   { name: "delete:tenant", description: "Remove tenants (organizations)", category: "platform" },
 ];
@@ -94,7 +100,7 @@ const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   agent: [
     "read:policy", "write:policy", "read:client", "write:client", "read:product",
     "read:lead", "write:lead", "read:commission", "read:report",
-    "read:finance", "write:finance",
+    "read:finance", "receipt:cash",
   ],
   claims_officer: [
     "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",

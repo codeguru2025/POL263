@@ -24,7 +24,7 @@ export default function StaffUsers() {
   const [searchTerm, setSearchTerm] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
-  const [newUser, setNewUser] = useState({ email: "", displayName: "", roleIds: [] as string[], branchId: "", password: "" });
+  const [newUser, setNewUser] = useState({ email: "", displayName: "", roleIds: [] as string[], branchId: "", password: "", phone: "", address: "", nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", nextOfKinName: "", nextOfKinPhone: "" });
 
   const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/users"] });
   const { data: roles = [] } = useQuery<any[]>({ queryKey: ["/api/roles"] });
@@ -38,7 +38,7 @@ export default function StaffUsers() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       setShowCreateDialog(false);
-      setNewUser({ email: "", displayName: "", roleIds: [], branchId: "", password: "" });
+      setNewUser({ email: "", displayName: "", roleIds: [], branchId: "", password: "", phone: "", address: "", nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", nextOfKinName: "", nextOfKinPhone: "" });
       toast({ title: "User created", description: "The new user has been added successfully." });
     },
     onError: (err: any) => {
@@ -119,14 +119,16 @@ export default function StaffUsers() {
             <DialogTrigger asChild>
               <Button data-testid="button-create-user"><UserPlus className="mr-2 h-4 w-4" />Add User</Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Add New User</DialogTitle>
-                <DialogDescription>
-                  Staff: add email and they sign in with Google (must be added first). Agents: add email, assign the Agent role, and set a password—they sign in at the agent login page.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
+            <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col p-0">
+              <div className="px-6 pt-6 pb-2 shrink-0">
+                <DialogHeader>
+                  <DialogTitle>Add New User</DialogTitle>
+                  <DialogDescription>
+                    Staff: add email and they sign in with Google (must be added first). Agents: add email, assign the Agent role, and set a password—they sign in at the agent login page.
+                  </DialogDescription>
+                </DialogHeader>
+              </div>
+              <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1">
                 <div className="space-y-2">
                   <Label htmlFor="email">Email Address</Label>
                   <Input id="email" type="email" placeholder="user@example.com" value={newUser.email} onChange={e => setNewUser(p => ({ ...p, email: e.target.value }))} data-testid="input-user-email" />
@@ -168,8 +170,60 @@ export default function StaffUsers() {
                     <Input id="new-user-password" type="password" placeholder="••••••••" value={newUser.password} onChange={e => setNewUser(p => ({ ...p, password: e.target.value }))} data-testid="input-agent-password" />
                   </div>
                 )}
+                <div className="border-t pt-4 mt-2">
+                  <h4 className="text-sm font-semibold mb-3">Personal Details</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="new-phone">Phone</Label>
+                      <Input id="new-phone" placeholder="+263..." value={newUser.phone} onChange={e => setNewUser(p => ({ ...p, phone: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="new-nationalId">National ID</Label>
+                      <Input id="new-nationalId" placeholder="ID number" value={newUser.nationalId} onChange={e => setNewUser(p => ({ ...p, nationalId: e.target.value }))} />
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <Label htmlFor="new-address">Address</Label>
+                      <Input id="new-address" placeholder="Physical address" value={newUser.address} onChange={e => setNewUser(p => ({ ...p, address: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="new-dob">Date of Birth</Label>
+                      <Input id="new-dob" type="date" value={newUser.dateOfBirth} onChange={e => setNewUser(p => ({ ...p, dateOfBirth: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Gender</Label>
+                      <Select value={newUser.gender} onValueChange={v => setNewUser(p => ({ ...p, gender: v }))}>
+                        <SelectTrigger><SelectValue placeholder="Select gender" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Male">Male</SelectItem>
+                          <SelectItem value="Female">Female</SelectItem>
+                          <SelectItem value="Other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Marital Status</Label>
+                      <Select value={newUser.maritalStatus} onValueChange={v => setNewUser(p => ({ ...p, maritalStatus: v }))}>
+                        <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Single">Single</SelectItem>
+                          <SelectItem value="Married">Married</SelectItem>
+                          <SelectItem value="Divorced">Divorced</SelectItem>
+                          <SelectItem value="Widowed">Widowed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="new-nextOfKinName">Next of Kin Name</Label>
+                      <Input id="new-nextOfKinName" placeholder="Full name" value={newUser.nextOfKinName} onChange={e => setNewUser(p => ({ ...p, nextOfKinName: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="new-nextOfKinPhone">Next of Kin Phone</Label>
+                      <Input id="new-nextOfKinPhone" placeholder="+263..." value={newUser.nextOfKinPhone} onChange={e => setNewUser(p => ({ ...p, nextOfKinPhone: e.target.value }))} />
+                    </div>
+                  </div>
+                </div>
               </div>
-              <DialogFooter>
+              <DialogFooter className="px-6 pb-6 pt-4 shrink-0 border-t">
                 <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
                 <Button onClick={() => createMutation.mutate(newUser)} disabled={!newUser.email || createMutation.isPending || (newUser.roleIds.some(rid => roles.find((r: any) => r.id === rid)?.name === "agent") && newUser.password.length < 8)} data-testid="button-submit-create-user">
                   {createMutation.isPending ? "Creating..." : "Create User"}
@@ -218,6 +272,7 @@ export default function StaffUsers() {
                   <TableRow>
                     <TableHead>Name</TableHead>
                     <TableHead>Email</TableHead>
+                    <TableHead>Phone</TableHead>
                     <TableHead>Roles</TableHead>
                     <TableHead>Referral Link</TableHead>
                     <TableHead>Status</TableHead>
@@ -230,6 +285,7 @@ export default function StaffUsers() {
                     <TableRow key={u.id} data-testid={`row-user-${u.id}`}>
                       <TableCell className="font-medium">{u.displayName || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{u.email}</TableCell>
+                      <TableCell className="text-muted-foreground">{u.phone || "—"}</TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
                           {u.roles?.length > 0 ? u.roles.map((r: any) => (
@@ -353,6 +409,58 @@ export default function StaffUsers() {
                     })}
                   </div>
                 </div>
+                <div className="border-t pt-4 mt-2">
+                  <h4 className="text-sm font-semibold mb-3">Personal Details</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="edit-phone">Phone</Label>
+                      <Input id="edit-phone" placeholder="+263..." value={editingUser.phone || ""} onChange={e => setEditingUser((p: any) => ({ ...p, phone: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="edit-nationalId">National ID</Label>
+                      <Input id="edit-nationalId" placeholder="ID number" value={editingUser.nationalId || ""} onChange={e => setEditingUser((p: any) => ({ ...p, nationalId: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <Label htmlFor="edit-address">Address</Label>
+                      <Input id="edit-address" placeholder="Physical address" value={editingUser.address || ""} onChange={e => setEditingUser((p: any) => ({ ...p, address: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="edit-dob">Date of Birth</Label>
+                      <Input id="edit-dob" type="date" value={editingUser.dateOfBirth || ""} onChange={e => setEditingUser((p: any) => ({ ...p, dateOfBirth: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Gender</Label>
+                      <Select value={editingUser.gender || ""} onValueChange={v => setEditingUser((p: any) => ({ ...p, gender: v }))} disabled={!canEditUsers}>
+                        <SelectTrigger><SelectValue placeholder="Select gender" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Male">Male</SelectItem>
+                          <SelectItem value="Female">Female</SelectItem>
+                          <SelectItem value="Other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Marital Status</Label>
+                      <Select value={editingUser.maritalStatus || ""} onValueChange={v => setEditingUser((p: any) => ({ ...p, maritalStatus: v }))} disabled={!canEditUsers}>
+                        <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Single">Single</SelectItem>
+                          <SelectItem value="Married">Married</SelectItem>
+                          <SelectItem value="Divorced">Divorced</SelectItem>
+                          <SelectItem value="Widowed">Widowed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="edit-nextOfKinName">Next of Kin Name</Label>
+                      <Input id="edit-nextOfKinName" placeholder="Full name" value={editingUser.nextOfKinName || ""} onChange={e => setEditingUser((p: any) => ({ ...p, nextOfKinName: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="edit-nextOfKinPhone">Next of Kin Phone</Label>
+                      <Input id="edit-nextOfKinPhone" placeholder="+263..." value={editingUser.nextOfKinPhone || ""} onChange={e => setEditingUser((p: any) => ({ ...p, nextOfKinPhone: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             <DialogFooter className="px-6 pb-6 pt-4 shrink-0 border-t flex-wrap gap-2">
@@ -375,7 +483,7 @@ export default function StaffUsers() {
               )}
               <div className="flex gap-2 ml-auto">
                 <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
-                <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined } })} disabled={updateMutation.isPending || !canEditUsers} data-testid="button-submit-edit-user">
+                <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined, phone: editingUser.phone || "", address: editingUser.address || "", nationalId: editingUser.nationalId || "", dateOfBirth: editingUser.dateOfBirth || "", gender: editingUser.gender || "", maritalStatus: editingUser.maritalStatus || "", nextOfKinName: editingUser.nextOfKinName || "", nextOfKinPhone: editingUser.nextOfKinPhone || "" } })} disabled={updateMutation.isPending || !canEditUsers} data-testid="button-submit-edit-user">
                   {updateMutation.isPending ? "Saving..." : "Save Changes"}
                 </Button>
               </div>

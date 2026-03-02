@@ -137,7 +137,8 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   const primaryColor = org?.primaryColor || "#D4AF37";
   const logoBuffer = await resolveImageForPdf(org?.logoUrl);
   const signatureBuffer = await resolveImageForPdf(org?.signatureUrl);
-  doc.rect(0, 0, doc.page.width, 100).fill(primaryColor);
+  doc.rect(0, 0, doc.page.width, 100).fill("#FFFFFF");
+  doc.moveTo(0, 100).lineTo(doc.page.width, 100).strokeColor(primaryColor).lineWidth(2).stroke();
   if (logoBuffer) {
     try {
       doc.image(logoBuffer, 50, 15, { width: 70, height: 70 });
@@ -145,7 +146,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   }
   const headerLeft = logoBuffer ? 130 : 50;
   doc
-    .fillColor("#FFFFFF")
+    .fillColor(primaryColor)
     .fontSize(22)
     .font("Helvetica-Bold")
     .text(org?.name || "POL263", headerLeft, 25, { align: "left" });
@@ -159,7 +160,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   if (org?.email) headerRight.push(org.email);
   if (org?.website) headerRight.push(org.website);
   if (headerRight.length > 0) {
-    doc.fontSize(8).text(headerRight.join(" | "), 50, 75, {
+    doc.fillColor(primaryColor).fontSize(8).text(headerRight.join(" | "), 50, 75, {
       align: "right",
       width: doc.page.width - 100,
     });
@@ -553,7 +554,8 @@ export function registerPolicyDocumentRoute(app: Express) {
     res.setHeader("Content-Disposition", `attachment; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"`);
     doc.pipe(res);
 
-    doc.rect(0, 0, doc.page.width, 100).fill(primaryColor);
+    doc.rect(0, 0, doc.page.width, 100).fill("#FFFFFF");
+    doc.moveTo(0, 100).lineTo(doc.page.width, 100).strokeColor(primaryColor).lineWidth(2).stroke();
     if (logoBufferEstatement) {
       try {
         doc.image(logoBufferEstatement, 50, 15, { width: 70, height: 70 });
@@ -561,17 +563,17 @@ export function registerPolicyDocumentRoute(app: Express) {
     }
     const headerLeft = logoBufferEstatement ? 130 : 50;
     doc
-      .fillColor("#FFFFFF")
+      .fillColor(primaryColor)
       .fontSize(22)
       .font("Helvetica-Bold")
       .text(org?.name || "POL263", headerLeft, 25, { align: "left" });
-    doc.fontSize(10).font("Helvetica").text("E-STATEMENT", headerLeft, 55, { align: "left" });
+    doc.fillColor(primaryColor).fontSize(10).font("Helvetica").text("E-STATEMENT", headerLeft, 55, { align: "left" });
     const headerRight: string[] = [];
     if (org?.address) headerRight.push(org.address);
     if (org?.phone) headerRight.push(`Tel: ${org.phone}`);
     if (org?.email) headerRight.push(org.email);
     if (headerRight.length > 0) {
-      doc.fontSize(8).text(headerRight.join(" | "), 50, 75, { align: "right", width: doc.page.width - 100 });
+      doc.fillColor(primaryColor).fontSize(8).text(headerRight.join(" | "), 50, 75, { align: "right", width: doc.page.width - 100 });
     }
 
     let y = 120;

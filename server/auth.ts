@@ -380,6 +380,30 @@ export function requirePermission(...requiredPerms: string[]) {
   };
 }
 
+export function requireAnyPermission(...anyOfPerms: string[]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.isAuthenticated() || !req.user) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+
+    const user = req.user as any;
+    const effectivePerms = await storage.getUserEffectivePermissions(user.id);
+
+    const hasAny = anyOfPerms.some((p) => effectivePerms.includes(p));
+    if (!hasAny) {
+      structuredLog("warn", "Permission denied", {
+        userId: user.id,
+        requiredAnyOf: anyOfPerms,
+        had: effectivePerms,
+        requestId: (req as any).requestId,
+      });
+      return res.status(403).json({ message: "Insufficient permissions" });
+    }
+
+    next();
+  };
+}
+
 export function requireTenantScope(req: Request, res: Response, next: NextFunction) {
   const user = req.user as any;
   if (!user?.organizationId) {

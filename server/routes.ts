@@ -3,7 +3,7 @@ import type { Server } from "http";
 import argon2 from "argon2";
 import { storage, findPaymentReceiptById } from "./storage";
 import { withOrgTransaction } from "./tenant-db";
-import { requireAuth, requirePermission, requireTenantScope } from "./auth";
+import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { z } from "zod";
 import multer from "multer";
@@ -431,6 +431,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
           "read:commission", "read:report", "write:report", "read:lead", "write:lead",
           "read:notification", "manage:approvals",
+          "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
+          "view:all_clients",
         ],
         administrator: [
           "read:organization", "write:organization", "read:branch", "write:branch",
@@ -443,14 +445,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           "read:payroll", "write:payroll", "read:report", "write:report",
           "read:lead", "write:lead", "read:notification", "write:notification",
           "manage:approvals", "backdate:payment",
+          "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
+          "view:own_clients", "view:all_clients",
         ],
         cashier: [
           "read:policy", "read:client", "read:finance", "write:finance", "read:report",
+          "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
         ],
         agent: [
           "read:policy", "write:policy", "read:client", "write:client", "read:product",
           "read:lead", "write:lead", "read:commission", "read:report",
-          "read:finance", "write:finance",
+          "read:finance", "receipt:cash",
         ],
         claims_officer: [
           "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
@@ -601,7 +606,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/users", requireAuth, requireTenantScope, requirePermission("write:user"), async (req, res) => {
     const currentUser = req.user as any;
-    const { email, displayName, roleIds, branchId, password } = req.body;
+    const { email, displayName, roleIds, branchId, password, phone, address, nationalId, dateOfBirth, gender, maritalStatus, nextOfKinName, nextOfKinPhone } = req.body;
     if (!email) return res.status(400).json({ message: "Email is required" });
 
     const existing = await storage.getUserByEmail(email);
@@ -627,6 +632,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       referralCode: refCode,
       isActive: true,
       passwordHash,
+      phone: phone || null,
+      address: address || null,
+      nationalId: nationalId || null,
+      dateOfBirth: dateOfBirth || null,
+      gender: gender || null,
+      maritalStatus: maritalStatus || null,
+      nextOfKinName: nextOfKinName || null,
+      nextOfKinPhone: nextOfKinPhone || null,
     });
 
     if (roleIds && Array.isArray(roleIds)) {
@@ -647,7 +660,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(404).json({ message: "User not found" });
     }
     const before = { ...targetUser };
-    const { displayName, isActive, branchId, roleIds, password, email } = req.body;
+    const { displayName, isActive, branchId, roleIds, password, email, phone, address, nationalId, dateOfBirth, gender, maritalStatus, nextOfKinName, nextOfKinPhone } = req.body;
     const updates: any = {};
     if (email !== undefined) {
       const trimmed = String(email).trim().toLowerCase();
@@ -666,6 +679,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (password !== undefined && String(password).length >= 8) {
       updates.passwordHash = await argon2.hash(String(password), { type: argon2.argon2id });
     }
+    if (phone !== undefined) updates.phone = phone || null;
+    if (address !== undefined) updates.address = address || null;
+    if (nationalId !== undefined) updates.nationalId = nationalId || null;
+    if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
+    if (gender !== undefined) updates.gender = gender || null;
+    if (maritalStatus !== undefined) updates.maritalStatus = maritalStatus || null;
+    if (nextOfKinName !== undefined) updates.nextOfKinName = nextOfKinName || null;
+    if (nextOfKinPhone !== undefined) updates.nextOfKinPhone = nextOfKinPhone || null;
     const updated = await storage.updateUser(req.params.id as string, updates);
 
     if (roleIds && Array.isArray(roleIds)) {
@@ -1411,12 +1432,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getPaymentsByPolicy(req.params.id as string, user.organizationId));
   });
 
-  app.post("/api/payments", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/payments", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer"), async (req, res) => {
     const user = req.user as any;
     const userRolesForPayment = await storage.getUserRoles(user.id, user.organizationId);
     const isAgentPayment = userRolesForPayment.some((r: { name?: string }) => r?.name === "agent");
     if (isAgentPayment && req.body.paymentMethod === "cash") {
       return res.status(403).json({ message: "Agents cannot process cash payments. Use a Paynow method instead." });
+    }
+
+    const effectivePerms = await storage.getUserEffectivePermissions(user.id);
+    if (!effectivePerms.includes("write:finance")) {
+      const method = (req.body.paymentMethod || "cash").toLowerCase();
+      const methodPermMap: Record<string, string> = {
+        cash: "receipt:cash",
+        mobile_money: "receipt:mobile",
+        ecocash: "receipt:mobile",
+        onemoney: "receipt:mobile",
+        innbucks: "receipt:mobile",
+        bank_transfer: "receipt:transfer",
+        transfer: "receipt:transfer",
+      };
+      const requiredPerm = methodPermMap[method] || "receipt:cash";
+      if (!effectivePerms.includes(requiredPerm)) {
+        return res.status(403).json({ message: `Missing permission: ${requiredPerm}` });
+      }
     }
     const today = new Date().toISOString().split("T")[0];
     const parsed = insertPaymentTransactionSchema.parse({
@@ -1902,7 +1941,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Group batch receipt (staff: receipt multiple group policies at once) ───
-  app.post("/api/group-receipt", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/group-receipt", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const { groupId, policyIds, totalAmount, currency } = req.body;
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
