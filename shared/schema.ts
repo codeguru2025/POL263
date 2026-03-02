@@ -1427,21 +1427,6 @@ export const insertTermsSchema = createInsertSchema(termsAndConditions).omit({ i
 export type TermsAndConditions = typeof termsAndConditions.$inferSelect;
 export type InsertTerms = z.infer<typeof insertTermsSchema>;
 
-// ─── FEATURE FLAGS ──────────────────────────────────────────
-
-export const featureFlags = pgTable(
-  "feature_flags",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    organizationId: uuid("organization_id").references(() => organizations.id),
-    name: text("name").notNull(),
-    isEnabled: boolean("is_enabled").default(false).notNull(),
-    description: text("description"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (t) => [index("ff_org_idx").on(t.organizationId)]
-);
-
 // ─── AUDIT ──────────────────────────────────────────────────
 
 export const auditLogs = pgTable(

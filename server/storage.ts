@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike } from "drizzle-orm";
+import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, type SQL } from "drizzle-orm";
 import { db } from "./db";
 import { getDbForOrg } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
@@ -16,7 +16,7 @@ import {
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
   payrollEmployees, payrollRuns, payslips,
   notificationTemplates, notificationLogs, leads, expenditures,
-  approvalRequests, featureFlags, dependentChangeRequests, securityQuestions,
+  approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
   policyCreditBalances, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
@@ -307,6 +307,8 @@ export interface IStorage {
   createClaimDocument(doc: InsertClaimDocument): Promise<ClaimDocument>;
   getFeedbackByClient(clientId: string, orgId: string): Promise<ClientFeedback[]>;
   createFeedback(feedback: InsertClientFeedback): Promise<ClientFeedback>;
+  getFeedbackByOrg(orgId: string, limit?: number, offset?: number, filters?: { search?: string; status?: string; type?: string }): Promise<{ rows: ClientFeedback[]; total: number }>;
+  updateFeedbackStatus(id: string, status: string, orgId: string): Promise<ClientFeedback | undefined>;
   getFuneralCasesByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<FuneralCase[]>;
   getFuneralCase(id: string, orgId: string): Promise<FuneralCase | undefined>;
   createFuneralCase(fc: InsertFuneralCase): Promise<FuneralCase>;
@@ -1659,6 +1661,33 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(feedback.organizationId);
     const [created] = await tdb.insert(clientFeedback).values(feedback).returning();
     return created;
+  }
+
+  async getFeedbackByOrg(orgId: string, limit = 50, offset = 0, filters?: { search?: string; status?: string; type?: string }): Promise<{ rows: ClientFeedback[]; total: number }> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: SQL[] = [eq(clientFeedback.organizationId, orgId)];
+    if (filters?.status) conditions.push(eq(clientFeedback.status, filters.status));
+    if (filters?.type) conditions.push(eq(clientFeedback.type, filters.type));
+    if (filters?.search) {
+      conditions.push(or(
+        ilike(clientFeedback.subject, `%${filters.search}%`),
+        ilike(clientFeedback.message, `%${filters.search}%`),
+      )!);
+    }
+    const where = and(...conditions);
+    const [{ count }] = await tdb.select({ count: sql<number>`count(*)::int` }).from(clientFeedback).where(where);
+    const rows = await tdb.select().from(clientFeedback).where(where)
+      .orderBy(desc(clientFeedback.createdAt)).limit(limit).offset(offset);
+    return { rows, total: count };
+  }
+
+  async updateFeedbackStatus(id: string, status: string, orgId: string): Promise<ClientFeedback | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(clientFeedback)
+      .set({ status, updatedAt: new Date() })
+      .where(and(eq(clientFeedback.id, id), eq(clientFeedback.organizationId, orgId)))
+      .returning();
+    return updated;
   }
 
   // ─── Funeral Cases ─────────────────────────────────────────

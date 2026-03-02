@@ -406,110 +406,116 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const parsed = insertOrganizationSchema.parse(orgData);
     const org = await storage.createOrganization(parsed);
-    const defaultBranch = await storage.createBranch({
-      organizationId: org.id,
-      name: "Head Office",
-      isActive: true,
-    });
-
-    const ROLE_PERMISSION_MAP: Record<string, string[]> = {
-      superuser: [],
-      executive: [
-        "read:organization", "read:branch", "read:user", "read:role", "read:audit_log",
-        "read:policy", "read:claim", "read:client", "read:product", "read:funeral_ops",
-        "read:finance", "read:fleet", "read:commission", "read:payroll", "read:report",
-        "read:lead", "read:notification",
-      ],
-      manager: [
-        "read:organization", "read:branch", "write:branch", "read:user", "write:user",
-        "read:role", "read:audit_log", "read:policy", "write:policy", "read:claim",
-        "write:claim", "approve:claim", "read:client", "write:client", "read:product",
-        "write:product", "manage:settings",
-        "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
-        "read:commission", "read:report", "write:report", "read:lead", "write:lead",
-        "read:notification", "manage:approvals",
-      ],
-      administrator: [
-        "read:organization", "write:organization", "read:branch", "write:branch",
-        "read:user", "write:user", "delete:user", "read:role", "write:role",
-        "manage:permissions", "read:audit_log", "read:policy", "write:policy",
-        "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
-        "read:product", "write:product", "manage:settings", "read:funeral_ops",
-        "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
-        "read:fleet", "write:fleet", "read:commission", "write:commission",
-        "read:payroll", "write:payroll", "read:report", "write:report",
-        "read:lead", "write:lead", "read:notification", "write:notification",
-        "manage:approvals", "backdate:payment",
-      ],
-      cashier: [
-        "read:policy", "read:client", "read:finance", "write:finance", "read:report",
-      ],
-      agent: [
-        "read:policy", "write:policy", "read:client", "write:client", "read:product",
-        "read:lead", "write:lead", "read:commission", "read:report",
-        "read:finance", "write:finance",
-      ],
-      claims_officer: [
-        "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
-        "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report",
-      ],
-      fleet_ops: [
-        "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
-      ],
-      staff: [
-        "read:organization", "read:branch", "read:policy", "read:claim",
-        "read:client", "read:product", "read:funeral_ops", "read:report",
-      ],
-    };
-
-    const allPerms = await storage.getPermissions();
-    const permMap = new Map<string, string>();
-    for (const p of allPerms) permMap.set(p.name, p.id);
-
-    const roleMap = new Map<string, string>();
-    for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
-      const role = await storage.createRole({
-        name: roleName,
+    try {
+      const defaultBranch = await storage.createBranch({
         organizationId: org.id,
-        description: `System ${roleName} role`,
-        isSystem: true,
+        name: "Head Office",
+        isActive: true,
       });
-      roleMap.set(roleName, role.id);
 
-      if (roleName !== "superuser") {
-        for (const permName of permNames) {
-          const permId = permMap.get(permName);
-          if (permId) await storage.addRolePermission(role.id, permId);
+      const ROLE_PERMISSION_MAP: Record<string, string[]> = {
+        superuser: [],
+        executive: [
+          "read:organization", "read:branch", "read:user", "read:role", "read:audit_log",
+          "read:policy", "read:claim", "read:client", "read:product", "read:funeral_ops",
+          "read:finance", "read:fleet", "read:commission", "read:payroll", "read:report",
+          "read:lead", "read:notification",
+        ],
+        manager: [
+          "read:organization", "read:branch", "write:branch", "read:user", "write:user",
+          "read:role", "read:audit_log", "read:policy", "write:policy", "read:claim",
+          "write:claim", "approve:claim", "read:client", "write:client", "read:product",
+          "write:product", "manage:settings",
+          "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
+          "read:commission", "read:report", "write:report", "read:lead", "write:lead",
+          "read:notification", "manage:approvals",
+        ],
+        administrator: [
+          "read:organization", "write:organization", "read:branch", "write:branch",
+          "read:user", "write:user", "delete:user", "read:role", "write:role",
+          "manage:permissions", "read:audit_log", "read:policy", "write:policy",
+          "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
+          "read:product", "write:product", "manage:settings", "read:funeral_ops",
+          "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
+          "read:fleet", "write:fleet", "read:commission", "write:commission",
+          "read:payroll", "write:payroll", "read:report", "write:report",
+          "read:lead", "write:lead", "read:notification", "write:notification",
+          "manage:approvals", "backdate:payment",
+        ],
+        cashier: [
+          "read:policy", "read:client", "read:finance", "write:finance", "read:report",
+        ],
+        agent: [
+          "read:policy", "write:policy", "read:client", "write:client", "read:product",
+          "read:lead", "write:lead", "read:commission", "read:report",
+          "read:finance", "write:finance",
+        ],
+        claims_officer: [
+          "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
+          "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report",
+        ],
+        fleet_ops: [
+          "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
+        ],
+        staff: [
+          "read:organization", "read:branch", "read:policy", "read:claim",
+          "read:client", "read:product", "read:funeral_ops", "read:report",
+        ],
+      };
+
+      const allPerms = await storage.getPermissions();
+      const permMap = new Map<string, string>();
+      for (const p of allPerms) permMap.set(p.name, p.id);
+
+      const roleMap = new Map<string, string>();
+      for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
+        const role = await storage.createRole({
+          name: roleName,
+          organizationId: org.id,
+          description: `System ${roleName} role`,
+          isSystem: true,
+        });
+        roleMap.set(roleName, role.id);
+
+        if (roleName !== "superuser") {
+          for (const permName of permNames) {
+            const permId = permMap.get(permName);
+            if (permId) await storage.addRolePermission(role.id, permId);
+          }
         }
       }
+
+      const passwordHash = await argon2.hash(String(adminPassword), { type: argon2.argon2id });
+      const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      const adminUser = await storage.createUser({
+        email: adminEmail,
+        displayName: adminDisplayName || adminEmail.split("@")[0],
+        organizationId: org.id,
+        branchId: defaultBranch.id,
+        referralCode: refCode,
+        isActive: true,
+        passwordHash,
+      });
+
+      const adminRoleId = roleMap.get("administrator");
+      if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId);
+
+      await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, {
+        ...org,
+        defaultBranchId: defaultBranch.id,
+        adminUserId: adminUser.id,
+        adminEmail,
+      });
+      return res.status(201).json({
+        ...org,
+        defaultBranchId: defaultBranch.id,
+        adminUser: { id: adminUser.id, email: adminUser.email, displayName: adminUser.displayName },
+      });
+    } catch (err) {
+      // Soft-delete the orphaned org to prevent partial tenant state
+      try { await storage.updateOrganization(org.id, { name: parsed.name + " (deleted)" }); } catch {}
+      throw err;
     }
-
-    const passwordHash = await argon2.hash(String(adminPassword), { type: argon2.argon2id });
-    const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    const adminUser = await storage.createUser({
-      email: adminEmail,
-      displayName: adminDisplayName || adminEmail.split("@")[0],
-      organizationId: org.id,
-      branchId: defaultBranch.id,
-      referralCode: refCode,
-      isActive: true,
-      passwordHash,
-    });
-
-    const adminRoleId = roleMap.get("administrator");
-    if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId);
-
-    await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, {
-      ...org,
-      defaultBranchId: defaultBranch.id,
-      adminUserId: adminUser.id,
-      adminEmail,
-    });
-    return res.status(201).json({
-      ...org,
-      defaultBranchId: defaultBranch.id,
-      adminUser: { id: adminUser.id, email: adminUser.email, displayName: adminUser.displayName },
-    });
   });
 
   app.delete("/api/organizations/:id", requireAuth, requirePermission("delete:tenant"), async (req, res) => {
@@ -1156,38 +1162,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       beneficiaryDependentId: beneficiary?.dependentId || null,
     });
     const policy = await storage.createPolicy(parsed);
-    await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Policy created", user.id);
+    try {
+      await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Policy created", user.id);
 
-    await storage.createPolicyMember({
-      policyId: policy.id,
-      clientId: policy.clientId,
-      role: "policy_holder",
-    });
+      await storage.createPolicyMember({
+        policyId: policy.id,
+        clientId: policy.clientId,
+        role: "policy_holder",
+      });
 
-    let dependentsToAdd = members;
-    if (dependentsToAdd.length === 0 && policy.clientId) {
-      const clientDeps = await storage.getDependentsByClient(policy.clientId, user.organizationId);
-      dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
-    }
-    for (const m of dependentsToAdd) {
-      if (m.clientId || m.dependentId) {
-        await storage.createPolicyMember({
-          policyId: policy.id,
-          clientId: m.clientId || null,
-          dependentId: m.dependentId || null,
-          role: m.role || "dependent",
-        });
+      let dependentsToAdd = members;
+      if (dependentsToAdd.length === 0 && policy.clientId) {
+        const clientDeps = await storage.getDependentsByClient(policy.clientId, user.organizationId);
+        dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
       }
-    }
+      for (const m of dependentsToAdd) {
+        if (m.clientId || m.dependentId) {
+          await storage.createPolicyMember({
+            policyId: policy.id,
+            clientId: m.clientId || null,
+            dependentId: m.dependentId || null,
+            role: m.role || "dependent",
+          });
+        }
+      }
 
-    const uniqueAddOnIds = Array.from(new Set(memberAddOns.map((ma) => ma.addOnId)));
-    const allAddOnIds = uniqueAddOnIds.length > 0 ? uniqueAddOnIds : addOnIds;
-    if (allAddOnIds.length > 0) {
-      await storage.addPolicyAddOns(policy.id, allAddOnIds, user.organizationId);
-    }
+      const uniqueAddOnIds = Array.from(new Set(memberAddOns.map((ma) => ma.addOnId)));
+      const allAddOnIds = uniqueAddOnIds.length > 0 ? uniqueAddOnIds : addOnIds;
+      if (allAddOnIds.length > 0) {
+        await storage.addPolicyAddOns(policy.id, allAddOnIds, user.organizationId);
+      }
 
-    await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
-    return res.status(201).json(policy);
+      await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
+      return res.status(201).json(policy);
+    } catch (err) {
+      // cleanup: policy will be orphaned but detected by audit
+      console.error(`Policy creation failed after creating policy ${policy.id}, orphaned record may remain:`, err);
+      throw err;
+    }
   });
 
   app.patch("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -2699,6 +2711,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const costSheetId = String(req.params.id);
     const item = await storage.createCostLineItem({ ...req.body, costSheetId });
     return res.status(201).json(item);
+  });
+
+  // ─── Staff: Client Feedback ──────────────────────────────────
+  app.get("/api/feedback", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
+    const user = req.user as any;
+    const limit = Math.min(parseInt(String(req.query.limit || "50"), 10) || 50, 200);
+    const offset = parseInt(String(req.query.offset || "0"), 10) || 0;
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const type = typeof req.query.type === "string" ? req.query.type : undefined;
+    const result = await storage.getFeedbackByOrg(user.organizationId, limit, offset, { search, status, type });
+    return res.json(result);
+  });
+
+  app.patch("/api/feedback/:id/status", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const status = typeof req.body.status === "string" ? req.body.status : "";
+    if (!["open", "acknowledged", "in_progress", "resolved", "closed"].includes(status)) {
+      return res.status(400).json({ message: "Invalid status. Must be one of: open, acknowledged, in_progress, resolved, closed" });
+    }
+    const updated = await storage.updateFeedbackStatus(req.params.id as string, status, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Feedback not found" });
+    await auditLog(req, "UPDATE_FEEDBACK_STATUS", "ClientFeedback", updated.id, null, { status });
+    return res.json(updated);
   });
 
   // ─── Diagnostics ────────────────────────────────────────
