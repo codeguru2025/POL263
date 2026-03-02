@@ -8,7 +8,8 @@ import { getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { FileText, ArrowLeft, Download, Eye } from "lucide-react";
+import { FileText, ArrowLeft, Download, Eye, Printer } from "lucide-react";
+import { printDocument } from "@/lib/print-document";
 
 interface Policy {
   id: string;
@@ -88,6 +89,15 @@ export default function ClientDocuments() {
                         <Download className="h-4 w-4" />
                         Download
                       </a>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => printDocument(`${base}/api/client-auth/policies/${p.id}/document`)}
+                      >
+                        <Printer className="h-4 w-4" />
+                        Print
+                      </Button>
                     </div>
                   </li>
                 ))}

@@ -40,7 +40,7 @@ async function main() {
       "client_feedback",
       "leads",
       "expenditures",
-      "chibikhulu_receivables",
+      "platform_receivables",
       "settlements",
       "commission_ledger_entries",
       "cashups",

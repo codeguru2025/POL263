@@ -462,7 +462,7 @@ export const policies = pgTable(
       .references(() => productVersions.id),
     agentId: uuid("agent_id").references(() => users.id),
     groupId: uuid("group_id").references(() => groups.id),
-    status: text("status").default("draft").notNull(),
+    status: text("status").default("inactive").notNull(),
     currency: text("currency").default("USD").notNull(),
     premiumAmount: numeric("premium_amount").notNull(),
     paymentSchedule: text("payment_schedule").default("monthly").notNull(),
@@ -1144,10 +1144,10 @@ export const commissionLedgerEntries = pgTable(
   ]
 );
 
-// ─── CHIBIKHULU 2.5% REVENUE SHARE ─────────────────────────
+// ─── POL263 2.5% PLATFORM REVENUE SHARE ────────────────────
 
-export const chibikhuluReceivables = pgTable(
-  "chibikhulu_receivables",
+export const platformReceivables = pgTable(
+  "platform_receivables",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: uuid("organization_id")
@@ -1160,7 +1160,7 @@ export const chibikhuluReceivables = pgTable(
     isSettled: boolean("is_settled").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("cr_org_idx").on(t.organizationId)]
+  (t) => [index("pr_recv_org_idx").on(t.organizationId)]
 );
 
 export const settlements = pgTable(
@@ -1732,17 +1732,17 @@ export const settlementAllocations = pgTable(
       .references(() => settlements.id),
     receivableId: uuid("receivable_id")
       .notNull()
-      .references(() => chibikhuluReceivables.id),
+      .references(() => platformReceivables.id),
     amount: numeric("amount").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   }
 );
 
-// ─── CHIBIKHULU + SETTLEMENT SCHEMAS ───────────────────────
+// ─── PLATFORM + SETTLEMENT SCHEMAS ─────────────────────────
 
-export const insertChibikhuluReceivableSchema = createInsertSchema(chibikhuluReceivables).omit({ id: true, createdAt: true });
-export type ChibikhuluReceivable = typeof chibikhuluReceivables.$inferSelect;
-export type InsertChibikhuluReceivable = z.infer<typeof insertChibikhuluReceivableSchema>;
+export const insertPlatformReceivableSchema = createInsertSchema(platformReceivables).omit({ id: true, createdAt: true });
+export type PlatformReceivable = typeof platformReceivables.$inferSelect;
+export type InsertPlatformReceivable = z.infer<typeof insertPlatformReceivableSchema>;
 
 export const insertSettlementSchema = createInsertSchema(settlements).omit({ id: true, createdAt: true });
 export type Settlement = typeof settlements.$inferSelect;

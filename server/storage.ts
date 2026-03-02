@@ -13,7 +13,7 @@ import {
   claims, claimDocuments, claimStatusHistory,
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
-  commissionPlans, commissionLedgerEntries, chibikhuluReceivables, settlements,
+  commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
   payrollEmployees, payrollRuns, payslips,
   notificationTemplates, notificationLogs, leads, expenditures,
   approvalRequests, featureFlags, dependentChangeRequests, securityQuestions,
@@ -64,7 +64,7 @@ import {
   type PayrollRun, type InsertPayrollRun,
   type Cashup, type InsertCashup,
   type Group, type InsertGroup,
-  type ChibikhuluReceivable, type InsertChibikhuluReceivable,
+  type PlatformReceivable, type InsertPlatformReceivable,
   type Settlement, type InsertSettlement,
   type TermsAndConditions, type InsertTerms,
   type ClientFeedback, type InsertClientFeedback,
@@ -384,9 +384,9 @@ export interface IStorage {
   createMonthEndRun(run: InsertMonthEndRun): Promise<MonthEndRun>;
   getMonthEndRunById(id: string, orgId: string): Promise<MonthEndRun | undefined>;
   getNextMonthEndRunNumber(orgId: string): Promise<string>;
-  getChibikhuluReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<ChibikhuluReceivable[]>;
-  createChibikhuluReceivable(entry: InsertChibikhuluReceivable): Promise<ChibikhuluReceivable>;
-  getChibikhuluSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }>;
+  getPlatformReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PlatformReceivable[]>;
+  createPlatformReceivable(entry: InsertPlatformReceivable): Promise<PlatformReceivable>;
+  getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }>;
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
   updateSettlement(id: string, data: Partial<InsertSettlement>, orgId: string): Promise<Settlement | undefined>;
@@ -2247,30 +2247,30 @@ export class DatabaseStorage implements IStorage {
     return `MER-${String(num).padStart(6, "0")}`;
   }
 
-  // ─── Chibikhulu Receivables ──────────────────────────────
-  async getChibikhuluReceivables(orgId: string, limit = 100, offset = 0, filters?: ReportFilters): Promise<ChibikhuluReceivable[]> {
+  // ─── Platform Receivables ──────────────────────────────
+  async getPlatformReceivables(orgId: string, limit = 100, offset = 0, filters?: ReportFilters): Promise<PlatformReceivable[]> {
     const tdb = await getDbForOrg(orgId);
-    const conditions = [eq(chibikhuluReceivables.organizationId, orgId)];
-    if (filters?.fromDate) conditions.push(gte(chibikhuluReceivables.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(chibikhuluReceivables.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    return tdb.select().from(chibikhuluReceivables).where(and(...conditions))
-      .orderBy(desc(chibikhuluReceivables.createdAt)).limit(limit).offset(offset);
+    const conditions = [eq(platformReceivables.organizationId, orgId)];
+    if (filters?.fromDate) conditions.push(gte(platformReceivables.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(platformReceivables.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    return tdb.select().from(platformReceivables).where(and(...conditions))
+      .orderBy(desc(platformReceivables.createdAt)).limit(limit).offset(offset);
   }
-  async createChibikhuluReceivable(entry: InsertChibikhuluReceivable): Promise<ChibikhuluReceivable> {
+  async createPlatformReceivable(entry: InsertPlatformReceivable): Promise<PlatformReceivable> {
     const tdb = await getDbForOrg(entry.organizationId);
-    const [created] = await tdb.insert(chibikhuluReceivables).values(entry).returning();
+    const [created] = await tdb.insert(platformReceivables).values(entry).returning();
     return created;
   }
-  async getChibikhuluSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }> {
+  async getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }> {
     const tdb = await getDbForOrg(orgId);
     const [totals] = await tdb.select({
-      totalDue: sql<string>`COALESCE(SUM(${chibikhuluReceivables.amount}), '0')`,
-    }).from(chibikhuluReceivables).where(eq(chibikhuluReceivables.organizationId, orgId));
+      totalDue: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')`,
+    }).from(platformReceivables).where(eq(platformReceivables.organizationId, orgId));
     const [settled] = await tdb.select({
-      totalSettled: sql<string>`COALESCE(SUM(${chibikhuluReceivables.amount}), '0')`,
-    }).from(chibikhuluReceivables).where(and(
-      eq(chibikhuluReceivables.organizationId, orgId),
-      eq(chibikhuluReceivables.isSettled, true)
+      totalSettled: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')`,
+    }).from(platformReceivables).where(and(
+      eq(platformReceivables.organizationId, orgId),
+      eq(platformReceivables.isSettled, true)
     ));
     const due = parseFloat(totals?.totalDue || "0");
     const stl = parseFloat(settled?.totalSettled || "0");

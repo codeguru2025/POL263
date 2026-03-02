@@ -170,7 +170,7 @@ If you skipped installing PostgreSQL in Step 2 or want to set the database up in
 
    ```bash
    chmod +x script/setup-postgres-vps.sh
-   sudo CHIBIKHULU_DB_PASSWORD='YourSecurePassword123' ./script/setup-postgres-vps.sh
+   sudo POL263_DB_PASSWORD='YourSecurePassword123' ./script/setup-postgres-vps.sh
    ```
 
 3. Use that **same password** in Step 5 for `YOUR_POSTGRES_PASSWORD` in `.env` (and in `DATABASE_URL`).

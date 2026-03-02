@@ -191,31 +191,17 @@ export async function seedDatabase() {
   if (!superuser) {
     superuser = await storage.createUser({
       email: superuserEmail,
-      displayName: "System Administrator",
-      organizationId: defaultOrg.id,
+      displayName: "Platform Owner",
       isActive: true,
     });
-    structuredLog("info", `Created superuser placeholder: ${superuserEmail}`, {
+    structuredLog("info", `Created platform owner: ${superuserEmail}`, {
       userId: superuser.id,
     });
-  } else if (!superuser.organizationId) {
+  } else if (superuser.organizationId) {
     superuser = await storage.updateUser(superuser.id, {
-      organizationId: defaultOrg.id,
+      organizationId: null,
     });
-  }
-
-  const superuserRoles = await storage.getUserRoles(superuser!.id, defaultOrg.id);
-  const hasSuperuserRole = superuserRoles.some((r) => r.name === "superuser");
-
-  if (!hasSuperuserRole) {
-    const superuserRole = await storage.getRoleByName("superuser", defaultOrg.id);
-    if (superuserRole) {
-      await storage.addUserRole(superuser!.id, superuserRole.id);
-      structuredLog("info", `Auto-assigned superuser role to: ${superuserEmail}`, {
-        userId: superuser!.id,
-        roleId: superuserRole.id,
-      });
-    }
+    structuredLog("info", `Unlinked platform owner from tenant: ${superuserEmail}`);
   }
 
   await storage.createAuditLog({

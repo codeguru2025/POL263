@@ -31,9 +31,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { Switch } from "@/components/ui/switch";
+import { useToast } from "@/hooks/use-toast";
 
 export default function StaffSettings() {
   const { user, permissions: userPerms } = useAuth();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const canEditRbac = userPerms.includes("write:role") || userPerms.includes("create:tenant");
   const isPlatformOwner = userPerms.includes("manage:whitelabel");
@@ -165,12 +167,16 @@ export default function StaffSettings() {
     if (!file || !currentOrg) return;
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch(getApiBase() + "/api/upload", {
+    const res = await fetch(getApiBase() + "/api/upload/logo", {
       method: "POST",
       body: formData,
       credentials: "include",
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: "Upload failed", description: err.message || "Logo must be PNG, WebP, or SVG (transparent background).", variant: "destructive" });
+      return;
+    }
     const data = await res.json();
     setLogoUrl(data.url);
     updateOrgMutation.mutate({ ...currentOrg, logoUrl: data.url });
@@ -181,12 +187,16 @@ export default function StaffSettings() {
     if (!file || !currentOrg) return;
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch(getApiBase() + "/api/upload", {
+    const res = await fetch(getApiBase() + "/api/upload/logo", {
       method: "POST",
       body: formData,
       credentials: "include",
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: "Upload failed", description: err.message || "Signature must be PNG, WebP, or SVG (transparent background).", variant: "destructive" });
+      return;
+    }
     const data = await res.json();
     setSignatureUrl(data.url);
     updateOrgMutation.mutate({ ...currentOrg, signatureUrl: data.url });
@@ -294,7 +304,7 @@ export default function StaffSettings() {
                       />
                     </div>
                     <div>
-                      <input id="logo-upload" type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                      <input id="logo-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleLogoUpload} />
                       <Button type="button" variant="outline" onClick={() => document.getElementById("logo-upload")?.click()}>Upload Logo</Button>
                     </div>
                   </div>
@@ -315,7 +325,7 @@ export default function StaffSettings() {
                       )}
                     </div>
                     <div>
-                      <input id="sig-upload" type="file" accept="image/*" className="hidden" onChange={handleSignatureUpload} />
+                      <input id="sig-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleSignatureUpload} />
                       <Button type="button" variant="outline" onClick={() => document.getElementById("sig-upload")?.click()}>Upload Signature</Button>
                     </div>
                   </div>

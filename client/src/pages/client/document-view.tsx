@@ -8,7 +8,8 @@ import { getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { FileText, ArrowLeft } from "lucide-react";
+import { FileText, ArrowLeft, Printer } from "lucide-react";
+import { printDocument } from "@/lib/print-document";
 
 export default function ClientDocumentView() {
   const [, setLocation] = useLocation();
@@ -65,10 +66,21 @@ export default function ClientDocumentView() {
             Back to documents
           </Button>
           {policy && (
-            <CardTitle className="flex items-center gap-2 text-lg font-medium">
-              <FileText className="h-5 w-5 text-primary" />
-              Policy document — {policy.policyNumber}
-            </CardTitle>
+            <div className="flex items-center gap-3">
+              <CardTitle className="flex items-center gap-2 text-lg font-medium">
+                <FileText className="h-5 w-5 text-primary" />
+                Policy document — {policy.policyNumber}
+              </CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => printDocument(documentUrl)}
+                data-testid="btn-print-client-doc"
+              >
+                <Printer className="h-4 w-4" /> Print
+              </Button>
+            </div>
           )}
         </div>
         <Card>

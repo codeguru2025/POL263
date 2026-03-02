@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import {
   LayoutDashboard,
   Settings,
@@ -31,6 +32,8 @@ import {
   Menu,
   X,
   Clock,
+  Check,
+  Globe,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +41,13 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { useBranding } from "@/hooks/use-branding";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 function ReferralLinkBox({ referralCode }: { referralCode: string }) {
   const [copied, setCopied] = useState(false);
@@ -72,10 +82,65 @@ function ReferralLinkBox({ referralCode }: { referralCode: string }) {
   );
 }
 
+function TenantPickerSplash({
+  orgs,
+  onSelect,
+  isLoading,
+}: {
+  orgs: any[];
+  onSelect: (id: string) => void;
+  isLoading: boolean;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] max-w-lg mx-auto">
+      <div className="rounded-full bg-primary/10 p-4 mb-6">
+        <Globe className="h-10 w-10 text-primary" />
+      </div>
+      <h1 className="text-2xl font-bold tracking-tight mb-2">Select a tenant</h1>
+      <p className="text-muted-foreground text-center mb-8">
+        As the platform owner, choose which tenant to manage. You can switch tenants at any time from the header.
+      </p>
+      {orgs.length === 0 ? (
+        <div className="text-center text-muted-foreground">
+          <p>No tenants found.</p>
+          <Link href="/staff/tenants">
+            <Button variant="default" className="mt-4">Create your first tenant</Button>
+          </Link>
+        </div>
+      ) : (
+        <div className="w-full space-y-2">
+          {orgs.map((org: any) => (
+            <button
+              key={org.id}
+              disabled={isLoading}
+              onClick={() => onSelect(org.id)}
+              className="w-full flex items-center gap-4 p-4 rounded-xl border bg-card hover:bg-accent/50 transition-colors text-left group"
+            >
+              {org.logoUrl ? (
+                <img src={org.logoUrl} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background" />
+              ) : (
+                <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <Building2 className="h-5 w-5 text-primary" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold truncate group-hover:text-primary transition-colors">{org.name}</p>
+                {org.email && <p className="text-xs text-muted-foreground truncate">{org.email}</p>}
+              </div>
+              <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90 group-hover:text-primary transition-colors shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { user, roles, permissions, isAuthenticated, isLoading, isError: authError, logout } = useAuth();
+  const { user, roles, permissions, isAuthenticated, isPlatformOwner, isLoading, isError: authError, logout } = useAuth();
+  const queryClient = useQueryClient();
 
   // Close mobile sidebar when route changes
   useEffect(() => {
@@ -118,17 +183,29 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     enabled: isAuthenticated,
   });
 
+  const hasTenant = !!user?.organizationId;
+
   const { data: branchesList } = useQuery<any[]>({
     queryKey: ["/api/branches"],
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && hasTenant,
   });
 
   const { data: approvals } = useQuery<any[]>({
     queryKey: ["/api/approvals"],
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && hasTenant,
   });
 
   const pendingApprovalsCount = approvals?.filter((a: any) => a.status === "pending").length || 0;
+
+  const switchTenantMutation = useMutation({
+    mutationFn: async (tenantId: string) => {
+      const res = await apiRequest("POST", "/api/platform/switch-tenant", { tenantId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+    },
+  });
 
   const navGroupsRaw: { title: string; items: { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number; hidden?: boolean }[] }[] = [
     {
@@ -198,7 +275,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     return null;
   }
 
-  const currentOrg = orgs?.[0];
+  const currentOrg = isPlatformOwner
+    ? orgs?.find((o: any) => o.id === user?.organizationId) || orgs?.[0]
+    : orgs?.[0];
   const currentBranch = branchesList?.[0];
   const primaryRole = roles[0]?.name || "staff";
   const initials = (user?.displayName || user?.email || "U")
@@ -298,7 +377,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{user?.email}</p>
               <p className="text-[10px] uppercase tracking-wider font-semibold text-primary mt-0.5">
-                {primaryRole}
+                {isPlatformOwner ? "Platform Owner" : primaryRole}
               </p>
             </div>
           </div>
@@ -329,10 +408,43 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <div className="hidden sm:flex items-center gap-2 text-sm">
               <Building className="h-4 w-4 text-muted-foreground shrink-0" />
               <span className="text-muted-foreground font-medium shrink-0">Tenant:</span>
-              <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
-                <span className="truncate max-w-[120px]">{currentOrg?.name || "Loading..."}</span>
-                <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
-              </Button>
+              {isPlatformOwner && orgs && orgs.length > 0 ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
+                      {isPlatformOwner && <Globe className="h-3 w-3 text-primary shrink-0" />}
+                      <span className="truncate max-w-[120px]">{currentOrg?.name || "Select tenant"}</span>
+                      <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-y-auto">
+                    {orgs.map((org: any) => (
+                      <DropdownMenuItem
+                        key={org.id}
+                        className="flex items-center gap-2 cursor-pointer"
+                        onClick={() => switchTenantMutation.mutate(org.id)}
+                      >
+                        {org.id === currentOrg?.id && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
+                        {org.id !== currentOrg?.id && <span className="w-3.5 shrink-0" />}
+                        <span className="truncate">{org.name}</span>
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="flex items-center gap-2 cursor-pointer text-muted-foreground"
+                      onClick={() => setLocation("/staff/tenants")}
+                    >
+                      <Building2 className="h-3.5 w-3.5 shrink-0" />
+                      <span>Manage tenants</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
+                  <span className="truncate max-w-[120px]">{currentOrg?.name || "Loading..."}</span>
+                  <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+                </Button>
+              )}
             </div>
             <div className="hidden lg:flex items-center gap-2 text-sm">
               <div className="h-5 w-px bg-border" />
@@ -356,7 +468,17 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
         <div className="flex-1 overflow-auto p-4 sm:p-6 md:p-8 relative">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent pointer-events-none -z-10" />
-          <div className="max-w-6xl mx-auto relative z-0 min-w-0">{children}</div>
+          <div className="max-w-6xl mx-auto relative z-0 min-w-0">
+            {isPlatformOwner && !user?.organizationId ? (
+              <TenantPickerSplash
+                orgs={orgs || []}
+                onSelect={(id) => switchTenantMutation.mutate(id)}
+                isLoading={switchTenantMutation.isPending}
+              />
+            ) : (
+              children
+            )}
+          </div>
         </div>
       </main>
     </div>

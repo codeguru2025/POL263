@@ -46,12 +46,17 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "System not configured" });
       }
 
-      const client = await storage.getClientByActivationCode(activationCode, orgs[0].id);
-      if (!client) {
+      let client = null;
+      let matchedOrgId: string | null = null;
+      for (const org of orgs) {
+        client = await storage.getClientByActivationCode(activationCode, org.id);
+        if (client) { matchedOrgId = org.id; break; }
+      }
+      if (!client || !matchedOrgId) {
         return constantTimeResponse(res, 400, { message: "Invalid activation code or policy number" });
       }
 
-      const policy = await storage.getPolicyByNumber(policyNumber, orgs[0].id);
+      const policy = await storage.getPolicyByNumber(policyNumber, matchedOrgId);
       if (!policy || policy.clientId !== client.id) {
         return constantTimeResponse(res, 400, { message: "Invalid activation code or policy number" });
       }
@@ -60,7 +65,7 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "This policy has already been claimed" });
       }
 
-      const questions = await storage.getSecurityQuestions(orgs[0].id);
+      const questions = await storage.getSecurityQuestions(matchedOrgId);
 
       return constantTimeResponse(res, 200, {
         clientId: client.id,
@@ -144,7 +149,11 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid credentials" });
       }
 
-      const policy = await storage.getPolicyByNumber(policyNumber, orgs[0].id);
+      let policy = null;
+      for (const org of orgs) {
+        policy = await storage.getPolicyByNumber(policyNumber, org.id);
+        if (policy) break;
+      }
       if (!policy) {
         return constantTimeResponse(res, 401, { message: "Invalid credentials" });
       }
@@ -414,7 +423,11 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 
-      const policy = await storage.getPolicyByNumber(policyNumber, orgs[0].id);
+      let policy = null;
+      for (const org of orgs) {
+        policy = await storage.getPolicyByNumber(policyNumber, org.id);
+        if (policy) break;
+      }
       if (!policy) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }

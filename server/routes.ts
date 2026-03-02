@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import type { Server } from "http";
 import argon2 from "argon2";
 import { storage, findPaymentReceiptById } from "./storage";
@@ -26,7 +26,7 @@ import {
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
-  insertGroupSchema, insertChibikhuluReceivableSchema, insertSettlementSchema,
+  insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertDependentSchema, insertTermsSchema,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts,
@@ -268,17 +268,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(200).send(result.ok ? "OK" : "Error");
   });
 
+  const uploadStorage = multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadsDir),
+    filename: (_req, file, cb) => {
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      cb(null, uniqueSuffix + path.extname(file.originalname));
+    },
+  });
+
   const upload = multer({
-    storage: multer.diskStorage({
-      destination: (_req, _file, cb) => cb(null, uploadsDir),
-      filename: (_req, file, cb) => {
-        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
-      },
-    }),
+    storage: uploadStorage,
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
-      const allowed = /\.(jpg|jpeg|png|gif|webp)$/i;
+      const allowed = /\.(jpg|jpeg|png|gif|webp|svg)$/i;
       const hasAllowedExtension = allowed.test(path.extname(file.originalname));
       const isImageMime = file.mimetype.startsWith("image/");
       if (hasAllowedExtension && isImageMime) cb(null, true);
@@ -286,10 +288,57 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     },
   });
 
+  const logoUpload = multer({
+    storage: uploadStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = /\.(png|webp|svg)$/i;
+      const hasAllowedExtension = allowed.test(path.extname(file.originalname));
+      const allowedMimes = ["image/png", "image/webp", "image/svg+xml"];
+      if (hasAllowedExtension && allowedMimes.includes(file.mimetype)) cb(null, true);
+      else cb(new Error("Logo and signature files must be PNG, WebP, or SVG (formats that support transparency)"));
+    },
+  });
+
   app.post("/api/upload", requireAuth, upload.single("file"), (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     const url = `/uploads/${req.file.filename}`;
     return res.json({ url, filename: req.file.filename });
+  });
+
+  app.post("/api/upload/logo", requireAuth, logoUpload.single("file"), (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    const url = `/uploads/${req.file.filename}`;
+    return res.json({ url, filename: req.file.filename });
+  });
+
+  // ─── Platform Owner: Tenant Switching ──────────────────────────
+
+  app.post("/api/platform/switch-tenant", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) {
+      return res.status(403).json({ message: "Platform owner access required" });
+    }
+    const { tenantId } = req.body;
+    if (!tenantId) {
+      delete (req.session as any).activeTenantId;
+      return res.json({ activeTenantId: null });
+    }
+    const org = await storage.getOrganization(tenantId);
+    if (!org) return res.status(404).json({ message: "Tenant not found" });
+    (req.session as any).activeTenantId = tenantId;
+    return res.json({ activeTenantId: tenantId, tenantName: org.name });
+  });
+
+  app.get("/api/platform/active-tenant", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) {
+      return res.status(403).json({ message: "Platform owner access required" });
+    }
+    const activeTenantId = (req.session as any)?.activeTenantId || user.organizationId || null;
+    if (!activeTenantId) return res.json({ activeTenantId: null, tenant: null });
+    const org = await storage.getOrganization(activeTenantId);
+    return res.json({ activeTenantId, tenant: org || null });
   });
 
   // ─── Organization / Tenant ──────────────────────────────────
@@ -1232,6 +1281,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         claimableReason = "Eligible for claim — waiting period completed.";
       }
 
+      let effectiveStatus: string;
+      if (!m.isActive) {
+        effectiveStatus = "removed";
+      } else {
+        effectiveStatus = policy.status;
+      }
+
       return {
         ...m,
         memberName,
@@ -1246,6 +1302,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         waitingPeriodDays,
         claimable: memberClaimable,
         claimableReason,
+        effectiveStatus,
       };
     }));
 
@@ -1345,7 +1402,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [tx] = await txDb.insert(paymentTransactions).values(parsed).returning();
 
       let receipt = null;
-      if (tx.status === "cleared" && tx.policyId) {
+      if (tx.status === "cleared" && tx.policyId && tx.clientId) {
         const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
         const [newReceipt] = await txDb.insert(paymentReceipts).values({
           organizationId: user.organizationId,
@@ -1391,18 +1448,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      if (tx.status === "cleared") {
-        const chibAmount = (parseFloat(tx.amount) * 0.025).toFixed(2);
-        await storage.createChibikhuluReceivable({
-          organizationId: user.organizationId,
-          sourceTransactionId: tx.id,
-          amount: chibAmount,
-          currency: tx.currency,
-          description: `2.5% on payment ${tx.id}`,
-          isSettled: false,
-        });
-      }
-
       return { tx, receipt };
     });
 
@@ -1414,6 +1459,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { generateReceiptPdf } = await import("./receipt-pdf");
       const pdfPath = await generateReceiptPdf(result.receipt.id);
       if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, user.organizationId);
+    }
+
+    if (result.tx.status === "cleared") {
+      const chibAmount = (parseFloat(result.tx.amount) * 0.025).toFixed(2);
+      await storage.createPlatformReceivable({
+        organizationId: user.organizationId,
+        sourceTransactionId: result.tx.id,
+        amount: chibAmount,
+        currency: result.tx.currency,
+        description: `2.5% on payment ${result.tx.id}`,
+        isSettled: false,
+      });
     }
 
     await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", result.tx.id, null, result.tx);
@@ -1630,13 +1687,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return { tx, receipt };
     });
 
-    // Non-transactional follow-ups (PDF generation, commission) — safe to do outside tx
+    // Non-transactional follow-ups (PDF generation, commission, revenue share)
     const { generateReceiptPdf } = await import("./receipt-pdf");
     const pdfPath = await generateReceiptPdf(result.receipt.id);
     if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, result.receipt.organizationId);
 
+    const chibAmount = (parseFloat(String(amount)) * 0.025).toFixed(2);
+    await storage.createPlatformReceivable({
+      organizationId: user.organizationId,
+      sourceTransactionId: result.tx.id,
+      amount: chibAmount,
+      currency: result.tx.currency,
+      description: `2.5% on cash payment ${result.tx.id}`,
+      isSettled: false,
+    });
+
     await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
-    await recordAgentCommission(user.organizationId, policy, result.tx.id, amount);
+    await recordAgentCommission(user.organizationId, policy, result.tx.id, String(amount));
     return res.status(201).json({ transaction: result.tx, receipt: result.receipt });
   });
 
@@ -2526,21 +2593,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getPoliciesByGroupId(user.organizationId, groupId));
   });
 
-  // ─── Chibikhulu Revenue Share ────────────────────────────
+  // ─── Platform Revenue Share ──────────────────────────────
 
-  app.get("/api/chibikhulu/receivables", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/platform/receivables", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.min(parseInt(String(req.query.limit) || "100", 10) || 100, 500);
     const offset = parseInt(String(req.query.offset) || "0");
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
-    return res.json(await storage.getChibikhuluReceivables(user.organizationId, limit, offset, filters));
+    return res.json(await storage.getPlatformReceivables(user.organizationId, limit, offset, filters));
   });
 
-  app.get("/api/chibikhulu/summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/platform/summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getChibikhuluSummary(user.organizationId));
+    return res.json(await storage.getPlatformRevenueSummary(user.organizationId));
   });
 
   app.get("/api/settlements", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -3005,8 +3072,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           rows = plans.map((r: any) => [r.name, r.commissionType, r.ratePercent, r.isActive ? "Active" : "Inactive", r.createdAt]);
           break;
         }
-        case "chibikhulu": {
-          const receivables = await storage.getChibikhuluReceivables(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+        case "platform": {
+          const receivables = await storage.getPlatformReceivables(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = ["Description", "Amount", "Currency", "Settled", "Created"];
           rows = receivables.map((r: any) => [r.description, r.amount, r.currency, r.isSettled ? "Yes" : "No", r.createdAt]);
           break;

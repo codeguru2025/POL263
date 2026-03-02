@@ -9,6 +9,7 @@ interface AuthUser {
   organizationId: string | null;
   isActive: boolean;
   referralCode: string | null;
+  isPlatformOwner?: boolean;
 }
 
 interface AuthSession {
@@ -61,6 +62,7 @@ export function useAuth() {
     roles: session?.roles ?? [],
     permissions: session?.permissions ?? [],
     isAuthenticated: !!session?.user,
+    isPlatformOwner: session?.user?.isPlatformOwner ?? false,
     isLoading,
     isError,
     error: error instanceof Error ? error.message : undefined,

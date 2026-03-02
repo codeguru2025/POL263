@@ -121,10 +121,10 @@ export default function StaffReports() {
   });
   const { data: payrollEmployees = [], isLoading: loadingPayroll } = useQuery<any[]>({ queryKey: ["/api/payroll/employees"] });
   const { data: commissionPlans = [], isLoading: loadingCommissions } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
-  const { data: chibikhuluReceivables = [], isLoading: loadingChibikhulu } = useQuery<any[]>({
-    queryKey: ["reports", "chibikhulu", ...fk],
+  const { data: platformReceivables = [], isLoading: loadingPlatform } = useQuery<any[]>({
+    queryKey: ["reports", "platform", ...fk],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/chibikhulu/receivables?limit=200" + qAppend, { credentials: "include" });
+      const res = await fetch(getApiBase() + "/api/platform/receivables?limit=200" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
@@ -382,7 +382,7 @@ export default function StaffReports() {
             {canReadFinance && <TabsTrigger value="cashups" data-testid="tab-cashups-report">Cashups by user</TabsTrigger>}
             {canReadPayroll && <TabsTrigger value="payroll" data-testid="tab-payroll-report">Payroll</TabsTrigger>}
             {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions-report">Commissions</TabsTrigger>}
-            {canReadFinance && <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu-report">POL263</TabsTrigger>}
+            {canReadFinance && <TabsTrigger value="platform" data-testid="tab-platform-report">POL263</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="policies">
@@ -1191,19 +1191,19 @@ export default function StaffReports() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="chibikhulu">
+          <TabsContent value="platform">
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Building className="h-5 w-5" />POL263 Revenue Share</CardTitle>
-                  <ExportButton reportType="chibikhulu" filters={filters} />
+                  <CardTitle className="flex items-center gap-2"><Building className="h-5 w-5" />POL263 Platform Revenue Share</CardTitle>
+                  <ExportButton reportType="platform" filters={filters} />
                 </div>
               </CardHeader>
               <CardContent>
-                {loadingChibikhulu ? (
+                {loadingPlatform ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : chibikhuluReceivables.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-chibikhulu">No POL263 receivables recorded</p>
+                ) : platformReceivables.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-platform-receivables">No POL263 Platform receivables recorded</p>
                 ) : (
                   <Table>
                     <TableHeader>
@@ -1216,8 +1216,8 @@ export default function StaffReports() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {chibikhuluReceivables.slice(0, 20).map((cr: any) => (
-                        <TableRow key={cr.id} data-testid={`row-chibikhulu-${cr.id}`}>
+                      {platformReceivables.slice(0, 20).map((cr: any) => (
+                        <TableRow key={cr.id} data-testid={`row-platform-receivable-${cr.id}`}>
                           <TableCell>{cr.description}</TableCell>
                           <TableCell className="font-semibold">{cr.amount}</TableCell>
                           <TableCell>{cr.currency}</TableCell>

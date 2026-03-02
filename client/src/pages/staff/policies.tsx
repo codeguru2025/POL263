@@ -14,7 +14,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer } from "lucide-react";
+import { printDocument } from "@/lib/print-document";
 import { useSearch } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
@@ -392,7 +393,7 @@ export default function StaffPolicies() {
         memberAddOns: {},
         newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
       });
-      toast({ title: "Policy created", description: `Policy ${policy.policyNumber} has been created in draft status.` });
+      toast({ title: "Policy created", description: `Policy ${policy.policyNumber} has been created in inactive status.` });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -606,6 +607,15 @@ export default function StaffPolicies() {
             </Button>
             <Button
               variant="outline"
+              size="icon"
+              title="Print policy document"
+              onClick={() => printDocument(getApiBase() + `/api/policies/${selectedPolicy.id}/document?lang=${docLang}`)}
+              data-testid="btn-print-policy-doc"
+            >
+              <Printer className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
               className="gap-2"
               onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`, "_blank", "noopener")}
               data-testid="btn-download-estatement"
@@ -786,8 +796,20 @@ export default function StaffPolicies() {
                           ) : "—"}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={m.isActive ? "bg-emerald-500/15 text-emerald-700" : "bg-gray-500/15 text-gray-600"}>
-                            {m.isActive ? "Active" : "Inactive"}
+                          <Badge variant="outline" className={
+                            m.effectiveStatus === "active" ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" :
+                            m.effectiveStatus === "grace" ? "bg-amber-500/15 text-amber-700 border-amber-200" :
+                            m.effectiveStatus === "lapsed" ? "bg-red-500/15 text-red-700 border-red-200" :
+                            m.effectiveStatus === "cancelled" ? "bg-gray-500/15 text-gray-600 border-gray-200" :
+                            m.effectiveStatus === "removed" ? "bg-gray-500/15 text-gray-600 border-gray-200" :
+                            "bg-blue-500/15 text-blue-700 border-blue-200"
+                          }>
+                            {m.effectiveStatus === "active" ? "Active" :
+                             m.effectiveStatus === "grace" ? "Grace" :
+                             m.effectiveStatus === "lapsed" ? "Lapsed" :
+                             m.effectiveStatus === "cancelled" ? "Cancelled" :
+                             m.effectiveStatus === "removed" ? "Removed" :
+                             "Inactive"}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -923,6 +945,23 @@ export default function StaffPolicies() {
                   data-testid="btn-download-estatement-card"
                 >
                   <Download className="h-4 w-4" /> Download e-statement
+                </Button>
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => {
+                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
+                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
+                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
+                    const params = new URLSearchParams();
+                    if (from) params.set("dateFrom", from);
+                    if (to) params.set("dateTo", to);
+                    if (params.toString()) url += "?" + params.toString();
+                    printDocument(url);
+                  }}
+                  data-testid="btn-print-estatement"
+                >
+                  <Printer className="h-4 w-4" /> Print
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">Leave dates empty for full payment history. Uses tenant logo and signature from Settings.</p>

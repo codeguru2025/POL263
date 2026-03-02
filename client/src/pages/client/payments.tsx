@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft } from "lucide-react";
+import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft, Printer } from "lucide-react";
+import { printDocument } from "@/lib/print-document";
 import { useToast } from "@/hooks/use-toast";
 import { openPaymentInSystemBrowser, redirectToAppIfMobileReturn, isNativeMobile } from "@/lib/mobile-payment";
 
@@ -540,14 +541,25 @@ function ReceiptsList() {
                     {r.currency} {r.amount} — {new Date(r.issuedAt).toLocaleString()}
                   </p>
                 </div>
-                <a
-                  href={`${base}/api/client-auth/receipts/${r.id}/download`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-primary hover:underline"
-                >
-                  Download PDF
-                </a>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`${base}/api/client-auth/receipts/${r.id}/download`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-primary hover:underline"
+                  >
+                    Download PDF
+                  </a>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1 text-xs"
+                    onClick={() => printDocument(`${base}/api/client-auth/receipts/${r.id}/download`)}
+                  >
+                    <Printer className="h-3.5 w-3.5" />
+                    Print
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>

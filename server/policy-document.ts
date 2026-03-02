@@ -175,7 +175,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     .fontSize(9)
     .font("Helvetica")
     .fillColor("#666666")
-    .text(`Date Issued: ${new Date().toLocaleDateString("en-GB")}`, 50, y);
+    .text(`Date Issued: ${new Date().toLocaleDateString("en-GB")} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`, 50, y);
   y += 20;
   doc
     .fillColor(primaryColor)
@@ -578,7 +578,7 @@ export function registerPolicyDocumentRoute(app: Express) {
     doc.fillColor("#000000").fontSize(16).font("Helvetica-Bold").text("Policy Statement", 50, y);
     y += 22;
     doc.fontSize(9).font("Helvetica").fillColor("#666666");
-    doc.text(`Statement date: ${new Date().toLocaleDateString("en-GB")}`, 50, y);
+    doc.text(`Statement date: ${new Date().toLocaleDateString("en-GB")} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`, 50, y);
     if (dateFrom || dateTo) {
       doc.text(`Period: ${dateFrom || "—"} to ${dateTo || "—"}`, 50, y + 12);
       y += 24;

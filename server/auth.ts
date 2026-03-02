@@ -7,6 +7,7 @@ import argon2 from "argon2";
 import { pool } from "./db";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
+import { PLATFORM_OWNER_EMAIL } from "./constants";
 
 const PgSession = connectPgSimple(session);
 
@@ -61,6 +62,20 @@ export function setupAuth(app: Express) {
     } catch (err) {
       done(err, null);
     }
+  });
+
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    const user = req.user as any;
+    if (!user) return next();
+    const isPlatformOwner = user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+    if (isPlatformOwner) {
+      const activeTenantId = (req.session as any)?.activeTenantId;
+      if (activeTenantId) {
+        user.organizationId = activeTenantId;
+      }
+      user.isPlatformOwner = true;
+    }
+    next();
   });
 
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -330,6 +345,7 @@ function sanitizeUser(user: any) {
     organizationId: user.organizationId,
     isActive: user.isActive,
     referralCode: user.referralCode,
+    isPlatformOwner: user.isPlatformOwner || false,
   };
 }
 
@@ -367,6 +383,9 @@ export function requirePermission(...requiredPerms: string[]) {
 export function requireTenantScope(req: Request, res: Response, next: NextFunction) {
   const user = req.user as any;
   if (!user?.organizationId) {
+    if (user?.isPlatformOwner) {
+      return res.status(403).json({ message: "Select a tenant first", code: "NO_TENANT_SELECTED" });
+    }
     return res.status(403).json({ message: "No tenant scope assigned" });
   }
   next();

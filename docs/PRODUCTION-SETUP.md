@@ -49,7 +49,7 @@ Point this at your **production** PostgreSQL instance.
 DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/pol263
 ```
 
-Replace `YOUR_PASSWORD` with the password you set (e.g. when you ran `script/setup-postgres-vps.sh` with `CHIBIKHULU_DB_PASSWORD`).
+Replace `YOUR_PASSWORD` with the password you set (e.g. when you ran `script/setup-postgres-vps.sh` with `POL263_DB_PASSWORD`).
 
 **If you use a managed database (Neon, Supabase, etc.):**
 

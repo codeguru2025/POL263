@@ -23,7 +23,7 @@
 **Payments**: paymentTransactions (immutable), receipts (immutable), reversalEntries, cashups
 **Claims**: claims, claimDocuments, claimStatusHistory
 **Operations**: funeralCases, funeralTasks, fleetVehicles, driverAssignments, fleetFuelLogs, fleetMaintenance
-**Finance**: priceBookItems, costSheets, costLineItems, commissionPlans, commissionLedgerEntries, chibikhuluReceivables, settlements, settlementAllocations, expenditures
+**Finance**: priceBookItems, costSheets, costLineItems, commissionPlans, commissionLedgerEntries, platformReceivables, settlements, settlementAllocations, expenditures
 **Payroll**: payrollEmployees, payrollRuns, payslips
 **Notifications**: notificationTemplates, notificationLogs
 **CRM**: leads, groups
@@ -50,7 +50,7 @@
 8. `/staff/finance` - Payments, cashups, commissions, expenditures, POL263 2.5% revenue share (tabbed view)
 9. `/staff/pricebook` - Price book items CRUD, cost sheets with itemized line items
 10. `/staff/payroll` - Employee records, payroll runs, payslips
-11. `/staff/reports` - 9 report types (policies, claims, payments, funerals, fleet, expenditure, payroll, commissions, chibikhulu) with CSV export
+11. `/staff/reports` - 9 report types (policies, claims, payments, funerals, fleet, expenditure, payroll, commissions, platform receivables) with CSV export
 12. `/staff/products` - Product builder with versions, benefits, add-ons, age bands, casket types
 13. `/staff/notifications` - Notification template builder with merge tags
 14. `/staff/approvals` - Approval workflow UI with pending/resolved tabs, approve/reject with reason

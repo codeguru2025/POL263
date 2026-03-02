@@ -278,11 +278,11 @@ export default function StaffFinance() {
     },
     enabled: !!cashReceiptSelectedPolicyId,
   });
-  const { data: rawChibReceivables } = useQuery<any[]>({ queryKey: ["/api/chibikhulu/receivables"] });
-  const { data: chibSummary } = useQuery<{ totalDue: string; totalSettled: string; outstanding: string }>({ queryKey: ["/api/chibikhulu/summary"] });
+  const { data: rawPlatformReceivables } = useQuery<any[]>({ queryKey: ["/api/platform/receivables"] });
+  const { data: platformSummary } = useQuery<{ totalDue: string; totalSettled: string; outstanding: string }>({ queryKey: ["/api/platform/summary"] });
   const { data: rawSettlements } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
   const { data: rawPaymentIntents, isLoading: loadingIntents, refetch: refetchIntents } = useQuery<any[]>({ queryKey: ["/api/payment-intents"] });
-  const chibReceivables = Array.isArray(rawChibReceivables) ? rawChibReceivables : [];
+  const platformReceivables = Array.isArray(rawPlatformReceivables) ? rawPlatformReceivables : [];
   const settlements = Array.isArray(rawSettlements) ? rawSettlements : [];
   const paymentIntents = Array.isArray(rawPaymentIntents) ? rawPaymentIntents : [];
 
@@ -415,24 +415,24 @@ export default function StaffFinance() {
     setPaynowPhase("select");
   };
 
-  const chibDailyDue = useMemo(() => {
+  const platformDailyDue = useMemo(() => {
     const today = new Date().toISOString().split("T")[0];
-    return chibReceivables
+    return platformReceivables
       .filter((r: any) => !r.isSettled && r.createdAt?.startsWith(today))
       .reduce((sum: number, r: any) => sum + parseFloat(r.amount || "0"), 0);
-  }, [chibReceivables]);
+  }, [platformReceivables]);
 
-  const chibMTD = useMemo(() => {
+  const platformMTD = useMemo(() => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    return chibReceivables
+    return platformReceivables
       .filter((r: any) => r.createdAt >= monthStart)
       .reduce((sum: number, r: any) => sum + parseFloat(r.amount || "0"), 0);
-  }, [chibReceivables]);
+  }, [platformReceivables]);
 
-  const chibAging = useMemo(() => {
+  const platformAging = useMemo(() => {
     const now = Date.now();
-    const unsettled = chibReceivables.filter((r: any) => !r.isSettled);
+    const unsettled = platformReceivables.filter((r: any) => !r.isSettled);
     const buckets = { current: 0, days30: 0, days60: 0, days90plus: 0 };
     unsettled.forEach((r: any) => {
       const age = (now - new Date(r.createdAt).getTime()) / (1000 * 60 * 60 * 24);
@@ -443,7 +443,7 @@ export default function StaffFinance() {
       else buckets.days90plus += amt;
     });
     return buckets;
-  }, [chibReceivables]);
+  }, [platformReceivables]);
 
   const createSettlementMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -452,7 +452,7 @@ export default function StaffFinance() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/settlements"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/chibikhulu/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/summary"] });
       setShowSettlementDialog(false);
       setSettlementAmount("");
       setSettlementReference("");
@@ -468,8 +468,8 @@ export default function StaffFinance() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/settlements"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/chibikhulu/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/chibikhulu/receivables"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/receivables"] });
       toast({ title: "Settlement approved" });
     },
     onError: (err: any) => toast({ title: "Approval failed", description: err.message, variant: "destructive" }),
@@ -708,7 +708,7 @@ export default function StaffFinance() {
             {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>}
             {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>}
             {!commissionOnly && <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>}
-            {!commissionOnly && <TabsTrigger value="chibikhulu" data-testid="tab-chibikhulu">POL263</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="platform" data-testid="tab-platform">POL263</TabsTrigger>}
             {canWriteFinance && <TabsTrigger value="month-end" data-testid="tab-month-end">Month-end run</TabsTrigger>}
             {canWriteFinance && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt">Group receipt</TabsTrigger>}
           </TabsList>
@@ -1068,7 +1068,7 @@ export default function StaffFinance() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="chibikhulu">
+          <TabsContent value="platform">
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -1090,7 +1090,7 @@ export default function StaffFinance() {
                       <CalendarDays className="h-8 w-8 text-blue-600" />
                       <div>
                         <p className="text-sm text-muted-foreground">Daily Due</p>
-                        <p className="text-2xl font-bold" data-testid="text-chib-daily">{chibDailyDue.toFixed(2)}</p>
+                        <p className="text-2xl font-bold" data-testid="text-platform-daily">{platformDailyDue.toFixed(2)}</p>
                       </div>
                     </div>
                   </CardContent>
@@ -1101,7 +1101,7 @@ export default function StaffFinance() {
                       <TrendingUp className="h-8 w-8 text-green-600" />
                       <div>
                         <p className="text-sm text-muted-foreground">MTD Accrued</p>
-                        <p className="text-2xl font-bold" data-testid="text-chib-mtd">{chibMTD.toFixed(2)}</p>
+                        <p className="text-2xl font-bold" data-testid="text-platform-mtd">{platformMTD.toFixed(2)}</p>
                       </div>
                     </div>
                   </CardContent>
@@ -1112,8 +1112,8 @@ export default function StaffFinance() {
                       <ArrowUpRight className="h-8 w-8 text-orange-600" />
                       <div>
                         <p className="text-sm text-muted-foreground">Outstanding</p>
-                        <p className="text-2xl font-bold" data-testid="text-chib-outstanding">
-                          {chibSummary ? parseFloat(chibSummary.outstanding).toFixed(2) : "0.00"}
+                        <p className="text-2xl font-bold" data-testid="text-platform-outstanding">
+                          {platformSummary ? parseFloat(platformSummary.outstanding).toFixed(2) : "0.00"}
                         </p>
                       </div>
                     </div>
@@ -1125,8 +1125,8 @@ export default function StaffFinance() {
                       <CheckCircle2 className="h-8 w-8 text-primary" />
                       <div>
                         <p className="text-sm text-muted-foreground">Total Settled</p>
-                        <p className="text-2xl font-bold" data-testid="text-chib-settled">
-                          {chibSummary ? parseFloat(chibSummary.totalSettled).toFixed(2) : "0.00"}
+                        <p className="text-2xl font-bold" data-testid="text-platform-settled">
+                          {platformSummary ? parseFloat(platformSummary.totalSettled).toFixed(2) : "0.00"}
                         </p>
                       </div>
                     </div>
@@ -1140,19 +1140,19 @@ export default function StaffFinance() {
                   <div className="grid grid-cols-4 gap-4">
                     <div className="text-center p-4 rounded-lg bg-green-50 dark:bg-green-950/20">
                       <p className="text-xs text-muted-foreground mb-1">0–30 Days</p>
-                      <p className="text-xl font-bold text-green-700 dark:text-green-400" data-testid="text-aging-current">{chibAging.current.toFixed(2)}</p>
+                      <p className="text-xl font-bold text-green-700 dark:text-green-400" data-testid="text-aging-current">{platformAging.current.toFixed(2)}</p>
                     </div>
                     <div className="text-center p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20">
                       <p className="text-xs text-muted-foreground mb-1">31–60 Days</p>
-                      <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400" data-testid="text-aging-30">{chibAging.days30.toFixed(2)}</p>
+                      <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400" data-testid="text-aging-30">{platformAging.days30.toFixed(2)}</p>
                     </div>
                     <div className="text-center p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20">
                       <p className="text-xs text-muted-foreground mb-1">61–90 Days</p>
-                      <p className="text-xl font-bold text-orange-700 dark:text-orange-400" data-testid="text-aging-60">{chibAging.days60.toFixed(2)}</p>
+                      <p className="text-xl font-bold text-orange-700 dark:text-orange-400" data-testid="text-aging-60">{platformAging.days60.toFixed(2)}</p>
                     </div>
                     <div className="text-center p-4 rounded-lg bg-red-50 dark:bg-red-950/20">
                       <p className="text-xs text-muted-foreground mb-1">90+ Days</p>
-                      <p className="text-xl font-bold text-red-700 dark:text-red-400" data-testid="text-aging-90plus">{chibAging.days90plus.toFixed(2)}</p>
+                      <p className="text-xl font-bold text-red-700 dark:text-red-400" data-testid="text-aging-90plus">{platformAging.days90plus.toFixed(2)}</p>
                     </div>
                   </div>
                 </CardContent>
@@ -1211,7 +1211,7 @@ export default function StaffFinance() {
               <Card>
                 <CardHeader><CardTitle>Receivables</CardTitle></CardHeader>
                 <CardContent>
-                  {chibReceivables.length === 0 ? (
+                  {platformReceivables.length === 0 ? (
                     <p className="text-center text-muted-foreground py-8">No receivables yet — they are auto-created when payments are cleared</p>
                   ) : (
                     <Table>
@@ -1225,7 +1225,7 @@ export default function StaffFinance() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {chibReceivables.map((r: any) => (
+                        {platformReceivables.map((r: any) => (
                           <TableRow key={r.id} data-testid={`row-receivable-${r.id}`}>
                             <TableCell className="text-sm">{new Date(r.createdAt).toLocaleDateString()}</TableCell>
                             <TableCell className="text-sm">{r.description || "—"}</TableCell>
