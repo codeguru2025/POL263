@@ -1,31 +1,85 @@
 const CACHE_NAME = "pol263-v1";
-const PRECACHE_URLS = ["/", "/assets/logo.png", "/favicon.png"];
+const PRECACHE_URLS = [
+  "/",
+  "/assets/logo.png",
+  "/favicon.png"
+];
 
+/* =========================
+   INSTALL
+========================= */
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(PRECACHE_URLS))
+      .then(() => self.skipWaiting())
   );
 });
 
+/* =========================
+   ACTIVATE
+========================= */
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(
-      keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-    )).then(() => self.clients.claim())
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      )
+    ).then(() => self.clients.claim())
   );
 });
 
+/* =========================
+   FETCH
+========================= */
 self.addEventListener("fetch", (e) => {
-  if (e.request.method !== "GET") return;
-  const url = new URL(e.request.url);
+  const req = e.request;
+
+  // Only handle GET requests
+  if (req.method !== "GET") return;
+
+  const url = new URL(req.url);
+
+  // ✅ CRITICAL FIX:
+  // Ignore chrome-extension://, data:, blob:, etc.
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+
+  // Do not cache API requests
   if (url.pathname.startsWith("/api/")) return;
+
   e.respondWith(
-    fetch(e.request).then((res) => {
-      if (res.ok && (url.pathname.match(/\.(js|css|png|svg|woff2?)$/) || url.pathname === "/")) {
-        const clone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(e.request, clone));
-      }
-      return res;
-    }).catch(() => caches.match(e.request).then((cached) => cached || new Response("Offline", { status: 503 })))
+    fetch(req)
+      .then((res) => {
+
+        // Only cache successful responses
+        if (!res || !res.ok) return res;
+
+        // Cache only static assets and root
+        const isStaticAsset =
+          url.pathname.match(/\.(js|css|png|svg|woff2?|jpg|jpeg|gif|ico)$/);
+
+        if (isStaticAsset || url.pathname === "/") {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(req, clone).catch(() => {
+              // silently ignore caching errors
+            });
+          });
+        }
+
+        return res;
+      })
+      .catch(() =>
+        caches.match(req).then(
+          (cached) =>
+            cached ||
+            new Response("Offline", {
+              status: 503,
+              statusText: "Offline",
+            })
+        )
+      )
   );
 });
