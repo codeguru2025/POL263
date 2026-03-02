@@ -10,6 +10,7 @@ import { useLocation } from "wouter";
 import { useEffect } from "react";
 import { isNativeMobile } from "@/lib/mobile-payment";
 import { Loader2 } from "lucide-react";
+import { PwaInstallPrompt } from "@/components/pwa-install-prompt";
 
 // Eagerly loaded: landing + login pages (first paint)
 import Home from "@/pages/home";
@@ -155,6 +156,7 @@ function App() {
         <QueryClientProvider client={queryClient}>
           <TooltipProvider>
             <Toaster />
+            <PwaInstallPrompt />
             <Router />
           </TooltipProvider>
         </QueryClientProvider>

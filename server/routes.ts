@@ -259,7 +259,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-  app.use("/uploads", express.static(uploadsDir));
+  app.use("/uploads", express.static(uploadsDir, { maxAge: "1d" }));
 
   // Paynow result URL (webhook) — no auth; hash verified in handler. Always return 200 to avoid Paynow retries.
   app.post("/api/payments/paynow/result", express.urlencoded({ extended: false }), async (req, res) => {
@@ -395,13 +395,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
     const { adminEmail, adminPassword, adminDisplayName, ...orgData } = req.body;
-    if (!adminEmail || !adminPassword || String(adminPassword).length < 8) {
-      return res.status(400).json({ message: "adminEmail and adminPassword (min 8 chars) are required to create a tenant." });
+    if (adminEmail && (!adminPassword || String(adminPassword).length < 8)) {
+      return res.status(400).json({ message: "When providing an admin email, a password of min 8 chars is also required." });
     }
 
-    const existingAdmin = await storage.getUserByEmail(adminEmail);
-    if (existingAdmin) {
-      return res.status(409).json({ message: "A user with this admin email already exists." });
+    if (adminEmail) {
+      const existingAdmin = await storage.getUserByEmail(adminEmail);
+      if (existingAdmin) {
+        return res.status(409).json({ message: "A user with this admin email already exists." });
+      }
     }
 
     const parsed = insertOrganizationSchema.parse(orgData);
@@ -485,31 +487,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      const passwordHash = await argon2.hash(String(adminPassword), { type: argon2.argon2id });
-      const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-      const adminUser = await storage.createUser({
-        email: adminEmail,
-        displayName: adminDisplayName || adminEmail.split("@")[0],
-        organizationId: org.id,
-        branchId: defaultBranch.id,
-        referralCode: refCode,
-        isActive: true,
-        passwordHash,
-      });
+      let adminUser: any = null;
+      if (adminEmail && adminPassword) {
+        const passwordHash = await argon2.hash(String(adminPassword), { type: argon2.argon2id });
+        const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        adminUser = await storage.createUser({
+          email: adminEmail,
+          displayName: adminDisplayName || adminEmail.split("@")[0],
+          organizationId: org.id,
+          branchId: defaultBranch.id,
+          referralCode: refCode,
+          isActive: true,
+          passwordHash,
+        });
 
-      const adminRoleId = roleMap.get("administrator");
-      if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId);
+        const adminRoleId = roleMap.get("administrator");
+        if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId);
+      }
 
       await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, {
         ...org,
         defaultBranchId: defaultBranch.id,
-        adminUserId: adminUser.id,
-        adminEmail,
+        ...(adminUser ? { adminUserId: adminUser.id, adminEmail } : {}),
       });
       return res.status(201).json({
         ...org,
         defaultBranchId: defaultBranch.id,
-        adminUser: { id: adminUser.id, email: adminUser.email, displayName: adminUser.displayName },
+        ...(adminUser ? { adminUser: { id: adminUser.id, email: adminUser.email, displayName: adminUser.displayName } } : {}),
       });
     } catch (err) {
       // Soft-delete the orphaned org to prevent partial tenant state
@@ -2636,7 +2640,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const groupId = String(req.params.id);
     const group = await storage.getGroup(groupId, user.organizationId);
     if (!group) return res.status(404).json({ error: "Group not found" });
-    return res.json(await storage.getPoliciesByGroupId(user.organizationId, groupId));
+    const policiesList = await storage.getPoliciesByGroupId(user.organizationId, groupId);
+    const enriched = await Promise.all(
+      policiesList.map(async (p) => {
+        const client = p.clientId ? await storage.getClient(p.clientId, user.organizationId) : null;
+        return {
+          ...p,
+          clientFirstName: client?.firstName || null,
+          clientLastName: client?.lastName || null,
+          clientPhone: client?.phone || null,
+          clientNationalId: client?.nationalId || null,
+        };
+      })
+    );
+    return res.json(enriched);
   });
 
   // ─── Platform Revenue Share ──────────────────────────────

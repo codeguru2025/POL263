@@ -196,8 +196,8 @@ export default function StaffSettings() {
   });
 
   const handleCreateTenant = () => {
-    if (!newTenant.name.trim() || !newTenant.adminEmail.trim() || !newTenant.adminPassword.trim()) return;
-    if (newTenant.adminPassword.length < 8) {
+    if (!newTenant.name.trim()) return;
+    if (newTenant.adminPassword && newTenant.adminPassword.length < 8) {
       toast({ title: "Validation error", description: "Admin password must be at least 8 characters", variant: "destructive" });
       return;
     }
@@ -478,7 +478,7 @@ export default function StaffSettings() {
                 <DialogHeader>
                   <DialogTitle>Create new tenant</DialogTitle>
                   <DialogDescription>
-                    Set up a new organization with its own admin account. A default branch "Head Office" will be created automatically.
+                    Create a new organization. You can optionally set up an admin account now, or add one later.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-2">
@@ -526,7 +526,7 @@ export default function StaffSettings() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="tenant-admin-email">Email *</Label>
+                      <Label htmlFor="tenant-admin-email">Email</Label>
                       <Input
                         id="tenant-admin-email"
                         type="email"
@@ -537,7 +537,7 @@ export default function StaffSettings() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="tenant-admin-password">Password * (min 8 chars)</Label>
+                      <Label htmlFor="tenant-admin-password">Password (min 8 chars)</Label>
                       <Input
                         id="tenant-admin-password"
                         type="password"
@@ -553,7 +553,7 @@ export default function StaffSettings() {
                   <Button variant="outline" onClick={() => setTenantAddOpen(false)}>Cancel</Button>
                   <Button
                     onClick={handleCreateTenant}
-                    disabled={!newTenant.name.trim() || !newTenant.adminEmail.trim() || newTenant.adminPassword.length < 8 || createTenantMutation.isPending}
+                    disabled={!newTenant.name.trim() || createTenantMutation.isPending}
                     data-testid="btn-confirm-add-tenant"
                   >
                     {createTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
@@ -596,38 +596,45 @@ export default function StaffSettings() {
               <CardContent className="space-y-6">
                 <div className="space-y-4">
                   <Label>Organization Logo</Label>
-                  <div className="flex items-end gap-6">
-                    <div className="h-24 w-24 rounded-xl border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden">
-                      <img
-                        src={logoUrl || currentOrg?.logoUrl || "/assets/logo.png"}
-                        alt="Current Logo"
-                        className="object-contain max-h-full max-w-full"
-                      />
+                  <div className="flex items-center gap-6">
+                    <div className="h-28 w-28 rounded-xl border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
+                      {(logoUrl || currentOrg?.logoUrl) ? (
+                        <img
+                          src={`${logoUrl || currentOrg?.logoUrl}?v=${Date.now()}`}
+                          alt="Current Logo"
+                          className="object-contain max-h-full max-w-full p-1"
+                          onError={(e) => { (e.target as HTMLImageElement).src = "/assets/logo.png"; }}
+                        />
+                      ) : (
+                        <img src="/assets/logo.png" alt="Default" className="object-contain max-h-full max-w-full p-1 opacity-40" />
+                      )}
                     </div>
-                    <div>
+                    <div className="space-y-2">
                       <input id="logo-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleLogoUpload} />
                       <Button type="button" variant="outline" onClick={() => document.getElementById("logo-upload")?.click()}>Upload Logo</Button>
+                      <p className="text-xs text-muted-foreground">PNG, WebP or SVG. Transparent background recommended.</p>
                     </div>
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <Label>Authorized Signature (for receipts & policy documents)</Label>
-                  <div className="flex items-end gap-6">
-                    <div className="h-16 w-40 rounded border flex items-center justify-center bg-muted/20 overflow-hidden">
-                      {signatureUrl || currentOrg?.signatureUrl ? (
+                  <div className="flex items-center gap-6">
+                    <div className="h-20 w-48 rounded-lg border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
+                      {(signatureUrl || currentOrg?.signatureUrl) ? (
                         <img
-                          src={signatureUrl || currentOrg?.signatureUrl}
+                          src={`${signatureUrl || currentOrg?.signatureUrl}?v=${Date.now()}`}
                           alt="Signature"
-                          className="object-contain max-h-full max-w-full"
+                          className="object-contain max-h-full max-w-full p-1"
                         />
                       ) : (
-                        <span className="text-xs text-muted-foreground">No signature</span>
+                        <span className="text-xs text-muted-foreground italic">No signature uploaded</span>
                       )}
                     </div>
-                    <div>
+                    <div className="space-y-2">
                       <input id="sig-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleSignatureUpload} />
                       <Button type="button" variant="outline" onClick={() => document.getElementById("sig-upload")?.click()}>Upload Signature</Button>
+                      <p className="text-xs text-muted-foreground">PNG, WebP or SVG. Transparent background recommended.</p>
                     </div>
                   </div>
                 </div>
@@ -681,18 +688,34 @@ export default function StaffSettings() {
                     />
                   </div>
                   <div className="grid gap-2">
-                    <Label htmlFor="primaryColor">Primary Color (Hex)</Label>
-                    <div className="flex gap-2">
-                      <div
-                        className="h-10 w-10 rounded border"
-                        style={{ backgroundColor: primaryColor || currentOrg?.primaryColor || "#D4AF37" }}
-                      ></div>
-                      <Input
+                    <Label htmlFor="primaryColor">Primary Color</Label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="color"
                         id="primaryColor"
                         value={primaryColor || currentOrg?.primaryColor || "#D4AF37"}
-                        className="font-mono flex-1"
                         onChange={(e) => setPrimaryColor(e.target.value)}
+                        className="h-10 w-10 rounded border cursor-pointer p-0.5"
                       />
+                      <Input
+                        value={primaryColor || currentOrg?.primaryColor || "#D4AF37"}
+                        className="font-mono w-32"
+                        onChange={(e) => setPrimaryColor(e.target.value)}
+                        maxLength={7}
+                        placeholder="#D4AF37"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {["#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"].map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${primaryColor === c ? "border-foreground ring-2 ring-offset-2 ring-primary" : "border-transparent"}`}
+                          style={{ backgroundColor: c }}
+                          onClick={() => setPrimaryColor(c)}
+                          title={c}
+                        />
+                      ))}
                     </div>
                   </div>
                   <div className="grid gap-2">

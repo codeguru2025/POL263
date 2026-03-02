@@ -17,11 +17,14 @@ const { Pool } = require("pg");
 require("dotenv").config();
 
 const connStr = process.env.DATABASE_URL || "";
+const acceptSelfSigned =
+  process.env.DB_ACCEPT_SELF_SIGNED === "true" ||
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
+  connStr.includes("supabase") ||
+  connStr.includes("sslmode=");
 const pool = new Pool({
   connectionString: connStr,
-  ssl: connStr.includes("sslmode=")
-    ? { rejectUnauthorized: false }
-    : undefined,
+  ...(acceptSelfSigned && { ssl: { rejectUnauthorized: false } }),
 });
 
 async function main() {

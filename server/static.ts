@@ -10,7 +10,7 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  app.use(express.static(distPath, { maxAge: "1y", immutable: true }));
 
   // SPA fallback: serve index.html for app routes so reload gets fresh HTML after deploy (no-cache). Missing assets → 404.
   app.get("/{*splat}", (req, res) => {

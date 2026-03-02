@@ -689,15 +689,41 @@ export default function StaffPolicies() {
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Waiting Period</p>
-                  <p className="font-semibold">{displayPolicy.waitingPeriodDays != null ? `${displayPolicy.waitingPeriodDays} days` : "—"}</p>
+                  {displayPolicy.waitingPeriodEndDate ? (() => {
+                    const endDate = new Date(displayPolicy.waitingPeriodEndDate);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    endDate.setHours(0, 0, 0, 0);
+                    const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    return daysRemaining > 0 ? (
+                      <p className="font-semibold text-amber-600">{daysRemaining} days remaining</p>
+                    ) : (
+                      <p className="font-semibold text-emerald-600">Completed</p>
+                    );
+                  })() : (
+                    <p className="font-semibold">{displayPolicy.waitingPeriodDays != null ? `${displayPolicy.waitingPeriodDays} days` : "—"}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Waiting Period End</p>
-                  <p className="font-semibold">{displayPolicy.waitingPeriodEndDate || "—"}</p>
+                  <p className="font-semibold">{displayPolicy.waitingPeriodEndDate ? new Date(displayPolicy.waitingPeriodEndDate).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" }) : "—"}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground text-xs">Grace End</p>
-                  <p className="font-semibold">{displayPolicy.graceEndDate || "—"}</p>
+                  <p className="text-muted-foreground text-xs">Grace Period</p>
+                  {displayPolicy.graceEndDate ? (() => {
+                    const endDate = new Date(displayPolicy.graceEndDate);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    endDate.setHours(0, 0, 0, 0);
+                    const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    return daysRemaining > 0 ? (
+                      <p className="font-semibold text-amber-600">{daysRemaining} days remaining</p>
+                    ) : (
+                      <p className="font-semibold text-emerald-600">Completed</p>
+                    );
+                  })() : (
+                    <p className="font-semibold">—</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Claimability</p>
@@ -807,9 +833,12 @@ export default function StaffPolicies() {
                           {m.coverDate || "—"}
                         </TableCell>
                         <TableCell className="text-sm">
-                          {m.waitingPeriodDays != null ? (
-                            <span className="text-xs">{m.waitingPeriodDays}d</span>
-                          ) : "—"}
+                          {m.waitingPeriodEndDate ? (() => {
+                            const end = new Date(m.waitingPeriodEndDate);
+                            const now = new Date(); now.setHours(0,0,0,0); end.setHours(0,0,0,0);
+                            const d = Math.ceil((end.getTime() - now.getTime()) / 86400000);
+                            return d > 0 ? <span className="text-xs text-amber-600">{d}d left</span> : <span className="text-xs text-emerald-600">Done</span>;
+                          })() : m.waitingPeriodDays != null ? <span className="text-xs">{m.waitingPeriodDays}d</span> : "—"}
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline" className={

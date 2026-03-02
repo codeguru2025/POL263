@@ -162,15 +162,42 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
       {groupId && (
         <>
           <div>
-            <Label>Policies (select to include)</Label>
+            <div className="flex items-center justify-between mb-1">
+              <Label>Policies (select to include)</Label>
+              <Button type="button" variant="ghost" size="sm" className="text-xs h-auto py-0.5" onClick={() => {
+                if (policyIds.size === groupPolicies.length) {
+                  setPolicyIds(new Set());
+                } else {
+                  setPolicyIds(new Set(groupPolicies.map((p: any) => p.id)));
+                }
+              }}>
+                {policyIds.size === groupPolicies.length ? "Deselect all" : "Select all"}
+              </Button>
+            </div>
             <div className="border rounded-md p-2 max-h-48 overflow-auto space-y-1">
-              {groupPolicies.map((p: any) => (
-                <label key={p.id} className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={policyIds.has(p.id)} onChange={() => togglePolicy(p.id)} />
-                  <span className="font-mono text-sm">{p.policyNumber}</span>
-                  <span className="text-muted-foreground">{p.currency} {p.premiumAmount}</span>
-                </label>
-              ))}
+              {groupPolicies.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">No policies in this group.</p>
+              ) : (
+                groupPolicies.map((p: any) => (
+                  <label key={p.id} className="flex items-start gap-3 cursor-pointer p-2 rounded-md hover:bg-muted/50 transition-colors">
+                    <input type="checkbox" checked={policyIds.has(p.id)} onChange={() => togglePolicy(p.id)} className="mt-1" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm font-medium">{p.policyNumber}</span>
+                        <Badge variant="outline" className="text-xs">{p.status}</Badge>
+                        <span className="text-sm font-semibold ml-auto">{p.currency} {p.premiumAmount}</span>
+                      </div>
+                      {(p.clientFirstName || p.clientLastName) && (
+                        <p className="text-sm text-muted-foreground mt-0.5">
+                          {p.clientFirstName} {p.clientLastName}
+                          {p.clientPhone && <span className="ml-2">{p.clientPhone}</span>}
+                          {p.clientNationalId && <span className="ml-2 font-mono text-xs">ID: {p.clientNationalId}</span>}
+                        </p>
+                      )}
+                    </div>
+                  </label>
+                ))
+              )}
             </div>
           </div>
           <div>
