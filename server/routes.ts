@@ -32,6 +32,7 @@ import {
   policies, paymentTransactions, paymentReceipts,
 } from "@shared/schema";
 import { sql, eq } from "drizzle-orm";
+import { notifyClient } from "./notifications";
 
 
 async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
@@ -844,6 +845,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       stage: "lead",
     });
     await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
+    const org = await storage.getOrganization(user.organizationId);
+    await notifyClient(user.organizationId, client.id, "Welcome!", `Welcome to ${org?.name || "our platform"}. Your account has been created.`);
     return res.status(201).json(client);
   });
 
@@ -1558,6 +1561,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (result.tx.status === "cleared" && result.tx.policyId) {
       const commPolicy = await storage.getPolicy(result.tx.policyId, user.organizationId);
       if (commPolicy) await recordAgentCommission(user.organizationId, commPolicy, result.tx.id, result.tx.amount);
+    }
+    if (result.tx.status === "cleared" && result.tx.clientId && result.tx.policyId && policy) {
+      await notifyClient(user.organizationId, result.tx.clientId, "Payment received", `Your payment of ${result.tx.currency} ${result.tx.amount} for policy ${policy.policyNumber} has been received. Thank you.`);
     }
     return res.status(201).json({ ...result.tx, receipt: result.receipt });
   });
@@ -3193,9 +3199,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "commissions": {
-          const plans = await storage.getCommissionPlans(user.organizationId);
-          headers = ["Plan Name", "Type", "Rate (%)", "Status", "Created"];
-          rows = plans.map((r: any) => [r.name, r.commissionType, r.ratePercent, r.isActive ? "Active" : "Inactive", r.createdAt]);
+          const agentFilter = typeof req.query.agentId === "string" ? req.query.agentId : null;
+          if (agentFilter) {
+            const ledger = await storage.getCommissionLedgerByAgent(agentFilter, user.organizationId);
+            headers = ["Agent ID", "Entry Type", "Amount", "Currency", "Description", "Period Start", "Period End", "Status", "Created"];
+            rows = ledger.map((r: any) => [r.agentId, r.entryType, r.amount, r.currency, r.description || "", r.periodStart || "", r.periodEnd || "", r.status, r.createdAt]);
+          } else {
+            const plans = await storage.getCommissionPlans(user.organizationId);
+            headers = ["Plan Name", "Type", "Rate (%)", "Status", "Created"];
+            rows = plans.map((r: any) => [r.name, r.commissionType, r.ratePercent, r.isActive ? "Active" : "Inactive", r.createdAt]);
+          }
           break;
         }
         case "platform": {
@@ -3426,6 +3439,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
+  });
+
+  app.post("/api/admin/run-notifications", requireAuth, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
+
+    let birthdayCount = 0;
+    let preLapseCount = 0;
+    let lapseCount = 0;
+
+    const allClients = await storage.getClientsByOrg(orgId, 100000, 0);
+    for (const c of allClients) {
+      if (c.dateOfBirth) {
+        const dob = new Date(c.dateOfBirth);
+        if (dob.getMonth() === today.getMonth() && dob.getDate() === today.getDate()) {
+          await notifyClient(orgId, c.id, "Happy Birthday!", `Wishing you a wonderful birthday, ${c.firstName}!`);
+          birthdayCount++;
+        }
+      }
+    }
+
+    const allPolicies = await storage.getPoliciesByOrg(orgId, 100000, 0);
+    for (const p of allPolicies) {
+      if (p.status === "active" && p.clientId && p.graceEndDate) {
+        const graceEnd = new Date(p.graceEndDate);
+        const daysToGrace = Math.ceil((graceEnd.getTime() - today.getTime()) / 86400000);
+        if (daysToGrace === 7) {
+          await notifyClient(orgId, p.clientId, "Payment Reminder", `Your policy ${p.policyNumber} payment is due. Grace period ends in 7 days.`);
+          preLapseCount++;
+        } else if (daysToGrace <= 0) {
+          await notifyClient(orgId, p.clientId, "Policy Lapsed", `Your policy ${p.policyNumber} has lapsed due to non-payment. Contact us to reinstate.`);
+          lapseCount++;
+        }
+      }
+    }
+
+    return res.json({ birthdayCount, preLapseCount, lapseCount });
   });
 
   app.post("/api/admin/sync-permissions", requireAuth, requireTenantScope, async (req, res) => {

@@ -38,6 +38,14 @@ interface Group {
   treasurerName: string | null;
   treasurerPhone: string | null;
   treasurerEmail: string | null;
+  companyName: string | null;
+  hrManagerName: string | null;
+  hrManagerPhone: string | null;
+  hrManagerEmail: string | null;
+  contactPersonName: string | null;
+  contactPersonPhone: string | null;
+  contactPersonEmail: string | null;
+  capacity: number | null;
   isActive: boolean;
   createdAt: string;
 }
@@ -67,6 +75,14 @@ interface GroupFormData {
   treasurerName: string;
   treasurerPhone: string;
   treasurerEmail: string;
+  companyName: string;
+  hrManagerName: string;
+  hrManagerPhone: string;
+  hrManagerEmail: string;
+  contactPersonName: string;
+  contactPersonPhone: string;
+  contactPersonEmail: string;
+  capacity: string;
 }
 
 const emptyForm: GroupFormData = {
@@ -82,6 +98,14 @@ const emptyForm: GroupFormData = {
   treasurerName: "",
   treasurerPhone: "",
   treasurerEmail: "",
+  companyName: "",
+  hrManagerName: "",
+  hrManagerPhone: "",
+  hrManagerEmail: "",
+  contactPersonName: "",
+  contactPersonPhone: "",
+  contactPersonEmail: "",
+  capacity: "",
 };
 
 const GROUP_TYPES = [
@@ -193,12 +217,20 @@ export default function StaffGroups() {
       toast({ title: "Validation", description: "Group name is required.", variant: "destructive" });
       return;
     }
-    createMutation.mutate(formData);
+    const payload = {
+      ...formData,
+      capacity: formData.capacity ? parseInt(formData.capacity, 10) || null : null,
+    };
+    createMutation.mutate(payload as any);
   };
 
   const handleUpdate = () => {
     if (!selectedGroupId) return;
-    updateMutation.mutate({ id: selectedGroupId, data: formData });
+    const payload = {
+      ...formData,
+      capacity: formData.capacity ? parseInt(formData.capacity, 10) || null : null,
+    };
+    updateMutation.mutate({ id: selectedGroupId, data: payload as any });
   };
 
   const openEdit = (group: Group) => {
@@ -216,6 +248,14 @@ export default function StaffGroups() {
       treasurerName: group.treasurerName || "",
       treasurerPhone: group.treasurerPhone || "",
       treasurerEmail: group.treasurerEmail || "",
+      companyName: group.companyName || "",
+      hrManagerName: group.hrManagerName || "",
+      hrManagerPhone: group.hrManagerPhone || "",
+      hrManagerEmail: group.hrManagerEmail || "",
+      contactPersonName: group.contactPersonName || "",
+      contactPersonPhone: group.contactPersonPhone || "",
+      contactPersonEmail: group.contactPersonEmail || "",
+      capacity: group.capacity != null ? String(group.capacity) : "",
     });
     setShowEditDialog(true);
   };
@@ -659,6 +699,95 @@ function GroupFormFields({
           </div>
         </div>
       </div>
+
+      {formData.type === "corporate" && (
+        <div className="border-t pt-4 space-y-4">
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Company Details</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Company Name</Label>
+              <Input
+                value={formData.companyName}
+                onChange={(e) => update("companyName", e.target.value)}
+                placeholder="Company / organization name"
+                data-testid={`input-${prefix}-company-name`}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Capacity</Label>
+              <Input
+                type="number"
+                value={formData.capacity}
+                onChange={(e) => update("capacity", e.target.value)}
+                placeholder="Number of members"
+                data-testid={`input-${prefix}-capacity`}
+              />
+            </div>
+          </div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-2">HR Manager</h4>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label>Full Name</Label>
+              <Input
+                value={formData.hrManagerName}
+                onChange={(e) => update("hrManagerName", e.target.value)}
+                placeholder="Full name"
+                data-testid={`input-${prefix}-hr-manager-name`}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Phone</Label>
+              <Input
+                value={formData.hrManagerPhone}
+                onChange={(e) => update("hrManagerPhone", e.target.value)}
+                placeholder="+263 77 123 4567"
+                data-testid={`input-${prefix}-hr-manager-phone`}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Email</Label>
+              <Input
+                type="email"
+                value={formData.hrManagerEmail}
+                onChange={(e) => update("hrManagerEmail", e.target.value)}
+                placeholder="email@example.com"
+                data-testid={`input-${prefix}-hr-manager-email`}
+              />
+            </div>
+          </div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-2">Contact Person</h4>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label>Full Name</Label>
+              <Input
+                value={formData.contactPersonName}
+                onChange={(e) => update("contactPersonName", e.target.value)}
+                placeholder="Full name"
+                data-testid={`input-${prefix}-contact-person-name`}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Phone</Label>
+              <Input
+                value={formData.contactPersonPhone}
+                onChange={(e) => update("contactPersonPhone", e.target.value)}
+                placeholder="+263 77 123 4567"
+                data-testid={`input-${prefix}-contact-person-phone`}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Email</Label>
+              <Input
+                type="email"
+                value={formData.contactPersonEmail}
+                onChange={(e) => update("contactPersonEmail", e.target.value)}
+                placeholder="email@example.com"
+                data-testid={`input-${prefix}-contact-person-email`}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft, Printer } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft, Printer, Users } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { useToast } from "@/hooks/use-toast";
 import { openPaymentInSystemBrowser, redirectToAppIfMobileReturn, isNativeMobile } from "@/lib/mobile-payment";
@@ -83,6 +84,10 @@ export default function ClientPayments() {
   const { data: me, isFetched: meFetched, isError: meError } = useQuery<{ client: { id: string } }>({ queryKey: ["/api/client-auth/me"], retry: false });
   const { data: policies } = useQuery<Policy[]>({ queryKey: ["/api/client-auth/policies"], enabled: !!me?.client });
   const { data: paynowConfig } = useQuery<{ enabled: boolean }>({ queryKey: ["/api/client-auth/paynow-config"], retry: false });
+  const { data: myGroups = [] } = useQuery<any[]>({
+    queryKey: ["/api/client-auth/my-groups"],
+    enabled: !!me?.client,
+  });
 
   const createIntentMutation = useMutation({
     mutationFn: async () => {
@@ -520,9 +525,171 @@ export default function ClientPayments() {
           </CardContent>
         </Card>
 
+        {myGroups.length > 0 && <GroupReceiptSection groups={myGroups} />}
+
         <ReceiptsList />
       </div>
     </ClientLayout>
+  );
+}
+
+function GroupReceiptSection({ groups }: { groups: any[] }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [selectedGroupId, setSelectedGroupId] = useState(groups.length === 1 ? groups[0].id : "");
+  const [totalAmount, setTotalAmount] = useState("");
+  const [selectedPolicyIds, setSelectedPolicyIds] = useState<string[]>([]);
+
+  const { data: groupPolicies = [], isLoading: loadingPolicies } = useQuery<any[]>({
+    queryKey: ["/api/client-auth/group", selectedGroupId, "policies"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/client-auth/group/${selectedGroupId}/policies`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!selectedGroupId,
+  });
+
+  useEffect(() => {
+    setSelectedPolicyIds([]);
+    setTotalAmount("");
+  }, [selectedGroupId]);
+
+  const togglePolicy = (id: string) => {
+    setSelectedPolicyIds((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  };
+
+  const selectAll = () => {
+    if (selectedPolicyIds.length === groupPolicies.length) {
+      setSelectedPolicyIds([]);
+    } else {
+      setSelectedPolicyIds(groupPolicies.map((p) => p.id));
+    }
+  };
+
+  const submitMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/client-auth/group-receipt", {
+        groupId: selectedGroupId,
+        policyIds: selectedPolicyIds,
+        totalAmount,
+        currency: groupPolicies[0]?.currency || "USD",
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Group receipt processed", description: `${data.count} policies receipted successfully.` });
+      setSelectedPolicyIds([]);
+      setTotalAmount("");
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/group", selectedGroupId, "policies"] });
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/receipts"] });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const perPolicy = selectedPolicyIds.length > 0 && totalAmount
+    ? (parseFloat(totalAmount) / selectedPolicyIds.length).toFixed(2)
+    : null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Users className="h-5 w-5" />
+          Group Receipting
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          As a group executive, you can record payments for group members.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {groups.length > 1 && (
+          <div>
+            <Label>Select Group</Label>
+            <Select value={selectedGroupId} onValueChange={setSelectedGroupId}>
+              <SelectTrigger><SelectValue placeholder="Choose a group" /></SelectTrigger>
+              <SelectContent>
+                {groups.map((g: any) => (
+                  <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {groups.length === 1 && (
+          <p className="text-sm font-medium">Group: {groups[0].name}</p>
+        )}
+
+        {selectedGroupId && (
+          <>
+            {loadingPolicies ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : groupPolicies.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">No policies in this group.</p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <Label>Select members to receipt ({selectedPolicyIds.length}/{groupPolicies.length})</Label>
+                  <Button variant="ghost" size="sm" onClick={selectAll}>
+                    {selectedPolicyIds.length === groupPolicies.length ? "Deselect all" : "Select all"}
+                  </Button>
+                </div>
+                <div className="border rounded-lg divide-y max-h-64 overflow-y-auto">
+                  {groupPolicies.map((p: any) => (
+                    <label
+                      key={p.id}
+                      className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/30 cursor-pointer transition-colors"
+                    >
+                      <Checkbox
+                        checked={selectedPolicyIds.includes(p.id)}
+                        onCheckedChange={() => togglePolicy(p.id)}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {p.clientFirstName} {p.clientLastName}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {p.policyNumber} &middot; {p.currency} {parseFloat(p.premiumAmount).toFixed(2)} &middot; {p.status}
+                        </p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+
+                <div>
+                  <Label>Total Amount Collected</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="Total cash collected"
+                    value={totalAmount}
+                    onChange={(e) => setTotalAmount(e.target.value)}
+                  />
+                  {perPolicy && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {groupPolicies[0]?.currency || "USD"} {perPolicy} per policy ({selectedPolicyIds.length} selected)
+                    </p>
+                  )}
+                </div>
+
+                <Button
+                  className="w-full"
+                  disabled={selectedPolicyIds.length === 0 || !totalAmount || parseFloat(totalAmount) <= 0 || submitMutation.isPending}
+                  onClick={() => submitMutation.mutate()}
+                >
+                  {submitMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                  Process Group Receipt
+                </Button>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

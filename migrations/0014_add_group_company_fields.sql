@@ -1,0 +1,8 @@
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS hr_manager_name TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS hr_manager_phone TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS hr_manager_email TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS contact_person_name TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS contact_person_phone TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS contact_person_email TEXT;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS capacity INTEGER;

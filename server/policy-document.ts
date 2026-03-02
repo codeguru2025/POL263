@@ -554,29 +554,34 @@ export function registerPolicyDocumentRoute(app: Express) {
     res.setHeader("Content-Disposition", `attachment; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"`);
     doc.pipe(res);
 
-    doc.rect(0, 0, doc.page.width, 100).fill("#FFFFFF");
-    doc.moveTo(0, 100).lineTo(doc.page.width, 100).strokeColor(primaryColor).lineWidth(2).stroke();
+    const headerHeight = 110;
+    doc.rect(0, 0, doc.page.width, headerHeight).fill("#FFFFFF");
+    doc.moveTo(0, headerHeight).lineTo(doc.page.width, headerHeight).strokeColor(primaryColor).lineWidth(2).stroke();
     if (logoBufferEstatement) {
       try {
         doc.image(logoBufferEstatement, 50, 15, { width: 70, height: 70 });
       } catch (_) {}
     }
     const headerLeft = logoBufferEstatement ? 130 : 50;
+    const headerTextWidth = 280;
+    let hy = 20;
     doc
       .fillColor(primaryColor)
-      .fontSize(22)
+      .fontSize(18)
       .font("Helvetica-Bold")
-      .text(org?.name || "POL263", headerLeft, 25, { align: "left" });
-    doc.fillColor(primaryColor).fontSize(10).font("Helvetica").text("E-STATEMENT", headerLeft, 55, { align: "left" });
+      .text(org?.name || "POL263", headerLeft, hy, { width: headerTextWidth });
+    hy = Math.max(hy + 24, (doc as any).y + 4);
+    doc.fillColor(primaryColor).fontSize(10).font("Helvetica").text("E-STATEMENT", headerLeft, hy);
+    hy += 16;
     const headerRight: string[] = [];
     if (org?.address) headerRight.push(org.address);
     if (org?.phone) headerRight.push(`Tel: ${org.phone}`);
     if (org?.email) headerRight.push(org.email);
     if (headerRight.length > 0) {
-      doc.fillColor(primaryColor).fontSize(8).text(headerRight.join(" | "), 50, 75, { align: "right", width: doc.page.width - 100 });
+      doc.fillColor(primaryColor).fontSize(8).text(headerRight.join("  |  "), 300, 25, { align: "right", width: doc.page.width - 350 });
     }
 
-    let y = 120;
+    let y = headerHeight + 10;
     doc.fillColor("#000000").fontSize(16).font("Helvetica-Bold").text("Policy Statement", 50, y);
     y += 22;
     doc.fontSize(9).font("Helvetica").fillColor("#666666");
@@ -637,10 +642,22 @@ export function registerPolicyDocumentRoute(app: Express) {
       doc.text("No payments in this period.", 50, y);
       y += 16;
     } else {
+      const rowHeight = 16;
       for (const p of filteredPayments) {
-        if (y > 720) {
+        if (y > 700) {
           doc.addPage();
           y = 50;
+          doc.font("Helvetica-Bold").fontSize(8).fillColor("#333333");
+          doc.text("Date", 50, y, { width: 75 });
+          doc.text("Amount", 130, y, { width: 70 });
+          doc.text("Method", 205, y, { width: 60 });
+          doc.text("Status", 270, y, { width: 55 });
+          doc.text("Receipt", 330, y, { width: 70 });
+          doc.text("Reference", 405, y, { width: 120 });
+          y += 14;
+          doc.moveTo(50, y).lineTo(545, y).strokeColor("#CCCCCC").lineWidth(0.5).stroke();
+          y += 6;
+          doc.font("Helvetica").fontSize(8).fillColor("#000000");
         }
         const dateStr = p.postedDate || (p.receivedAt && new Date(p.receivedAt).toLocaleDateString("en-GB")) || "—";
         const rec = receiptMap[p.id];
@@ -650,7 +667,7 @@ export function registerPolicyDocumentRoute(app: Express) {
         doc.text(p.status || "—", 270, y, { width: 55 });
         doc.text(rec ? rec.receiptNumber : "—", 330, y, { width: 70 });
         doc.text((p.reference || "—").slice(0, 25), 405, y, { width: 120 });
-        y += 14;
+        y += rowHeight;
       }
     }
     y += 16;

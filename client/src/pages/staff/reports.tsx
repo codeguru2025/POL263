@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getApiBase } from "@/lib/queryClient";
-import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt } from "lucide-react";
+import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt, Eye } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
 export type ReportFiltersState = {
@@ -41,10 +41,12 @@ function ExportButton({ reportType, filters }: { reportType: string; filters: Re
     window.open(getApiBase() + `/api/reports/export/${reportType}` + q, "_blank");
   };
   return (
-    <Button variant="outline" size="sm" onClick={handleExport} data-testid={`button-export-${reportType}`}>
-      <Download className="h-4 w-4 mr-1" />
-      Export CSV
-    </Button>
+    <div className="flex items-center gap-2">
+      <Button variant="default" size="sm" onClick={handleExport} data-testid={`button-export-${reportType}`}>
+        <Download className="h-4 w-4 mr-1" />
+        Download CSV
+      </Button>
+    </div>
   );
 }
 
@@ -1155,8 +1157,22 @@ export default function StaffReports() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle className="flex items-center gap-2"><Percent className="h-5 w-5" />Commission Plans</CardTitle>
-                  <ExportButton reportType="commissions" filters={filters} />
+                  <div className="flex items-center gap-2">
+                    <ExportButton reportType="commissions" filters={filters} />
+                    {agentId && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => window.open(getApiBase() + `/api/reports/export/commissions?agentId=${agentId}`, "_blank")}
+                        data-testid="button-export-commission-ledger"
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Agent Ledger CSV
+                      </Button>
+                    )}
+                  </div>
                 </div>
+                {!agentId && <p className="text-sm text-muted-foreground mt-1">Select an agent in the filters above to export their commission ledger.</p>}
               </CardHeader>
               <CardContent>
                 {loadingCommissions ? (

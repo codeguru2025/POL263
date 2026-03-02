@@ -204,6 +204,70 @@ function ClientNotificationsList() {
   );
 }
 
+interface CreditBalance {
+  policyId: string;
+  policyNumber: string;
+  balance: string;
+  currency: string;
+  premiumAmount: string;
+  status: string;
+}
+
+function ClientCreditBalances() {
+  const { data: balances = [] } = useQuery<CreditBalance[]>({
+    queryKey: ["/api/client-auth/credit-balance"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/client-auth/credit-balance", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    retry: false,
+  });
+  if (!balances.length) return null;
+  return (
+    <Card className="shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <DollarSign className="h-5 w-5 text-primary" />
+          Policy Balances
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3">
+          {balances.map((b) => {
+            const bal = parseFloat(b.balance);
+            const premium = parseFloat(b.premiumAmount);
+            return (
+              <div key={b.policyId} className="p-3 border rounded-lg flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">{b.policyNumber}</p>
+                  <p className="text-xs text-muted-foreground capitalize">{b.status}</p>
+                </div>
+                <div className="text-right">
+                  {bal < 0 ? (
+                    <p className="text-sm font-semibold text-red-600">
+                      Owing: {b.currency} {Math.abs(bal).toFixed(2)}
+                    </p>
+                  ) : bal > 0 ? (
+                    <p className="text-sm font-semibold text-green-600">
+                      Credit: {b.currency} {bal.toFixed(2)}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Balance: {b.currency} 0.00</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Premium: {b.currency} {isNaN(premium) ? "—" : premium.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ClientCreditNotesList() {
   const { data: creditNotes = [] } = useQuery<any[]>({
     queryKey: ["/api/client-auth/credit-notes"],
@@ -526,6 +590,8 @@ export default function ClientDashboard() {
                 </CardContent>
               </Card>
             </div>
+
+            <ClientCreditBalances />
 
             <Card className="shadow-sm">
               <CardHeader className="flex flex-row items-center justify-between">

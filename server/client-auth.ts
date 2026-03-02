@@ -130,6 +130,9 @@ export function setupClientAuth(app: Express) {
       }
 
       structuredLog("info", "Client enrolled", { clientId, referralCode: referralCode || null });
+      const org = await storage.getOrganization(orgId);
+      const { notifyClient } = await import("./notifications");
+      await notifyClient(orgId, clientId, "Welcome!", `Welcome to ${org?.name || "our platform"}. Your portal access is now active.`);
       return res.json({ message: "Enrollment successful" });
     } catch (err) {
       structuredLog("error", "Client enrollment error", { error: (err as Error).message });
@@ -504,6 +507,27 @@ export function setupClientAuth(app: Express) {
     return res.json({ message: "Password updated" });
   });
 
+  app.get("/api/client-auth/credit-balance", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const policies = await storage.getPoliciesByClient(clientId, clientOrgId);
+    const balances = await Promise.all(
+      policies.map(async (p) => {
+        const bal = await storage.getPolicyCreditBalance(clientOrgId, p.id);
+        return {
+          policyId: p.id,
+          policyNumber: p.policyNumber,
+          balance: bal?.balance || "0",
+          currency: bal?.currency || p.currency || "USD",
+          premiumAmount: p.premiumAmount,
+          status: p.status,
+        };
+      })
+    );
+    return res.json(balances);
+  });
+
   app.post("/api/client-auth/logout", (req: Request, res: Response) => {
     (req.session as any).clientId = null;
     (req.session as any).clientOrgId = null;
@@ -753,6 +777,78 @@ export function setupClientAuth(app: Express) {
     }
     await storage.removeClientDeviceToken(clientOrgId, token.trim());
     return res.status(204).send();
+  });
+
+  // ─── Group executive auto-recognition ────────────────────
+  app.get("/api/client-auth/my-groups", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const groups = await storage.getGroupsWhereClientIsExecutive(clientOrgId, clientId);
+    return res.json(groups);
+  });
+
+  app.get("/api/client-auth/group/:groupId/policies", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const groups = await storage.getGroupsWhereClientIsExecutive(clientOrgId, clientId);
+    const group = groups.find(g => g.id === req.params.groupId);
+    if (!group) return res.status(403).json({ message: "You are not an executive of this group" });
+    const policies = await storage.getPoliciesByGroupId(clientOrgId, req.params.groupId as string);
+    const enriched = await Promise.all(
+      policies.map(async (p) => {
+        const client = p.clientId ? await storage.getClient(p.clientId, clientOrgId) : null;
+        return {
+          ...p,
+          clientFirstName: client?.firstName || null,
+          clientLastName: client?.lastName || null,
+          clientPhone: client?.phone || null,
+        };
+      })
+    );
+    return res.json(enriched);
+  });
+
+  app.post("/api/client-auth/group-receipt", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const { groupId, policyIds, totalAmount, currency } = req.body;
+    if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || !totalAmount) {
+      return res.status(400).json({ message: "groupId, policyIds, and totalAmount required" });
+    }
+    const groups = await storage.getGroupsWhereClientIsExecutive(clientOrgId, clientId);
+    const group = groups.find(g => g.id === groupId);
+    if (!group) return res.status(403).json({ message: "You are not an executive of this group" });
+    try {
+      const policies = await storage.getPoliciesByGroupId(clientOrgId, groupId);
+      const selected = policies.filter(p => policyIds.includes(p.id));
+      if (selected.length === 0) return res.status(400).json({ message: "No valid policies selected" });
+      const perPolicy = (parseFloat(totalAmount) / selected.length).toFixed(2);
+      for (const policy of selected) {
+        const tx = await storage.createPaymentTransaction({
+          organizationId: clientOrgId,
+          policyId: policy.id,
+          clientId: policy.clientId,
+          amount: perPolicy,
+          currency: currency || "USD",
+          paymentMethod: "cash",
+          status: "cleared",
+          reference: `GRP-${group.name.slice(0, 6)}-${Date.now().toString(36)}`,
+        });
+        await storage.createPlatformReceivable({
+          organizationId: clientOrgId,
+          sourceTransactionId: tx.id,
+          amount: perPolicy,
+          currency: currency || "USD",
+          isSettled: false,
+        });
+      }
+      return res.status(201).json({ message: "Group receipt processed", count: selected.length });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message || "Failed to process group receipt" });
+    }
   });
 
   // ─── Dependents (client self-service) ─────────────────────
