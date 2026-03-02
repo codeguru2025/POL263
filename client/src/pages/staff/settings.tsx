@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ChangeEvent } from "react";
 import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,8 +26,21 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { Check, Loader2, Plus, Pencil, Trash2, KeyRound, Shield, Building2, ArrowRightLeft, Globe, Settings as SettingsIcon, Users } from "lucide-react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Check,
+  Loader2,
+  Plus,
+  Pencil,
+  Trash2,
+  KeyRound,
+  Shield,
+  Building2,
+  ArrowRightLeft,
+  Globe,
+  Settings as SettingsIcon,
+  Users,
+} from "lucide-react";
+import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { Switch } from "@/components/ui/switch";
@@ -45,7 +58,16 @@ export default function StaffSettings() {
   const search = useSearch();
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const defaultTab = tabParam === "tenants" && canManageTenants ? "tenants" : tabParam === "terms" ? "terms" : tabParam === "rbac" ? "rbac" : tabParam === "account" ? "account" : "branding";
+  const defaultTab =
+    tabParam === "tenants" && canManageTenants
+      ? "tenants"
+      : tabParam === "terms"
+        ? "terms"
+        : tabParam === "rbac"
+          ? "rbac"
+          : tabParam === "account"
+            ? "account"
+            : "branding";
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   useEffect(() => {
@@ -198,7 +220,11 @@ export default function StaffSettings() {
   const handleCreateTenant = () => {
     if (!newTenant.name.trim()) return;
     if (newTenant.adminPassword && newTenant.adminPassword.length < 8) {
-      toast({ title: "Validation error", description: "Admin password must be at least 8 characters", variant: "destructive" });
+      toast({
+        title: "Validation error",
+        description: "Admin password must be at least 8 characters",
+        variant: "destructive",
+      });
       return;
     }
     createTenantMutation.mutate(newTenant);
@@ -216,7 +242,8 @@ export default function StaffSettings() {
     if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
     if (signatureUrl !== undefined) updates.signatureUrl = signatureUrl || null;
     if (policyNumberPrefix !== undefined) updates.policyNumberPrefix = policyNumberPrefix || null;
-    if (policyNumberPadding !== undefined) updates.policyNumberPadding = Math.max(1, Math.min(20, policyNumberPadding));
+    if (policyNumberPadding !== undefined)
+      updates.policyNumberPadding = Math.max(1, Math.min(20, policyNumberPadding));
     if (databaseUrl !== undefined) updates.databaseUrl = databaseUrl.trim() || null;
     updates.isWhitelabeled = isWhitelabeled;
     updateOrgMutation.mutate(updates);
@@ -227,7 +254,7 @@ export default function StaffSettings() {
     return u;
   };
 
-  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentOrg) return;
     const formData = new FormData();
@@ -239,7 +266,11 @@ export default function StaffSettings() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      toast({ title: "Upload failed", description: err.message || "Logo must be PNG, WebP, or SVG (transparent background).", variant: "destructive" });
+      toast({
+        title: "Upload failed",
+        description: err.message || "Logo must be PNG, WebP, or SVG (transparent background).",
+        variant: "destructive",
+      });
       return;
     }
     const data = await res.json();
@@ -247,7 +278,7 @@ export default function StaffSettings() {
     updateOrgMutation.mutate({ ...currentOrg, logoUrl: data.url });
   };
 
-  const handleSignatureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSignatureUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentOrg) return;
     const formData = new FormData();
@@ -259,7 +290,11 @@ export default function StaffSettings() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      toast({ title: "Upload failed", description: err.message || "Signature must be PNG, WebP, or SVG (transparent background).", variant: "destructive" });
+      toast({
+        title: "Upload failed",
+        description: err.message || "Signature must be PNG, WebP, or SVG (transparent background).",
+        variant: "destructive",
+      });
       return;
     }
     const data = await res.json();
@@ -299,7 +334,13 @@ export default function StaffSettings() {
   });
 
   const updateTermMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Partial<{ title: string; content: string; category: string; sortOrder: number; isActive: boolean }> }) => {
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: Partial<{ title: string; content: string; category: string; sortOrder: number; isActive: boolean }>;
+    }) => {
       const res = await apiRequest("PATCH", `/api/terms/${id}`, data);
       return res.json();
     },
@@ -335,6 +376,20 @@ export default function StaffSettings() {
     }
   };
 
+  // ✅ FIX: fetch role permissions with useQueries (hook-safe)
+  const rolePermResults = useQueries({
+    queries: (rolesList ?? []).map((role: any) => ({
+      queryKey: [`/api/roles/${role.id}/permissions`],
+      staleTime: 60_000,
+      enabled: !!role?.id,
+    })),
+  });
+
+  const permsByRoleId: Record<string, any[] | undefined> = {};
+  (rolesList ?? []).forEach((role: any, idx: number) => {
+    permsByRoleId[role.id] = rolePermResults[idx]?.data as any[] | undefined;
+  });
+
   return (
     <StaffLayout>
       <div className="space-y-6">
@@ -345,9 +400,7 @@ export default function StaffSettings() {
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList className={`grid w-full max-w-2xl ${canManageTenants ? "grid-cols-5" : "grid-cols-4"}`}>
-            {canManageTenants && (
-              <TabsTrigger value="tenants">Tenants</TabsTrigger>
-            )}
+            {canManageTenants && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
             <TabsTrigger value="branding">Branding</TabsTrigger>
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="terms">Terms</TabsTrigger>
@@ -355,238 +408,242 @@ export default function StaffSettings() {
           </TabsList>
 
           {canManageTenants && (
-          <TabsContent value="tenants" className="mt-6">
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                    <Globe className="h-6 w-6 text-primary" />
-                    Platform Administration
-                  </h2>
-                  <p className="text-muted-foreground mt-1">Manage tenant organizations across the platform.</p>
+            <TabsContent value="tenants" className="mt-6">
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+                      <Globe className="h-6 w-6 text-primary" />
+                      Platform Administration
+                    </h2>
+                    <p className="text-muted-foreground mt-1">Manage tenant organizations across the platform.</p>
+                  </div>
+                  {canCreateTenant && (
+                    <Button onClick={() => setTenantAddOpen(true)} data-testid="btn-add-tenant">
+                      <Plus className="h-4 w-4 mr-2" />
+                      New tenant
+                    </Button>
+                  )}
                 </div>
-                {canCreateTenant && (
-                  <Button onClick={() => setTenantAddOpen(true)} data-testid="btn-add-tenant">
-                    <Plus className="h-4 w-4 mr-2" />
-                    New tenant
-                  </Button>
-                )}
-              </div>
 
-              {orgs === undefined ? (
-                <div className="flex items-center justify-center py-16">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : orgs.length === 0 ? (
-                <Card>
-                  <CardContent className="flex flex-col items-center justify-center py-16">
-                    <Building2 className="h-12 w-12 text-muted-foreground/40 mb-4" />
-                    <p className="text-muted-foreground font-medium">No tenants yet</p>
-                    <p className="text-sm text-muted-foreground mt-1">Create your first tenant to get started.</p>
-                    {canCreateTenant && (
-                      <Button className="mt-4" onClick={() => setTenantAddOpen(true)}>
-                        <Plus className="h-4 w-4 mr-2" />
-                        Create tenant
-                      </Button>
-                    )}
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {orgs.map((org: any) => {
-                    const isActive = isPlatformOwner && org.id === user?.organizationId;
-                    return (
-                      <Card key={org.id} className={`relative transition-shadow hover:shadow-md ${isActive ? "ring-2 ring-primary" : ""}`}>
-                        {isActive && (
-                          <Badge className="absolute top-3 right-3 bg-primary/15 text-primary border-primary/30" variant="outline">
-                            Active
-                          </Badge>
-                        )}
-                        <CardHeader className="pb-3">
-                          <div className="flex items-start gap-3">
-                            {org.logoUrl ? (
-                              <img src={org.logoUrl} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background shrink-0" />
-                            ) : (
-                              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                                <Building2 className="h-5 w-5 text-primary" />
+                {orgs === undefined ? (
+                  <div className="flex items-center justify-center py-16">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : orgs.length === 0 ? (
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center py-16">
+                      <Building2 className="h-12 w-12 text-muted-foreground/40 mb-4" />
+                      <p className="text-muted-foreground font-medium">No tenants yet</p>
+                      <p className="text-sm text-muted-foreground mt-1">Create your first tenant to get started.</p>
+                      {canCreateTenant && (
+                        <Button className="mt-4" onClick={() => setTenantAddOpen(true)}>
+                          <Plus className="h-4 w-4 mr-2" />
+                          Create tenant
+                        </Button>
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {orgs.map((org: any) => {
+                      const isActive = isPlatformOwner && org.id === user?.organizationId;
+                      return (
+                        <Card
+                          key={org.id}
+                          className={`relative transition-shadow hover:shadow-md ${isActive ? "ring-2 ring-primary" : ""}`}
+                        >
+                          {isActive && (
+                            <Badge className="absolute top-3 right-3 bg-primary/15 text-primary border-primary/30" variant="outline">
+                              Active
+                            </Badge>
+                          )}
+                          <CardHeader className="pb-3">
+                            <div className="flex items-start gap-3">
+                              {org.logoUrl ? (
+                                <img src={org.logoUrl} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background shrink-0" />
+                              ) : (
+                                <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                                  <Building2 className="h-5 w-5 text-primary" />
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <CardTitle className="text-base truncate">{org.name}</CardTitle>
+                                <CardDescription className="text-xs truncate">{org.email || "No contact email"}</CardDescription>
                               </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <CardTitle className="text-base truncate">{org.name}</CardTitle>
-                              <CardDescription className="text-xs truncate">{org.email || "No contact email"}</CardDescription>
                             </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="pt-0">
-                          <div className="text-xs text-muted-foreground space-y-1 mb-4">
-                            {org.phone && <p>Phone: {org.phone}</p>}
-                            <p className="font-mono opacity-60">ID: {org.id.slice(0, 8)}...</p>
-                          </div>
-                          <div className="flex gap-2">
-                            {isPlatformOwner && (
-                              <Button
-                                variant={isActive ? "secondary" : "default"}
-                                size="sm"
-                                className="flex-1"
-                                disabled={isActive || switchTenantMutation.isPending}
-                                onClick={() => switchTenantMutation.mutate(org.id)}
-                              >
-                                <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
-                                {isActive ? "Current" : "Switch"}
-                              </Button>
-                            )}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                if (isPlatformOwner) {
-                                  switchTenantMutation.mutate(org.id, {
-                                    onSuccess: () => {
-                                      queryClient.invalidateQueries();
-                                      handleTabChange("branding");
-                                    },
-                                  });
-                                } else {
-                                  handleTabChange("branding");
-                                }
-                              }}
-                            >
-                              <SettingsIcon className="h-3.5 w-3.5" />
-                            </Button>
-                            {canDeleteTenant && (
+                          </CardHeader>
+                          <CardContent className="pt-0">
+                            <div className="text-xs text-muted-foreground space-y-1 mb-4">
+                              {org.phone && <p>Phone: {org.phone}</p>}
+                              <p className="font-mono opacity-60">ID: {org.id.slice(0, 8)}...</p>
+                            </div>
+                            <div className="flex gap-2">
+                              {isPlatformOwner && (
+                                <Button
+                                  variant={isActive ? "secondary" : "default"}
+                                  size="sm"
+                                  className="flex-1"
+                                  disabled={isActive || switchTenantMutation.isPending}
+                                  onClick={() => switchTenantMutation.mutate(org.id)}
+                                >
+                                  <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
+                                  {isActive ? "Current" : "Switch"}
+                                </Button>
+                              )}
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                onClick={() => setTenantDeleteId(org.id)}
-                                data-testid={`btn-delete-tenant-${org.id}`}
+                                onClick={() => {
+                                  if (isPlatformOwner) {
+                                    switchTenantMutation.mutate(org.id, {
+                                      onSuccess: () => {
+                                        queryClient.invalidateQueries();
+                                        handleTabChange("branding");
+                                      },
+                                    });
+                                  } else {
+                                    handleTabChange("branding");
+                                  }
+                                }}
                               >
-                                <Trash2 className="h-3.5 w-3.5" />
+                                <SettingsIcon className="h-3.5 w-3.5" />
                               </Button>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                              {canDeleteTenant && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => setTenantDeleteId(org.id)}
+                                  data-testid={`btn-delete-tenant-${org.id}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
-            <Dialog open={tenantAddOpen} onOpenChange={setTenantAddOpen}>
-              <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                  <DialogTitle>Create new tenant</DialogTitle>
-                  <DialogDescription>
-                    Create a new organization. You can optionally set up an admin account now, or add one later.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="tenant-org-name">Organization name *</Label>
-                    <Input
-                      id="tenant-org-name"
-                      value={newTenant.name}
-                      onChange={(e) => setNewTenant((p) => ({ ...p, name: e.target.value }))}
-                      placeholder="e.g. Acme Insurance"
-                      data-testid="input-tenant-name"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="tenant-org-email">Organization email</Label>
-                    <Input
-                      id="tenant-org-email"
-                      type="email"
-                      value={newTenant.email}
-                      onChange={(e) => setNewTenant((p) => ({ ...p, email: e.target.value }))}
-                      placeholder="info@acme.com"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="tenant-org-phone">Organization phone</Label>
-                    <Input
-                      id="tenant-org-phone"
-                      value={newTenant.phone}
-                      onChange={(e) => setNewTenant((p) => ({ ...p, phone: e.target.value }))}
-                      placeholder="+1 555 0100"
-                    />
-                  </div>
-                  <div className="border-t pt-4 space-y-4">
-                    <p className="text-sm font-medium flex items-center gap-2">
-                      <Users className="h-4 w-4 text-muted-foreground" />
-                      Tenant administrator account
-                    </p>
+              <Dialog open={tenantAddOpen} onOpenChange={setTenantAddOpen}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Create new tenant</DialogTitle>
+                    <DialogDescription>Create a new organization. You can optionally set up an admin account now, or add one later.</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-2">
                     <div className="space-y-2">
-                      <Label htmlFor="tenant-admin-name">Display name</Label>
+                      <Label htmlFor="tenant-org-name">Organization name *</Label>
                       <Input
-                        id="tenant-admin-name"
-                        value={newTenant.adminDisplayName}
-                        onChange={(e) => setNewTenant((p) => ({ ...p, adminDisplayName: e.target.value }))}
-                        placeholder="John Doe"
+                        id="tenant-org-name"
+                        value={newTenant.name}
+                        onChange={(e) => setNewTenant((p) => ({ ...p, name: e.target.value }))}
+                        placeholder="e.g. Acme Insurance"
+                        data-testid="input-tenant-name"
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="tenant-admin-email">Email</Label>
+                      <Label htmlFor="tenant-org-email">Organization email</Label>
                       <Input
-                        id="tenant-admin-email"
+                        id="tenant-org-email"
                         type="email"
-                        value={newTenant.adminEmail}
-                        onChange={(e) => setNewTenant((p) => ({ ...p, adminEmail: e.target.value }))}
-                        placeholder="admin@acme.com"
-                        data-testid="input-admin-email"
+                        value={newTenant.email}
+                        onChange={(e) => setNewTenant((p) => ({ ...p, email: e.target.value }))}
+                        placeholder="info@acme.com"
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="tenant-admin-password">Password (min 8 chars)</Label>
+                      <Label htmlFor="tenant-org-phone">Organization phone</Label>
                       <Input
-                        id="tenant-admin-password"
-                        type="password"
-                        value={newTenant.adminPassword}
-                        onChange={(e) => setNewTenant((p) => ({ ...p, adminPassword: e.target.value }))}
-                        placeholder="Minimum 8 characters"
-                        data-testid="input-admin-password"
+                        id="tenant-org-phone"
+                        value={newTenant.phone}
+                        onChange={(e) => setNewTenant((p) => ({ ...p, phone: e.target.value }))}
+                        placeholder="+1 555 0100"
                       />
                     </div>
+                    <div className="border-t pt-4 space-y-4">
+                      <p className="text-sm font-medium flex items-center gap-2">
+                        <Users className="h-4 w-4 text-muted-foreground" />
+                        Tenant administrator account
+                      </p>
+                      <div className="space-y-2">
+                        <Label htmlFor="tenant-admin-name">Display name</Label>
+                        <Input
+                          id="tenant-admin-name"
+                          value={newTenant.adminDisplayName}
+                          onChange={(e) => setNewTenant((p) => ({ ...p, adminDisplayName: e.target.value }))}
+                          placeholder="John Doe"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="tenant-admin-email">Email</Label>
+                        <Input
+                          id="tenant-admin-email"
+                          type="email"
+                          value={newTenant.adminEmail}
+                          onChange={(e) => setNewTenant((p) => ({ ...p, adminEmail: e.target.value }))}
+                          placeholder="admin@acme.com"
+                          data-testid="input-admin-email"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="tenant-admin-password">Password (min 8 chars)</Label>
+                        <Input
+                          id="tenant-admin-password"
+                          type="password"
+                          value={newTenant.adminPassword}
+                          onChange={(e) => setNewTenant((p) => ({ ...p, adminPassword: e.target.value }))}
+                          placeholder="Minimum 8 characters"
+                          data-testid="input-admin-password"
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setTenantAddOpen(false)}>Cancel</Button>
-                  <Button
-                    onClick={handleCreateTenant}
-                    disabled={!newTenant.name.trim() || createTenantMutation.isPending}
-                    data-testid="btn-confirm-add-tenant"
-                  >
-                    {createTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                    Create tenant
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setTenantAddOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleCreateTenant}
+                      disabled={!newTenant.name.trim() || createTenantMutation.isPending}
+                      data-testid="btn-confirm-add-tenant"
+                    >
+                      {createTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Create tenant
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
-            <AlertDialog open={!!tenantDeleteId} onOpenChange={(open) => !open && setTenantDeleteId(null)}>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Remove tenant?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will soft-delete <strong>{orgs?.find((o: any) => o.id === tenantDeleteId)?.name}</strong>. The tenant must have no active users. This action cannot be easily undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    onClick={() => tenantDeleteId && deleteTenantMutation.mutate(tenantDeleteId)}
-                    disabled={deleteTenantMutation.isPending}
-                  >
-                    {deleteTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                    Remove
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </TabsContent>
+              <AlertDialog open={!!tenantDeleteId} onOpenChange={(open) => !open && setTenantDeleteId(null)}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Remove tenant?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will soft-delete <strong>{orgs?.find((o: any) => o.id === tenantDeleteId)?.name}</strong>. The tenant must have no active users. This action cannot be easily undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onClick={() => tenantDeleteId && deleteTenantMutation.mutate(tenantDeleteId)}
+                      disabled={deleteTenantMutation.isPending}
+                    >
+                      {deleteTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Remove
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </TabsContent>
           )}
 
+          {/* Branding */}
           <TabsContent value="branding" className="mt-6">
             <Card className="shadow-sm">
               <CardHeader>
@@ -611,7 +668,9 @@ export default function StaffSettings() {
                     </div>
                     <div className="space-y-2">
                       <input id="logo-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleLogoUpload} />
-                      <Button type="button" variant="outline" onClick={() => document.getElementById("logo-upload")?.click()}>Upload Logo</Button>
+                      <Button type="button" variant="outline" onClick={() => document.getElementById("logo-upload")?.click()}>
+                        Upload Logo
+                      </Button>
                       <p className="text-xs text-muted-foreground">PNG, WebP or SVG. Transparent background recommended.</p>
                     </div>
                   </div>
@@ -633,7 +692,9 @@ export default function StaffSettings() {
                     </div>
                     <div className="space-y-2">
                       <input id="sig-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleSignatureUpload} />
-                      <Button type="button" variant="outline" onClick={() => document.getElementById("sig-upload")?.click()}>Upload Signature</Button>
+                      <Button type="button" variant="outline" onClick={() => document.getElementById("sig-upload")?.click()}>
+                        Upload Signature
+                      </Button>
                       <p className="text-xs text-muted-foreground">PNG, WebP or SVG. Transparent background recommended.</p>
                     </div>
                   </div>
@@ -642,50 +703,25 @@ export default function StaffSettings() {
                 <div className="grid gap-4">
                   <div className="grid gap-2">
                     <Label htmlFor="orgName">Organization Name</Label>
-                    <Input
-                      id="orgName"
-                      value={orgName}
-                      onChange={(e) => setOrgName(e.target.value)}
-                    />
+                    <Input id="orgName" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="address">Address</Label>
-                    <Input
-                      id="address"
-                      value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      placeholder="Street, city, country"
-                    />
+                    <Input id="address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, city, country" />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
                       <Label htmlFor="phone">Phone</Label>
-                      <Input
-                        id="phone"
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        placeholder="+263 ..."
-                      />
+                      <Input id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+263 ..." />
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="email">Email</Label>
-                      <Input
-                        id="email"
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="contact@example.com"
-                      />
+                      <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="contact@example.com" />
                     </div>
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="website">Website</Label>
-                    <Input
-                      id="website"
-                      value={website}
-                      onChange={(e) => setWebsite(e.target.value)}
-                      placeholder="https://..."
-                    />
+                    <Input id="website" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://..." />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="primaryColor">Primary Color</Label>
@@ -710,7 +746,9 @@ export default function StaffSettings() {
                         <button
                           key={c}
                           type="button"
-                          className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${primaryColor === c ? "border-foreground ring-2 ring-offset-2 ring-primary" : "border-transparent"}`}
+                          className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${
+                            primaryColor === c ? "border-foreground ring-2 ring-offset-2 ring-primary" : "border-transparent"
+                          }`}
                           style={{ backgroundColor: c }}
                           onClick={() => setPrimaryColor(c)}
                           title={c}
@@ -720,11 +758,7 @@ export default function StaffSettings() {
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="footerText">Footer Text (on documents)</Label>
-                    <Input
-                      id="footerText"
-                      value={footerText}
-                      onChange={(e) => setFooterText(e.target.value)}
-                    />
+                    <Input id="footerText" value={footerText} onChange={(e) => setFooterText(e.target.value)} />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
@@ -749,44 +783,39 @@ export default function StaffSettings() {
                       <p className="text-xs text-muted-foreground">e.g. 5 → 00001, 00002 (per tenant)</p>
                     </div>
                   </div>
+
                   {isPlatformOwner && (
-                    <>
-                      <div className="border-t pt-6 mt-4">
-                        <div className="flex items-center gap-2 mb-4">
-                          <Shield className="h-4 w-4 text-primary" />
-                          <span className="font-semibold text-sm">Platform Owner Settings</span>
-                        </div>
-                        <div className="grid gap-4">
-                          <div className="flex items-center justify-between rounded-lg border p-4">
-                            <div className="space-y-0.5">
-                              <Label htmlFor="whitelabel-toggle" className="font-medium">White-Label Mode</Label>
-                              <p className="text-xs text-muted-foreground">
-                                When enabled, POL263 branding is fully replaced with this tenant's name, logo, and colors across the entire app (login, sidebar, documents). When disabled, the app loads as POL263 but tenant details appear on documents and receipts.
-                              </p>
-                            </div>
-                            <Switch
-                              id="whitelabel-toggle"
-                              checked={isWhitelabeled}
-                              onCheckedChange={setIsWhitelabeled}
-                            />
-                          </div>
-                          <div className="grid gap-2">
-                            <Label htmlFor="databaseUrl">Dedicated Database URL (optional)</Label>
-                            <Input
-                              id="databaseUrl"
-                              type="password"
-                              autoComplete="off"
-                              value={databaseUrl}
-                              onChange={(e) => setDatabaseUrl(e.target.value)}
-                              placeholder="postgresql://... (leave empty to use shared database)"
-                            />
+                    <div className="border-t pt-6 mt-4">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Shield className="h-4 w-4 text-primary" />
+                        <span className="font-semibold text-sm">Platform Owner Settings</span>
+                      </div>
+                      <div className="grid gap-4">
+                        <div className="flex items-center justify-between rounded-lg border p-4">
+                          <div className="space-y-0.5">
+                            <Label htmlFor="whitelabel-toggle" className="font-medium">White-Label Mode</Label>
                             <p className="text-xs text-muted-foreground">
-                              When set, this tenant's data is stored in a separate database for full isolation. Leave empty to share the platform database.
+                              When enabled, POL263 branding is fully replaced with this tenant&apos;s name, logo, and colors across the entire app (login, sidebar, documents). When disabled, the app loads as POL263 but tenant details appear on documents and receipts.
                             </p>
                           </div>
+                          <Switch id="whitelabel-toggle" checked={isWhitelabeled} onCheckedChange={setIsWhitelabeled} />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="databaseUrl">Dedicated Database URL (optional)</Label>
+                          <Input
+                            id="databaseUrl"
+                            type="password"
+                            autoComplete="off"
+                            value={databaseUrl}
+                            onChange={(e) => setDatabaseUrl(e.target.value)}
+                            placeholder="postgresql://... (leave empty to use shared database)"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            When set, this tenant&apos;s data is stored in a separate database for full isolation. Leave empty to share the platform database.
+                          </p>
                         </div>
                       </div>
-                    </>
+                    </div>
                   )}
                 </div>
 
@@ -799,6 +828,7 @@ export default function StaffSettings() {
                     "Save Branding Changes"
                   )}
                 </Button>
+
                 {updateOrgMutation.isSuccess && (
                   <p className="text-sm text-emerald-600 flex items-center gap-1">
                     <Check className="h-4 w-4" /> Saved successfully. Audit log entry created.
@@ -808,15 +838,14 @@ export default function StaffSettings() {
             </Card>
           </TabsContent>
 
+          {/* Account */}
           <TabsContent value="account" className="mt-6">
             <Card className="shadow-sm">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <KeyRound className="h-5 w-5" /> Change password
                 </CardTitle>
-                <CardDescription>
-                  Change your sign-in password. If you sign in with Google, this section does not apply.
-                </CardDescription>
+                <CardDescription>Change your sign-in password. If you sign in with Google, this section does not apply.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 max-w-md">
                 <div className="grid gap-2">
@@ -895,6 +924,7 @@ export default function StaffSettings() {
             </Card>
           </TabsContent>
 
+          {/* Terms */}
           <TabsContent value="terms" className="mt-6">
             <Card className="shadow-sm">
               <CardHeader>
@@ -909,6 +939,7 @@ export default function StaffSettings() {
                     <Plus className="h-4 w-4 mr-2" /> Add term
                   </Button>
                 </div>
+
                 {termsList === undefined ? (
                   <div className="flex justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -960,12 +991,7 @@ export default function StaffSettings() {
                 <div className="grid gap-4 py-4">
                   <div className="grid gap-2">
                     <Label htmlFor="termTitle">Title</Label>
-                    <Input
-                      id="termTitle"
-                      value={termTitle}
-                      onChange={(e) => setTermTitle(e.target.value)}
-                      placeholder="e.g. Premium Payment"
-                    />
+                    <Input id="termTitle" value={termTitle} onChange={(e) => setTermTitle(e.target.value)} placeholder="e.g. Premium Payment" />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="termContent">Content</Label>
@@ -981,12 +1007,7 @@ export default function StaffSettings() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
                       <Label htmlFor="termCategory">Category</Label>
-                      <Input
-                        id="termCategory"
-                        value={termCategory}
-                        onChange={(e) => setTermCategory(e.target.value)}
-                        placeholder="general"
-                      />
+                      <Input id="termCategory" value={termCategory} onChange={(e) => setTermCategory(e.target.value)} placeholder="general" />
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="termSortOrder">Sort order</Label>
@@ -1043,6 +1064,7 @@ export default function StaffSettings() {
             </AlertDialog>
           </TabsContent>
 
+          {/* RBAC */}
           <TabsContent value="rbac" className="mt-6">
             <Card className="shadow-sm">
               <CardHeader>
@@ -1069,7 +1091,13 @@ export default function StaffSettings() {
                       </TableHeader>
                       <TableBody>
                         {permsList.map((perm: any) => (
-                          <RBACPermissionRow key={perm.id} permission={perm} roles={rolesList} canEdit={canEditRbac} />
+                          <RBACPermissionRow
+                            key={perm.id}
+                            permission={perm}
+                            roles={rolesList}
+                            canEdit={canEditRbac}
+                            permsByRoleId={permsByRoleId}
+                          />
                         ))}
                       </TableBody>
                     </Table>
@@ -1088,7 +1116,17 @@ export default function StaffSettings() {
   );
 }
 
-function RBACPermissionRow({ permission, roles, canEdit }: { permission: any; roles: any[]; canEdit: boolean }) {
+function RBACPermissionRow({
+  permission,
+  roles,
+  canEdit,
+  permsByRoleId,
+}: {
+  permission: any;
+  roles: any[];
+  canEdit: boolean;
+  permsByRoleId: Record<string, any[] | undefined>;
+}) {
   const queryClient = useQueryClient();
 
   const toggleMutation = useMutation({
@@ -1104,18 +1142,11 @@ function RBACPermissionRow({ permission, roles, canEdit }: { permission: any; ro
     },
   });
 
-  const rolePermQueries = roles.map((role: any) => {
-    const { data: rolePerms } = useQuery<any[]>({
-      queryKey: [`/api/roles/${role.id}/permissions`],
-      staleTime: 60000,
-    });
-    return { role, perms: rolePerms };
-  });
-
   return (
     <TableRow>
       <TableCell className="font-mono text-xs sticky left-0 bg-card z-10">{permission.name}</TableCell>
-      {rolePermQueries.map(({ role, perms }) => {
+
+      {roles.map((role: any) => {
         if (role.name === "superuser") {
           return (
             <TableCell key={role.id} className="text-center text-primary">
@@ -1123,18 +1154,23 @@ function RBACPermissionRow({ permission, roles, canEdit }: { permission: any; ro
             </TableCell>
           );
         }
+
+        const perms = permsByRoleId[role.id];
+        const loading = perms === undefined;
         const hasPerm = perms?.some((p: any) => p.id === permission.id);
+
         const handleToggle = () => {
-          if (!canEdit) return;
+          if (!canEdit || loading) return;
           toggleMutation.mutate({ roleId: role.id, permId: permission.id, grant: !hasPerm });
         };
+
         return (
           <TableCell
             key={role.id}
             className={`text-center ${canEdit ? "cursor-pointer hover:bg-muted/50 transition-colors" : ""}`}
             onClick={handleToggle}
           >
-            {perms === undefined ? (
+            {loading ? (
               <Loader2 className="h-3 w-3 animate-spin mx-auto" />
             ) : hasPerm ? (
               <Check className="h-4 w-4 mx-auto text-primary" />
