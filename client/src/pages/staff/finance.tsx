@@ -275,14 +275,22 @@ export default function StaffFinance() {
 
   const { data: rawPayments, isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
   const { data: rawCashups } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
-  const { data: rawCommissionPlans } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
+  const { data: rawProducts } = useQuery<any[]>({ queryKey: ["/api/products"] });
   const { data: rawCommissionLedger } = useQuery<any[]>({ queryKey: ["/api/commission-ledger"] });
   const { data: rawExpenditures } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
   const { data: rawPolicies } = useQuery<any[]>({ queryKey: ["/api/policies"] });
   const { data: rawClients } = useQuery<any[]>({ queryKey: ["/api/clients"] });
   const payments = Array.isArray(rawPayments) ? rawPayments : [];
   const cashups = Array.isArray(rawCashups) ? rawCashups : [];
-  const commissionPlans = Array.isArray(rawCommissionPlans) ? rawCommissionPlans : [];
+  const products = Array.isArray(rawProducts) ? rawProducts : [];
+  const { data: rawProductVersions } = useQuery<any[]>({ queryKey: ["/api/product-versions"] });
+  const productVersions = Array.isArray(rawProductVersions) ? rawProductVersions : [];
+  const commissionConfigs = productVersions
+    .filter((v: any) => v.commissionFirstMonthsRate || v.commissionRecurringRate)
+    .map((v: any) => {
+      const product = products.find((p: any) => p.id === v.productId);
+      return { ...v, productName: product?.name || "Unknown" };
+    });
   const commissionLedger = Array.isArray(rawCommissionLedger) ? rawCommissionLedger : [];
   const expenditures = Array.isArray(rawExpenditures) ? rawExpenditures : [];
   const policies = Array.isArray(rawPolicies) ? rawPolicies : [];
@@ -708,8 +716,8 @@ export default function StaffFinance() {
               <div className="flex items-center gap-3">
                 <TrendingUp className="h-8 w-8 text-blue-600" />
                 <div>
-                  <p className="text-sm text-muted-foreground">Commission Plans</p>
-                  <p className="text-2xl font-bold">{commissionPlans.length}</p>
+                  <p className="text-sm text-muted-foreground">Commission Configs</p>
+                  <p className="text-2xl font-bold">{commissionConfigs.length}</p>
                 </div>
               </div>
             </CardContent>
@@ -954,29 +962,34 @@ export default function StaffFinance() {
               })()}
 
               <Card>
-                <CardHeader><CardTitle>Commission Plans</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle>Commission Rates (from Product Versions)</CardTitle>
+                  <p className="text-sm text-muted-foreground">Commission rates are configured when creating product versions in the Products section.</p>
+                </CardHeader>
                 <CardContent>
-                  {commissionPlans.length === 0 ? (
-                    <p className="text-center text-muted-foreground py-8">No commission plans configured yet</p>
+                  {commissionConfigs.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-8">No commission rates configured on any product version yet. Go to Products to set commission rates on a product version.</p>
                   ) : (
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Name</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead>Version</TableHead>
                           <TableHead>New Business Rate</TableHead>
-                          <TableHead>Existing Business Rate</TableHead>
+                          <TableHead>Recurring Rate</TableHead>
                           <TableHead>Clawback Threshold</TableHead>
                           <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {commissionPlans.map((cp: any) => (
-                          <TableRow key={cp.id}>
-                            <TableCell className="font-medium">{cp.name}</TableCell>
-                            <TableCell>{cp.firstMonthsRate}% for {cp.firstMonthsCount} months</TableCell>
-                            <TableCell>{cp.recurringRate}% from month {cp.recurringStartMonth}</TableCell>
-                            <TableCell>{cp.clawbackThresholdPayments ?? 4} payments</TableCell>
-                            <TableCell><Badge variant={cp.isActive ? "default" : "secondary"}>{cp.isActive ? "Active" : "Inactive"}</Badge></TableCell>
+                        {commissionConfigs.map((v: any) => (
+                          <TableRow key={v.id}>
+                            <TableCell className="font-medium">{v.productName}</TableCell>
+                            <TableCell>v{v.version}</TableCell>
+                            <TableCell>{v.commissionFirstMonthsRate}% for {v.commissionFirstMonthsCount ?? "—"} months</TableCell>
+                            <TableCell>{v.commissionRecurringRate}% from month {v.commissionRecurringStartMonth ?? "—"}</TableCell>
+                            <TableCell>{v.commissionClawbackThreshold ?? "—"} payments</TableCell>
+                            <TableCell><Badge variant={v.isActive ? "default" : "secondary"}>{v.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
