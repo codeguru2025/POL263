@@ -799,7 +799,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.query.dateTo) filters.dateTo = String(req.query.dateTo);
     if (req.query.status) filters.status = String(req.query.status);
     if (req.query.branchId) filters.branchId = String(req.query.branchId);
-    return res.json(await storage.getDashboardStats(user.organizationId, filters));
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const agentId = isAgent ? user.id : undefined;
+    return res.json(await storage.getDashboardStats(user.organizationId, filters, agentId));
   });
 
   // ─── Clients ────────────────────────────────────────────────
@@ -2865,7 +2868,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/diagnostics", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const stats = await storage.getDashboardStats(user.organizationId);
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const stats = await storage.getDashboardStats(user.organizationId, undefined, isAgent ? user.id : undefined);
     const unallocated = await storage.getPaymentsByOrg(user.organizationId, 100, 0);
     const unallocatedPayments = unallocated.filter((p: any) => !p.policyId);
     return res.json({
@@ -2882,7 +2887,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const payments = await storage.getPaymentsByOrg(user.organizationId, 5000, 0);
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    let payments: any[];
+    if (isAgent) {
+      const agentPolicyIds = new Set((await storage.getPoliciesByAgent(user.id, user.organizationId)).map((p) => p.id));
+      const allPayments = await storage.getPaymentsByOrg(user.organizationId, 5000, 0);
+      payments = allPayments.filter((p: any) => p.policyId && agentPolicyIds.has(p.policyId));
+    } else {
+      payments = await storage.getPaymentsByOrg(user.organizationId, 5000, 0);
+    }
     const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
     const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
     const cleared = payments.filter((p: any) => {
@@ -2903,7 +2917,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const allPolicies = isAgent
+      ? await storage.getPoliciesByAgent(user.id, user.organizationId)
+      : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
     const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
     const branchId = req.query.branchId ? String(req.query.branchId) : undefined;
@@ -2919,7 +2937,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const allLeads = await storage.getLeadsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const allLeads = isAgent
+      ? await storage.getLeadsByAgent(user.id, user.organizationId)
+      : await storage.getLeadsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const stages: Record<string, number> = {};
     allLeads.forEach((l: any) => {
       stages[l.stage] = (stages[l.stage] || 0) + 1;
@@ -2929,15 +2951,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent) {
+      const agentPolicies = await storage.getPoliciesByAgent(user.id, user.organizationId);
+      const activePolicies = agentPolicies.filter((p: any) => p.status === "active");
+      let coveredLives = 0;
+      for (const p of activePolicies) {
+        const members = await storage.getPolicyMembers(p.id, user.organizationId);
+        coveredLives += members.length;
+      }
+      return res.json({ coveredLives, activePolicyCount: activePolicies.length });
+    }
     const result = await storage.countCoveredLives(user.organizationId);
     return res.json(result);
   });
 
   app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
     const allProducts = await storage.getProductsByOrg(user.organizationId);
-    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
-    const allPayments = await storage.getPaymentsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const allPolicies = isAgent
+      ? await storage.getPoliciesByAgent(user.id, user.organizationId)
+      : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const allPaymentsRaw = await storage.getPaymentsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const allPayments = isAgent
+      ? allPaymentsRaw.filter((p: any) => p.policyId && allPolicies.some((pol: any) => pol.id === p.policyId))
+      : allPaymentsRaw;
 
     const pvToProductId: Record<string, string> = {};
     for (const prod of allProducts) {
@@ -2974,7 +3015,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const allPolicies = await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const allPolicies = isAgent
+      ? await storage.getPoliciesByAgent(user.id, user.organizationId)
+      : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
     const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
     const branchId = req.query.branchId ? String(req.query.branchId) : undefined;
@@ -3141,7 +3186,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...filters, preparedBy: filters.userId }));
+    const preparedBy = filters.agentId ?? filters.userId;
+    return res.json(await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...filters, preparedBy }));
   });
 
   app.get("/api/reports/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

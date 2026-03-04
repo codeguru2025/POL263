@@ -10,6 +10,7 @@ import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { useBranding } from "@/hooks/use-branding";
 import { resolveAssetUrl } from "@/lib/assetUrl";
+import AppFooter from "@/components/app-footer";
 
 export default function AgentLogin() {
   const [, setLocation] = useLocation();
@@ -75,8 +76,9 @@ export default function AgentLogin() {
   }
 
   return (
-    <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md border-border/50 shadow-lg">
+    <div className="min-h-screen bg-muted/30 flex flex-col">
+      <div className="flex-1 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
             <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="w-10 h-10 rounded-lg object-contain" />
@@ -144,6 +146,8 @@ export default function AgentLogin() {
           </div>
         </CardContent>
       </Card>
+      </div>
+      <AppFooter />
     </div>
   );
 }

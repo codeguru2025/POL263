@@ -17,39 +17,58 @@ import Home from "@/pages/home";
 import NotFound from "@/pages/not-found";
 
 // Lazily loaded: all other pages (route-based code splitting)
-const StaffLogin = lazy(() => import("@/pages/staff/login"));
-const AgentLogin = lazy(() => import("@/pages/agent/login"));
-const StaffDashboard = lazy(() => import("@/pages/staff/dashboard"));
-const AuditLogs = lazy(() => import("@/pages/staff/audit"));
-const StaffSettings = lazy(() => import("@/pages/staff/settings"));
-const ProductBuilder = lazy(() => import("@/pages/staff/products"));
-const StaffPolicies = lazy(() => import("@/pages/staff/policies"));
-const StaffClients = lazy(() => import("@/pages/staff/clients"));
-const StaffClaims = lazy(() => import("@/pages/staff/claims"));
-const StaffFunerals = lazy(() => import("@/pages/staff/funerals"));
-const StaffFinance = lazy(() => import("@/pages/staff/finance"));
-const StaffReports = lazy(() => import("@/pages/staff/reports"));
-const StaffLeads = lazy(() => import("@/pages/staff/leads"));
-const StaffNotifications = lazy(() => import("@/pages/staff/notifications"));
-const StaffGroups = lazy(() => import("@/pages/staff/groups"));
-const StaffApprovals = lazy(() => import("@/pages/staff/approvals"));
-const StaffDiagnostics = lazy(() => import("@/pages/staff/diagnostics"));
-const StaffPriceBook = lazy(() => import("@/pages/staff/pricebook"));
-const StaffPayroll = lazy(() => import("@/pages/staff/payroll"));
-const StaffUsers = lazy(() => import("@/pages/staff/users"));
-const StaffTenants = lazy(() => import("@/pages/staff/tenants"));
+// Retry chunk load on failure (e.g. transient network) to avoid "error then loads" when navigating
+function retryLazy<T>(
+  importFn: () => Promise<{ default: T }>,
+  retries = 3,
+  delay = 500
+): Promise<{ default: T }> {
+  return importFn().catch((err) => {
+    const isChunkError =
+      err?.name === "ChunkLoadError" ||
+      err?.message?.includes("Loading chunk") ||
+      err?.message?.includes("Failed to fetch dynamically imported module");
+    if (isChunkError && retries > 0) {
+      return new Promise((resolve, reject) => {
+        setTimeout(() => retryLazy(importFn, retries - 1, delay).then(resolve).catch(reject), delay);
+      });
+    }
+    throw err;
+  });
+}
+const StaffLogin = lazy(() => retryLazy(() => import("@/pages/staff/login")));
+const AgentLogin = lazy(() => retryLazy(() => import("@/pages/agent/login")));
+const StaffDashboard = lazy(() => retryLazy(() => import("@/pages/staff/dashboard")));
+const AuditLogs = lazy(() => retryLazy(() => import("@/pages/staff/audit")));
+const StaffSettings = lazy(() => retryLazy(() => import("@/pages/staff/settings")));
+const ProductBuilder = lazy(() => retryLazy(() => import("@/pages/staff/products")));
+const StaffPolicies = lazy(() => retryLazy(() => import("@/pages/staff/policies")));
+const StaffClients = lazy(() => retryLazy(() => import("@/pages/staff/clients")));
+const StaffClaims = lazy(() => retryLazy(() => import("@/pages/staff/claims")));
+const StaffFunerals = lazy(() => retryLazy(() => import("@/pages/staff/funerals")));
+const StaffFinance = lazy(() => retryLazy(() => import("@/pages/staff/finance")));
+const StaffReports = lazy(() => retryLazy(() => import("@/pages/staff/reports")));
+const StaffLeads = lazy(() => retryLazy(() => import("@/pages/staff/leads")));
+const StaffNotifications = lazy(() => retryLazy(() => import("@/pages/staff/notifications")));
+const StaffGroups = lazy(() => retryLazy(() => import("@/pages/staff/groups")));
+const StaffApprovals = lazy(() => retryLazy(() => import("@/pages/staff/approvals")));
+const StaffDiagnostics = lazy(() => retryLazy(() => import("@/pages/staff/diagnostics")));
+const StaffPriceBook = lazy(() => retryLazy(() => import("@/pages/staff/pricebook")));
+const StaffPayroll = lazy(() => retryLazy(() => import("@/pages/staff/payroll")));
+const StaffUsers = lazy(() => retryLazy(() => import("@/pages/staff/users")));
+const StaffTenants = lazy(() => retryLazy(() => import("@/pages/staff/tenants")));
 
-const ClientLogin = lazy(() => import("@/pages/client/login"));
-const ClientClaim = lazy(() => import("@/pages/client/claim"));
-const ClientResetPassword = lazy(() => import("@/pages/client/reset-password"));
-const ClientDashboard = lazy(() => import("@/pages/client/dashboard"));
-const ClientPayments = lazy(() => import("@/pages/client/payments"));
-const ClientDocuments = lazy(() => import("@/pages/client/documents"));
-const ClientDocumentView = lazy(() => import("@/pages/client/document-view"));
-const ClientClaims = lazy(() => import("@/pages/client/claims"));
-const ClientFeedback = lazy(() => import("@/pages/client/feedback"));
-const JoinPage = lazy(() => import("@/pages/join"));
-const JoinRegisterPage = lazy(() => import("@/pages/join/register"));
+const ClientLogin = lazy(() => retryLazy(() => import("@/pages/client/login")));
+const ClientClaim = lazy(() => retryLazy(() => import("@/pages/client/claim")));
+const ClientResetPassword = lazy(() => retryLazy(() => import("@/pages/client/reset-password")));
+const ClientDashboard = lazy(() => retryLazy(() => import("@/pages/client/dashboard")));
+const ClientPayments = lazy(() => retryLazy(() => import("@/pages/client/payments")));
+const ClientDocuments = lazy(() => retryLazy(() => import("@/pages/client/documents")));
+const ClientDocumentView = lazy(() => retryLazy(() => import("@/pages/client/document-view")));
+const ClientClaims = lazy(() => retryLazy(() => import("@/pages/client/claims")));
+const ClientFeedback = lazy(() => retryLazy(() => import("@/pages/client/feedback")));
+const JoinPage = lazy(() => retryLazy(() => import("@/pages/join")));
+const JoinRegisterPage = lazy(() => retryLazy(() => import("@/pages/join/register")));
 
 function PageLoader() {
   return (

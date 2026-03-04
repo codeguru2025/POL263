@@ -40,6 +40,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import AppFooter from "@/components/app-footer";
 import { useBranding } from "@/hooks/use-branding";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 import {
@@ -521,6 +522,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             )}
           </div>
         </div>
+        <AppFooter />
       </main>
     </div>
   );

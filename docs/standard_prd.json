@@ -1,0 +1,54 @@
+{
+  "productName": "POL263",
+  "productDescription": "Multi-tenant insurance policy management platform with Staff, Agent, and Client portals. RBAC enforced; agents see only their own data.",
+  "version": "1.0",
+  "technicalSpecs": {
+    "stack": "React 19, Vite, TypeScript, Express, PostgreSQL (Drizzle), Passport auth",
+    "defaultBaseUrl": "http://localhost:5000",
+    "auth": {
+      "staff": "Google OAuth",
+      "agent": "Email + password",
+      "client": "Policy number + password"
+    },
+    "roles": ["platform_owner", "staff", "agent", "client"]
+  },
+  "functionalRequirements": [
+    "FR1: Staff can sign in with Google and access dashboard, policies, clients, claims, finance, reports, settings",
+    "FR2: Agent can sign in with email/password and see only own clients, policies, leads, commissions, and reports",
+    "FR3: Client can sign in with policy number and password and view policies, pay premiums, view documents, submit claims and feedback",
+    "FR4: All lists, dashboards, and reports must respect RBAC (agents see only their data)",
+    "FR5: Policies support full lifecycle: inactive, active, grace, lapsed, cancelled; status history and reinstatement",
+    "FR6: Payments can be recorded and allocated; client can initiate premium payment",
+    "FR7: Claims can be created, linked to policy, and have documents attached",
+    "FR8: Tenant whitelabel (name, logo) applies when enabled; default is POL263 branding",
+    "FR9: Join and registration flows support referral codes and policy claim",
+    "FR10: Settings (tenant, users, branches, logo, signature) save and take effect"
+  ],
+  "userStories": [
+    "As staff I can log in with Google so that I access the staff dashboard",
+    "As staff I can create and edit policies so that client coverage is managed",
+    "As staff I can view reports and export CSV so that I can analyze data",
+    "As agent I can log in with email/password so that I access my scoped dashboard",
+    "As agent I see only my clients and policies so that data is RBAC-compliant",
+    "As agent I can copy my referral link so that clients can sign up with my code",
+    "As client I can log in with policy number and password so that I see my dashboard",
+    "As client I can pay my premium so that my policy stays in good standing",
+    "As client I can view my documents and submit claims so that I manage my coverage",
+    "As platform owner I can switch tenants so that I manage multiple organizations"
+  ],
+  "keyFlows": [
+    "Home -> Staff login (Google) -> Dashboard -> Policies / Clients / Claims / Finance / Reports / Settings",
+    "Home -> Agent login (email/password) -> Dashboard (agent-scoped) -> My Clients / Policies / Commissions",
+    "Home -> Client login (policy + password) -> Client dashboard -> Pay / Documents / Claims / Feedback",
+    "Join (with ref) -> Register -> Product/branch selection -> Client details -> Dependents -> Payment -> Policy created"
+  ],
+  "acceptanceCriteria": [
+    "Login flows for staff, agent, and client work and redirect to correct dashboard",
+    "Dashboard and all reports show agent-scoped data when user is agent",
+    "Policy CRUD, status lifecycle, and PDF generation work",
+    "Payment recording and client payment flow work",
+    "Claims creation and document upload work",
+    "Settings and whitelabel save and apply",
+    "No uncaught errors that break the page; error boundary does not auto-clear"
+  ]
+}

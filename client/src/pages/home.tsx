@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Building2, Users, UserCircle } from "lucide-react";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import AppFooter from "@/components/app-footer";
 
 const portals = [
   {
@@ -72,6 +73,8 @@ export default function Home() {
           </Link>
         ))}
       </div>
+
+      <AppFooter />
     </div>
   );
 }

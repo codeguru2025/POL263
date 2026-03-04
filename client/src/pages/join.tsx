@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { getApiBase } from "@/lib/queryClient";
 import { UserPlus, Shield, CheckCircle2, ArrowRight } from "lucide-react";
+import AppFooter from "@/components/app-footer";
 
 export default function JoinPage() {
   const search = useSearch();
@@ -26,7 +27,8 @@ export default function JoinPage() {
   }, [refCode]);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-background flex flex-col">
+      <div className="flex-1 flex flex-col items-center justify-center p-4">
       <div className="mb-8 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
         <img src="/assets/logo.png" alt="Logo" className="h-16 w-16 mb-4 rounded-2xl object-contain" />
         <h1 className="text-3xl font-display font-bold text-foreground tracking-tight">Join</h1>
@@ -91,6 +93,8 @@ export default function JoinPage() {
           </p>
         </CardContent>
       </Card>
+      </div>
+      <AppFooter />
     </div>
   );
 }

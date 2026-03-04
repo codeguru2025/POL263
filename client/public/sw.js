@@ -2,6 +2,7 @@ const CACHE_NAME = "pol263-v1";
 const PRECACHE_URLS = [
   "/",
   "/assets/logo.png",
+  "/assets/chibikhulu-logo.png",
   "/favicon.png"
 ];
 

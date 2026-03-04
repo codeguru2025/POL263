@@ -13,6 +13,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { resolveAssetUrl } from "@/lib/assetUrl";
+import AppFooter from "@/components/app-footer";
 
 interface ClientLayoutProps {
   children: React.ReactNode;
@@ -117,6 +118,8 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
           {children}
         </div>
       </main>
+
+      <AppFooter />
 
       {(tenant?.address || tenant?.phone || tenant?.email || tenant?.website) && (
         <footer className="border-t bg-muted/30 py-4 px-4 sm:px-6 shrink-0">

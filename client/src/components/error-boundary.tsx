@@ -22,12 +22,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught an error", error, errorInfo);
-    if (!this.retryTimer) {
-      this.retryTimer = setTimeout(() => {
-        this.retryTimer = null;
-        this.setState({ hasError: false, error: null });
-      }, 2000);
-    }
+    // Do not auto-clear error state; user must use Back/Reload. Auto-clear caused "error then loads" flash when navigating.
   }
 
   componentWillUnmount() {

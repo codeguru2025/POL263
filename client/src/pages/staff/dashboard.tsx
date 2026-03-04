@@ -123,7 +123,6 @@ export default function StaffDashboard() {
 
   const { data: coveredLives } = useQuery<CoveredLives>({
     queryKey: ["/api/dashboard/covered-lives"],
-    enabled: !isAgent,
   });
 
   const { data: revenueTrend } = useQuery<{ date: string; total: number }[]>({
@@ -171,12 +170,10 @@ export default function StaffDashboard() {
       if (!res.ok) throw new Error("Failed to load lapse retention");
       return res.json();
     },
-    enabled: !isAgent,
   });
 
   const { data: productPerformance } = useQuery<ProductPerformance[]>({
     queryKey: ["/api/dashboard/product-performance"],
-    enabled: !isAgent,
   });
 
   const { data: orgs } = useQuery<any[]>({
@@ -242,7 +239,7 @@ export default function StaffDashboard() {
       icon: Heart,
       color: "text-rose-600",
       bgColor: "bg-rose-50",
-      show: !isAgent,
+      show: true,
     },
     {
       title: isAgent ? "My Clients" : "Leads & Clients",
@@ -298,7 +295,7 @@ export default function StaffDashboard() {
       icon: TrendingUp,
       color: "text-indigo-600",
       bgColor: "bg-indigo-50",
-      show: !isAgent,
+      show: true,
     },
   ];
 
@@ -472,9 +469,8 @@ export default function StaffDashboard() {
         </div>
         )}
 
-        {!isAgent && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {canReadLead && (
+          {!isAgent && canReadLead && (
           <Card className="shadow-sm">
             <CardHeader>
               <CardTitle className="font-display text-base">Lead Conversion Funnel</CardTitle>
@@ -548,9 +544,8 @@ export default function StaffDashboard() {
             </CardContent>
           </Card>
         </div>
-        )}
 
-        {!isAgent && productPerformance && productPerformance.length > 0 && (
+        {productPerformance && productPerformance.length > 0 && (
           <div>
             <h2 className="text-lg font-display font-semibold mb-3">Product Performance</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

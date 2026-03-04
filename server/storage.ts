@@ -385,7 +385,7 @@ export interface IStorage {
   createCashup(cashup: InsertCashup): Promise<Cashup>;
   updateCashup(id: string, data: Partial<InsertCashup>, orgId: string): Promise<Cashup | undefined>;
   getSecurityQuestions(orgId: string): Promise<{ id: string; question: string }[]>;
-  getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }): Promise<any>;
+  getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }, agentId?: string): Promise<any>;
   generatePolicyNumber(orgId: string): Promise<string>;
   generateClaimNumber(orgId: string): Promise<string>;
   getNextMemberNumber(orgId: string): Promise<string>;
@@ -1186,6 +1186,7 @@ export class DatabaseStorage implements IStorage {
     if (filters?.status) conditions.push(eq(policies.status, filters.status));
     if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
     if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
     if (filters?.productId) {
       const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
       const ids = versionIds.map((v) => v.id);
@@ -1380,6 +1381,7 @@ export class DatabaseStorage implements IStorage {
     ];
     if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
     const rows = await tdb
       .select({
         policyId: policyStatusHistory.policyId,
@@ -1419,6 +1421,7 @@ export class DatabaseStorage implements IStorage {
     ];
     if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
     const rows = await tdb
       .select({
         policyId: policyStatusHistory.policyId,
@@ -1453,6 +1456,7 @@ export class DatabaseStorage implements IStorage {
     ];
     if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
     const rows = await tdb
       .select({
         policyId: policyStatusHistory.policyId,
@@ -1591,6 +1595,7 @@ export class DatabaseStorage implements IStorage {
     if (filters?.fromDate) conditions.push(gte(paymentReceipts.issuedAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(paymentReceipts.issuedAt, new Date(filters.toDate + "T23:59:59.999Z")));
     if (filters?.branchId) conditions.push(eq(paymentReceipts.branchId, filters.branchId));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
 
     const rows = await tdb
       .select({
@@ -2215,8 +2220,66 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── Dashboard Stats ──────────────────────────────────────
-  async getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }): Promise<any> {
+  async getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }, agentId?: string): Promise<any> {
     const tdb = await getDbForOrg(orgId);
+
+    if (agentId) {
+      // Agent-scoped: only policies, clients, claims, leads, transactions belonging to this agent
+      const agentPolicies = await this.getPoliciesByAgent(agentId, orgId);
+      const agentPolicyIds = new Set(agentPolicies.map((p) => p.id));
+      const policyList = agentPolicies.filter((p) => {
+        if (filters?.dateFrom && p.createdAt && new Date(p.createdAt) < new Date(filters.dateFrom)) return false;
+        if (filters?.dateTo && p.createdAt && new Date(p.createdAt) > new Date(filters.dateTo + "T23:59:59")) return false;
+        if (filters?.status && filters.status !== "all" && p.status !== filters.status) return false;
+        if (filters?.branchId && filters.branchId !== "all" && p.branchId !== filters.branchId) return false;
+        return true;
+      });
+      const activePoliciesList = policyList.filter((p) => p.status === "active");
+      const agentClients = await this.getClientsByAgent(agentId, orgId, 100000, 0);
+      const clientList = agentClients.filter((c) => {
+        if (filters?.dateFrom && c.createdAt && new Date(c.createdAt) < new Date(filters.dateFrom)) return false;
+        if (filters?.dateTo && c.createdAt && new Date(c.createdAt) > new Date(filters.dateTo + "T23:59:59")) return false;
+        if (filters?.branchId && filters.branchId !== "all" && c.branchId !== filters.branchId) return false;
+        return true;
+      });
+      const agentLeads = await this.getLeadsByAgent(agentId, orgId);
+      const leadList = agentLeads;
+      const ids = Array.from(agentPolicyIds);
+      let claimCount = 0;
+      let openClaimsCount = 0;
+      let funeralCount = 0;
+      let txCount = 0;
+      if (ids.length > 0) {
+        const [cRow] = await tdb.select({ cnt: count() }).from(claims).where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, ids)));
+        claimCount = Number(cRow?.cnt ?? 0);
+        const [oRow] = await tdb.select({ cnt: count() }).from(claims).where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, ids), inArray(claims.status, ["submitted", "verified"])));
+        openClaimsCount = Number(oRow?.cnt ?? 0);
+        const agentClaimRows = await tdb.select({ id: claims.id }).from(claims).where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, ids)));
+        const agentClaimIds = agentClaimRows.map((r) => r.id);
+        if (agentClaimIds.length > 0) {
+          const [fRow] = await tdb.select({ cnt: count() }).from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), or(inArray(funeralCases.policyId, ids), inArray(funeralCases.claimId, agentClaimIds))));
+          funeralCount = Number(fRow?.cnt ?? 0);
+        } else {
+          const [fRow] = await tdb.select({ cnt: count() }).from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), inArray(funeralCases.policyId, ids)));
+          funeralCount = Number(fRow?.cnt ?? 0);
+        }
+        const txConds = [eq(paymentTransactions.organizationId, orgId), inArray(paymentTransactions.policyId, ids)];
+        if (filters?.dateFrom) txConds.push(gte(paymentTransactions.createdAt, new Date(filters.dateFrom)));
+        if (filters?.dateTo) txConds.push(lte(paymentTransactions.createdAt, new Date(filters.dateTo + "T23:59:59")));
+        const [txRow] = await tdb.select({ cnt: count() }).from(paymentTransactions).where(and(...txConds));
+        txCount = Number(txRow?.cnt ?? 0);
+      }
+      return {
+        totalPolicies: policyList.length,
+        activePolicies: activePoliciesList.length,
+        totalClients: clientList.length,
+        totalClaims: claimCount,
+        openClaims: openClaimsCount,
+        totalFuneralCases: funeralCount,
+        totalLeads: leadList.length,
+        totalTransactions: txCount,
+      };
+    }
 
     const pConds: any[] = [eq(policies.organizationId, orgId)];
     if (filters?.dateFrom) pConds.push(gte(policies.createdAt, new Date(filters.dateFrom)));
