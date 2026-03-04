@@ -1565,32 +1565,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await rollbackClawbacks(user.organizationId, policy);
     }
 
-    if (result.receipt) {
-      const { generateReceiptPdf } = await import("./receipt-pdf");
-      const pdfPath = await generateReceiptPdf(result.receipt.id);
-      if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, user.organizationId);
-    }
-
-    if (result.tx.status === "cleared") {
-      const chibAmount = (parseFloat(result.tx.amount) * 0.025).toFixed(2);
-      await storage.createPlatformReceivable({
-        organizationId: user.organizationId,
-        sourceTransactionId: result.tx.id,
-        amount: chibAmount,
-        currency: result.tx.currency,
-        description: `2.5% on payment ${result.tx.id}`,
-        isSettled: false,
-      });
-    }
-
-    await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", result.tx.id, null, result.tx);
-    if (result.receipt) await auditLog(req, "CREATE_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
-    if (result.tx.status === "cleared" && result.tx.policyId) {
-      const commPolicy = await storage.getPolicy(result.tx.policyId, user.organizationId);
-      if (commPolicy) await recordAgentCommission(user.organizationId, commPolicy, result.tx.id, result.tx.amount);
-    }
-    if (result.tx.status === "cleared" && result.tx.clientId && result.tx.policyId && policy) {
-      await notifyClient(user.organizationId, result.tx.clientId, "Payment received", `Your payment of ${result.tx.currency} ${result.tx.amount} for policy ${policy.policyNumber} has been received. Thank you.`);
+    try {
+      if (result.receipt) {
+        const { generateReceiptPdf } = await import("./receipt-pdf");
+        const pdfPath = await generateReceiptPdf(result.receipt.id);
+        if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, user.organizationId);
+      }
+      if (result.tx.status === "cleared") {
+        const chibAmount = (parseFloat(result.tx.amount) * 0.025).toFixed(2);
+        await storage.createPlatformReceivable({
+          organizationId: user.organizationId,
+          sourceTransactionId: result.tx.id,
+          amount: chibAmount,
+          currency: result.tx.currency,
+          description: `2.5% on payment ${result.tx.id}`,
+          isSettled: false,
+        });
+      }
+      await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", result.tx.id, null, result.tx);
+      if (result.receipt) await auditLog(req, "CREATE_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
+      if (result.tx.status === "cleared" && result.tx.policyId) {
+        const commPolicy = await storage.getPolicy(result.tx.policyId, user.organizationId);
+        if (commPolicy) await recordAgentCommission(user.organizationId, commPolicy, result.tx.id, result.tx.amount);
+      }
+      if (result.tx.status === "cleared" && result.tx.clientId && result.tx.policyId && policy) {
+        await notifyClient(user.organizationId, result.tx.clientId, "Payment received", `Your payment of ${result.tx.currency} ${result.tx.amount} for policy ${policy.policyNumber} has been received. Thank you.`);
+      }
+    } catch (postErr: any) {
+      structuredLog("warn", "POST /api/payments post-commit step failed (payment already saved)", { error: postErr?.message || String(postErr), stack: postErr?.stack });
     }
     return res.status(201).json({ ...result.tx, receipt: result.receipt });
     } catch (err: any) {

@@ -1574,13 +1574,14 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(paymentReceipts.issuedAt));
   }
   async getNextPaymentReceiptNumber(orgId: string): Promise<string> {
-    const tdb = await getDbForOrg(orgId);
-    const result = await tdb.execute(sql`
+    // org_policy_sequences lives in the registry (main) DB so receipt numbers work when org has a dedicated tenant DB.
+    const result = await db.execute(sql`
       INSERT INTO org_policy_sequences (organization_id, payment_receipt_next) VALUES (${orgId}, 1)
       ON CONFLICT (organization_id) DO UPDATE SET payment_receipt_next = org_policy_sequences.payment_receipt_next + 1
       RETURNING payment_receipt_next
     `);
-    const nextVal = (result as unknown as { rows?: { payment_receipt_next: number }[] }).rows?.[0]?.payment_receipt_next ?? 1;
+    const rows = (result as unknown as { rows?: { payment_receipt_next: number }[] }).rows;
+    const nextVal = rows?.[0]?.payment_receipt_next ?? 1;
     return String(nextVal);
   }
   async updatePaymentReceipt(id: string, data: Partial<InsertPaymentReceipt>, orgId: string): Promise<PaymentReceipt | undefined> {

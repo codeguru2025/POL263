@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { resolveAssetUrl } from "@/lib/assetUrl";
 
 interface ClientLayoutProps {
   children: React.ReactNode;
@@ -62,7 +63,7 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
       <header className="h-14 sm:h-16 border-b bg-card flex items-center justify-between px-4 sm:px-6 shrink-0 sticky top-0 z-10">
         <div className="flex items-center gap-2 min-w-0">
           <img
-            src={tenant?.logoUrl || "/assets/logo.png"}
+            src={tenant?.logoUrl ? resolveAssetUrl(tenant.logoUrl) : "/assets/logo.png"}
             alt={tenant?.name || "Logo"}
             className="h-8 w-8 sm:h-9 sm:w-9 rounded-lg object-contain shrink-0"
           />

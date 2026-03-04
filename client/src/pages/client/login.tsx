@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { ShieldCheck, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useBranding } from "@/hooks/use-branding";
+import { resolveAssetUrl } from "@/lib/assetUrl";
 
 export default function ClientLogin() {
   const { displayName, displayLogo } = useBranding();
@@ -48,7 +49,7 @@ export default function ClientLogin() {
       <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
-            <img src={displayLogo} alt={displayName} className="w-10 h-10 rounded-lg object-contain" />
+            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="w-10 h-10 rounded-lg object-contain" />
           </div>
           <CardTitle className="text-2xl font-display">{displayName} — Client Portal</CardTitle>
           <CardDescription className="text-base mt-2">

@@ -41,6 +41,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { useBranding } from "@/hooks/use-branding";
+import { resolveAssetUrl } from "@/lib/assetUrl";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -128,7 +129,17 @@ function TenantPickerSplash({
               className="w-full flex items-center gap-4 p-4 rounded-xl border bg-card hover:bg-accent/50 transition-colors text-left group"
             >
               {org.logoUrl ? (
-                <img src={org.logoUrl} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background" />
+                <span className="relative h-10 w-10 shrink-0 block">
+                  <img
+                    src={resolveAssetUrl(org.logoUrl)}
+                    alt=""
+                    className="h-10 w-10 rounded-lg object-contain border bg-background absolute inset-0"
+                    onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = ""; e.currentTarget.classList.add("opacity-0"); e.currentTarget.nextElementSibling?.classList.remove("hidden"); }}
+                  />
+                  <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center hidden border border-transparent pointer-events-none" aria-hidden>
+                    <Building2 className="h-5 w-5 text-primary" />
+                  </div>
+                </span>
               ) : (
                 <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
                   <Building2 className="h-5 w-5 text-primary" />
@@ -326,7 +337,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         <div className="h-16 flex items-center justify-between px-4 border-b shrink-0">
           <div className="flex items-center min-w-0">
             <img
-              src={isWhitelabeled ? (currentOrg?.logoUrl || brandLogo) : brandLogo}
+              src={resolveAssetUrl(isWhitelabeled ? (currentOrg?.logoUrl || brandLogo) : brandLogo)}
               alt={brandName}
               className="h-10 w-10 rounded-lg object-contain mr-2 shrink-0"
             />

@@ -46,6 +46,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { resolveAssetUrl } from "@/lib/assetUrl";
 
 export default function StaffSettings() {
   const { user, permissions: userPerms, isPlatformOwner } = useAuth();
@@ -495,7 +496,7 @@ export default function StaffSettings() {
                           <CardHeader className="pb-3">
                             <div className="flex items-start gap-3">
                               {org.logoUrl ? (
-                                <img src={org.logoUrl} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background shrink-0" />
+                                <img src={resolveAssetUrl(org.logoUrl)} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background shrink-0" />
                               ) : (
                                 <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                                   <Building2 className="h-5 w-5 text-primary" />
@@ -691,7 +692,7 @@ export default function StaffSettings() {
                     <div className="h-28 w-28 rounded-xl border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
                       {(logoUrl || currentOrg?.logoUrl) ? (
                         <img
-                          src={`${logoUrl || currentOrg?.logoUrl}?v=${Date.now()}`}
+                          src={`${resolveAssetUrl(logoUrl || currentOrg?.logoUrl)}?v=${Date.now()}`}
                           alt="Current Logo"
                           className="object-contain max-h-full max-w-full p-1"
                           onError={(e) => { (e.target as HTMLImageElement).src = "/assets/logo.png"; }}
@@ -716,7 +717,7 @@ export default function StaffSettings() {
                     <div className="h-20 w-48 rounded-lg border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
                       {(signatureUrl || currentOrg?.signatureUrl) ? (
                         <img
-                          src={`${signatureUrl || currentOrg?.signatureUrl}?v=${Date.now()}`}
+                          src={`${resolveAssetUrl(signatureUrl || currentOrg?.signatureUrl)}?v=${Date.now()}`}
                           alt="Signature"
                           className="object-contain max-h-full max-w-full p-1"
                         />
