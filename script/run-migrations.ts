@@ -21,6 +21,8 @@ async function run() {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
     process.env.DATABASE_URL.includes("supabase") ||
     /digitalocean|\.ondigitalocean\.com/i.test(process.env.DATABASE_URL || "");
+
+  // Use SSL (keep URL as-is so sslmode=require keeps connection encrypted) but accept self-signed/DO cert
   const poolConfig: pg.PoolConfig = {
     connectionString: process.env.DATABASE_URL,
     ...(acceptSelfSigned && { ssl: { rejectUnauthorized: false } }),
@@ -47,6 +49,28 @@ async function run() {
       applied_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
     )
   `);
+
+  // Migrations assume base schema exists (from drizzle-kit push). Check before running.
+  const { rows: tableCheck } = await pool.query<{ exists: boolean }>(`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'organizations'
+    ) AS exists
+  `);
+  if (!tableCheck[0]?.exists) {
+    await pool.end();
+    const isDo = /ondigitalocean\.com/i.test(process.env.DATABASE_URL || "");
+    console.error("Base schema missing: table 'organizations' does not exist.");
+    console.error("Create it first by running:");
+    if (isDo) {
+      console.error("  npm run db:push:do   (use this for DigitalOcean)");
+    } else {
+      console.error("  npm run db:push");
+      console.error("  (If you get an SSL error, use: npm run db:push:do)");
+    }
+    console.error("Then run this script again: npx tsx script/run-migrations.ts");
+    process.exit(1);
+  }
 
   const { rows: applied } = await pool.query<{ filename: string }>(
     "SELECT filename FROM schema_migrations ORDER BY filename"

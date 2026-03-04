@@ -225,6 +225,7 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined>;
   getRole(id: string, organizationId: string): Promise<Role | undefined>;
+  getRolesByIds(roleIds: string[], organizationId: string): Promise<Role[]>;
   getRolesByOrg(organizationId: string): Promise<Role[]>;
   getRoleByName(name: string, organizationId: string): Promise<Role | undefined>;
   createRole(role: InsertRole): Promise<Role>;
@@ -289,6 +290,7 @@ export interface IStorage {
   getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]>;
   getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]>;
   getPolicy(id: string, orgId: string): Promise<Policy | undefined>;
+  getPoliciesByIds(ids: string[], orgId: string): Promise<Policy[]>;
   getPolicyByNumber(policyNumber: string, orgId: string): Promise<Policy | undefined>;
   updatePolicy(id: string, data: Partial<InsertPolicy>, orgId: string): Promise<Policy | undefined>;
   createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, organizationId?: string): Promise<void>;
@@ -491,6 +493,12 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(organizationId);
     const [role] = await tdb.select().from(roles).where(eq(roles.id, id));
     return role;
+  }
+  /** Batch fetch roles by ids (avoids N+1 when resolving many role ids). */
+  async getRolesByIds(roleIds: string[], organizationId: string): Promise<Role[]> {
+    if (!roleIds?.length) return [];
+    const tdb = await getDbForOrg(organizationId);
+    return tdb.select().from(roles).where(inArray(roles.id, roleIds));
   }
   async getRolesByOrg(organizationId: string): Promise<Role[]> {
     const tdb = await getDbForOrg(organizationId);
@@ -1322,6 +1330,12 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [policy] = await tdb.select().from(policies).where(eq(policies.id, id));
     return policy;
+  }
+  /** Batch fetch policies by ids (avoids N+1 when resolving many policy ids). */
+  async getPoliciesByIds(ids: string[], orgId: string): Promise<Policy[]> {
+    if (!ids?.length) return [];
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(policies).where(inArray(policies.id, ids));
   }
   async getPolicyByNumber(policyNumber: string, orgId: string): Promise<Policy | undefined> {
     const tdb = await getDbForOrg(orgId);

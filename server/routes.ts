@@ -645,7 +645,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const existing = await storage.getUserByEmail(email);
     if (existing) return res.status(409).json({ message: "A user with this email already exists" });
 
-    const roles = roleIds && Array.isArray(roleIds) ? await Promise.all(roleIds.map((id: string) => storage.getRole(id, currentUser.organizationId))) : [];
+    const roles = roleIds && Array.isArray(roleIds) ? await storage.getRolesByIds(roleIds, currentUser.organizationId) : [];
     const isAgent = roles.some((r) => r?.name === "agent");
     if (isAgent && (!password || String(password).length < 8)) {
       return res.status(400).json({ message: "Agents require a password of at least 8 characters" });
@@ -1615,6 +1615,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const msg = err.errors.map((e: { path?: string[]; message?: string }) => `${e.path?.join(".") || "field"}: ${e.message}`).join("; ");
         return res.status(400).json({ message: msg || "Invalid payment data" });
       }
+      // Duplicate idempotency key (e.g. retry) — return 409 so client can treat as idempotent
+      if (err?.code === "23505" || (err?.message && String(err.message).includes("unique constraint") && String(err.message).includes("idempotency_key"))) {
+        return res.status(409).json({ message: "A payment with this idempotency key already exists. Duplicate request ignored." });
+      }
       structuredLog("error", "POST /api/payments failed", { error: err?.message || String(err), stack: err?.stack });
       return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Payment failed. Please try again." : (err?.message || "Payment failed") });
     }
@@ -2011,8 +2015,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
     }
-    const policies = await Promise.all(policyIds.map((id: string) => storage.getPolicy(id, user.organizationId)));
-    const valid = policies.filter((p): p is NonNullable<typeof p> => Boolean(p && p.organizationId === user.organizationId && p.groupId === groupId));
+    const policies = await storage.getPoliciesByIds(policyIds, user.organizationId);
+    const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));
@@ -2077,8 +2081,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
     }
-    const policies = await Promise.all(policyIds.map((id: string) => storage.getPolicy(id, user.organizationId)));
-    const valid = policies.filter((p): p is NonNullable<typeof p> => Boolean(p && p.organizationId === user.organizationId && p.groupId === groupId));
+    const policies = await storage.getPoliciesByIds(policyIds, user.organizationId);
+    const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));

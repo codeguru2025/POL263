@@ -105,6 +105,16 @@ app.use("/api/client-auth", authLimiter);
 app.use("/api/security-questions", authLimiter);
 app.use("/api/agents/by-referral", authLimiter);
 
+// Stricter rate limit on Paynow webhook to mitigate DDoS / replay: 60/min per IP
+const paynowWebhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { message: "Too many requests" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api/payments/paynow/result", paynowWebhookLimiter);
+
 app.get("/api/health", async (_req, res) => {
   try {
     const result = await pool.query("SELECT 1");
