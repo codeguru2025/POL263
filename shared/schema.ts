@@ -359,6 +359,12 @@ export const productVersions = pgTable(
     commissionRecurringRate: numeric("commission_recurring_rate"),
     commissionClawbackThreshold: integer("commission_clawback_threshold"),
     commissionFuneralIncentive: numeric("commission_funeral_incentive"),
+    /** Amount tenant pays to underwriter per adult member per month (product currency). */
+    underwriterAmountAdult: numeric("underwriter_amount_adult"),
+    /** Amount tenant pays to underwriter per child member per month. If null and underwriterAmountAdult set, same as adult. */
+    underwriterAmountChild: numeric("underwriter_amount_child"),
+    /** Months to pay underwriter in advance (e.g. 3 = tenant pays 3 months ahead). Total payable = monthly × (1 + advance). */
+    underwriterAdvanceMonths: integer("underwriter_advance_months").default(0).notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

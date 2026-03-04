@@ -13,7 +13,9 @@ import { useBranding } from "@/hooks/use-branding";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 
 export default function ClientLogin() {
-  const { displayName, displayLogo } = useBranding();
+  const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  const orgIdFromUrl = params.get("orgId") || undefined;
+  const { displayName, displayLogo } = useBranding(orgIdFromUrl);
   const [policyNumber, setPolicyNumber] = useState("");
   const [password, setPassword] = useState("");
   const [, setLocation] = useLocation();

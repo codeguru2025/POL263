@@ -63,6 +63,9 @@ type ProductVersion = {
   commissionRecurringRate: string | null;
   commissionClawbackThreshold: number | null;
   commissionFuneralIncentive: string | null;
+  underwriterAmountAdult: string | null;
+  underwriterAmountChild: string | null;
+  underwriterAdvanceMonths: number;
   reinstatementRequiresArrears: boolean | null;
   reinstatementNewWaitingPeriod: boolean | null;
   isActive: boolean;
@@ -1042,6 +1045,10 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [commRecurringRate, setCommRecurringRate] = useState("");
   const [commClawback, setCommClawback] = useState("");
   const [commFuneralIncentive, setCommFuneralIncentive] = useState("");
+  const [underwriterAmountAdult, setUnderwriterAmountAdult] = useState("");
+  const [underwriterAmountChild, setUnderwriterAmountChild] = useState("");
+  const [underwriterSameAmount, setUnderwriterSameAmount] = useState(true);
+  const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState("0");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1068,6 +1075,9 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       commissionRecurringRate: commRecurringRate || undefined,
       commissionClawbackThreshold: commClawback ? parseInt(commClawback) : undefined,
       commissionFuneralIncentive: commFuneralIncentive || undefined,
+      underwriterAmountAdult: underwriterAmountAdult || undefined,
+      underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult || undefined) : (underwriterAmountChild || undefined),
+      underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
     });
   };
 
@@ -1220,6 +1230,29 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             </div>
           </div>
 
+          <Separator />
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (tenant pays underwriter)</h3>
+          <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if this product has no underwriter.</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Amount per adult (per month)</Label>
+              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="e.g. 5.00" data-testid="input-version-underwriter-adult" />
+            </div>
+            <div className="space-y-2">
+              <Label>Amount per child (per month)</Label>
+              <Input type="number" step="0.01" value={underwriterAmountChild} onChange={(e) => setUnderwriterAmountChild(e.target.value)} placeholder="Same as adult if not set" data-testid="input-version-underwriter-child" disabled={underwriterSameAmount} />
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <Checkbox id="underwriter-same-amount" checked={underwriterSameAmount} onCheckedChange={(v) => setUnderwriterSameAmount(v === true)} data-testid="checkbox-underwriter-same-amount" />
+            <Label htmlFor="underwriter-same-amount" className="text-sm font-normal cursor-pointer">Same amount for adult and child</Label>
+          </div>
+          <div className="space-y-2">
+            <Label>Pay underwriter in advance (months)</Label>
+            <Input type="number" min={0} value={underwriterAdvanceMonths} onChange={(e) => setUnderwriterAdvanceMonths(e.target.value)} placeholder="e.g. 3" data-testid="input-version-underwriter-advance" />
+            <p className="text-xs text-muted-foreground">e.g. 3 = tenant pays 3 months ahead; total payable = monthly × (1 + advance months).</p>
+          </div>
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={isPending || !effectiveFrom} data-testid="button-submit-version">
@@ -1256,6 +1289,10 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [commRecurringRate, setCommRecurringRate] = useState(version.commissionRecurringRate || "");
   const [commClawback, setCommClawback] = useState(version.commissionClawbackThreshold != null ? String(version.commissionClawbackThreshold) : "");
   const [commFuneralIncentive, setCommFuneralIncentive] = useState(version.commissionFuneralIncentive || "");
+  const [underwriterAmountAdult, setUnderwriterAmountAdult] = useState(version.underwriterAmountAdult || "");
+  const [underwriterAmountChild, setUnderwriterAmountChild] = useState(version.underwriterAmountChild || "");
+  const [underwriterSameAmount, setUnderwriterSameAmount] = useState(version.underwriterAmountChild == null || version.underwriterAmountChild === version.underwriterAmountAdult);
+  const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState(String(version.underwriterAdvanceMonths ?? 0));
   const [reinstatementRequiresArrears, setReinstatementRequiresArrears] = useState(version.reinstatementRequiresArrears ?? true);
   const [reinstatementNewWaitingPeriod, setReinstatementNewWaitingPeriod] = useState(version.reinstatementNewWaitingPeriod ?? true);
 
@@ -1285,6 +1322,9 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       commissionRecurringRate: commRecurringRate || null,
       commissionClawbackThreshold: commClawback ? parseInt(commClawback) : null,
       commissionFuneralIncentive: commFuneralIncentive || null,
+      underwriterAmountAdult: underwriterAmountAdult || null,
+      underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult || null) : (underwriterAmountChild || null),
+      underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
     });
   };
 
@@ -1427,6 +1467,28 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Label>Funeral Service Incentive</Label>
               <Input type="number" step="0.01" value={commFuneralIncentive} onChange={(e) => setCommFuneralIncentive(e.target.value)} placeholder="e.g. 50.00" data-testid="input-edit-version-comm-funeral" />
             </div>
+          </div>
+
+          <Separator />
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (tenant pays underwriter)</h3>
+          <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if no underwriter.</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Amount per adult (per month)</Label>
+              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="e.g. 5.00" data-testid="input-edit-version-underwriter-adult" />
+            </div>
+            <div className="space-y-2">
+              <Label>Amount per child (per month)</Label>
+              <Input type="number" step="0.01" value={underwriterAmountChild} onChange={(e) => setUnderwriterAmountChild(e.target.value)} placeholder="Same as adult if not set" data-testid="input-edit-version-underwriter-child" disabled={underwriterSameAmount} />
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <Checkbox id="edit-underwriter-same-amount" checked={underwriterSameAmount} onCheckedChange={(v) => setUnderwriterSameAmount(v === true)} data-testid="checkbox-edit-underwriter-same-amount" />
+            <Label htmlFor="edit-underwriter-same-amount" className="text-sm font-normal cursor-pointer">Same amount for adult and child</Label>
+          </div>
+          <div className="space-y-2">
+            <Label>Pay underwriter in advance (months)</Label>
+            <Input type="number" min={0} value={underwriterAdvanceMonths} onChange={(e) => setUnderwriterAdvanceMonths(e.target.value)} placeholder="e.g. 3" data-testid="input-edit-version-underwriter-advance" />
           </div>
 
           <DialogFooter>

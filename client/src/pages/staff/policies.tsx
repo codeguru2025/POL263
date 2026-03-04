@@ -96,6 +96,8 @@ export default function StaffPolicies() {
   const [pnOtpRef, setPnOtpRef] = useState("");
   const [pnOtp, setPnOtp] = useState("");
   const [pnPhase, setPnPhase] = useState<"select" | "waiting">("select");
+  const [showEstatementViewer, setShowEstatementViewer] = useState(false);
+  const [estatementViewerUrl, setEstatementViewerUrl] = useState<string>("");
 
   const [createForm, setCreateForm] = useState({
     clientId: "",
@@ -652,7 +654,8 @@ export default function StaffPolicies() {
                 onClick={() => {
                   setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
                   setInPolicyReceiptCurrency(displayPolicy.premiumCurrency || "USD");
-                  setInPolicyReceiptRef("");
+                  const clientPhone = displayPolicy.clientId ? (clientMap[displayPolicy.clientId]?.phone || "").trim() : "";
+                  setInPolicyReceiptRef(clientPhone);
                   setInPolicyReceiptNotes("");
                   setShowInPolicyReceiptDialog(true);
                 }}
@@ -960,7 +963,7 @@ export default function StaffPolicies() {
           <Card className="shadow-sm border-border/60">
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5 text-primary" /> E-Statement</CardTitle>
-              <CardDescription>Download a statement PDF with policy summary and payment history (optionally filter by date range).</CardDescription>
+              <CardDescription>View or download a statement PDF with policy summary and payment history (optionally filter by date range).</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap items-end gap-3">
@@ -983,6 +986,24 @@ export default function StaffPolicies() {
                   />
                 </div>
                 <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => {
+                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
+                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
+                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
+                    const params = new URLSearchParams();
+                    params.set("inline", "1");
+                    if (from) params.set("dateFrom", from);
+                    if (to) params.set("dateTo", to);
+                    setShowEstatementViewer(true);
+                    setEstatementViewerUrl(url + "?" + params.toString());
+                  }}
+                  data-testid="btn-view-estatement"
+                >
+                  <Eye className="h-4 w-4" /> View
+                </Button>
+                <Button
                   variant="default"
                   className="gap-2"
                   onClick={() => {
@@ -997,7 +1018,7 @@ export default function StaffPolicies() {
                   }}
                   data-testid="btn-download-estatement-card"
                 >
-                  <Download className="h-4 w-4" /> Download e-statement
+                  <Download className="h-4 w-4" /> Download
                 </Button>
                 <Button
                   variant="outline"
@@ -1020,6 +1041,38 @@ export default function StaffPolicies() {
               <p className="text-xs text-muted-foreground">Leave dates empty for full payment history. Uses tenant logo and signature from Settings.</p>
             </CardContent>
           </Card>
+
+          <Dialog open={showEstatementViewer} onOpenChange={setShowEstatementViewer}>
+            <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col">
+              <DialogHeader>
+                <DialogTitle>E-Statement</DialogTitle>
+                <DialogDescription>View your statement below. Use Download to save a copy.</DialogDescription>
+              </DialogHeader>
+              <div className="flex-1 min-h-0 flex flex-col gap-3">
+                {estatementViewerUrl && (
+                  <iframe
+                    title="E-Statement"
+                    src={estatementViewerUrl}
+                    className="w-full flex-1 min-h-[60vh] border rounded-md"
+                  />
+                )}
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const u = new URL(estatementViewerUrl);
+                      u.searchParams.delete("inline");
+                      window.open(u.toString(), "_blank", "noopener");
+                    }}
+                  >
+                    <Download className="h-4 w-4" /> Download
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowEstatementViewer(false)}>Close</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
 
         <Dialog open={showTransitionDialog} onOpenChange={setShowTransitionDialog}>
@@ -1165,9 +1218,9 @@ export default function StaffPolicies() {
                 <>
                   {(inPolicyReceiptMethod === "ecocash" || inPolicyReceiptMethod === "onemoney") && (
                     <div>
-                      <Label className="text-xs">Client's Mobile Number</Label>
+                      <Label className="text-xs">Client's Mobile Number (EcoCash/OneMoney)</Label>
                       <Input placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
-                      <p className="text-xs text-muted-foreground mt-1">A USSD prompt will be sent. The client enters their PIN to approve.</p>
+                      <p className="text-xs text-muted-foreground mt-1">EcoCash uses USSD — a prompt is sent to this number. The client enters their PIN on their phone (no app push). Use the number registered with EcoCash/OneMoney.</p>
                     </div>
                   )}
                   {inPolicyReceiptMethod === "innbucks" && (
@@ -1236,7 +1289,7 @@ export default function StaffPolicies() {
                       <p className="text-sm text-green-800">
                         {inPolicyReceiptMethod === "visa_mastercard"
                           ? "Client should complete payment in the card page."
-                          : "A USSD prompt was sent. Client must enter their PIN."}
+                          : "EcoCash/OneMoney use USSD — the client should see a prompt on their phone to enter their PIN. If nothing appears within 30 seconds, check the mobile number is correct (e.g. 0771234567) and try again."}
                       </p>
                     </div>
                   )}
@@ -1269,7 +1322,12 @@ export default function StaffPolicies() {
                       pnInitiateMutation.mutate();
                     }
                   }}
-                  disabled={!displayPolicy.premiumAmount || inPolicyReceiptMutation.isPending || pnInitiateMutation.isPending}
+                  disabled={
+                    !displayPolicy.premiumAmount ||
+                    inPolicyReceiptMutation.isPending ||
+                    pnInitiateMutation.isPending ||
+                    (["ecocash", "onemoney"].includes(inPolicyReceiptMethod) && (!inPolicyReceiptRef || inPolicyReceiptRef.trim().replace(/\D/g, "").length < 9))
+                  }
                 >
                   {(inPolicyReceiptMutation.isPending || pnInitiateMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   <Receipt className="h-4 w-4 mr-2" />

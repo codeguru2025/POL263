@@ -26,15 +26,20 @@ function resolveLogoPath(logoUrl: string | null | undefined): string | null {
   const u = logoUrl.trim();
   if (u.startsWith("http://") || u.startsWith("https://")) return null;
   const relativePath = u.replace(/^\/+/, "");
+  // Resolve /uploads/filename relative to cwd so tenant uploads are found
   const bases = [
+    path.join(process.cwd(), "uploads"),
     path.join(process.cwd(), "dist", "public"),
     path.join(process.cwd(), "client", "public"),
-    path.join(process.cwd(), "uploads"),
     process.cwd(),
   ];
   for (const base of bases) {
-    const localPath = path.resolve(base, relativePath);
+    const localPath = path.resolve(base, relativePath.startsWith("uploads/") ? relativePath.slice(8) : relativePath);
     if (fs.existsSync(localPath)) return localPath;
+  }
+  if (path.isAbsolute(relativePath) || relativePath.startsWith("uploads/")) {
+    const cwdPath = path.resolve(process.cwd(), relativePath);
+    if (fs.existsSync(cwdPath)) return cwdPath;
   }
   return null;
 }

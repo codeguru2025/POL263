@@ -400,7 +400,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
+    const user = req.user as any;
+    const isPlatformOwner = user?.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
     const { adminEmail, adminPassword, adminDisplayName, ...orgData } = req.body;
+    if (!isPlatformOwner) {
+      delete orgData.isWhitelabeled;
+      delete orgData.databaseUrl;
+    }
     if (adminEmail && (!adminPassword || String(adminPassword).length < 8)) {
       return res.status(400).json({ message: "When providing an admin email, a password of min 8 chars is also required." });
     }
@@ -3071,6 +3077,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(rows);
   });
 
+  app.get("/api/reports/underwriter-payable", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
+    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
+    const offset = parseInt(String(req.query.offset)) || 0;
+    const result = await storage.getUnderwriterPayableReport(user.organizationId, limit, offset, filters);
+    return res.json(result);
+  });
+
   app.get("/api/reports/reinstatements", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
@@ -3211,6 +3226,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           rows = reportRows.map((r: any) => [
             r.policyNumber, r.status, r.currency, r.premiumAmount, r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.waitingPeriodEndDate ?? "", r.dueDate ?? "", r.datePaid ?? "", r.receiptCount, r.monthsPaid, r.graceDaysUsed, r.graceDaysRemaining ?? "", r.outstandingPremium, r.advancePremium,
             [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), r.productName ?? "", r.productCode ?? "", r.branchName ?? "", r.groupName ?? "", r.agentDisplayName ?? r.agentEmail ?? "",
+          ]);
+          break;
+        }
+        case "underwriter-payable": {
+          const result = await storage.getUnderwriterPayableReport(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = [
+            "Policy Number", "Status", "Client First Name", "Client Last Name", "Client Phone", "Client Email", "Product Name", "Product Code", "Branch",
+            "Adults", "Children", "Underwriter Amount Adult", "Underwriter Amount Child", "Advance Months", "Monthly Payable", "Total Payable",
+          ];
+          rows = result.rows.map((r: any) => [
+            r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientPhone ?? "", r.clientEmail ?? "",
+            r.productName ?? "", r.productCode ?? "", r.branchName ?? "",
+            r.adults, r.children, r.underwriterAmountAdult ?? "", r.underwriterAmountChild ?? "", r.underwriterAdvanceMonths,
+            r.monthlyPayable.toFixed(2), r.totalPayable.toFixed(2),
           ]);
           break;
         }

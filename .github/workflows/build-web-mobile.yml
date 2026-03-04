@@ -89,7 +89,9 @@ jobs:
     name: Build Android Release (AAB)
     runs-on: ubuntu-latest
     needs: build-web
-    if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    # Run only when repo variable ANDROID_RELEASE_ENABLED is 'true' (set after configuring keystore secrets).
+    # Job-level if cannot use secrets; use vars instead.
+    if: vars.ANDROID_RELEASE_ENABLED == 'true'
     steps:
       - uses: actions/checkout@v4
 

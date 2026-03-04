@@ -1412,9 +1412,9 @@ export default function StaffFinance() {
               <>
                 {(paymentMethod === "ecocash" || paymentMethod === "onemoney") && (
                   <div>
-                    <Label>Client's Mobile Number</Label>
+                    <Label>Client's Mobile Number (EcoCash/OneMoney)</Label>
                     <Input placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
-                    <p className="text-xs text-muted-foreground mt-1">A USSD prompt will be sent to this number. The client enters their PIN to approve.</p>
+                    <p className="text-xs text-muted-foreground mt-1">EcoCash/OneMoney use USSD — a prompt is sent to this number. The client enters their PIN on their phone (no app push). Use the number registered with EcoCash/OneMoney.</p>
                   </div>
                 )}
                 {paymentMethod === "innbucks" && (
@@ -1509,7 +1509,7 @@ export default function StaffFinance() {
                     <p className="text-sm text-green-800">
                       {paymentMethod === "visa_mastercard"
                         ? "The client should complete payment in the card payment page that was opened."
-                        : `A USSD prompt has been sent. The client must enter their ${paymentMethod === "ecocash" ? "EcoCash" : "OneMoney"} PIN to approve.`}
+                        : "EcoCash/OneMoney use USSD — the client should see a prompt on their phone to enter their PIN. If nothing appears within 30 seconds, check the mobile number is correct (e.g. 0771234567) and try again."}
                     </p>
                   </div>
                 )}
@@ -1522,7 +1522,13 @@ export default function StaffFinance() {
             {paynowPhase === "select" && (
               <Button
                 onClick={handleSubmitPayment}
-                disabled={!receiptDialogPolicy || (!receiptDialogPolicy?.premiumAmount && !paymentAmount) || createPaymentMutation.isPending || paynowInitiateMutation.isPending}
+                disabled={
+                  !receiptDialogPolicy ||
+                  (!receiptDialogPolicy?.premiumAmount && !paymentAmount) ||
+                  createPaymentMutation.isPending ||
+                  paynowInitiateMutation.isPending ||
+                  (["ecocash", "onemoney"].includes(paymentMethod) && (!paymentReference || paymentReference.trim().replace(/\D/g, "").length < 9))
+                }
                 data-testid="button-submit-payment"
               >
                 {(createPaymentMutation.isPending || paynowInitiateMutation.isPending) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}

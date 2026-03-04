@@ -36,6 +36,7 @@
     "generate-secret": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "simulate:payments": "tsx script/simulate-payment-receipt.ts",
     "precommit": "npm run build && npm run test",
     "prepare": "husky",
     "lockfile:check": "node script/lockfile-check.cjs",

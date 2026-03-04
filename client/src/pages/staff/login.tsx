@@ -11,7 +11,11 @@ import { resolveAssetUrl } from "@/lib/assetUrl";
 export default function StaffLogin() {
   const [, setLocation] = useLocation();
   const { isAuthenticated, isLoading } = useAuth();
-  const { displayName, displayLogo } = useBranding();
+  const params = new URLSearchParams(window.location.search);
+  const authError = params.get("error");
+  const orgIdFromUrl = params.get("orgId") || undefined;
+  const sessionError = authError === "session";
+  const { displayName, displayLogo } = useBranding(orgIdFromUrl);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -26,10 +30,6 @@ export default function StaffLogin() {
       </div>
     );
   }
-
-  const params = new URLSearchParams(window.location.search);
-  const authError = params.get("error");
-  const sessionError = authError === "session";
 
   const handleGoogleLogin = () => {
     try {

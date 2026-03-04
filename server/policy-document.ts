@@ -46,13 +46,14 @@ async function resolveImageForPdf(url: string | null | undefined): Promise<Buffe
     }
   }
   const relativePath = u.replace(/^\/+/, "");
-  const bases = [
-    path.join(process.cwd(), "dist", "public"),
-    path.join(process.cwd(), "client", "public"),
-    process.cwd(),
+  const bases: { base: string; subPath: string }[] = [
+    { base: path.join(process.cwd(), "uploads"), subPath: relativePath.startsWith("uploads/") ? relativePath.slice(8) : relativePath },
+    { base: path.join(process.cwd(), "dist", "public"), subPath: relativePath },
+    { base: path.join(process.cwd(), "client", "public"), subPath: relativePath },
+    { base: process.cwd(), subPath: relativePath },
   ];
-  for (const base of bases) {
-    const localPath = path.resolve(base, relativePath);
+  for (const { base, subPath } of bases) {
+    const localPath = path.resolve(base, subPath);
     if (fs.existsSync(localPath)) {
       try {
         return fs.readFileSync(localPath);
@@ -525,7 +526,7 @@ export function registerPolicyDocumentRoute(app: Express) {
     const org = await storage.getOrganization(policy.organizationId);
     const client = await storage.getClient(policy.clientId, policy.organizationId);
     const payments = await storage.getPaymentsByPolicy(policy.id, policy.organizationId);
-    const policyReceipts = await storage.getReceiptsByPolicy(policy.id, policy.organizationId);
+    const policyReceipts = await storage.getPaymentReceiptsByPolicy(policy.id, policy.organizationId);
 
     const dateFrom = req.query.dateFrom as string | undefined;
     const dateTo = req.query.dateTo as string | undefined;
@@ -540,24 +541,29 @@ export function registerPolicyDocumentRoute(app: Express) {
       });
     }
 
+    // Map payment transaction id -> receipt number (from payment_receipts.metadata_json.transactionId)
     const receiptMap: Record<string, { receiptNumber: string }> = {};
-    policyReceipts.forEach((r) => {
-      receiptMap[r.transactionId] = { receiptNumber: r.receiptNumber };
-    });
+    for (const r of policyReceipts) {
+      const meta = r.metadataJson as { transactionId?: string } | null;
+      const txId = meta?.transactionId;
+      if (txId) receiptMap[txId] = { receiptNumber: r.receiptNumber };
+    }
 
     const primaryColor = org?.primaryColor || "#D4AF37";
+    const docBlack = "#000000";
     const logoBufferEstatement = await resolveImageForPdf(org?.logoUrl);
     const signatureBufferEstatement = await resolveImageForPdf(org?.signatureUrl);
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     res.setHeader("Content-Type", "application/pdf");
     const statementDate = new Date().toISOString().slice(0, 10);
-    res.setHeader("Content-Disposition", `attachment; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"`);
+    const inline = req.query.inline === "1" || req.query.inline === "true";
+    res.setHeader("Content-Disposition", inline ? `inline; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"` : `attachment; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"`);
     doc.pipe(res);
 
     const headerHeight = 110;
     doc.rect(0, 0, doc.page.width, headerHeight).fill("#FFFFFF");
-    doc.moveTo(0, headerHeight).lineTo(doc.page.width, headerHeight).strokeColor(primaryColor).lineWidth(2).stroke();
+    doc.moveTo(0, headerHeight).lineTo(doc.page.width, headerHeight).strokeColor(docBlack).lineWidth(2).stroke();
     if (logoBufferEstatement) {
       try {
         doc.image(logoBufferEstatement, 50, 15, { width: 70, height: 70 });
@@ -567,25 +573,25 @@ export function registerPolicyDocumentRoute(app: Express) {
     const headerTextWidth = 280;
     let hy = 20;
     doc
-      .fillColor(primaryColor)
+      .fillColor(docBlack)
       .fontSize(18)
       .font("Helvetica-Bold")
       .text(org?.name || "POL263", headerLeft, hy, { width: headerTextWidth });
     hy = Math.max(hy + 24, (doc as any).y + 4);
-    doc.fillColor(primaryColor).fontSize(10).font("Helvetica").text("E-STATEMENT", headerLeft, hy);
+    doc.fillColor(docBlack).fontSize(10).font("Helvetica").text("E-STATEMENT", headerLeft, hy);
     hy += 16;
     const headerRight: string[] = [];
     if (org?.address) headerRight.push(org.address);
     if (org?.phone) headerRight.push(`Tel: ${org.phone}`);
     if (org?.email) headerRight.push(org.email);
     if (headerRight.length > 0) {
-      doc.fillColor(primaryColor).fontSize(8).text(headerRight.join("  |  "), 300, 25, { align: "right", width: doc.page.width - 350 });
+      doc.fillColor(docBlack).fontSize(8).text(headerRight.join("  |  "), 300, 25, { align: "right", width: doc.page.width - 350 });
     }
 
     let y = headerHeight + 10;
-    doc.fillColor("#000000").fontSize(16).font("Helvetica-Bold").text("Policy Statement", 50, y);
+    doc.fillColor(docBlack).fontSize(16).font("Helvetica-Bold").text("Policy Statement", 50, y);
     y += 22;
-    doc.fontSize(9).font("Helvetica").fillColor("#666666");
+    doc.fontSize(9).font("Helvetica").fillColor(docBlack);
     doc.text(`Statement date: ${new Date().toLocaleDateString("en-GB")} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`, 50, y);
     if (dateFrom || dateTo) {
       doc.text(`Period: ${dateFrom || "—"} to ${dateTo || "—"}`, 50, y + 12);
@@ -594,9 +600,9 @@ export function registerPolicyDocumentRoute(app: Express) {
       y += 16;
     }
 
-    doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Policy Summary", 50, y);
+    doc.fillColor(docBlack).fontSize(12).font("Helvetica-Bold").text("Policy Summary", 50, y);
     y += 5;
-    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(docBlack).lineWidth(1).stroke();
     y += 20;
 
     const clientName = client ? [client.title, client.firstName, client.lastName].filter(Boolean).join(" ") : "—";
@@ -607,10 +613,10 @@ export function registerPolicyDocumentRoute(app: Express) {
       ["Premium", `${policy.currency} ${parseFloat(policy.premiumAmount).toFixed(2)} (${policy.paymentSchedule || "monthly"})`],
       ["Effective Date", policy.effectiveDate || "—"],
     ];
-    doc.font("Helvetica").fontSize(9).fillColor("#000000");
+    doc.font("Helvetica").fontSize(9).fillColor(docBlack);
     for (const [label, value] of summaryFields) {
-      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 120 });
-      doc.font("Helvetica").text(`  ${value}`, { width: 380 });
+      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { width: 120 });
+      doc.font("Helvetica").text(String(value).slice(0, 120), 175, y, { width: 370 });
       y += 14;
     }
     y += 8;
@@ -622,12 +628,12 @@ export function registerPolicyDocumentRoute(app: Express) {
     doc.font("Helvetica").text(`  ${policy.currency} ${totalPaid.toFixed(2)}`, { width: 200 });
     y += 20;
 
-    doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Payment History", 50, y);
+    doc.fillColor(docBlack).fontSize(12).font("Helvetica-Bold").text("Payment History", 50, y);
     y += 5;
-    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(docBlack).lineWidth(1).stroke();
     y += 20;
 
-    doc.font("Helvetica-Bold").fontSize(8).fillColor("#333333");
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(docBlack);
     doc.text("Date", 50, y, { width: 75 });
     doc.text("Amount", 130, y, { width: 70 });
     doc.text("Method", 205, y, { width: 60 });
@@ -648,7 +654,7 @@ export function registerPolicyDocumentRoute(app: Express) {
         if (y > 700) {
           doc.addPage();
           y = 50;
-          doc.font("Helvetica-Bold").fontSize(8).fillColor("#333333");
+          doc.font("Helvetica-Bold").fontSize(8).fillColor(docBlack);
           doc.text("Date", 50, y, { width: 75 });
           doc.text("Amount", 130, y, { width: 70 });
           doc.text("Method", 205, y, { width: 60 });
@@ -667,7 +673,8 @@ export function registerPolicyDocumentRoute(app: Express) {
         doc.text(p.paymentMethod || "—", 205, y, { width: 60 });
         doc.text(p.status || "—", 270, y, { width: 55 });
         doc.text(rec ? rec.receiptNumber : "—", 330, y, { width: 70 });
-        doc.text((p.reference || "—").slice(0, 25), 405, y, { width: 120 });
+        const refStr = (p.reference || (p as any).paynowReference || "—").toString().slice(0, 25);
+        doc.text(refStr, 405, y, { width: 120 });
         y += rowHeight;
       }
     }
@@ -676,7 +683,7 @@ export function registerPolicyDocumentRoute(app: Express) {
     y = Math.max(y, 680);
     doc.moveTo(50, y).lineTo(545, y).strokeColor("#CCCCCC").lineWidth(0.5).stroke();
     y += 16;
-    doc.font("Helvetica").fontSize(8).fillColor("#666666").text("Authorized signature", 50, y);
+    doc.font("Helvetica").fontSize(8).fillColor(docBlack).text("Authorized signature", 50, y);
     y += 4;
     if (signatureBufferEstatement) {
       try {
@@ -691,7 +698,7 @@ export function registerPolicyDocumentRoute(app: Express) {
     doc
       .font("Helvetica")
       .fontSize(7)
-      .fillColor("#999999")
+      .fillColor(docBlack)
       .text(org?.footerText || `${org?.name || "POL263"} — All rights reserved`, 50, y, {
         align: "center",
         width: 495,

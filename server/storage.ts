@@ -160,6 +160,33 @@ export interface FinanceReportRow extends PolicyReportRow {
   advancePremium: string;
 }
 
+export interface UnderwriterPayableRow {
+  policyId: string;
+  policyNumber: string;
+  status: string;
+  clientId: string;
+  clientFirstName: string;
+  clientLastName: string;
+  clientPhone: string | null;
+  clientEmail: string | null;
+  clientNationalId: string | null;
+  productName: string | null;
+  productCode: string | null;
+  branchName: string | null;
+  adults: number;
+  children: number;
+  underwriterAmountAdult: string | null;
+  underwriterAmountChild: string | null;
+  underwriterAdvanceMonths: number;
+  monthlyPayable: number;
+  totalPayable: number;
+}
+
+export interface UnderwriterPayableReportResult {
+  rows: UnderwriterPayableRow[];
+  summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number };
+}
+
 export interface ActivationEntry {
   policyId: string;
   policyNumber: string;
@@ -258,6 +285,7 @@ export interface IStorage {
   /** Policy report rows with client, product, branch, agent details for reports/export. */
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
   getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<FinanceReportRow[]>;
+  getUnderwriterPayableReport(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<UnderwriterPayableReportResult>;
   getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]>;
   getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]>;
   getPolicy(id: string, orgId: string): Promise<Policy | undefined>;
@@ -1140,6 +1168,146 @@ export class DatabaseStorage implements IStorage {
         advancePremium,
       } as FinanceReportRow;
     });
+  }
+
+  async getUnderwriterPayableReport(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<UnderwriterPayableReportResult> {
+    const tdb = await getDbForOrg(organizationId);
+    const conditions = [eq(policies.organizationId, organizationId)];
+    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.status) conditions.push(eq(policies.status, filters.status));
+    if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else conditions.push(sql`1 = 0`);
+    }
+    const baseRows = await tdb
+      .select({
+        policyId: policies.id,
+        policyNumber: policies.policyNumber,
+        status: policies.status,
+        clientId: clients.id,
+        clientFirstName: clients.firstName,
+        clientLastName: clients.lastName,
+        clientPhone: clients.phone,
+        clientEmail: clients.email,
+        clientNationalId: clients.nationalId,
+        productName: products.name,
+        productCode: products.code,
+        branchName: branches.name,
+        underwriterAmountAdult: productVersions.underwriterAmountAdult,
+        underwriterAmountChild: productVersions.underwriterAmountChild,
+        underwriterAdvanceMonths: productVersions.underwriterAdvanceMonths,
+        dependentMaxAge: productVersions.dependentMaxAge,
+      })
+      .from(policies)
+      .innerJoin(clients, eq(policies.clientId, clients.id))
+      .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+      .innerJoin(products, eq(productVersions.productId, products.id))
+      .leftJoin(branches, eq(policies.branchId, branches.id))
+      .where(and(...conditions))
+      .orderBy(desc(policies.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const policyIds = baseRows.map((r) => r.policyId);
+    const membersByPolicy: Record<string, { clientId: string | null; dependentId: string | null; role: string }[]> = {};
+    let allMembers: { policyId: string; clientId: string | null; dependentId: string | null; role: string }[] = [];
+    if (policyIds.length > 0) {
+      const members = await tdb.select({
+        policyId: policyMembers.policyId,
+        clientId: policyMembers.clientId,
+        dependentId: policyMembers.dependentId,
+        role: policyMembers.role,
+      }).from(policyMembers).where(and(inArray(policyMembers.policyId, policyIds), eq(policyMembers.isActive, true)));
+      allMembers = members;
+      for (const m of members) {
+        if (!membersByPolicy[m.policyId]) membersByPolicy[m.policyId] = [];
+        membersByPolicy[m.policyId].push({ clientId: m.clientId, dependentId: m.dependentId, role: m.role });
+      }
+    }
+    const dependentIds = [...new Set(allMembers.map((m) => m.dependentId).filter(Boolean) as string[])];
+    const dependentDobMap: Record<string, string | null> = {};
+    if (dependentIds.length > 0) {
+      const deps = await tdb.select({ id: dependents.id, dateOfBirth: dependents.dateOfBirth }).from(dependents).where(inArray(dependents.id, dependentIds));
+      for (const d of deps) dependentDobMap[d.id] = d.dateOfBirth ? String(d.dateOfBirth) : null;
+    }
+    const asOfDate = new Date();
+
+    function ageAt(dob: string | null): number | null {
+      if (!dob) return null;
+      const birth = new Date(dob);
+      let age = asOfDate.getFullYear() - birth.getFullYear();
+      const m = asOfDate.getMonth() - birth.getMonth();
+      if (m < 0 || (m === 0 && asOfDate.getDate() < birth.getDate())) age--;
+      return age;
+    }
+
+    const rows: UnderwriterPayableRow[] = [];
+    let totalMonthlyPayable = 0;
+    let totalPayableIncludingAdvance = 0;
+
+    for (const r of baseRows) {
+      const advanceMonths = Number(r.underwriterAdvanceMonths ?? 0);
+      const maxAge = r.dependentMaxAge != null ? Number(r.dependentMaxAge) : 21;
+      const amtAdult = r.underwriterAmountAdult != null ? parseFloat(String(r.underwriterAmountAdult)) : 0;
+      const amtChild = r.underwriterAmountChild != null ? parseFloat(String(r.underwriterAmountChild)) : amtAdult;
+
+      const members = membersByPolicy[r.policyId] ?? [];
+      let adults = 0;
+      let children = 0;
+      for (const m of members) {
+        if (m.role === "principal" || m.clientId) {
+          adults += 1;
+          continue;
+        }
+        if (m.dependentId) {
+          const dob = dependentDobMap[m.dependentId];
+          const a = ageAt(dob);
+          if (a === null || a >= maxAge) adults += 1;
+          else children += 1;
+        }
+      }
+
+      const monthlyPayable = adults * amtAdult + children * amtChild;
+      const totalPayable = monthlyPayable * (1 + advanceMonths);
+      totalMonthlyPayable += monthlyPayable;
+      totalPayableIncludingAdvance += totalPayable;
+
+      rows.push({
+        policyId: r.policyId,
+        policyNumber: r.policyNumber,
+        status: r.status,
+        clientId: r.clientId,
+        clientFirstName: r.clientFirstName,
+        clientLastName: r.clientLastName,
+        clientPhone: r.clientPhone,
+        clientEmail: r.clientEmail,
+        clientNationalId: r.clientNationalId,
+        productName: r.productName,
+        productCode: r.productCode,
+        branchName: r.branchName,
+        adults,
+        children,
+        underwriterAmountAdult: r.underwriterAmountAdult != null ? String(r.underwriterAmountAdult) : null,
+        underwriterAmountChild: r.underwriterAmountChild != null ? String(r.underwriterAmountChild) : null,
+        underwriterAdvanceMonths: advanceMonths,
+        monthlyPayable,
+        totalPayable,
+      });
+    }
+
+    return {
+      rows,
+      summary: {
+        totalMonthlyPayable,
+        totalPayableIncludingAdvance,
+        policyCount: rows.length,
+      },
+    };
   }
 
   async getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]> {

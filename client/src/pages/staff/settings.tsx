@@ -50,6 +50,7 @@ import { resolveAssetUrl } from "@/lib/assetUrl";
 
 export default function StaffSettings() {
   const { user, permissions: userPerms, isPlatformOwner } = useAuth();
+  const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const permissions = Array.isArray(userPerms) ? userPerms : [];
@@ -109,7 +110,9 @@ export default function StaffSettings() {
     queryKey: ["/api/terms?all=true"],
   });
 
-  const currentOrg = orgs?.[0];
+  const currentOrg = isPlatformOwner && effectiveOrgId
+    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) ?? orgs[0] : undefined)
+    : orgs?.[0];
 
   const [orgName, setOrgName] = useState("");
   const [primaryColor, setPrimaryColor] = useState("");
@@ -139,7 +142,9 @@ export default function StaffSettings() {
   const [changePasswordConfirm, setChangePasswordConfirm] = useState("");
 
   const [tenantAddOpen, setTenantAddOpen] = useState(false);
+  const [tenantEditId, setTenantEditId] = useState<string | null>(null);
   const [tenantDeleteId, setTenantDeleteId] = useState<string | null>(null);
+  const [editingTenantForm, setEditingTenantForm] = useState({ name: "", email: "", phone: "", isWhitelabeled: false, databaseUrl: "" });
   const [newTenant, setNewTenant] = useState({
     name: "",
     adminEmail: "",
@@ -147,6 +152,8 @@ export default function StaffSettings() {
     adminDisplayName: "",
     phone: "",
     email: "",
+    isWhitelabeled: false,
+    databaseUrl: "",
   });
 
   useEffect(() => {
@@ -197,7 +204,7 @@ export default function StaffSettings() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
       setTenantAddOpen(false);
-      setNewTenant({ name: "", adminEmail: "", adminPassword: "", adminDisplayName: "", phone: "", email: "" });
+      setNewTenant({ name: "", adminEmail: "", adminPassword: "", adminDisplayName: "", phone: "", email: "", isWhitelabeled: false, databaseUrl: "" });
       toast({ title: "Tenant created", description: `${data?.name ?? "New tenant"} is ready.` });
     },
     onError: (err: any) => {
@@ -229,6 +236,36 @@ export default function StaffSettings() {
     },
   });
 
+  useEffect(() => {
+    if (tenantEditId && orgsList.length > 0) {
+      const org = orgsList.find((o: any) => o.id === tenantEditId);
+      if (org) {
+        setEditingTenantForm({
+          name: org.name || "",
+          email: org.email || "",
+          phone: org.phone || "",
+          isWhitelabeled: org.isWhitelabeled ?? false,
+          databaseUrl: org.databaseUrl ?? "",
+        });
+      }
+    }
+  }, [tenantEditId, orgsList]);
+
+  const updateTenantMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const res = await apiRequest("PATCH", `/api/organizations/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      setTenantEditId(null);
+      toast({ title: "Tenant updated" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to update tenant", variant: "destructive" });
+    },
+  });
+
   const handleCreateTenant = () => {
     if (!newTenant.name.trim()) return;
     if (newTenant.adminPassword && newTenant.adminPassword.length < 8) {
@@ -256,8 +293,10 @@ export default function StaffSettings() {
     if (policyNumberPrefix !== undefined) updates.policyNumberPrefix = policyNumberPrefix || null;
     if (policyNumberPadding !== undefined)
       updates.policyNumberPadding = Math.max(1, Math.min(20, policyNumberPadding));
-    if (databaseUrl !== undefined) updates.databaseUrl = databaseUrl.trim() || null;
-    updates.isWhitelabeled = isWhitelabeled;
+    if (isPlatformOwner) {
+      if (databaseUrl !== undefined) updates.databaseUrl = databaseUrl.trim() || null;
+      updates.isWhitelabeled = isWhitelabeled;
+    }
     updateOrgMutation.mutate(updates);
   };
 
@@ -482,7 +521,7 @@ export default function StaffSettings() {
                 ) : (
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {orgsList.map((org: any) => {
-                      const isActive = isPlatformOwner && org.id === user?.organizationId;
+                      const isActive = isPlatformOwner && org.id === effectiveOrgId;
                       return (
                         <Card
                           key={org.id}
@@ -524,6 +563,17 @@ export default function StaffSettings() {
                                 >
                                   <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
                                   {isActive ? "Current" : "Switch"}
+                                </Button>
+                              )}
+                              {isPlatformOwner && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setTenantEditId(org.id)}
+                                  data-testid={`btn-edit-tenant-${org.id}`}
+                                  aria-label="Edit tenant"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
                                 </Button>
                               )}
                               <Button
@@ -600,6 +650,37 @@ export default function StaffSettings() {
                         placeholder="+1 555 0100"
                       />
                     </div>
+                    {isPlatformOwner && (
+                      <>
+                        <div className="flex items-center justify-between rounded-lg border p-4">
+                          <div className="space-y-0.5">
+                            <Label htmlFor="new-tenant-whitelabel" className="font-medium">White-Label Mode</Label>
+                            <p className="text-xs text-muted-foreground">
+                              When enabled, the app will show this tenant&apos;s name and logo instead of POL263.
+                            </p>
+                          </div>
+                          <Switch
+                            id="new-tenant-whitelabel"
+                            checked={newTenant.isWhitelabeled}
+                            onCheckedChange={(v) => setNewTenant((p) => ({ ...p, isWhitelabeled: v === true }))}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="new-tenant-databaseUrl">Dedicated Database URL (optional)</Label>
+                          <Input
+                            id="new-tenant-databaseUrl"
+                            type="password"
+                            autoComplete="off"
+                            value={newTenant.databaseUrl}
+                            onChange={(e) => setNewTenant((p) => ({ ...p, databaseUrl: e.target.value }))}
+                            placeholder="postgresql://... (leave empty for shared database)"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            When set, this tenant&apos;s data is stored in a separate database.
+                          </p>
+                        </div>
+                      </>
+                    )}
                     <div className="border-t pt-4 space-y-4">
                       <p className="text-sm font-medium flex items-center gap-2">
                         <Users className="h-4 w-4 text-muted-foreground" />
@@ -649,6 +730,93 @@ export default function StaffSettings() {
                     >
                       {createTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                       Create tenant
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              <Dialog open={!!tenantEditId} onOpenChange={(open) => !open && setTenantEditId(null)}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Edit tenant</DialogTitle>
+                    <DialogDescription>Update organization details and platform owner settings.</DialogDescription>
+                  </DialogHeader>
+                  {tenantEditId && (
+                    <div className="space-y-4 py-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-tenant-name">Organization name *</Label>
+                        <Input
+                          id="edit-tenant-name"
+                          value={editingTenantForm.name}
+                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, name: e.target.value }))}
+                          placeholder="e.g. Acme Insurance"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-tenant-email">Organization email</Label>
+                        <Input
+                          id="edit-tenant-email"
+                          type="email"
+                          value={editingTenantForm.email}
+                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, email: e.target.value }))}
+                          placeholder="info@acme.com"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-tenant-phone">Organization phone</Label>
+                        <Input
+                          id="edit-tenant-phone"
+                          value={editingTenantForm.phone}
+                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, phone: e.target.value }))}
+                          placeholder="+1 555 0100"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg border p-4">
+                        <div className="space-y-0.5">
+                          <Label htmlFor="edit-tenant-whitelabel" className="font-medium">White-Label Mode</Label>
+                          <p className="text-xs text-muted-foreground">
+                            When enabled, the app shows this tenant&apos;s name and logo instead of POL263.
+                          </p>
+                        </div>
+                        <Switch
+                          id="edit-tenant-whitelabel"
+                          checked={editingTenantForm.isWhitelabeled}
+                          onCheckedChange={(v) => setEditingTenantForm((p) => ({ ...p, isWhitelabeled: v === true }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-tenant-databaseUrl">Dedicated Database URL (optional)</Label>
+                        <Input
+                          id="edit-tenant-databaseUrl"
+                          type="password"
+                          autoComplete="off"
+                          value={editingTenantForm.databaseUrl}
+                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, databaseUrl: e.target.value }))}
+                          placeholder="postgresql://... (leave empty for shared database)"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setTenantEditId(null)}>Cancel</Button>
+                    <Button
+                      onClick={() => {
+                        if (!tenantEditId || !editingTenantForm.name.trim()) return;
+                        updateTenantMutation.mutate({
+                          id: tenantEditId,
+                          data: {
+                            name: editingTenantForm.name.trim(),
+                            email: editingTenantForm.email || null,
+                            phone: editingTenantForm.phone || null,
+                            isWhitelabeled: editingTenantForm.isWhitelabeled,
+                            databaseUrl: editingTenantForm.databaseUrl.trim() || null,
+                          },
+                        });
+                      }}
+                      disabled={!editingTenantForm.name.trim() || updateTenantMutation.isPending}
+                    >
+                      {updateTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Save changes
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -791,6 +959,7 @@ export default function StaffSettings() {
                       ))}
                     </div>
                   </div>
+                  </div>
                   <div className="grid gap-2">
                     <Label htmlFor="footerText">Footer Text (on documents)</Label>
                     <Input id="footerText" value={footerText} onChange={(e) => setFooterText(e.target.value)} />
@@ -818,41 +987,6 @@ export default function StaffSettings() {
                       <p className="text-xs text-muted-foreground">e.g. 5 → 00001, 00002 (per tenant)</p>
                     </div>
                   </div>
-
-                  {isPlatformOwner && (
-                    <div className="border-t pt-6 mt-4">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Shield className="h-4 w-4 text-primary" />
-                        <span className="font-semibold text-sm">Platform Owner Settings</span>
-                      </div>
-                      <div className="grid gap-4">
-                        <div className="flex items-center justify-between rounded-lg border p-4">
-                          <div className="space-y-0.5">
-                            <Label htmlFor="whitelabel-toggle" className="font-medium">White-Label Mode</Label>
-                            <p className="text-xs text-muted-foreground">
-                              When enabled, POL263 branding is fully replaced with this tenant&apos;s name, logo, and colors across the entire app (login, sidebar, documents). When disabled, the app loads as POL263 but tenant details appear on documents and receipts.
-                            </p>
-                          </div>
-                          <Switch id="whitelabel-toggle" checked={isWhitelabeled} onCheckedChange={setIsWhitelabeled} />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="databaseUrl">Dedicated Database URL (optional)</Label>
-                          <Input
-                            id="databaseUrl"
-                            type="password"
-                            autoComplete="off"
-                            value={databaseUrl}
-                            onChange={(e) => setDatabaseUrl(e.target.value)}
-                            placeholder="postgresql://... (leave empty to use shared database)"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            When set, this tenant&apos;s data is stored in a separate database for full isolation. Leave empty to share the platform database.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
 
                 <Button onClick={handleSaveBranding} disabled={updateOrgMutation.isPending}>
                   {updateOrgMutation.isPending ? (

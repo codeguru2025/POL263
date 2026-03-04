@@ -222,6 +222,14 @@ export default function StaffReports() {
       return res.json();
     },
   });
+  const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number } }>({
+    queryKey: ["reports", "underwriter-payable", ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/underwriter-payable?limit=500" + qAppend, { credentials: "include" });
+      if (!res.ok) return { rows: [], summary: { totalMonthlyPayable: 0, totalPayableIncludingAdvance: 0, policyCount: 0 } };
+      return res.json();
+    },
+  });
   const { data: cashups = [], isLoading: loadingCashups } = useQuery<any[]>({
     queryKey: ["reports", "cashups", ...fk, userId],
     queryFn: async () => {
@@ -366,6 +374,7 @@ export default function StaffReports() {
             <TabsTrigger value="policies" data-testid="tab-policies-report">Policies</TabsTrigger>
             <TabsTrigger value="policy-details" data-testid="tab-policy-details">Policy report</TabsTrigger>
             {canReadFinance && <TabsTrigger value="finance" data-testid="tab-finance-report">Finance</TabsTrigger>}
+            {canReadFinance && <TabsTrigger value="underwriter-payable" data-testid="tab-underwriter-payable">Underwriter payable</TabsTrigger>}
             <TabsTrigger value="active-policies" data-testid="tab-active-policies">Active</TabsTrigger>
             <TabsTrigger value="awaiting-payments" data-testid="tab-awaiting-payments">Awaiting payments</TabsTrigger>
             <TabsTrigger value="overdue" data-testid="tab-overdue">Overdue</TabsTrigger>
@@ -589,6 +598,86 @@ export default function StaffReports() {
                       </TableBody>
                     </Table>
                   </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="underwriter-payable">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2"><Truck className="h-5 w-5" />Underwriter payable</CardTitle>
+                  <ExportButton reportType="underwriter-payable" filters={filters} />
+                </div>
+                <p className="text-sm text-muted-foreground">Monthly amount the tenant pays to the underwriter per policy (per adult/child). Includes advance months where applicable. Use filters to narrow by branch, product or status.</p>
+              </CardHeader>
+              <CardContent>
+                {loadingUnderwriterPayable ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                ) : !underwriterPayableResult?.rows?.length ? (
+                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-underwriter-report">No policies with underwriter configuration match the filters</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                      <Card>
+                        <CardContent className="pt-6">
+                          <p className="text-2xl font-bold" data-testid="text-underwriter-policy-count">{underwriterPayableResult.summary.policyCount}</p>
+                          <p className="text-sm text-muted-foreground">Policies</p>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-6">
+                          <p className="text-2xl font-bold" data-testid="text-underwriter-monthly">{underwriterPayableResult.summary.totalMonthlyPayable.toFixed(2)}</p>
+                          <p className="text-sm text-muted-foreground">Total monthly payable</p>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-6">
+                          <p className="text-2xl font-bold" data-testid="text-underwriter-total">{underwriterPayableResult.summary.totalPayableIncludingAdvance.toFixed(2)}</p>
+                          <p className="text-sm text-muted-foreground">Total (incl. advance months)</p>
+                        </CardContent>
+                      </Card>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Policy #</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Client</TableHead>
+                            <TableHead>Phone</TableHead>
+                            <TableHead>Product</TableHead>
+                            <TableHead>Branch</TableHead>
+                            <TableHead>Adults</TableHead>
+                            <TableHead>Children</TableHead>
+                            <TableHead>Rate (A/C)</TableHead>
+                            <TableHead>Advance (mo)</TableHead>
+                            <TableHead>Monthly</TableHead>
+                            <TableHead>Total payable</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {underwriterPayableResult.rows.map((r: any) => (
+                            <TableRow key={r.policyId} data-testid={`row-underwriter-${r.policyId}`}>
+                              <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
+                              <TableCell><Badge variant={r.status === "active" ? "default" : "secondary"}>{r.status}</Badge></TableCell>
+                              <TableCell className="whitespace-nowrap">{[r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</TableCell>
+                              <TableCell className="text-sm whitespace-nowrap">{r.clientPhone || "—"}</TableCell>
+                              <TableCell className="text-sm">{r.productName || "—"}</TableCell>
+                              <TableCell>{r.branchName || "—"}</TableCell>
+                              <TableCell>{r.adults}</TableCell>
+                              <TableCell>{r.children}</TableCell>
+                              <TableCell className="text-sm whitespace-nowrap">{r.underwriterAmountAdult ?? "—"} / {r.underwriterAmountChild ?? "—"}</TableCell>
+                              <TableCell>{r.underwriterAdvanceMonths}</TableCell>
+                              <TableCell className="font-medium">{r.monthlyPayable.toFixed(2)}</TableCell>
+                              <TableCell className="font-medium">{r.totalPayable.toFixed(2)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </>
                 )}
               </CardContent>
             </Card>

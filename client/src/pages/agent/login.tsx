@@ -13,8 +13,10 @@ import { resolveAssetUrl } from "@/lib/assetUrl";
 
 export default function AgentLogin() {
   const [, setLocation] = useLocation();
+  const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  const orgIdFromUrl = params.get("orgId") || undefined;
   const { isAuthenticated, isLoading } = useAuth();
-  const { displayName, displayLogo } = useBranding();
+  const { displayName, displayLogo } = useBranding(orgIdFromUrl);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);

@@ -411,9 +411,13 @@ export function setupAuth(app: Express) {
       const orgId = user.organizationId ?? undefined;
       const userRoles = orgId ? await storage.getUserRoles(user.id, orgId) : [];
       const effectivePermissions = await storage.getUserEffectivePermissions(user.id);
+      const session = req.session as any;
+      const effectiveOrganizationId = user.isPlatformOwner
+        ? (session?.activeTenantId ?? user.organizationId)
+        : user.organizationId;
 
       return res.json({
-        user: sanitizeUser(user),
+        user: { ...sanitizeUser(user), effectiveOrganizationId },
         roles: userRoles.map((r) => ({ name: r.name, branchId: r.branchId })),
         permissions: effectivePermissions,
       });

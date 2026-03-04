@@ -184,7 +184,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const canManageTenants = (permissions ?? []).includes("create:tenant") || (permissions ?? []).includes("delete:tenant");
   const safeRoles = Array.isArray(roles) ? roles : [];
   const isAgent = safeRoles.some((r: any) => r.name === "agent");
-  const { displayName: brandName, displayLogo: brandLogo, isWhitelabeled } = useBranding();
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
 
   const [now, setNow] = useState(() => new Date());
@@ -206,6 +205,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   });
 
   const hasTenant = !!user?.organizationId;
+  const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
+  const { displayName: brandName, displayLogo: brandLogo, isWhitelabeled } = useBranding(effectiveOrgId);
 
   const { data: branchesList } = useQuery<any[]>({
     queryKey: ["/api/branches"],
@@ -297,7 +298,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   }
 
   const currentOrg = isPlatformOwner
-    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === user?.organizationId) || orgs[0] : undefined)
+    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) || orgs[0] : undefined)
     : (Array.isArray(orgs) ? orgs[0] : undefined);
   const currentBranch = branchesList?.[0];
   const primaryRole = safeRoles[0]?.name || "staff";
@@ -312,6 +313,15 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     await logout();
     setLocation("/");
   };
+
+  // When whitelabeled, set app title to tenant name
+  useEffect(() => {
+    if (isWhitelabeled && currentOrg?.name) {
+      const prev = document.title;
+      document.title = currentOrg.name;
+      return () => { document.title = prev; };
+    }
+  }, [isWhitelabeled, currentOrg?.name]);
 
   const displayName = user?.displayName || user?.email || "User";
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });

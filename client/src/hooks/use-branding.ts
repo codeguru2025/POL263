@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { getApiBase } from "@/lib/queryClient";
 
 export interface PlatformBranding {
   name: string;
@@ -20,13 +21,23 @@ const FALLBACK: PlatformBranding = {
 
 /**
  * Fetches the platform/tenant branding from the public endpoint.
- * Available without authentication — used on login, home, and splash screens.
- * When whitelabeled, all POL263 references are replaced with tenant branding.
+ * When orgId is provided (e.g. after login), returns that tenant's branding so the app
+ * can show tenant name/logo when whitelabeled. Without orgId (e.g. login page), returns POL263.
  */
-export function useBranding() {
+export function useBranding(orgId?: string | null) {
   const { data, isLoading } = useQuery<PlatformBranding>({
-    queryKey: ["/api/public/branding"],
+    queryKey: ["/api/public/branding", orgId ?? ""],
+    queryFn: async () => {
+      const base = getApiBase();
+      const url = orgId
+        ? `${base}/api/public/branding?orgId=${encodeURIComponent(orgId)}`
+        : `${base}/api/public/branding`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) return FALLBACK;
+      return res.json();
+    },
     staleTime: 5 * 60 * 1000,
+    enabled: true,
   });
 
   const branding = data ?? FALLBACK;

@@ -7,6 +7,8 @@ interface AuthUser {
   displayName: string | null;
   avatarUrl: string | null;
   organizationId: string | null;
+  /** For platform owners: selected tenant id from session; else same as organizationId */
+  effectiveOrganizationId?: string | null;
   isActive: boolean;
   referralCode: string | null;
   isPlatformOwner?: boolean;
