@@ -1540,26 +1540,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             ...(!policy.effectiveDate ? { effectiveDate: todayDate } : {}),
             version: sql`version + 1`,
           }).where(eq(policies.id, tx.policyId));
-          await storage.createPolicyStatusHistory(tx.policyId, "inactive", "active", "First premium paid — conversion", user.id);
         } else if (policy.status === "grace") {
           await txDb.update(policies).set({
             status: "active",
             graceEndDate: null,
             version: sql`version + 1`,
           }).where(eq(policies.id, tx.policyId));
-          await storage.createPolicyStatusHistory(tx.policyId, "grace", "active", "Payment received", user.id);
         } else if (policy.status === "lapsed") {
           await txDb.update(policies).set({
             status: "active",
             graceEndDate: null,
             version: sql`version + 1`,
           }).where(eq(policies.id, tx.policyId));
-          await storage.createPolicyStatusHistory(tx.policyId, "lapsed", "active", "Reinstatement — payment received", user.id);
         }
       }
 
-      return { tx, receipt };
+      return { tx, receipt, policyStatusChange: (tx.status === "cleared" && tx.policyId && policy) ? { from: policy.status, to: "active" as const, reason: policy.status === "inactive" ? "First premium paid — conversion" : policy.status === "grace" ? "Payment received" : "Reinstatement — payment received" } : null };
     });
+
+    if (result.policyStatusChange) {
+      try {
+        await storage.createPolicyStatusHistory(result.tx.policyId!, result.policyStatusChange.from, result.policyStatusChange.to, result.policyStatusChange.reason, user.id, user.organizationId);
+      } catch (e) {
+        structuredLog("warn", "createPolicyStatusHistory after payment failed", { error: (e as Error).message, policyId: result.tx.policyId });
+      }
+    }
 
     if (result.tx.status === "cleared" && result.tx.policyId && policy?.status === "lapsed") {
       await rollbackClawbacks(user.organizationId, policy);

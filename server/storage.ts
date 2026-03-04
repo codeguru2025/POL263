@@ -263,7 +263,7 @@ export interface IStorage {
   getPolicy(id: string, orgId: string): Promise<Policy | undefined>;
   getPolicyByNumber(policyNumber: string, orgId: string): Promise<Policy | undefined>;
   updatePolicy(id: string, data: Partial<InsertPolicy>, orgId: string): Promise<Policy | undefined>;
-  createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string): Promise<void>;
+  createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, organizationId?: string): Promise<void>;
   getReinstatementHistory(organizationId: string, filters?: ReportFilters): Promise<ReinstatementEntry[]>;
   getConversionHistory(organizationId: string, filters?: ReportFilters): Promise<ConversionEntry[]>;
   getActivationHistory(organizationId: string, filters?: ReportFilters): Promise<ActivationEntry[]>;
@@ -1171,7 +1171,12 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await tdb.update(policies).set(data).where(eq(policies.id, id)).returning();
     return updated;
   }
-  async createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string): Promise<void> {
+  async createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, organizationId?: string): Promise<void> {
+    if (organizationId) {
+      const tdb = await getDbForOrg(organizationId);
+      await tdb.insert(policyStatusHistory).values({ policyId, fromStatus, toStatus, reason, changedBy });
+      return;
+    }
     const orgs = await db.select({ id: organizations.id }).from(organizations);
     for (const org of orgs) {
       const tdb = await getDbForOrg(org.id);
