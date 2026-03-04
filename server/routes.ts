@@ -1559,11 +1559,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
 
     if (result.policyStatusChange) {
-      try {
-        await storage.createPolicyStatusHistory(result.tx.policyId!, result.policyStatusChange.from, result.policyStatusChange.to, result.policyStatusChange.reason, user.id, user.organizationId);
-      } catch (e) {
-        structuredLog("warn", "createPolicyStatusHistory after payment failed", { error: (e as Error).message, policyId: result.tx.policyId });
-      }
+      const policyId = result.tx.policyId!;
+      const { from, to, reason } = result.policyStatusChange;
+      const orgId = user.organizationId;
+      const changedBy = user.id;
+      setImmediate(() => {
+        storage.createPolicyStatusHistory(policyId, from, to, reason, changedBy, orgId).catch((e) => {
+          structuredLog("warn", "createPolicyStatusHistory after payment failed", { error: (e as Error).message, policyId });
+        });
+      });
     }
 
     if (result.tx.status === "cleared" && result.tx.policyId && policy?.status === "lapsed") {
