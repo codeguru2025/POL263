@@ -1,5 +1,6 @@
 # Build and deploy web + Android + iOS on every push to main.
 # Also runs on PRs to main to verify lockfile + build (no merge if lockfile out of sync).
+# Uses a Linux-generated lockfile for the build so lint:lock passes (lockfile from Windows differs on Linux).
 name: Build Web & Mobile
 
 on:
@@ -13,9 +14,29 @@ env:
   NODE_VERSION: "22"
 
 jobs:
+  lockfile-linux:
+    name: Generate lockfile (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Pin npm
+        run: npm install -g npm@11.11.0
+      - name: Generate lockfile on Linux
+        run: npm install --package-lock-only --include=dev --ignore-scripts
+      - name: Upload lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lock-linux
+          path: package-lock.json
+
   build-web:
     name: Build Web
     runs-on: ubuntu-latest
+    needs: lockfile-linux
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +45,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
+
+      - name: Use Linux lockfile
+        uses: actions/download-artifact@v4
+        with:
+          name: package-lock-linux
+          path: .
 
       - name: Install dependencies
         run: npm ci
