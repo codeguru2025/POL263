@@ -23,6 +23,20 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught an error", error, errorInfo);
     // Do not auto-clear error state; user must use Back/Reload. Auto-clear caused "error then loads" flash when navigating.
+
+    // On chunk/dynamic-import failure, try one automatic reload before showing the error (avoids transient network showing error screen).
+    const isChunkOrNetwork =
+      error.name === "ChunkLoadError" ||
+      error.message?.includes("Loading chunk") ||
+      error.message?.includes("Failed to fetch dynamically imported module");
+    if (isChunkOrNetwork && typeof window !== "undefined") {
+      const key = "pol263_chunk_reload_done";
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, "1");
+        window.location.reload();
+        return;
+      }
+    }
   }
 
   componentWillUnmount() {
@@ -89,6 +103,7 @@ export class ErrorBoundary extends Component<Props, State> {
               variant="outline"
               onClick={() => {
                 if (isChunkOrNetwork && typeof window !== "undefined") {
+                  sessionStorage.removeItem("pol263_chunk_reload_done");
                   window.location.reload();
                   return;
                 }

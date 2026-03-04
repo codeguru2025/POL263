@@ -46,7 +46,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { resolveAssetUrl } from "@/lib/assetUrl";
+import { resolveAssetUrl, getDefaultLogoUrl } from "@/lib/assetUrl";
 
 export default function StaffSettings() {
   const { user, permissions: userPerms, isPlatformOwner } = useAuth();
@@ -863,10 +863,10 @@ export default function StaffSettings() {
                           src={`${resolveAssetUrl(logoUrl || currentOrg?.logoUrl)}?v=${Date.now()}`}
                           alt="Current Logo"
                           className="object-contain max-h-full max-w-full p-1"
-                          onError={(e) => { (e.target as HTMLImageElement).src = "/assets/logo.png"; }}
+                          onError={(e) => { (e.target as HTMLImageElement).src = getDefaultLogoUrl(); }}
                         />
                       ) : (
-                        <img src="/assets/logo.png" alt="Default" className="object-contain max-h-full max-w-full p-1 opacity-40" />
+                        <img src={getDefaultLogoUrl()} alt="Default" className="object-contain max-h-full max-w-full p-1 opacity-40" />
                       )}
                     </div>
                     <div className="space-y-2">

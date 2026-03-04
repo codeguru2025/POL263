@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
+import { getDefaultLogoUrl } from "@/lib/assetUrl";
 
 export interface PlatformBranding {
   name: string;
@@ -14,7 +15,7 @@ export interface PlatformBranding {
 
 const FALLBACK: PlatformBranding = {
   name: "POL263",
-  logoUrl: "/assets/logo.png",
+  logoUrl: getDefaultLogoUrl(),
   primaryColor: "#D4AF37",
   isWhitelabeled: false,
 };
@@ -42,7 +43,7 @@ export function useBranding(orgId?: string | null) {
 
   const branding = data ?? FALLBACK;
   const displayName = branding.isWhitelabeled ? branding.name : "POL263";
-  const displayLogo = branding.isWhitelabeled ? branding.logoUrl : "/assets/logo.png";
+  const displayLogo = branding.isWhitelabeled ? branding.logoUrl : getDefaultLogoUrl();
 
   return {
     branding,

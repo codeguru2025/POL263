@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getDefaultLogoUrl } from "@/lib/assetUrl";
 
 interface ClaimResponse {
   clientId: string;
@@ -94,7 +95,7 @@ export default function ClientClaim() {
       <Card className="w-full max-w-lg border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto bg-primary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6">
-            <img src="/assets/logo.png" alt="POL263 Logo" className="w-10 h-10 rounded-lg" />
+            <img src={getDefaultLogoUrl()} alt="POL263 Logo" className="w-10 h-10 rounded-lg" />
           </div>
           <CardTitle className="text-3xl font-display">Claim Your Policy</CardTitle>
           <CardDescription className="text-base mt-2">

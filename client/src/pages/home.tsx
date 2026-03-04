@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Building2, Users, UserCircle } from "lucide-react";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import AppFooter from "@/components/app-footer";
+import { getDefaultLogoUrl } from "@/lib/assetUrl";
 
 const portals = [
   {
@@ -34,7 +35,7 @@ const portals = [
 
 export default function Home() {
   const displayName = "POL263";
-  const displayLogo = "/assets/logo.png";
+  const displayLogo = getDefaultLogoUrl();
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 relative">
