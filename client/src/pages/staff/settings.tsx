@@ -51,10 +51,11 @@ export default function StaffSettings() {
   const { user, permissions: userPerms, isPlatformOwner } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const canEditRbac = userPerms.includes("write:role") || userPerms.includes("create:tenant");
-  const canManageTenants = userPerms.includes("create:tenant") || userPerms.includes("delete:tenant");
-  const canCreateTenant = userPerms.includes("create:tenant");
-  const canDeleteTenant = userPerms.includes("delete:tenant");
+  const permissions = Array.isArray(userPerms) ? userPerms : [];
+  const canEditRbac = permissions.includes("write:role") || permissions.includes("create:tenant");
+  const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
+  const canCreateTenant = permissions.includes("create:tenant");
+  const canDeleteTenant = permissions.includes("delete:tenant");
   const search = useSearch();
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
@@ -81,9 +82,19 @@ export default function StaffSettings() {
     setLocation(value === "branding" ? "/staff/settings" : `/staff/settings?tab=${value}`);
   };
 
-  const { data: orgs } = useQuery<any[]>({
+  const {
+    data: orgs,
+    isLoading: orgsLoading,
+    isError: isOrgsError,
+    error: orgsError,
+    refetch: refetchOrgsList,
+  } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
   });
+
+  // Safe list for tenants tab: API can return array, null (403), or undefined (loading/error)
+  const orgsList = Array.isArray(orgs) ? orgs : [];
+  const orgsForbidden = orgs === null;
 
   const { data: rolesList } = useQuery<any[]>({
     queryKey: ["/api/roles"],
@@ -186,7 +197,7 @@ export default function StaffSettings() {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
       setTenantAddOpen(false);
       setNewTenant({ name: "", adminEmail: "", adminPassword: "", adminDisplayName: "", phone: "", email: "" });
-      toast({ title: "Tenant created", description: `${data.organization?.name || "New tenant"} is ready.` });
+      toast({ title: "Tenant created", description: `${data?.name ?? "New tenant"} is ready.` });
     },
     onError: (err: any) => {
       toast({ title: "Error", description: err.message || "Failed to create tenant", variant: "destructive" });
@@ -426,11 +437,34 @@ export default function StaffSettings() {
                   )}
                 </div>
 
-                {orgs === undefined ? (
-                  <div className="flex items-center justify-center py-16">
+                {orgsLoading ? (
+                  <div className="flex flex-col items-center justify-center py-16 gap-4">
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Loading tenants…</p>
                   </div>
-                ) : orgs.length === 0 ? (
+                ) : isOrgsError ? (
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
+                      <p className="text-muted-foreground font-medium">Could not load tenants</p>
+                      <p className="text-sm text-muted-foreground text-center max-w-md">
+                        {orgsError instanceof Error ? orgsError.message : "Something went wrong."}
+                      </p>
+                      <Button variant="outline" onClick={() => refetchOrgsList()}>
+                        Try again
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : orgsForbidden ? (
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
+                      <Shield className="h-12 w-12 text-muted-foreground/40" />
+                      <p className="text-muted-foreground font-medium">Access restricted</p>
+                      <p className="text-sm text-muted-foreground text-center max-w-md">
+                        You don’t have permission to view or manage tenants.
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : orgsList.length === 0 ? (
                   <Card>
                     <CardContent className="flex flex-col items-center justify-center py-16">
                       <Building2 className="h-12 w-12 text-muted-foreground/40 mb-4" />
@@ -446,7 +480,7 @@ export default function StaffSettings() {
                   </Card>
                 ) : (
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {orgs.map((org: any) => {
+                    {orgsList.map((org: any) => {
                       const isActive = isPlatformOwner && org.id === user?.organizationId;
                       return (
                         <Card
@@ -624,7 +658,7 @@ export default function StaffSettings() {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Remove tenant?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      This will soft-delete <strong>{orgs?.find((o: any) => o.id === tenantDeleteId)?.name}</strong>. The tenant must have no active users. This action cannot be easily undone.
+                      This will soft-delete <strong>{orgsList.find((o: any) => o.id === tenantDeleteId)?.name ?? "this tenant"}</strong>. The tenant must have no active users. This action cannot be easily undone.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
@@ -944,7 +978,7 @@ export default function StaffSettings() {
                   <div className="flex justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin text-primary" />
                   </div>
-                ) : termsList.length === 0 ? (
+                ) : (termsList ?? []).length === 0 ? (
                   <p className="text-muted-foreground text-sm py-6">No terms yet. Add one to show on policy documents.</p>
                 ) : (
                   <Table>
@@ -958,7 +992,7 @@ export default function StaffSettings() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {termsList.map((term: any) => (
+                      {(termsList ?? []).map((term: any) => (
                         <TableRow key={term.id}>
                           <TableCell className="font-medium">{term.title}</TableCell>
                           <TableCell className="text-muted-foreground">{term.category || "general"}</TableCell>
@@ -1082,7 +1116,7 @@ export default function StaffSettings() {
                       <TableHeader className="bg-muted/50">
                         <TableRow>
                           <TableHead className="w-[200px] sticky left-0 bg-muted/50 z-10">Permission</TableHead>
-                          {rolesList.map((role: any) => (
+                          {(rolesList ?? []).map((role: any) => (
                             <TableHead key={role.id} className="text-center capitalize min-w-[100px]">
                               {role.name}
                             </TableHead>
@@ -1090,11 +1124,11 @@ export default function StaffSettings() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {permsList.map((perm: any) => (
+                        {(permsList ?? []).map((perm: any) => (
                           <RBACPermissionRow
                             key={perm.id}
                             permission={perm}
-                            roles={rolesList}
+                            roles={rolesList ?? []}
                             canEdit={canEditRbac}
                             permsByRoleId={permsByRoleId}
                           />

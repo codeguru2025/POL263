@@ -1,4 +1,5 @@
 import { storage } from "./storage";
+import { structuredLog } from "./logger";
 
 export async function notifyClient(orgId: string, clientId: string, subject: string, body: string, channel = "in_app") {
   try {
@@ -10,5 +11,7 @@ export async function notifyClient(orgId: string, clientId: string, subject: str
       body,
       status: "sent",
     });
-  } catch {}
+  } catch (err) {
+    structuredLog("error", "Failed to create notification log", { error: (err as Error).message, orgId, clientId });
+  }
 }

@@ -393,6 +393,21 @@ export function setupAuth(app: Express) {
 
     const user = req.user as any;
     try {
+      // If user has an org that no longer exists or is soft-deleted, clear it so they can add/select a tenant
+      if (user.organizationId) {
+        const org = await storage.getOrganization(user.organizationId);
+        if (!org || org.name?.endsWith(" (deleted)")) {
+          await storage.updateUser(user.id, { organizationId: null });
+          user.organizationId = null;
+          (req.session as any).activeTenantId = null;
+          if (typeof (req.session as any).save === "function") {
+            await new Promise<void>((resolve, reject) => {
+              (req.session as any).save((err: Error | null) => (err ? reject(err) : resolve()));
+            });
+          }
+        }
+      }
+
       const orgId = user.organizationId ?? undefined;
       const userRoles = orgId ? await storage.getUserRoles(user.id, orgId) : [];
       const effectivePermissions = await storage.getUserEffectivePermissions(user.id);

@@ -87,29 +87,40 @@ function TenantPickerSplash({
   onSelect,
   isLoading,
 }: {
-  orgs: any[];
+  orgs: any[] | null | undefined;
   onSelect: (id: string) => void;
   isLoading: boolean;
 }) {
+  const safeOrgs = Array.isArray(orgs) ? orgs : [];
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] max-w-lg mx-auto">
       <div className="rounded-full bg-primary/10 p-4 mb-6">
         <Globe className="h-10 w-10 text-primary" />
       </div>
-      <h1 className="text-2xl font-bold tracking-tight mb-2">Select a tenant</h1>
+      <h1 className="text-2xl font-bold tracking-tight mb-2">
+        {safeOrgs.length === 0 ? "Add your first tenant" : "Select a tenant"}
+      </h1>
       <p className="text-muted-foreground text-center mb-8">
-        As the platform owner, choose which tenant to manage. You can switch tenants at any time from the header.
+        {safeOrgs.length === 0
+          ? "Create a tenant organization to get started. You can add, edit, or remove tenants anytime from Settings."
+          : "As the platform owner, choose which tenant to manage. You can switch tenants at any time from the header."}
       </p>
-      {orgs.length === 0 ? (
-        <div className="text-center text-muted-foreground">
-          <p>No tenants found.</p>
+      {safeOrgs.length === 0 ? (
+        <div className="text-center text-muted-foreground space-y-4">
+          <p>No tenants yet.</p>
           <Link href="/staff/settings?tab=tenants">
-            <Button variant="default" className="mt-4">Create your first tenant</Button>
+            <Button variant="default" className="mt-4" size="lg">
+              <Building2 className="h-4 w-4 mr-2" />
+              Add tenant
+            </Button>
           </Link>
+          <p className="text-sm">
+            Or open <Link href="/staff/settings?tab=tenants" className="text-primary hover:underline">Settings → Tenants</Link> to manage tenants.
+          </p>
         </div>
       ) : (
         <div className="w-full space-y-2">
-          {orgs.map((org: any) => (
+          {safeOrgs.map((org: any) => (
             <button
               key={org.id}
               disabled={isLoading}
@@ -159,8 +170,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     };
   }, [sidebarOpen]);
 
-  const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
-  const isAgent = roles.some((r) => r.name === "agent");
+  const canManageTenants = (permissions ?? []).includes("create:tenant") || (permissions ?? []).includes("delete:tenant");
+  const safeRoles = Array.isArray(roles) ? roles : [];
+  const isAgent = safeRoles.some((r: any) => r.name === "agent");
   const { displayName: brandName, displayLogo: brandLogo, isWhitelabeled } = useBranding();
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
 
@@ -241,6 +253,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     {
       title: "System & Audit",
       items: [
+        { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
         { href: "/staff/users", label: "User Management", icon: UserCog, permission: "read:user" },
         { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals", badge: pendingApprovalsCount },
         { href: "/staff/audit", label: "Audit Logs", icon: History, permission: "read:audit_log" },
@@ -273,10 +286,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   }
 
   const currentOrg = isPlatformOwner
-    ? orgs?.find((o: any) => o.id === user?.organizationId) || orgs?.[0]
-    : orgs?.[0];
+    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === user?.organizationId) || orgs[0] : undefined)
+    : (Array.isArray(orgs) ? orgs[0] : undefined);
   const currentBranch = branchesList?.[0];
-  const primaryRole = roles[0]?.name || "staff";
+  const primaryRole = safeRoles[0]?.name || "staff";
   const initials = (user?.displayName || user?.email || "U")
     .split(/[@\s]/)
     .map((s: string) => s[0])
@@ -405,7 +418,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <div className="hidden sm:flex items-center gap-2 text-sm">
               <Building className="h-4 w-4 text-muted-foreground shrink-0" />
               <span className="text-muted-foreground font-medium shrink-0">Tenant:</span>
-              {isPlatformOwner && orgs && orgs.length > 0 ? (
+              {isPlatformOwner && Array.isArray(orgs) && orgs.length > 0 ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
@@ -415,7 +428,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-y-auto">
-                    {orgs.map((org: any) => (
+                    {(orgs ?? []).map((org: any) => (
                       <DropdownMenuItem
                         key={org.id}
                         className="flex items-center gap-2 cursor-pointer"
@@ -430,12 +443,22 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                     <DropdownMenuItem
                       className="flex items-center gap-2 cursor-pointer text-muted-foreground"
                       onClick={() => setLocation("/staff/settings?tab=tenants")}
-   >
+                    >
                       <Building2 className="h-3.5 w-3.5 shrink-0" />
                       <span>Manage tenants</span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+              ) : isPlatformOwner && (orgs == null || !Array.isArray(orgs) || orgs.length === 0) ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50"
+                  onClick={() => setLocation("/staff/settings?tab=tenants")}
+                >
+                  <Globe className="h-3 w-3 text-primary shrink-0" />
+                  <span>Add tenant</span>
+                </Button>
               ) : (
                 <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
                   <span className="truncate max-w-[120px]">{currentOrg?.name || "Loading..."}</span>

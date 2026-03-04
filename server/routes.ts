@@ -345,19 +345,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Organization / Tenant ──────────────────────────────────
 
   app.get("/api/organizations", requireAuth, async (req, res) => {
-    const user = req.user as any;
-    const perms = await storage.getUserEffectivePermissions(user.id);
-    const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
-    if (canManageTenants) {
-      const allOrgs = await storage.getOrganizations();
-      const active = allOrgs.filter((o) => !o.name?.endsWith(" (deleted)"));
-      return res.json(active);
+    try {
+      const user = req.user as any;
+      const perms = await storage.getUserEffectivePermissions(user.id);
+      const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
+      if (canManageTenants) {
+        const allOrgs = await storage.getOrganizations();
+        const active = (Array.isArray(allOrgs) ? allOrgs : []).filter((o) => !o.name?.endsWith(" (deleted)"));
+        return res.json(active);
+      }
+      if (user.organizationId) {
+        const org = await storage.getOrganization(user.organizationId);
+        return res.json(org ? [org] : []);
+      }
+      return res.json([]);
+    } catch (err: any) {
+      structuredLog("error", "GET /api/organizations failed", { error: err?.message || String(err), stack: err?.stack });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to load organizations." : (err?.message || "Failed to load organizations") });
     }
-    if (user.organizationId) {
-      const org = await storage.getOrganization(user.organizationId);
-      return res.json(org ? [org] : []);
-    }
-    return res.json([]);
   });
 
   app.get("/api/organizations/:id", requireAuth, async (req, res) => {
@@ -523,21 +528,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     } catch (err) {
       // Soft-delete the orphaned org to prevent partial tenant state
-      try { await storage.updateOrganization(org.id, { name: parsed.name + " (deleted)" }); } catch {}
+      try {
+        await storage.updateOrganization(org.id, { name: parsed.name + " (deleted)" });
+      } catch (rollbackErr) {
+        structuredLog("error", "Failed to soft-delete orphaned org after create failure", {
+          orgId: org.id,
+          error: (rollbackErr as Error).message,
+        });
+      }
       throw err;
     }
   });
 
   app.delete("/api/organizations/:id", requireAuth, requirePermission("delete:tenant"), async (req, res) => {
     const id = req.params.id as string;
+    const user = req.user as any;
     const org = await storage.getOrganization(id);
     if (!org) return res.status(404).json({ message: "Not found" });
-    const usersInOrg = await storage.getUsersByOrg(id, 1, 0);
-    if (usersInOrg.length > 0) {
+
+    const usersInOrg = await storage.getUsersByOrg(id, 100, 0);
+    const isPlatformOwner = user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+    const allPlatformOwners = usersInOrg.every((u: any) => u.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase());
+
+    if (usersInOrg.length > 0 && !allPlatformOwners) {
       return res.status(400).json({
         message: "Cannot delete tenant that has users. Remove or reassign users first.",
       });
     }
+
+    // Clear organizationId for all users in this org (e.g. platform owner) so they can log in with no tenant
+    for (const u of usersInOrg) {
+      await storage.updateUser(u.id, { organizationId: null });
+    }
+    if (isPlatformOwner && user.organizationId === id) {
+      (req.session as any).activeTenantId = null;
+    }
+
     await storage.updateOrganization(id, { name: org.name + " (deleted)" });
     await auditLog(req, "DELETE_ORGANIZATION", "Organization", id, org, null);
     return res.status(204).send();
@@ -1437,6 +1463,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/payments", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer"), async (req, res) => {
     const user = req.user as any;
+    try {
     const userRolesForPayment = await storage.getUserRoles(user.id, user.organizationId);
     const isAgentPayment = userRolesForPayment.some((r: { name?: string }) => r?.name === "agent");
     if (isAgentPayment && req.body.paymentMethod === "cash") {
@@ -1566,6 +1593,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await notifyClient(user.organizationId, result.tx.clientId, "Payment received", `Your payment of ${result.tx.currency} ${result.tx.amount} for policy ${policy.policyNumber} has been received. Thank you.`);
     }
     return res.status(201).json({ ...result.tx, receipt: result.receipt });
+    } catch (err: any) {
+      if (err?.name === "ZodError" && err?.errors?.length) {
+        const msg = err.errors.map((e: { path?: string[]; message?: string }) => `${e.path?.join(".") || "field"}: ${e.message}`).join("; ");
+        return res.status(400).json({ message: msg || "Invalid payment data" });
+      }
+      structuredLog("error", "POST /api/payments failed", { error: err?.message || String(err), stack: err?.stack });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Payment failed. Please try again." : (err?.message || "Payment failed") });
+    }
   });
 
   app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -1686,6 +1721,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
+    try {
     const userRolesForCash = await storage.getUserRoles(user.id, user.organizationId);
     const isAgentCash = userRolesForCash.some((r: { name?: string }) => r?.name === "agent");
     if (isAgentCash) {
@@ -1791,6 +1827,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
     await recordAgentCommission(user.organizationId, policy, result.tx.id, String(amount));
     return res.status(201).json({ transaction: result.tx, receipt: result.receipt });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/admin/receipts/cash failed", { error: err?.message || String(err), stack: err?.stack });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Cash receipt failed. Please try again." : (err?.message || "Cash receipt failed") });
+    }
   });
 
   app.post("/api/admin/receipts/reprint", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -1949,6 +1989,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Group batch receipt (staff: receipt multiple group policies at once) ───
   app.post("/api/group-receipt", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
+    try {
     const { groupId, policyIds, totalAmount, currency } = req.body;
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
@@ -2006,6 +2047,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum });
     }
     return res.status(201).json({ receipted: results.length, results });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Group receipt failed. Please try again." : (err?.message || "Group receipt failed") });
+    }
   });
 
   // ─── Group PayNow (create intent, initiate, poll) ───
@@ -2463,17 +2508,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Public branding (no auth required, for login/splash screens) ──
   app.get("/api/public/branding", async (req, res) => {
+    const NEUTRAL = { name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#D4AF37" };
     const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
-    let org: Awaited<ReturnType<typeof storage.getOrganizations>>[number] | undefined;
-    if (orgIdParam) {
-      const found = await storage.getOrganization(orgIdParam);
-      if (found) org = found;
+    if (!orgIdParam) {
+      return res.json(NEUTRAL);
     }
-    if (!org) {
-      const orgs = await storage.getOrganizations();
-      org = orgs[0];
-    }
-    if (!org) return res.json({ name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#D4AF37" });
+    const org = await storage.getOrganization(orgIdParam);
+    if (!org || org.name?.endsWith("(deleted)")) return res.json(NEUTRAL);
     return res.json({
       name: org.name,
       logoUrl: org.logoUrl || "/assets/logo.png",

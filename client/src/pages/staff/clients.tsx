@@ -615,7 +615,7 @@ export default function StaffClients() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {clientDependents.map((dep) => (
+                        {(clientDependents ?? []).map((dep) => (
                           <TableRow key={dep.id} data-testid={`row-dependent-${dep.id}`}>
                             <TableCell className="font-medium">
                               {dep.firstName} {dep.lastName}

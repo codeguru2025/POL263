@@ -109,6 +109,7 @@ function Router() {
       <Route path="/staff/" component={StaffDashboard} />
       <Route path="/staff/audit" component={AuditLogs} />
       <Route path="/staff/settings" component={StaffSettings} />
+      <Route path="/staff/settings/" component={StaffSettings} />
       <Route path="/staff/products" component={ProductBuilder} />
       <Route path="/staff/policies" component={StaffPolicies} />
       <Route path="/staff/clients" component={StaffClients} />

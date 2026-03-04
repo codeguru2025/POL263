@@ -19,12 +19,27 @@ async function run() {
   const acceptSelfSigned =
     process.env.DB_ACCEPT_SELF_SIGNED === "true" ||
     process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
-    process.env.DATABASE_URL.includes("supabase");
+    process.env.DATABASE_URL.includes("supabase") ||
+    /digitalocean|\.ondigitalocean\.com/i.test(process.env.DATABASE_URL || "");
   const poolConfig: pg.PoolConfig = {
     connectionString: process.env.DATABASE_URL,
     ...(acceptSelfSigned && { ssl: { rejectUnauthorized: false } }),
   };
-  const pool = new pg.Pool(poolConfig);
+  let pool = new pg.Pool(poolConfig);
+
+  try {
+    await pool.query("SELECT 1");
+  } catch (firstErr: any) {
+    if (firstErr?.code === "SELF_SIGNED_CERT_IN_CHAIN" && !acceptSelfSigned) {
+      await pool.end();
+      console.warn("Database uses a self-signed certificate. Retrying with SSL verification disabled. Set DB_ACCEPT_SELF_SIGNED=true to avoid this.");
+      pool = new pg.Pool({ ...poolConfig, ssl: { rejectUnauthorized: false } });
+      await pool.query("SELECT 1");
+    } else {
+      await pool.end();
+      throw firstErr;
+    }
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

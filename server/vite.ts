@@ -31,7 +31,8 @@ export async function setupVite(server: Server, app: Express) {
 
   app.use(vite.middlewares);
 
-  app.use("/{*path}", async (req, res, next) => {
+  // Use regex to avoid path-to-regexp v8 "Missing parameter name" for wildcard (Express 5).
+  app.use(/(.*)/, async (req, res, next) => {
     const url = req.originalUrl;
 
     try {

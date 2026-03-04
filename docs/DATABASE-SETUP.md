@@ -43,7 +43,7 @@ This will:
 1. Create all tables in your database (`db:push`).
 2. Insert default roles, permissions, organization, and a superuser placeholder (`db:seed`).
 
-If you see any prompt like “Apply changes?”, type **y** and press Enter.
+If you see any prompt like "Apply changes?", type **y** and press Enter.
 
 After that, start the app with `npm run dev` and open http://127.0.0.1:5000.
 
@@ -113,15 +113,23 @@ Open http://127.0.0.1:5000 in your browser.
 
 ---
 
-## Optional: auto-setup when the server starts
+## Production: run migrations separately
 
-If you want the server to create tables and run the seed **when it starts** (e.g. first run only), add to `.env`:
+In production, **do not** run schema push or seed from the app. Run them as part of your deploy or release:
 
-```env
-RUN_DB_BOOTSTRAP=true
-```
+- **Existing database (upgrades):** Run migrations before starting the app:
+  ```bash
+  npm run db:migrate
+  npm start
+  ```
+- **Fresh database:** Run setup once (e.g. in a one-off job or deploy step), then use migrations for future deploys:
+  ```bash
+  npm run db:setup    # first time only: push schema + seed
+  npm run db:migrate  # apply any SQL migrations
+  npm start
+  ```
 
-Then run `npm run dev` once. After the first successful run you can set `RUN_DB_BOOTSTRAP=false` or remove it so it doesn’t run again on every start.
+The app assumes the database is already migrated and ready when it starts.
 
 ---
 

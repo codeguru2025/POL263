@@ -400,7 +400,11 @@ export async function submitOmariOtp(intentId: string, orgId: string, otp: strin
   }, orgId);
 
   if (status === "paid" || status === "sent" || status === "awaiting delivery") {
-    await applyPaymentToPolicy(intent.id, actorType, actorId);
+    const applied = await applyPaymentToPolicy(intent.id, actorType, actorId);
+    if (!applied.ok) {
+      structuredLog("error", "applyPaymentToPolicy failed after Paynow status", { intentId: intent.id, error: applied.error });
+      return { ok: true, paid: false, error: applied.error };
+    }
     return { ok: true, paid: true };
   }
 
@@ -445,7 +449,8 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
     }
 
     if (status === "paid" || status === "sent") {
-      await applyPaymentToPolicy(intent.id, "system", null);
+      const applied = await applyPaymentToPolicy(intent.id, "system", null);
+      if (!applied.ok) structuredLog("error", "handlePaynowResult applyPaymentToPolicy failed", { intentId: intent.id, error: applied.error });
       return { ok: true };
     }
     if (status === "cancelled" || status === "failed" || status === "disputed") {
@@ -476,7 +481,8 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
   }
   if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) return { ok: true };
   if (status === "paid" || status === "sent") {
-    await applyGroupPaymentToPolicies(groupIntent.id, groupOrgId, "system", null);
+    const applied = await applyGroupPaymentToPolicies(groupIntent.id, groupOrgId, "system", null);
+    if (!applied.ok) structuredLog("error", "handlePaynowResult applyGroupPaymentToPolicies failed", { groupIntentId: groupIntent.id, error: applied.error });
     return { ok: true };
   }
   if (status === "cancelled" || status === "failed" || status === "disputed") {
@@ -513,7 +519,8 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
       actorId: null,
     });
     if (status === "paid" || status === "sent") {
-      await applyPaymentToPolicy(intent.id, "system", null);
+      const applied = await applyPaymentToPolicy(intent.id, "system", null);
+      if (!applied.ok) return { status: intent.status, paid: false, error: applied.error || "Failed to apply payment" };
       return { status: "paid", paid: true };
     }
     if (status === "cancelled" || status === "failed") {
@@ -544,6 +551,7 @@ export async function applyPaymentToPolicy(
   const policy = await storage.getPolicy(intent.policyId, orgId);
   if (!policy) return { ok: false, error: "Policy not found" };
 
+  try {
   const today = new Date().toISOString().split("T")[0];
   const effectiveUserId = eventActorId(actorType, actorId);
   const txData = {
@@ -676,6 +684,10 @@ export async function applyPaymentToPolicy(
   }
 
   return { ok: true, transactionId: transaction.id, receiptId: receipt.id };
+  } catch (err: any) {
+    structuredLog("error", "applyPaymentToPolicy failed", { intentId, error: err?.message || String(err), stack: err?.stack });
+    return { ok: false, error: err?.message || "Failed to apply payment" };
+  }
 }
 
 /** Apply group PayNow payment: create transaction + receipt per allocation, update policies, mark group intent paid. Idempotent. */
@@ -695,6 +707,7 @@ export async function applyGroupPaymentToPolicies(
   const allocations = await storage.getGroupPaymentAllocations(groupIntentId, orgId);
   if (allocations.length === 0) return { ok: false, error: "No allocations" };
 
+  try {
   const today = new Date().toISOString().split("T")[0];
   const refPrefix = groupIntent.merchantReference;
   const notifiedClients = new Set<string>();
@@ -762,6 +775,10 @@ export async function applyGroupPaymentToPolicies(
 
   await storage.updateGroupPaymentIntent(groupIntentId, { status: GROUP_PAYMENT_STATUS_PAID }, orgId);
   return { ok: true, receiptCount: allocations.length };
+  } catch (err: any) {
+    structuredLog("error", "applyGroupPaymentToPolicies failed", { groupIntentId, error: err?.message || String(err), stack: err?.stack });
+    return { ok: false, error: err?.message || "Failed to apply group payment" };
+  }
 }
 
 export interface InitiatePaynowForGroupInput {

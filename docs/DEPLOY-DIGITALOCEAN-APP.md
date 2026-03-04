@@ -118,6 +118,19 @@ Optional (for production):
 2. Name the app e.g. **POL263**.
 3. Click **Create Resources**. DigitalOcean will build from GitHub and deploy.
 
+**Database: first deploy and upgrades**
+
+- **First deploy (fresh database):** Run schema and seed once, before or right after the first deploy. Use a one-off job, a separate “migrate” component, or run locally with `DATABASE_URL` pointing at your production DB:
+  ```bash
+  npm run db:setup     # push schema + seed
+  npm run db:migrate   # apply any SQL migrations
+  ```
+- **Later deploys (existing database):** Run migrations as part of your release (e.g. in CI or a pre-start job):
+  ```bash
+  npm run db:migrate
+  ```
+Do **not** run schema push or seed from the app at startup; the app assumes the database is already ready.
+
 After the first deploy, your app will be at a URL like:
 
 `https://your-app-name-xxxxx.ondigitalocean.app`

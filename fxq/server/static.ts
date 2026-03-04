@@ -13,7 +13,8 @@ export function serveStatic(app: Express) {
   app.use(express.static(distPath));
 
   // SPA fallback: serve index.html for app routes so reload gets fresh HTML after deploy (no-cache). Missing assets → 404.
-  app.get("*", (req, res) => {
+  // Use regex to avoid path-to-regexp v8 "Missing parameter name" for wildcard (Express 5).
+  app.get(/(.*)/, (req, res) => {
     const looksLikeAsset = req.path.startsWith("/assets/") || /\.[a-z0-9]+$/i.test(req.path);
     if (looksLikeAsset) {
       return res.status(404).send("Not found");

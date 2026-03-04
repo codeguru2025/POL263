@@ -5,7 +5,6 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth } from "./auth";
 import { setupClientAuth } from "./client-auth";
-import { seedDatabase } from "./seed";
 import { requestIdMiddleware, structuredLog } from "./logger";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -171,38 +170,8 @@ app.use((req, res, next) => {
       port,
       host: process.env.HOST || "127.0.0.1",
     },
-    async () => {
+    () => {
       structuredLog("info", `POL263 serving on port ${port}`);
-
-      if (process.env.RUN_DB_BOOTSTRAP === "true") {
-        try {
-          structuredLog("info", "Pushing database schema (RUN_DB_BOOTSTRAP=true)...");
-          const { spawn } = await import("child_process");
-          const push = spawn("npx", ["drizzle-kit", "push"], {
-            stdio: ["pipe", "inherit", "inherit"],
-            shell: true,
-            env: { ...process.env },
-          });
-          push.stdin?.write("y\n");
-          push.stdin?.end();
-          await new Promise<void>((resolve, reject) => {
-            push.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`drizzle-kit push exited ${code}`))));
-            push.on("error", reject);
-          });
-          structuredLog("info", "Database schema pushed successfully.");
-
-          structuredLog("info", "Starting database seed...");
-          await seedDatabase();
-          structuredLog("info", "Database seed completed successfully.");
-        } catch (err) {
-          structuredLog("error", "Database initialization failed", { error: String(err) });
-        }
-      } else {
-        structuredLog(
-          "info",
-          "Skipping automatic database migrations/seed. Set RUN_DB_BOOTSTRAP=true to enable on startup.",
-        );
-      }
     }
   );
 })();

@@ -890,8 +890,10 @@ export function setupClientAuth(app: Express) {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) return res.status(400).json({ message: "Dependent id required" });
     const deps = await storage.getDependentsByClient(clientId, clientOrgId);
-    const dep = deps.find((d) => d.id === req.params.id);
+    const dep = deps.find((d) => d.id === id);
     if (!dep) return res.status(404).json({ message: "Dependent not found" });
     await storage.deleteDependent(dep.id, clientOrgId);
     return res.json({ message: "Dependent removed" });

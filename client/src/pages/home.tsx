@@ -3,7 +3,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Building2, Users, UserCircle } from "lucide-react";
 import { ThemeSwitcher } from "@/components/theme-switcher";
-import { useBranding } from "@/hooks/use-branding";
 
 const portals = [
   {
@@ -33,8 +32,8 @@ const portals = [
 ];
 
 export default function Home() {
-  const { displayName, displayLogo, isWhitelabeled } = useBranding();
-  const tagline = isWhitelabeled ? "Insurance Management Platform" : "Core Administration Platform";
+  const displayName = "POL263";
+  const displayLogo = "/assets/logo.png";
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 relative">
@@ -44,7 +43,7 @@ export default function Home() {
       <div className="mb-14 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
         <img src={displayLogo} alt={displayName} className="h-20 w-20 mb-5 rounded-2xl object-contain" />
         <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">{displayName}</h1>
-        <p className="text-muted-foreground text-lg font-medium mt-2">{tagline}</p>
+        <p className="text-muted-foreground text-lg font-medium mt-2">Insurance Management Platform</p>
       </div>
 
       <div className="grid md:grid-cols-3 gap-6 w-full max-w-5xl">

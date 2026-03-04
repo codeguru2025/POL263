@@ -66,8 +66,10 @@ export default function StaffPolicies() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user, roles, permissions } = useAuth();
-  const isAgent = roles.some((r) => r.name === "agent");
-  const canWriteFinance = permissions.includes("write:finance");
+  const safeRoles = Array.isArray(roles) ? roles : [];
+  const safePermissions = Array.isArray(permissions) ? permissions : [];
+  const isAgent = safeRoles.some((r: any) => r.name === "agent");
+  const canWriteFinance = safePermissions.includes("write:finance");
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
@@ -138,8 +140,12 @@ export default function StaffPolicies() {
     queryKey: ["/api/policies", { q: debouncedSearch }],
     queryFn: async () => {
       const res = await fetch(getApiBase() + policiesQueryUrl, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch policies");
-      return res.json();
+      if (!res.ok) {
+        if (res.status === 403) return [];
+        throw new Error("Failed to fetch policies");
+      }
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     },
   });
 
@@ -314,8 +320,9 @@ export default function StaffPolicies() {
     enabled: !!selectedPolicy?.id && showDetailView,
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/members`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load members");
-      return res.json();
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     },
   });
 
@@ -324,8 +331,9 @@ export default function StaffPolicies() {
     enabled: !!selectedPolicy?.id && showDetailView,
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/payments`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load payments");
-      return res.json();
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     },
   });
 
@@ -541,8 +549,8 @@ export default function StaffPolicies() {
   }, [pnPollData]);
 
   const filteredPolicies = useMemo(() => {
-    if (!policies) return [];
-    return policies.filter((p: any) => {
+    const list = Array.isArray(policies) ? policies : [];
+    return list.filter((p: any) => {
       const matchesStatus = statusFilter === "all" || p.status === statusFilter;
       return matchesStatus;
     });
@@ -794,7 +802,7 @@ export default function StaffPolicies() {
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                 </div>
-              ) : policyMembers && policyMembers.length > 0 ? (
+              ) : (policyMembers ?? []).length > 0 ? (
                 <div className="overflow-x-auto">
                 <Table>
                   <TableHeader className="bg-muted/50">
@@ -814,7 +822,7 @@ export default function StaffPolicies() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {policyMembers.map((m: any) => (
+                    {(policyMembers ?? []).map((m: any) => (
                       <TableRow key={m.id} data-testid={`row-member-${m.id}`}>
                         <TableCell className="pl-6 font-medium whitespace-nowrap">
                           {m.memberName || (m.clientId ? getClientName(m.clientId) : "—")}
@@ -916,7 +924,7 @@ export default function StaffPolicies() {
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                 </div>
-              ) : policyPayments && policyPayments.length > 0 ? (
+              ) : (policyPayments ?? []).length > 0 ? (
                 <Table>
                   <TableHeader className="bg-muted/50">
                     <TableRow>
@@ -928,7 +936,7 @@ export default function StaffPolicies() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {policyPayments.map((p: any) => (
+                    {(policyPayments ?? []).map((p: any) => (
                       <TableRow key={p.id} data-testid={`row-payment-${p.id}`}>
                         <TableCell className="pl-6">{p.postedDate || new Date(p.receivedAt).toLocaleDateString()}</TableCell>
                         <TableCell className="font-medium">{p.currency} {Number(p.amount).toFixed(2)}</TableCell>

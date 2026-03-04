@@ -17,11 +17,15 @@
     "build:web": "npx tsx script/build.ts",
     "build:client": "vite build",
     "start": "cross-env NODE_ENV=production node dist/index.cjs",
+    "start:with-migrate": "npm run db:migrate && npm run start",
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx script/run-seed.ts",
     "db:setup": "npm run db:push && npm run db:seed",
     "db:migrate": "tsx script/run-migrations.ts",
+    "db:export-tenant": "tsx script/export-tenant-users.ts",
+    "db:seed-tenant": "tsx script/seed-tenant-from-backup.ts",
+    "db:wipe": "tsx script/wipe-and-keep-platform-owner.ts",
     "db:setup:supabase": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 npm run db:setup",
     "setup": "npm install && npm run build && npx cap sync",
     "cap:sync": "npm run build && npx cap sync",
@@ -30,6 +34,8 @@
     "generate-secret": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "precommit": "npm run check && npm run test",
+    "prepare": "husky",
     "lockfile:check": "node script/lockfile-check.cjs",
     "lint:lock": "node script/lockfile-check.cjs",
     "relock": "node script/relock.cjs"
@@ -140,7 +146,8 @@
     "tailwindcss": "^3.4.17",
     "typescript": "5.6.3",
     "vite": "^5.4.14",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "husky": "^9.1.7"
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"

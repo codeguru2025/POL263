@@ -50,26 +50,30 @@ export class ErrorBoundary extends Component<Props, State> {
       let primaryActionHref = "/";
       let secondaryActionLabel: string | null = null;
       let secondaryActionHref: string | null = null;
+      let reloadLabel: string | null = "Reload page";
 
       if (typeof window !== "undefined") {
         const path = window.location.pathname || "";
         if (path.startsWith("/staff")) {
           primaryActionLabel = isChunkOrNetwork ? "Reload to update" : "Go to staff login";
           primaryActionHref = isChunkOrNetwork ? window.location.href : "/staff/login";
-          if (!isChunkOrNetwork) {
+          if (isChunkOrNetwork) reloadLabel = null;
+          else if (!isChunkOrNetwork) {
             secondaryActionLabel = "Back to home";
             secondaryActionHref = "/";
           }
         } else if (path.startsWith("/client")) {
           primaryActionLabel = isChunkOrNetwork ? "Reload to update" : "Go to client login";
           primaryActionHref = isChunkOrNetwork ? window.location.href : "/client/login";
-          if (!isChunkOrNetwork) {
+          if (isChunkOrNetwork) reloadLabel = null;
+          else {
             secondaryActionLabel = "Back to home";
             secondaryActionHref = "/";
           }
         } else if (isChunkOrNetwork) {
           primaryActionLabel = "Reload to update";
           primaryActionHref = window.location.href;
+          reloadLabel = null;
         }
       }
 
@@ -103,6 +107,15 @@ export class ErrorBoundary extends Component<Props, State> {
             >
               {primaryActionLabel}
             </Button>
+            {reloadLabel && (
+              <Button
+                variant="ghost"
+                onClick={() => window.location.reload()}
+                className="mt-1 text-xs text-muted-foreground"
+              >
+                {reloadLabel}
+              </Button>
+            )}
             {secondaryActionLabel && secondaryActionHref && (
               <Button
                 variant="ghost"

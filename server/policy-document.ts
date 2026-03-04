@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
+import { requireAuth } from "./auth";
 
 const SUPPORTED_LANGUAGES: Record<string, string> = {
   en: "English", sn: "Shona", nd: "Ndebele", zu: "Zulu", xh: "Xhosa",
@@ -494,7 +495,7 @@ export function registerPolicyDocumentRoute(app: Express) {
     return res.json(Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => ({ code, name })));
   });
 
-  app.get("/api/policies/:id/document", async (req: Request, res: Response) => {
+  app.get("/api/policies/:id/document", requireAuth, async (req: Request, res: Response) => {
     const user = req.user as any;
     if (!user?.organizationId) {
       return res.status(403).json({ message: "Tenant scope required" });
@@ -510,7 +511,7 @@ export function registerPolicyDocumentRoute(app: Express) {
   });
 
   // E-Statement PDF: premium summary + payment history (optionally date-filtered)
-  app.get("/api/policies/:id/estatement", async (req: Request, res: Response) => {
+  app.get("/api/policies/:id/estatement", requireAuth, async (req: Request, res: Response) => {
     const user = req.user as any;
     if (!user?.organizationId) {
       return res.status(403).json({ message: "Tenant scope required" });

@@ -1,0 +1,157 @@
+{
+  "tenantName": "Falakhe Funeral Parlour",
+  "organizationId": "644e55cb-386a-4732-a08e-ed03e17856e7",
+  "exportedAt": "2026-03-04T10:01:31.002Z",
+  "branches": [
+    {
+      "id": "9fa30f74-1a71-48c1-966b-60788a4a9b7c",
+      "name": "Head Office"
+    }
+  ],
+  "users": [
+    {
+      "email": "irvinenyerukai@falakhe.com",
+      "displayName": "Irvine Nyerukai",
+      "phone": "+263786506374",
+      "referralCode": "AGTEVXF1B",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "sibonginkosinyathi@falakhe.com",
+      "displayName": "Sibonginkosi Nyathi",
+      "phone": "+263782482456",
+      "referralCode": "AGTCXOCX7",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "ntandoyenkosigumede",
+      "displayName": "Ntandoyenkosi Gumede",
+      "phone": "+263773454382",
+      "referralCode": "AGTVTG63S",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "pesuatemhlanga@falakhe.com",
+      "displayName": "Pesuate Mhlanga",
+      "phone": "+263711653488",
+      "referralCode": "AGT1I6L4P",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "nothabodube@falakhe.com",
+      "displayName": "Nothabo Dube",
+      "phone": "+263789378688",
+      "referralCode": "AGTUFXNTB",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "nqobilencube@falakhe.com",
+      "displayName": "Nqobile Ncube",
+      "phone": "+263778709131",
+      "referralCode": "AGT3BKS5U",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "ndabezinhlemduduzidube@falakhe.com",
+      "displayName": "Ndabezinhle Mduduzi Dube",
+      "phone": "+263780243158",
+      "referralCode": "AGTZT2IGW",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "normanmpofu@falakhe.com",
+      "displayName": "Norman Mpofu",
+      "phone": "+263774489325",
+      "referralCode": "AGT7HAJVI",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "lindanindebele@falakhe.com",
+      "displayName": "Lindani Ndebele",
+      "phone": "+263782807688",
+      "referralCode": "AGTWXXBMI",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "ayandamuringazuva@falakhe.com",
+      "displayName": "Ayanda Muringazuva",
+      "phone": "+263788078408",
+      "referralCode": "AGTQ38DQO",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "patiencemoyo@falakhe.com",
+      "displayName": "Patience Moyo",
+      "phone": "+263774611427",
+      "referralCode": "AGTMB3EQ2",
+      "roles": [
+        {
+          "roleName": "agent",
+          "branchName": null
+        }
+      ]
+    },
+    {
+      "email": "augustussiziba19@gmail.com",
+      "displayName": "Augustus Siziba",
+      "phone": null,
+      "referralCode": "AGT6FMKXQ",
+      "roles": [
+        {
+          "roleName": "administrator",
+          "branchName": null
+        }
+      ]
+    }
+  ]
+}
