@@ -57,7 +57,7 @@ jobs:
           rm -f package-lock.json
 
       - name: Generate lockfile on Linux
-        run: npm install --package-lock-only --include=dev
+        run: npm install --package-lock-only --include=dev --ignore-scripts
 
       - name: Verify npm ci
         run: npm ci --include=dev
