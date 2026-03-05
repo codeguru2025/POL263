@@ -1491,7 +1491,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/policies/:id/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getPaymentsByPolicy(req.params.id as string, user.organizationId));
+    const policyId = req.params.id as string;
+    const orgId = user.organizationId;
+    const policy = await storage.getPolicy(policyId, orgId);
+    if (policy?.clientId) {
+      const intents = await storage.getPaymentIntentsByClient(policy.clientId, orgId);
+      const paidForPolicy = intents.filter((i: any) => i.policyId === policyId && i.status === "paid");
+      for (const intent of paidForPolicy) {
+        await applyPaymentToPolicy(intent.id, "system", null);
+      }
+    }
+    return res.json(await storage.getPaymentsByPolicy(policyId, orgId));
   });
 
   app.post("/api/payments", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer"), async (req, res) => {

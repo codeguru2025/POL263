@@ -342,7 +342,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       doc.text(mem.age != null ? String(mem.age) : "—", 314, y, { width: 22 });
       doc.text(mem.coverDate || "—", 339, y, { width: 58 });
       doc.text(`${mem.waitingDays}d`, 400, y, { width: 30 });
-      doc.fillColor(mem.claimable ? "#059669" : "#D97706").text(mem.claimable ? "Yes" : "No", 433, y, { width: 48 });
+      doc.text(mem.claimable ? "Yes" : "No", 433, y, { width: 48 });
       doc.fillColor("#000000").text(mem.claimableReason, 484, y, { width: 55 });
       y += 13;
     }

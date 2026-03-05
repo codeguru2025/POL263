@@ -546,10 +546,18 @@ export async function applyPaymentToPolicy(
   const intent = await findPaymentIntentById(intentId);
   if (!intent) return { ok: false, error: "Intent not found" };
   const orgId = intent.organizationId;
-  if (intent.status === "paid") {
+
+  const existingTx = await storage.getPaymentTransactionByIdempotencyKey(`paynow-${intent.id}`, orgId);
+  if (existingTx) {
     const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId, orgId);
     const existing = receipts.find((r) => r.paymentIntentId === intentId);
-    return { ok: true, receiptId: existing?.id };
+    return { ok: true, transactionId: existingTx.id, receiptId: existing?.id };
+  }
+
+  if (intent.status === "paid") {
+    const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId, orgId);
+    const existingReceipt = receipts.find((r) => r.paymentIntentId === intentId);
+    if (existingReceipt) return { ok: true, receiptId: existingReceipt.id };
   }
 
   const policy = await storage.getPolicy(intent.policyId, orgId);
