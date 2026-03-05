@@ -135,6 +135,7 @@ function TenantPickerSplash({
                     src={resolveAssetUrl(org.logoUrl)}
                     alt=""
                     className="h-10 w-10 rounded-lg object-contain border bg-background absolute inset-0"
+                    loading="lazy"
                     onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = ""; e.currentTarget.classList.add("opacity-0"); e.currentTarget.nextElementSibling?.classList.remove("hidden"); }}
                   />
                   <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center hidden border border-transparent pointer-events-none" aria-hidden>
@@ -351,6 +352,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
               src={resolveAssetUrl(isWhitelabeled ? (currentOrg?.logoUrl || brandLogo) : brandLogo)}
               alt={brandName}
               className="h-10 w-10 rounded-lg object-contain mr-2 shrink-0"
+              loading="lazy"
             />
             <span className="font-display font-bold text-lg tracking-tight text-foreground truncate">{isWhitelabeled ? (currentOrg?.name || brandName) : brandName}</span>
           </div>

@@ -1,10 +1,15 @@
-import { Link } from "wouter";
+import { useEffect } from "react";
+import { Link, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Building2, Users, UserCircle } from "lucide-react";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import AppFooter from "@/components/app-footer";
 import { getDefaultLogoUrl } from "@/lib/assetUrl";
+import { useAuth } from "@/hooks/use-auth";
+import { getApiBase } from "@/lib/queryClient";
+import { Loader2 } from "lucide-react";
 
 const portals = [
   {
@@ -36,6 +41,60 @@ const portals = [
 export default function Home() {
   const displayName = "POL263";
   const displayLogo = getDefaultLogoUrl();
+  const [, setLocation] = useLocation();
+  const returnTo =
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("returnTo") : null;
+  const { isAuthenticated, isLoading: staffAuthLoading } = useAuth();
+  const { data: clientMe, isFetched: clientMeFetched } = useQuery<{ client: { id: string } | null }>({
+    queryKey: ["/api/client-auth/me"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/client-auth/me", { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return { client: null };
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    retry: false,
+    // Fetch when we have returnTo=/client... or when on home with no returnTo (to redirect already-logged-in clients)
+    enabled: !!returnTo?.startsWith("/client") || (typeof window !== "undefined" && !returnTo),
+  });
+
+  // After OAuth or server redirect: land on home with ?returnTo=...; redirect once auth is ready.
+  useEffect(() => {
+    if (returnTo && returnTo !== "/") {
+      if (returnTo.startsWith("/staff") && !staffAuthLoading && isAuthenticated) {
+        window.history.replaceState(null, "", window.location.pathname || "/");
+        setLocation(returnTo);
+      } else if (returnTo.startsWith("/client") && clientMeFetched && clientMe?.client) {
+        window.history.replaceState(null, "", window.location.pathname || "/");
+        setLocation(returnTo);
+      }
+      return;
+    }
+    // No returnTo: if already logged in, open the right app (staff/agent → /staff, client → /client)
+    if (returnTo !== null) return; // still reading search params
+    if (!staffAuthLoading && isAuthenticated) {
+      setLocation("/staff");
+      return;
+    }
+    if (clientMeFetched && clientMe?.client) {
+      setLocation("/client");
+    }
+  }, [returnTo, staffAuthLoading, isAuthenticated, clientMeFetched, clientMe, setLocation]);
+
+  const isRedirecting =
+    (returnTo &&
+      ((returnTo.startsWith("/staff") && !staffAuthLoading && isAuthenticated) ||
+        (returnTo.startsWith("/client") && clientMeFetched && clientMe?.client))) ||
+    (!returnTo && !staffAuthLoading && isAuthenticated) ||
+    (!returnTo && clientMeFetched && !!clientMe?.client);
+
+  if (isRedirecting) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 relative">
@@ -43,7 +102,7 @@ export default function Home() {
         <ThemeSwitcher />
       </div>
       <div className="mb-14 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src={displayLogo} alt={displayName} className="h-20 w-20 mb-5 rounded-2xl object-contain" />
+        <img src={displayLogo} alt={displayName} className="h-20 w-20 mb-5 rounded-2xl object-contain" fetchPriority="high" />
         <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">{displayName}</h1>
         <p className="text-muted-foreground text-lg font-medium mt-2">Insurance Management Platform</p>
       </div>

@@ -65,7 +65,7 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "This policy has already been claimed" });
       }
 
-      const questions = await storage.getSecurityQuestions(matchedOrgId);
+      const questions = await storage.getOrCreateDefaultSecurityQuestions(matchedOrgId);
 
       return constantTimeResponse(res, 200, {
         clientId: client.id,
@@ -88,6 +88,11 @@ export function setupClientAuth(app: Express) {
       return res.status(400).json({ message: "Password must be at least 8 characters" });
     }
 
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (typeof securityQuestionId !== "string" || !uuidRegex.test(securityQuestionId)) {
+      return res.status(400).json({ message: "Invalid security question. Please go back and complete the verification step again." });
+    }
+
     try {
       const orgs = await storage.getOrganizations();
       let client = null;
@@ -99,6 +104,12 @@ export function setupClientAuth(app: Express) {
         return res.status(400).json({ message: "Invalid enrollment request" });
       }
       const orgId = client.organizationId;
+
+      const validQuestions = await storage.getSecurityQuestions(orgId);
+      const questionIds = new Set(validQuestions.map((q) => q.id));
+      if (!questionIds.has(securityQuestionId)) {
+        return res.status(400).json({ message: "Invalid security question. Please go back and complete the verification step again." });
+      }
 
       const normalizedAnswer = securityAnswer.trim().toLowerCase();
       const passwordHash = await hashSecret(password);

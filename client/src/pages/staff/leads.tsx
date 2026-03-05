@@ -31,6 +31,7 @@ export default function StaffLeads() {
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
   const [showDialog, setShowDialog] = useState(false);
+  const [createSource, setCreateSource] = useState("walk_in");
 
   const { data: leads = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/leads"] });
 
@@ -66,7 +67,7 @@ export default function StaffLeads() {
       lastName: fd.get("lastName"),
       phone: fd.get("phone") || undefined,
       email: fd.get("email") || undefined,
-      source: fd.get("source") || "walk_in",
+      source: createSource || "walk_in",
     });
   };
 
@@ -103,7 +104,7 @@ export default function StaffLeads() {
                 <div><Label>Phone</Label><Input name="phone" data-testid="input-lead-phone" /></div>
                 <div><Label>Email</Label><Input name="email" type="email" data-testid="input-lead-email" /></div>
                 <div><Label>Source</Label>
-                  <Select name="source" defaultValue="walk_in">
+                  <Select name="source" value={createSource} onValueChange={setCreateSource}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="walk_in">Walk-in</SelectItem>
@@ -121,44 +122,32 @@ export default function StaffLeads() {
           </Dialog>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {STAGES.filter(s => s.key !== "lost").map(stage => {
-            const count = leads.filter((l: any) => l.stage === stage.key).length;
-            return (
-              <Card key={stage.key} className={stage.color}>
-                <CardContent className="pt-4 pb-3 text-center">
-                  <p className="text-2xl font-bold">{count}</p>
-                  <p className="text-xs text-muted-foreground">{stage.label}</p>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-
         {isLoading ? (
           <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 lg:grid-cols-10 gap-4">
             {STAGES.map(stage => {
               const stageLeads = leads.filter((l: any) => l.stage === stage.key);
               return (
-                <Card key={stage.key}>
-                  <CardHeader className="py-3">
-                    <CardTitle className="text-sm flex items-center justify-between">
-                      {stage.label}
-                      <Badge variant="secondary">{stageLeads.length}</Badge>
+                <Card key={stage.key} className="flex flex-col min-w-0">
+                  <CardHeader className="py-3 px-4">
+                    <CardTitle className="text-sm flex items-center justify-between gap-2">
+                      <span className="truncate">{stage.label}</span>
+                      <Badge variant="secondary" className="shrink-0">{stageLeads.length}</Badge>
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-2 max-h-96 overflow-y-auto">
+                  <CardContent className="space-y-2 flex-1 overflow-y-auto max-h-[70vh] px-4 pb-4">
                     {stageLeads.length === 0 ? (
                       <p className="text-xs text-muted-foreground text-center py-4">No leads</p>
                     ) : (
                       stageLeads.map((lead: any) => (
-                        <div key={lead.id} className="p-3 rounded-lg border bg-card" data-testid={`card-lead-${lead.id}`}>
+                        <div key={lead.id} className="p-3 rounded-lg border bg-card space-y-1" data-testid={`card-lead-${lead.id}`}>
                           <p className="font-medium text-sm">{lead.firstName} {lead.lastName}</p>
                           {lead.phone && <p className="text-xs text-muted-foreground">{lead.phone}</p>}
+                          {lead.email && <p className="text-xs text-muted-foreground truncate" title={lead.email}>{lead.email}</p>}
+                          {lead.source && <p className="text-[10px] text-muted-foreground capitalize">{lead.source.replace(/_/g, " ")}</p>}
                           {lead.clientId && (
-                            <p className="text-[10px] text-primary mt-0.5">Client linked</p>
+                            <p className="text-[10px] text-primary mt-0.5 font-medium">Client linked</p>
                           )}
                           <div className="flex flex-wrap gap-1 mt-2">
                             {lead.clientId && (lead.stage === "approved" || lead.stage === "agreed_to_pay") && (

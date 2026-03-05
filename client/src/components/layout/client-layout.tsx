@@ -67,6 +67,7 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
             src={tenant?.logoUrl ? resolveAssetUrl(tenant.logoUrl) : getDefaultLogoUrl()}
             alt={tenant?.name || "Logo"}
             className="h-8 w-8 sm:h-9 sm:w-9 rounded-lg object-contain shrink-0"
+            loading="lazy"
           />
           {tenant?.name && (
             <span className="font-semibold text-sm truncate hidden sm:inline max-w-[140px] md:max-w-none">{tenant.name}</span>

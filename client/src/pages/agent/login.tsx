@@ -52,11 +52,9 @@ export default function AgentLogin() {
       }
       if (data.redirect) {
         const base = getApiBase();
-        if (base) {
-          window.location.href = new URL(data.redirect, base).href;
-        } else {
-          window.location.pathname = data.redirect.startsWith("/") ? data.redirect : "/" + data.redirect;
-        }
+        const path = typeof data.redirect === "string" && data.redirect.startsWith("/") ? data.redirect : "/staff";
+        const homeWithReturn = base ? `${base.replace(/\/$/, "")}/?returnTo=${encodeURIComponent(path)}` : `/?returnTo=${encodeURIComponent(path)}`;
+        window.location.href = homeWithReturn;
       } else {
         setLocation("/staff");
       }
@@ -81,7 +79,7 @@ export default function AgentLogin() {
         <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
-            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="w-10 h-10 rounded-lg object-contain" />
+            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="w-10 h-10 rounded-lg object-contain" fetchPriority="high" />
           </div>
           <CardTitle className="text-2xl font-display">{displayName} — Agent Login</CardTitle>
           <CardDescription className="text-base mt-2">

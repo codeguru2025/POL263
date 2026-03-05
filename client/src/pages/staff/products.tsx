@@ -16,6 +16,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Plus, Box, Search, Loader2, Package, Layers, Puzzle, BarChart3,
   Edit, ChevronDown, ChevronUp, Upload, Image, Users, Baby, Crown,
   FileText, Trash2,
@@ -96,6 +106,7 @@ export default function ProductBuilder() {
   const [search, setSearch] = useState("");
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [showCreateVersion, setShowCreateVersion] = useState<string | null>(null);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [showCreateBenefit, setShowCreateBenefit] = useState(false);
   const [showCreateBundle, setShowCreateBundle] = useState(false);
   const [showCreateAddOn, setShowCreateAddOn] = useState(false);
@@ -143,6 +154,19 @@ export default function ProductBuilder() {
       toast({ title: "Product updated" });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteProductMut = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/products/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/product-versions"] });
+      setProductToDelete(null);
+      toast({ title: "Product deleted" });
+    },
+    onError: (err: Error) => toast({ title: "Delete failed", description: err.message, variant: "destructive" }),
   });
 
   const createVersionMut = useMutation({
@@ -332,6 +356,7 @@ export default function ProductBuilder() {
                           onEdit={() => setEditingProduct(product)}
                           onCreateVersion={() => setShowCreateVersion(product.id)}
                           onEditVersion={(v) => setEditingVersion(v)}
+                          onDelete={() => setProductToDelete(product)}
                         />
                       ))}
                     </TableBody>
@@ -607,6 +632,30 @@ export default function ProductBuilder() {
       {editingProduct && <EditProductDialog product={editingProduct} open={!!editingProduct} onClose={() => setEditingProduct(null)} onSubmit={(data) => updateProductMut.mutate({ id: editingProduct.id, data })} isPending={updateProductMut.isPending} />}
       {showCreateVersion && <CreateVersionDialog productId={showCreateVersion} open={!!showCreateVersion} onClose={() => setShowCreateVersion(null)} onSubmit={(data) => createVersionMut.mutate({ productId: showCreateVersion, data })} isPending={createVersionMut.isPending} />}
       {editingVersion && <EditVersionDialog version={editingVersion} open={!!editingVersion} onClose={() => setEditingVersion(null)} onSubmit={(data) => updateVersionMut.mutate({ id: editingVersion.id, data })} isPending={updateVersionMut.isPending} />}
+
+      <AlertDialog open={!!productToDelete} onOpenChange={(open) => !open && setProductToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete product?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {productToDelete && (
+                <>This will permanently delete &quot;{productToDelete.name}&quot; ({productToDelete.code}) and all its versions. This cannot be undone. If any policies use this product, deletion will be blocked.</>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => productToDelete && deleteProductMut.mutate(productToDelete.id)}
+              disabled={deleteProductMut.isPending}
+            >
+              {deleteProductMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <CreateBenefitDialog open={showCreateBenefit} onClose={() => setShowCreateBenefit(false)} onSubmit={(data) => createBenefitMut.mutate(data)} isPending={createBenefitMut.isPending} />
       <CreateBundleDialog open={showCreateBundle} onClose={() => setShowCreateBundle(false)} onSubmit={(data) => createBundleMut.mutate(data)} isPending={createBundleMut.isPending} />
       <CreateAddOnDialog open={showCreateAddOn} onClose={() => setShowCreateAddOn(false)} onSubmit={(data) => createAddOnMut.mutate(data)} isPending={createAddOnMut.isPending} />
@@ -620,8 +669,8 @@ export default function ProductBuilder() {
   );
 }
 
-function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, onEditVersion }: {
-  product: Product; isExpanded: boolean; onToggle: () => void; onEdit: () => void; onCreateVersion: () => void; onEditVersion: (v: ProductVersion) => void;
+function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, onEditVersion, onDelete }: {
+  product: Product; isExpanded: boolean; onToggle: () => void; onEdit: () => void; onCreateVersion: () => void; onEditVersion: (v: ProductVersion) => void; onDelete: () => void;
 }) {
   const { data: versions = [], isLoading } = useQuery<ProductVersion[]>({
     queryKey: [`/api/products/${product.id}/versions`],
@@ -639,7 +688,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
         <TableCell>
           <div className="flex items-center gap-3">
             {product.casketImageUrl ? (
-              <img src={product.casketImageUrl} alt={product.casketType || ""} className="h-10 w-10 rounded object-cover border" />
+              <img src={product.casketImageUrl} alt={product.casketType || ""} className="h-10 w-10 rounded object-cover border" loading="lazy" />
             ) : (
               <div className="h-10 w-10 rounded bg-muted flex items-center justify-center"><Box className="h-5 w-5 text-muted-foreground/50" /></div>
             )}
@@ -668,6 +717,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
           <div className="flex items-center justify-end gap-1">
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onEdit} data-testid={`button-edit-product-${product.id}`}><Edit className="h-4 w-4" /></Button>
             <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs" onClick={onCreateVersion} data-testid={`button-new-version-${product.id}`}><Plus className="h-3 w-3" /> Version</Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete} title="Delete product" data-testid={`button-delete-product-${product.id}`}><Trash2 className="h-4 w-4" /></Button>
           </div>
         </TableCell>
       </TableRow>
@@ -860,7 +910,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
             <div className="flex items-start gap-4">
               {casketImageUrl ? (
                 <div className="relative">
-                  <img src={casketImageUrl} alt="Casket" className="h-24 w-32 rounded-lg object-cover border shadow-sm" />
+                  <img src={casketImageUrl} alt="Casket" className="h-24 w-32 rounded-lg object-cover border shadow-sm" loading="lazy" />
                   <button type="button" className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs" onClick={() => setCasketImageUrl("")}>×</button>
                 </div>
               ) : (
@@ -986,7 +1036,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
             <div className="flex items-start gap-4">
               {casketImageUrl ? (
                 <div className="relative">
-                  <img src={casketImageUrl} alt="Casket" className="h-24 w-32 rounded-lg object-cover border" />
+                  <img src={casketImageUrl} alt="Casket" className="h-24 w-32 rounded-lg object-cover border" loading="lazy" />
                   <button type="button" className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs" onClick={() => setCasketImageUrl("")}>×</button>
                 </div>
               ) : (
@@ -1075,8 +1125,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       commissionRecurringRate: commRecurringRate || undefined,
       commissionClawbackThreshold: commClawback ? parseInt(commClawback) : undefined,
       commissionFuneralIncentive: commFuneralIncentive || undefined,
-      underwriterAmountAdult: underwriterAmountAdult || undefined,
-      underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult || undefined) : (underwriterAmountChild || undefined),
+      underwriterAmountAdult: underwriterAmountAdult.trim() ? underwriterAmountAdult : undefined,
+      underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult.trim() ? underwriterAmountAdult : undefined) : (underwriterAmountChild.trim() ? underwriterAmountChild : undefined),
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
     });
   };
@@ -1231,12 +1281,12 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           </div>
 
           <Separator />
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (tenant pays underwriter)</h3>
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (optional)</h3>
           <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if this product has no underwriter.</p>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Amount per adult (per month)</Label>
-              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="e.g. 5.00" data-testid="input-version-underwriter-adult" />
+              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-version-underwriter-adult" />
             </div>
             <div className="space-y-2">
               <Label>Amount per child (per month)</Label>
@@ -1322,8 +1372,8 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       commissionRecurringRate: commRecurringRate || null,
       commissionClawbackThreshold: commClawback ? parseInt(commClawback) : null,
       commissionFuneralIncentive: commFuneralIncentive || null,
-      underwriterAmountAdult: underwriterAmountAdult || null,
-      underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult || null) : (underwriterAmountChild || null),
+      underwriterAmountAdult: underwriterAmountAdult.trim() ? underwriterAmountAdult : null,
+      underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult.trim() ? underwriterAmountAdult : null) : (underwriterAmountChild.trim() ? underwriterAmountChild : null),
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
     });
   };
@@ -1470,12 +1520,12 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           </div>
 
           <Separator />
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (tenant pays underwriter)</h3>
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (optional)</h3>
           <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if no underwriter.</p>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Amount per adult (per month)</Label>
-              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="e.g. 5.00" data-testid="input-edit-version-underwriter-adult" />
+              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-edit-version-underwriter-adult" />
             </div>
             <div className="space-y-2">
               <Label>Amount per child (per month)</Label>

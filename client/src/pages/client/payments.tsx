@@ -18,6 +18,7 @@ import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft, Prin
 import { printDocument } from "@/lib/print-document";
 import { useToast } from "@/hooks/use-toast";
 import { openPaymentInSystemBrowser, redirectToAppIfMobileReturn, isNativeMobile } from "@/lib/mobile-payment";
+import { formatReceiptNumber } from "@/lib/assetUrl";
 
 interface PaymentIntent {
   id: string;
@@ -716,7 +717,7 @@ function ReceiptsList() {
             {receipts.map((r) => (
               <li key={r.id} className="flex items-center justify-between p-3 border rounded-lg">
                 <div>
-                  <p className="font-medium text-sm">Receipt #{r.receiptNumber}</p>
+                  <p className="font-medium text-sm">Receipt #{formatReceiptNumber(r.receiptNumber)}</p>
                   <p className="text-xs text-muted-foreground">
                     {r.currency} {r.amount} — {new Date(r.issuedAt).toLocaleString()}
                   </p>

@@ -10,6 +10,7 @@ export default function AppFooter() {
           src="/assets/chibikhulu-logo.png"
           alt="CHIBIKHULU"
           className="h-6 w-auto object-contain"
+          loading="lazy"
         />
         <span
           className="text-sm sm:text-base italic"

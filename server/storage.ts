@@ -266,6 +266,7 @@ export interface IStorage {
   getProduct(id: string, orgId: string): Promise<Product | undefined>;
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: string, data: Partial<InsertProduct>, orgId: string): Promise<Product | undefined>;
+  deleteProduct(id: string, orgId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   getProductVersions(productId: string, orgId: string): Promise<ProductVersion[]>;
   getProductVersion(id: string, orgId: string): Promise<ProductVersion | undefined>;
   createProductVersion(pv: InsertProductVersion): Promise<ProductVersion>;
@@ -385,6 +386,7 @@ export interface IStorage {
   createCashup(cashup: InsertCashup): Promise<Cashup>;
   updateCashup(id: string, data: Partial<InsertCashup>, orgId: string): Promise<Cashup | undefined>;
   getSecurityQuestions(orgId: string): Promise<{ id: string; question: string }[]>;
+  getOrCreateDefaultSecurityQuestions(orgId: string): Promise<{ id: string; question: string }[]>;
   getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }, agentId?: string): Promise<any>;
   generatePolicyNumber(orgId: string): Promise<string>;
   generateClaimNumber(orgId: string): Promise<string>;
@@ -886,6 +888,20 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(products).set(data).where(eq(products.id, id)).returning();
     return updated;
+  }
+  async deleteProduct(id: string, orgId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const tdb = await getDbForOrg(orgId);
+    const versions = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, id));
+    const versionIds = versions.map((v) => v.id);
+    if (versionIds.length > 0) {
+      const [row] = await tdb.select({ count: count() }).from(policies).where(inArray(policies.productVersionId, versionIds));
+      if (row && Number(row.count) > 0) {
+        return { ok: false, reason: "Cannot delete product: one or more policies use this product." };
+      }
+    }
+    await tdb.delete(productVersions).where(eq(productVersions.productId, id));
+    await tdb.delete(products).where(eq(products.id, id));
+    return { ok: true };
   }
   async getProductVersions(productId: string, orgId: string): Promise<ProductVersion[]> {
     const tdb = await getDbForOrg(orgId);
@@ -2217,6 +2233,23 @@ export class DatabaseStorage implements IStorage {
     return tdb.select({ id: securityQuestions.id, question: securityQuestions.question })
       .from(securityQuestions)
       .where(and(eq(securityQuestions.organizationId, orgId), eq(securityQuestions.isActive, true)));
+  }
+
+  /** Ensure org has at least the default security questions (for claim flow). Returns questions. */
+  async getOrCreateDefaultSecurityQuestions(orgId: string): Promise<{ id: string; question: string }[]> {
+    const existing = await this.getSecurityQuestions(orgId);
+    if (existing.length > 0) return existing;
+    const defaults = [
+      "What was the name of your first pet?",
+      "In what city were you born?",
+      "What is your mother's maiden name?",
+      "What high school did you attend?",
+    ];
+    const tdb = await getDbForOrg(orgId);
+    await tdb.insert(securityQuestions).values(
+      defaults.map((question) => ({ organizationId: orgId, question, isActive: true }))
+    );
+    return this.getSecurityQuestions(orgId);
   }
 
   // ─── Dashboard Stats ──────────────────────────────────────

@@ -96,7 +96,10 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     if (org.website) line(org.website);
     y += 4;
     line("PAYMENT RECEIPT", { bold: true });
-    line(`Receipt # ${receipt.receiptNumber}`);
+    const displayReceiptNum = /^\d+$/.test(String(receipt.receiptNumber).trim())
+      ? `RCP-${String(receipt.receiptNumber).padStart(5, "0")}`
+      : receipt.receiptNumber;
+    line(`Receipt # ${displayReceiptNum}`);
     const issuedDate = new Date(receipt.issuedAt);
     line(`Date: ${issuedDate.toLocaleDateString("en-GB")} ${issuedDate.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`);
     y += 6;

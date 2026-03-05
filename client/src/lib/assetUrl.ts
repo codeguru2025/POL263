@@ -18,3 +18,10 @@ export function resolveAssetUrl(url: string | null | undefined): string {
   const base = getApiBase();
   return base ? `${base.replace(/\/$/, "")}${u.startsWith("/") ? u : `/${u}`}` : u;
 }
+
+/** Format receipt number for display (e.g. "42" -> "RCP-00042"). */
+export function formatReceiptNumber(receiptNumber: string | null | undefined): string {
+  if (!receiptNumber || !String(receiptNumber).trim()) return "—";
+  const num = String(receiptNumber).replace(/\D/g, "") || "0";
+  return `RCP-${num.padStart(5, "0")}`;
+}

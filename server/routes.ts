@@ -974,6 +974,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  app.delete("/api/products/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const product = await storage.getProduct(req.params.id as string, user.organizationId);
+    if (!product || product.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const result = await storage.deleteProduct(req.params.id as string, user.organizationId);
+    if (!result.ok) return res.status(400).json({ message: result.reason });
+    await auditLog(req, "DELETE_PRODUCT", "Product", req.params.id as string, product, null);
+    return res.status(204).send();
+  });
+
   app.get("/api/product-versions", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getAllProductVersions(user.organizationId));
@@ -1224,6 +1234,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       beneficiaryPhone: beneficiary?.phone || null,
       beneficiaryDependentId: beneficiary?.dependentId || null,
     });
+
+    // Prevent duplicate policies: same client + same product version (unless existing is cancelled)
+    const existingForClient = await storage.getPoliciesByClient(parsed.clientId, user.organizationId);
+    const duplicate = existingForClient.find(
+      (p) => p.productVersionId === parsed.productVersionId && p.status !== "cancelled"
+    );
+    if (duplicate) {
+      res.status(400).json({
+        error: "Duplicate policy",
+        message: "This client already has an active policy for this product. Cancel the existing policy first if you need to create a new one.",
+      });
+      return;
+    }
+
     const policy = await storage.createPolicy(parsed);
     try {
       await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Policy created", user.id);
@@ -2681,6 +2705,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         beneficiaryPhone: ben?.phone ? String(ben.phone).trim() : null,
         beneficiaryDependentId: null,
       });
+      const existingForClient = await storage.getPoliciesByClient(client.id, orgId);
+      const duplicate = existingForClient.find(
+        (p) => p.productVersionId === policyParsed.productVersionId && p.status !== "cancelled"
+      );
+      if (duplicate) {
+        res.status(400).json({
+          error: "Duplicate policy",
+          message: "This client already has an active policy for this product.",
+        });
+        return;
+      }
       const policy = await storage.createPolicy(policyParsed);
       await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Registered via agent link");
       await storage.createPolicyMember({

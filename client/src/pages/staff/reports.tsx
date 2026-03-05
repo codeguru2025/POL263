@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getApiBase } from "@/lib/queryClient";
+import { formatReceiptNumber } from "@/lib/assetUrl";
 import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt, Eye } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -963,7 +964,7 @@ export default function StaffReports() {
                       <TableBody>
                         {receiptReport.map((r: any, idx: number) => (
                           <TableRow key={r.receiptId || idx}>
-                            <TableCell className="font-mono text-sm whitespace-nowrap">{r.receiptNumber}</TableCell>
+                            <TableCell className="font-mono text-sm whitespace-nowrap">{formatReceiptNumber(r.receiptNumber)}</TableCell>
                             <TableCell className="text-sm whitespace-nowrap">{r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : "—"}</TableCell>
                             <TableCell><Badge variant="outline">{r.paymentChannel || r.txPaymentMethod || "—"}</Badge></TableCell>
                             <TableCell className="font-semibold whitespace-nowrap">{r.currency} {parseFloat(r.amount || "0").toFixed(2)}</TableCell>

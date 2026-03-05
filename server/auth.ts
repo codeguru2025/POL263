@@ -221,9 +221,23 @@ export function setupAuth(app: Express) {
           const sessionAny = req.session as any;
           const returnTo = sessionAny?.authReturnTo;
 
-          if (returnTo) {
+          // Redirect to home with returnTo so the client can redirect after auth is ready (avoids error page on first load).
+          const pathFromReturnTo = returnTo
+            ? (returnTo.startsWith("http") ? new URL(returnTo).pathname : returnTo)
+            : null;
+          if (pathFromReturnTo) {
             delete sessionAny.authReturnTo;
-            return res.redirect(returnTo);
+            const baseUrl = baseUrlFromEnv();
+            const host = req.get("host");
+            const proto =
+              (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
+              (req as any).protocol ||
+              "http";
+            const origin = baseUrl || (host ? `${proto}://${host}` : "");
+            const homeWithReturn = origin
+              ? `${origin}/?returnTo=${encodeURIComponent(pathFromReturnTo)}`
+              : `/?returnTo=${encodeURIComponent(pathFromReturnTo)}`;
+            return res.redirect(homeWithReturn);
           }
 
           const baseUrl = baseUrlFromEnv();
@@ -234,21 +248,24 @@ export function setupAuth(app: Express) {
           const loggedInUser = req.user as any;
           if (loggedInUser?.isPlatformOwner && !loggedInUser?.organizationId) {
             const tenantSetupPath = "/staff/tenants";
-            return res.redirect(baseUrl ? `${baseUrl}${tenantSetupPath}` : tenantSetupPath);
+            const homeWithReturn = baseUrl
+              ? `${baseUrl}/?returnTo=${encodeURIComponent(tenantSetupPath)}`
+              : `/?returnTo=${encodeURIComponent(tenantSetupPath)}`;
+            return res.redirect(homeWithReturn);
           }
 
-          if (baseUrl) {
-            return res.redirect(`${baseUrl}${staffPath}`);
-          }
-
-          const host = req.get("host");
-          const proto =
-            (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
-            (req as any).protocol ||
-            "http";
-          const sameOrigin = host ? `${proto}://${host}` : "";
-
-          return res.redirect(sameOrigin ? `${sameOrigin}${staffPath}` : staffPath);
+          const homeWithReturn = baseUrl
+            ? `${baseUrl}/?returnTo=${encodeURIComponent(staffPath)}`
+            : (() => {
+                const host = req.get("host");
+                const proto =
+                  (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
+                  (req as any).protocol ||
+                  "http";
+                const sameOrigin = host ? `${proto}://${host}` : "";
+                return sameOrigin ? `${sameOrigin}/?returnTo=${encodeURIComponent(staffPath)}` : `/?returnTo=${encodeURIComponent(staffPath)}`;
+              })();
+          return res.redirect(homeWithReturn);
         });
       })(req, res, next);
     });

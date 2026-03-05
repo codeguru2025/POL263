@@ -197,6 +197,7 @@ export default function StaffPolicies() {
 
   const [detailAddDepOpen, setDetailAddDepOpen] = useState(false);
   const [detailDepForm, setDetailDepForm] = useState({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
+  const [membersAgeFilter, setMembersAgeFilter] = useState<"all" | "adult" | "child">("all");
   const detailAddDepMutation = useMutation({
     mutationFn: async (data: typeof detailDepForm) => {
       if (!selectedPolicy) throw new Error("No policy selected");
@@ -769,12 +770,22 @@ export default function StaffPolicies() {
 
           <Card className="shadow-sm border-border/60">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
                   <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-primary" /> Policy Members</CardTitle>
-                  <CardDescription>People covered under this policy</CardDescription>
+                  <CardDescription>All lives covered (policy holder + dependants). Filter by age band.</CardDescription>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap items-center">
+                  <Select value={membersAgeFilter} onValueChange={(v: "all" | "adult" | "child") => setMembersAgeFilter(v)}>
+                    <SelectTrigger className="w-[140px] h-8">
+                      <SelectValue placeholder="Age band" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All lives</SelectItem>
+                      <SelectItem value="adult">Adults (18+)</SelectItem>
+                      <SelectItem value="child">Children (0–17)</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <Button
                     size="sm"
                     variant="outline"
@@ -805,7 +816,12 @@ export default function StaffPolicies() {
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                 </div>
-              ) : (policyMembers ?? []).length > 0 ? (
+              ) : (() => {
+                const all = policyMembers ?? [];
+                const filtered = membersAgeFilter === "all" ? all : membersAgeFilter === "adult"
+                  ? all.filter((m: any) => m.role === "policy_holder" || (m.age != null && m.age >= 18))
+                  : all.filter((m: any) => m.age != null && m.age < 18);
+                return filtered.length > 0 ? (
                 <div className="overflow-x-auto">
                 <Table>
                   <TableHeader className="bg-muted/50">
@@ -825,7 +841,7 @@ export default function StaffPolicies() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(policyMembers ?? []).map((m: any) => (
+                    {filtered.map((m: any) => (
                       <TableRow key={m.id} data-testid={`row-member-${m.id}`}>
                         <TableCell className="pl-6 font-medium whitespace-nowrap">
                           {m.memberName || (m.clientId ? getClientName(m.clientId) : "—")}
@@ -882,8 +898,11 @@ export default function StaffPolicies() {
                 </Table>
                 </div>
               ) : (
-                <div className="p-6 text-center text-muted-foreground" data-testid="text-no-members">No members found for this policy.</div>
-              )}
+                <div className="p-6 text-center text-muted-foreground" data-testid="text-no-members">
+                  {all.length === 0 ? "No members found for this policy." : `No members match the selected age band (${membersAgeFilter === "adult" ? "Adults 18+" : "Children 0–17"}).`}
+                </div>
+              );
+              })()}
             </CardContent>
           </Card>
 

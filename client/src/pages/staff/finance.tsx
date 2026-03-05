@@ -14,6 +14,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { formatReceiptNumber } from "@/lib/assetUrl";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -1696,7 +1697,7 @@ export default function StaffFinance() {
                   <div>
                     <p className="text-xs text-green-700 dark:text-green-400 font-medium uppercase tracking-wide">Receipt Number</p>
                     <p className="text-xl font-bold font-mono text-green-800 dark:text-green-300" data-testid="text-receipt-number">
-                      {receiptResult.receipt.receiptNumber}
+                      {formatReceiptNumber(receiptResult.receipt.receiptNumber)}
                     </p>
                   </div>
                   <Receipt className="h-8 w-8 text-green-600/50" />
