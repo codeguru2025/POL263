@@ -2185,25 +2185,118 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Cashups ────────────────────────────────────────────────
 
-  app.get("/api/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/cashups/my-receipt-totals", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
+    const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : undefined;
+    if (!date) return res.status(400).json({ error: "Query 'date' (YYYY-MM-DD) is required" });
+    const result = await storage.getReceiptTotalsByUserDate(user.organizationId, user.id, date);
+    return res.json(result);
+  });
+
+  app.get("/api/cashups", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
+    const user = req.user as any;
+    const perms = await storage.getUserEffectivePermissions(user.id);
+    const canReadFinance = perms.includes("read:finance");
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const userId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
-    const filters = (fromDate || toDate || userId) ? { fromDate, toDate, preparedBy: userId } : undefined;
-    return res.json(await storage.getCashups(user.organizationId, 100, filters));
+    const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
+    const filters: { fromDate?: string; toDate?: string; preparedBy?: string; status?: string } = {};
+    if (fromDate) filters.fromDate = fromDate;
+    if (toDate) filters.toDate = toDate;
+    if (status) filters.status = status;
+    if (canReadFinance && userId) filters.preparedBy = userId;
+    if (!canReadFinance) filters.preparedBy = user.id;
+    const list = await storage.getCashups(user.organizationId, 100, filters);
+    return res.json(list);
   });
 
-  app.post("/api/cashups", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/cashups", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
+    const body = req.body as any;
+    const amountsByMethod = body.amountsByMethod && typeof body.amountsByMethod === "object" ? body.amountsByMethod : { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
+    let totalAmount = 0;
+    for (const k of Object.keys(amountsByMethod)) {
+      totalAmount += parseFloat(String(amountsByMethod[k] || "0")) || 0;
+    }
     const parsed = insertCashupSchema.parse({
-      ...req.body,
       organizationId: user.organizationId,
       preparedBy: user.id,
+      branchId: body.branchId || undefined,
+      cashupDate: body.cashupDate,
+      totalAmount: String(totalAmount.toFixed(2)),
+      transactionCount: typeof body.transactionCount === "number" ? body.transactionCount : parseInt(String(body.transactionCount || "0"), 10) || 0,
+      amountsByMethod,
+      status: "draft",
+      notes: body.notes || undefined,
     });
     const cashup = await storage.createCashup(parsed);
     await auditLog(req, "CREATE_CASHUP", "Cashup", cashup.id, null, cashup);
     return res.status(201).json(cashup);
+  });
+
+  app.get("/api/cashups/:id", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
+    const user = req.user as any;
+    const cashup = await storage.getCashup(req.params.id as string, user.organizationId);
+    if (!cashup) return res.status(404).json({ message: "Not found" });
+    const perms = await storage.getUserEffectivePermissions(user.id);
+    if (!perms.includes("read:finance") && cashup.preparedBy !== user.id) return res.status(403).json({ message: "You can only view your own cashups" });
+    return res.json(cashup);
+  });
+
+  app.patch("/api/cashups/:id", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
+    const user = req.user as any;
+    const cashup = await storage.getCashup(req.params.id as string, user.organizationId);
+    if (!cashup) return res.status(404).json({ message: "Not found" });
+    const perms = await storage.getUserEffectivePermissions(user.id);
+    const hasFinance = perms.includes("write:finance");
+    const body = req.body as any;
+
+    if (cashup.status === "draft" && body.action === "submit") {
+      if (cashup.preparedBy !== user.id) return res.status(403).json({ message: "Only the preparer can submit" });
+      const updated = await storage.updateCashup(cashup.id, {
+        status: "submitted",
+        submittedAt: new Date(),
+        submittedBy: user.id,
+      }, user.organizationId);
+      await auditLog(req, "SUBMIT_CASHUP", "Cashup", cashup.id, cashup, updated);
+      return res.json(updated);
+    }
+
+    if (cashup.status === "submitted" && (body.action === "confirm" || body.action === "confirm_discrepancy")) {
+      if (!hasFinance) return res.status(403).json({ message: "Only finance can confirm cashups" });
+      const countedTotal = body.countedTotal != null ? parseFloat(String(body.countedTotal)) : null;
+      const countedAmountsByMethod = body.countedAmountsByMethod && typeof body.countedAmountsByMethod === "object" ? body.countedAmountsByMethod : undefined;
+      let computedCountedTotal = countedTotal;
+      if (computedCountedTotal == null && countedAmountsByMethod) {
+        computedCountedTotal = 0;
+        for (const k of Object.keys(countedAmountsByMethod)) {
+          computedCountedTotal += parseFloat(String(countedAmountsByMethod[k] || "0")) || 0;
+        }
+      }
+      const expectedTotal = parseFloat(String(cashup.totalAmount || "0"));
+      const finalCounted = computedCountedTotal ?? expectedTotal;
+      const discrepancyAmount = finalCounted - expectedTotal;
+      const hasDiscrepancy = Math.abs(discrepancyAmount) > 0.005;
+      const status = hasDiscrepancy ? "discrepancy" : "confirmed";
+      const discrepancyNotes = body.discrepancyNotes || (hasDiscrepancy ? `Counted ${finalCounted.toFixed(2)} vs expected ${expectedTotal.toFixed(2)}` : undefined);
+      const updated = await storage.updateCashup(cashup.id, {
+        status,
+        confirmedAt: new Date(),
+        confirmedBy: user.id,
+        countedTotal: finalCounted.toFixed(2),
+        countedAmountsByMethod: countedAmountsByMethod || undefined,
+        discrepancyAmount: hasDiscrepancy ? String(discrepancyAmount.toFixed(2)) : undefined,
+        discrepancyNotes,
+        isLocked: true,
+        lockedAt: new Date(),
+        lockedBy: user.id,
+      }, user.organizationId);
+      await auditLog(req, "CONFIRM_CASHUP", "Cashup", cashup.id, cashup, updated);
+      return res.json(updated);
+    }
+
+    return res.status(400).json({ error: "Invalid action or state", status: cashup.status });
   });
 
   // ─── Claims ─────────────────────────────────────────────────
@@ -3434,8 +3527,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "cashups": {
           const cashupsList = await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...reportFilters, preparedBy: reportFilters.userId });
-          headers = ["Cashup Date", "Total Amount", "Transaction Count", "Locked", "Prepared By", "Created"];
-          rows = cashupsList.map((r: any) => [r.cashupDate, r.totalAmount, r.transactionCount, r.isLocked ? "Yes" : "No", r.preparedBy, r.createdAt]);
+          headers = ["Cashup Date", "Total Amount", "Transaction Count", "Status", "Locked", "Prepared By", "Confirmed By", "Discrepancy Amount", "Discrepancy Notes", "Created"];
+          rows = cashupsList.map((r: any) => [
+            r.cashupDate, r.totalAmount, r.transactionCount, r.status || "—", r.isLocked ? "Yes" : "No", r.preparedBy,
+            r.confirmedBy || "—", r.discrepancyAmount ?? "—", r.discrepancyNotes ?? "—", r.createdAt,
+          ]);
           break;
         }
         case "receipts": {

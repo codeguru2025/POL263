@@ -230,7 +230,7 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
 export default function StaffFinance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { roles, permissions } = useAuth();
+  const { roles, permissions, user: authUser } = useAuth();
   const isAgent = roles.some((r) => r.name === "agent");
   const canReadFinance = permissions.includes("read:finance");
   const canWriteFinance = permissions.includes("write:finance");
@@ -274,8 +274,31 @@ export default function StaffFinance() {
   const [paynowOtp, setPaynowOtp] = useState("");
   const [paynowPhase, setPaynowPhase] = useState<"select" | "waiting">("select");
 
+  const [cashupStatusFilter, setCashupStatusFilter] = useState<string>("");
+  const [showCreateCashupDialog, setShowCreateCashupDialog] = useState(false);
+  const [createCashupDate, setCreateCashupDate] = useState(new Date().toISOString().slice(0, 10));
+  const [createCashupBranchId, setCreateCashupBranchId] = useState("");
+  const [createCashupAmounts, setCreateCashupAmounts] = useState<Record<string, string>>({ cash: "", paynow_ecocash: "", paynow_card: "", other: "" });
+  const [createCashupTransactionCount, setCreateCashupTransactionCount] = useState("");
+  const [createCashupNotes, setCreateCashupNotes] = useState("");
+  const [showConfirmCashupDialog, setShowConfirmCashupDialog] = useState(false);
+  const [confirmCashup, setConfirmCashup] = useState<any>(null);
+  const [confirmCountedTotal, setConfirmCountedTotal] = useState("");
+  const [confirmDiscrepancyNotes, setConfirmDiscrepancyNotes] = useState("");
+
   const { data: rawPayments, isLoading: loadingPayments } = useQuery<any[]>({ queryKey: ["/api/payments"] });
-  const { data: rawCashups } = useQuery<any[]>({ queryKey: ["/api/cashups"] });
+  const { data: rawCashups } = useQuery<any[]>({
+    queryKey: ["/api/cashups", cashupStatusFilter],
+    queryFn: async () => {
+      const url = getApiBase() + "/api/cashups" + (cashupStatusFilter ? `?status=${encodeURIComponent(cashupStatusFilter)}` : "");
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    },
+  });
+  const { data: branchesList = [] } = useQuery<any[]>({ queryKey: ["/api/branches"] });
+  const branchesArr = Array.isArray(branchesList) ? branchesList : [];
   const { data: rawProducts } = useQuery<any[]>({ queryKey: ["/api/products"] });
   const { data: rawCommissionLedger } = useQuery<any[]>({ queryKey: ["/api/commission-ledger"] });
   const { data: rawExpenditures } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
@@ -413,6 +436,54 @@ export default function StaffFinance() {
     onSuccess: () => {
       setReprintReceiptId("");
       toast({ title: "Reprint logged", description: "Audit log updated." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const createCashupMutation = useMutation({
+    mutationFn: async (data: { cashupDate: string; branchId?: string; amountsByMethod: Record<string, string>; transactionCount: number; notes?: string }) => {
+      const res = await apiRequest("POST", "/api/cashups", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cashups"] });
+      setShowCreateCashupDialog(false);
+      setCreateCashupAmounts({ cash: "", paynow_ecocash: "", paynow_card: "", other: "" });
+      setCreateCashupTransactionCount("");
+      setCreateCashupNotes("");
+      toast({ title: "Cashup draft created", description: "Submit to finance when ready." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const submitCashupMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("PATCH", `/api/cashups/${id}`, { action: "submit" });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cashups"] });
+      toast({ title: "Cashup submitted", description: "Finance will count and confirm." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const confirmCashupMutation = useMutation({
+    mutationFn: async ({ id, countedTotal, discrepancyNotes }: { id: string; countedTotal?: string; discrepancyNotes?: string }) => {
+      const res = await apiRequest("PATCH", `/api/cashups/${id}`, {
+        action: "confirm",
+        countedTotal: countedTotal ? parseFloat(countedTotal) : undefined,
+        discrepancyNotes: discrepancyNotes || undefined,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cashups"] });
+      setShowConfirmCashupDialog(false);
+      setConfirmCashup(null);
+      setConfirmCountedTotal("");
+      setConfirmDiscrepancyNotes("");
+      toast({ title: "Cashup confirmed", description: "Reconciliation recorded." });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -873,34 +944,179 @@ export default function StaffFinance() {
 
           <TabsContent value="cashups">
             <Card>
-              <CardHeader><CardTitle>Daily Cashups</CardTitle></CardHeader>
+              <CardHeader>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle>Daily Cashups</CardTitle>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Select value={cashupStatusFilter || "all"} onValueChange={(v) => setCashupStatusFilter(v === "all" ? "" : v)}>
+                      <SelectTrigger className="w-[140px]" data-testid="select-cashup-status">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="draft">Draft</SelectItem>
+                        <SelectItem value="submitted">Submitted</SelectItem>
+                        <SelectItem value="confirmed">Confirmed</SelectItem>
+                        <SelectItem value="discrepancy">Discrepancy</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button size="sm" onClick={() => { setShowCreateCashupDialog(true); setCreateCashupDate(new Date().toISOString().slice(0, 10)); setCreateCashupAmounts({ cash: "", paynow_ecocash: "", paynow_card: "", other: "" }); setCreateCashupTransactionCount(""); setCreateCashupNotes(""); }} data-testid="button-new-cashup">
+                      <Plus className="h-4 w-4 mr-1" /> New cashup
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground mt-1">Submit your receipted totals by payment method for finance to count and confirm. Cashups include cash and mobile/card payments you have receipted.</p>
+              </CardHeader>
               <CardContent>
                 {cashups.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No cashups recorded yet</p>
+                  <p className="text-center text-muted-foreground py-8">No cashups recorded yet. Create a draft, enter amounts by method (or load from your receipts), then submit to finance.</p>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Date</TableHead>
                         <TableHead>Total</TableHead>
-                        <TableHead>Transactions</TableHead>
+                        <TableHead>By method</TableHead>
+                        <TableHead>Txns</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead>Prepared by</TableHead>
+                        <TableHead className="w-[140px]">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {cashups.map((c: any) => (
-                        <TableRow key={c.id}>
-                          <TableCell>{c.cashupDate}</TableCell>
-                          <TableCell className="font-semibold">{c.totalAmount}</TableCell>
-                          <TableCell>{c.transactionCount}</TableCell>
-                          <TableCell><Badge variant={c.isLocked ? "default" : "secondary"}>{c.isLocked ? "Locked" : "Open"}</Badge></TableCell>
-                        </TableRow>
-                      ))}
+                      {cashups.map((c: any) => {
+                        const am = c.amountsByMethod || {};
+                        const methodSummary = ["cash", "paynow_ecocash", "paynow_card", "other"]
+                          .filter((k) => parseFloat(am[k] || "0") > 0)
+                          .map((k) => `${k === "cash" ? "Cash" : k === "paynow_ecocash" ? "Mobile" : k === "paynow_card" ? "Card" : "Other"}: ${parseFloat(am[k] || "0").toFixed(2)}`)
+                          .join("; ") || "—";
+                        const isMine = authUser?.id && c.preparedBy === authUser.id;
+                        return (
+                          <TableRow key={c.id} data-testid={`row-cashup-${c.id}`}>
+                            <TableCell className="font-mono text-sm">{c.cashupDate}</TableCell>
+                            <TableCell className="font-semibold">{c.totalAmount}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={methodSummary}>{methodSummary}</TableCell>
+                            <TableCell>{c.transactionCount}</TableCell>
+                            <TableCell>
+                              <Badge variant={c.status === "confirmed" ? "default" : c.status === "discrepancy" ? "secondary" : c.status === "submitted" ? "outline" : "secondary"}>
+                                {c.status === "draft" ? "Draft" : c.status === "submitted" ? "Submitted" : c.status === "confirmed" ? "Confirmed" : c.status === "discrepancy" ? "Discrepancy" : c.status || "—"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{isMine ? "You" : (c.preparedBy || "").slice(0, 8) + "…"}</TableCell>
+                            <TableCell>
+                              {c.status === "draft" && isMine && (
+                                <div className="flex gap-1">
+                                  <Button size="sm" variant="outline" onClick={() => submitCashupMutation.mutate(c.id)} disabled={submitCashupMutation.isPending} data-testid={`btn-submit-cashup-${c.id}`}>Submit</Button>
+                                </div>
+                              )}
+                              {c.status === "submitted" && canWriteFinance && (
+                                <Button size="sm" variant="outline" onClick={() => { setConfirmCashup(c); setConfirmCountedTotal(c.totalAmount || ""); setConfirmDiscrepancyNotes(""); setShowConfirmCashupDialog(true); }} data-testid={`btn-confirm-cashup-${c.id}`}>Confirm</Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 )}
               </CardContent>
             </Card>
+
+            <Dialog open={showCreateCashupDialog} onOpenChange={setShowCreateCashupDialog}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader><DialogTitle>New cashup</DialogTitle></DialogHeader>
+                <p className="text-sm text-muted-foreground">Enter amounts you received by payment method for this date. Use &quot;Load from my receipts&quot; to prefill from your issued receipts.</p>
+                <div className="space-y-4 pt-2">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label>Date *</Label>
+                      <Input type="date" value={createCashupDate} onChange={(e) => setCreateCashupDate(e.target.value)} data-testid="input-cashup-date" />
+                    </div>
+                    <div>
+                      <Label>Branch</Label>
+                      <Select value={createCashupBranchId || "none"} onValueChange={(v) => setCreateCashupBranchId(v === "none" ? "" : v)}>
+                        <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">—</SelectItem>
+                          {branchesArr.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Amounts by method</Label>
+                      <Button type="button" variant="ghost" size="sm" onClick={async () => {
+                        const res = await fetch(getApiBase() + `/api/cashups/my-receipt-totals?date=${encodeURIComponent(createCashupDate)}`, { credentials: "include" });
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        setCreateCashupAmounts(data.amountsByMethod || { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" });
+                        setCreateCashupTransactionCount(String(data.transactionCount ?? 0));
+                      }} data-testid="button-load-from-receipts">Load from my receipts</Button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><Label className="text-xs">Cash</Label><Input type="number" step="0.01" value={createCashupAmounts.cash || ""} onChange={(e) => setCreateCashupAmounts({ ...createCashupAmounts, cash: e.target.value })} placeholder="0" /></div>
+                      <div><Label className="text-xs">Mobile (EcoCash/OneMoney)</Label><Input type="number" step="0.01" value={createCashupAmounts.paynow_ecocash || ""} onChange={(e) => setCreateCashupAmounts({ ...createCashupAmounts, paynow_ecocash: e.target.value })} placeholder="0" /></div>
+                      <div><Label className="text-xs">Card</Label><Input type="number" step="0.01" value={createCashupAmounts.paynow_card || ""} onChange={(e) => setCreateCashupAmounts({ ...createCashupAmounts, paynow_card: e.target.value })} placeholder="0" /></div>
+                      <div><Label className="text-xs">Other</Label><Input type="number" step="0.01" value={createCashupAmounts.other || ""} onChange={(e) => setCreateCashupAmounts({ ...createCashupAmounts, other: e.target.value })} placeholder="0" /></div>
+                    </div>
+                  </div>
+                  <div>
+                    <Label>Transaction count</Label>
+                    <Input type="number" min={0} value={createCashupTransactionCount} onChange={(e) => setCreateCashupTransactionCount(e.target.value)} data-testid="input-cashup-txn-count" />
+                  </div>
+                  <div>
+                    <Label>Notes</Label>
+                    <Input value={createCashupNotes} onChange={(e) => setCreateCashupNotes(e.target.value)} placeholder="Optional" />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setShowCreateCashupDialog(false)}>Cancel</Button>
+                  <Button onClick={() => {
+                    const total = Object.values(createCashupAmounts).reduce((s, v) => s + (parseFloat(v || "0") || 0), 0);
+                    if (total <= 0) { toast({ title: "Enter at least one amount", variant: "destructive" }); return; }
+                    createCashupMutation.mutate({
+                      cashupDate: createCashupDate,
+                      branchId: createCashupBranchId || undefined,
+                      amountsByMethod: createCashupAmounts,
+                      transactionCount: parseInt(createCashupTransactionCount, 10) || 0,
+                      notes: createCashupNotes || undefined,
+                    });
+                  }} disabled={createCashupMutation.isPending} data-testid="button-create-cashup">
+                    {createCashupMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                    Create draft
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={showConfirmCashupDialog} onOpenChange={(open) => { if (!open) { setShowConfirmCashupDialog(false); setConfirmCashup(null); } setShowConfirmCashupDialog(open); }}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader><DialogTitle>Confirm cashup</DialogTitle></DialogHeader>
+                {confirmCashup && (
+                  <>
+                    <p className="text-sm text-muted-foreground">Expected total: <strong>{confirmCashup.totalAmount}</strong> ({confirmCashup.transactionCount} transactions). Enter counted total and any discrepancy notes.</p>
+                    <div className="space-y-4 pt-2">
+                      <div>
+                        <Label>Counted total</Label>
+                        <Input type="number" step="0.01" value={confirmCountedTotal} onChange={(e) => setConfirmCountedTotal(e.target.value)} placeholder={confirmCashup.totalAmount} data-testid="input-confirm-counted-total" />
+                      </div>
+                      <div>
+                        <Label>Discrepancy notes (if any)</Label>
+                        <Input value={confirmDiscrepancyNotes} onChange={(e) => setConfirmDiscrepancyNotes(e.target.value)} placeholder="Optional" />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setShowConfirmCashupDialog(false)}>Cancel</Button>
+                      <Button onClick={() => confirmCashupMutation.mutate({ id: confirmCashup.id, countedTotal: confirmCountedTotal || undefined, discrepancyNotes: confirmDiscrepancyNotes || undefined })} disabled={confirmCashupMutation.isPending} data-testid="button-confirm-cashup">
+                        {confirmCashupMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                        Confirm
+                      </Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           <TabsContent value="commissions">

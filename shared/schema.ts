@@ -836,6 +836,10 @@ export const cashups = pgTable(
     cashupDate: date("cashup_date").notNull(),
     totalAmount: numeric("total_amount").notNull(),
     transactionCount: integer("transaction_count").notNull(),
+    /** Expected amounts per payment method: cash, paynow_ecocash, paynow_card, other. */
+    amountsByMethod: jsonb("amounts_by_method"),
+    /** Status: draft (preparer editing) -> submitted (sent to finance) -> confirmed | discrepancy. */
+    status: text("status").default("draft").notNull(),
     isLocked: boolean("is_locked").default(false).notNull(),
     lockedBy: uuid("locked_by").references(() => users.id),
     lockedAt: timestamp("locked_at"),
@@ -843,10 +847,26 @@ export const cashups = pgTable(
       .notNull()
       .references(() => users.id),
     notes: text("notes"),
+    /** When preparer submitted to finance. */
+    submittedAt: timestamp("submitted_at"),
+    submittedBy: uuid("submitted_by").references(() => users.id),
+    /** When finance confirmed (or accepted with discrepancy). */
+    confirmedAt: timestamp("confirmed_at"),
+    confirmedBy: uuid("confirmed_by").references(() => users.id),
+    /** Counted amounts per method (finance entry). */
+    countedAmountsByMethod: jsonb("counted_amounts_by_method"),
+    countedTotal: numeric("counted_total"),
+    discrepancyAmount: numeric("discrepancy_amount"),
+    discrepancyNotes: text("discrepancy_notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("cashups_org_idx").on(t.organizationId)]
 );
+
+/** Cashup workflow statuses. */
+export const CASHUP_STATUSES = ["draft", "submitted", "confirmed", "discrepancy"] as const;
+/** Payment method keys for cashup breakdown (aligned with payment_receipts.paymentChannel where applicable). */
+export const CASHUP_PAYMENT_METHODS = ["cash", "paynow_ecocash", "paynow_card", "other"] as const;
 
 // ─── CLAIMS ─────────────────────────────────────────────────
 

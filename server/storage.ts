@@ -382,9 +382,11 @@ export interface IStorage {
   createPayrollEmployee(emp: InsertPayrollEmployee): Promise<PayrollEmployee>;
   getPayrollRuns(orgId: string): Promise<PayrollRun[]>;
   createPayrollRun(run: InsertPayrollRun): Promise<PayrollRun>;
-  getCashups(orgId: string, limit?: number, filters?: ReportFilters & { preparedBy?: string }): Promise<Cashup[]>;
+  getCashups(orgId: string, limit?: number, filters?: ReportFilters & { preparedBy?: string; status?: string }): Promise<Cashup[]>;
+  getCashup(id: string, orgId: string): Promise<Cashup | undefined>;
   createCashup(cashup: InsertCashup): Promise<Cashup>;
   updateCashup(id: string, data: Partial<InsertCashup>, orgId: string): Promise<Cashup | undefined>;
+  getReceiptTotalsByUserDate(orgId: string, userId: string, date: string): Promise<{ amountsByMethod: Record<string, string>; transactionCount: number }>;
   getSecurityQuestions(orgId: string): Promise<{ id: string; question: string }[]>;
   getOrCreateDefaultSecurityQuestions(orgId: string): Promise<{ id: string; question: string }[]>;
   getDashboardStats(orgId: string, filters?: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string }, agentId?: string): Promise<any>;
@@ -2207,14 +2209,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── Cashups ───────────────────────────────────────────────
-  async getCashups(orgId: string, limit = 30, filters?: ReportFilters & { preparedBy?: string }): Promise<Cashup[]> {
+  async getCashups(orgId: string, limit = 30, filters?: ReportFilters & { preparedBy?: string; status?: string }): Promise<Cashup[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions = [eq(cashups.organizationId, orgId)];
     if (filters?.fromDate) conditions.push(gte(cashups.cashupDate, filters.fromDate));
     if (filters?.toDate) conditions.push(lte(cashups.cashupDate, filters.toDate));
     if (filters?.preparedBy) conditions.push(eq(cashups.preparedBy, filters.preparedBy));
+    if (filters?.status) conditions.push(eq(cashups.status, filters.status));
     return tdb.select().from(cashups).where(and(...conditions))
-      .orderBy(desc(cashups.createdAt)).limit(limit);
+      .orderBy(desc(cashups.cashupDate), desc(cashups.createdAt)).limit(limit);
+  }
+  async getCashup(id: string, orgId: string): Promise<Cashup | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(cashups).where(and(eq(cashups.id, id), eq(cashups.organizationId, orgId)));
+    return row;
   }
   async createCashup(cashup: InsertCashup): Promise<Cashup> {
     const tdb = await getDbForOrg(cashup.organizationId);
@@ -2225,6 +2233,29 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(cashups).set(data).where(eq(cashups.id, id)).returning();
     return updated;
+  }
+  async getReceiptTotalsByUserDate(orgId: string, userId: string, date: string): Promise<{ amountsByMethod: Record<string, string>; transactionCount: number }> {
+    const tdb = await getDbForOrg(orgId);
+    const dayStart = new Date(date + "T00:00:00.000Z");
+    const dayEnd = new Date(date + "T23:59:59.999Z");
+    const rows = await tdb
+      .select({ paymentChannel: paymentReceipts.paymentChannel, amount: paymentReceipts.amount })
+      .from(paymentReceipts)
+      .where(and(
+        eq(paymentReceipts.organizationId, orgId),
+        eq(paymentReceipts.issuedByUserId, userId),
+        eq(paymentReceipts.status, "issued"),
+        gte(paymentReceipts.issuedAt, dayStart),
+        lte(paymentReceipts.issuedAt, dayEnd),
+      ));
+    const amountsByMethod: Record<string, string> = { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
+    for (const r of rows) {
+      const ch = (r.paymentChannel || "other").toLowerCase();
+      const key = ch === "cash" ? "cash" : ch === "paynow_ecocash" ? "paynow_ecocash" : ch === "paynow_card" ? "paynow_card" : "other";
+      const prev = parseFloat(amountsByMethod[key] || "0");
+      amountsByMethod[key] = (prev + parseFloat(String(r.amount || "0"))).toFixed(2);
+    }
+    return { amountsByMethod, transactionCount: rows.length };
   }
 
   // ─── Security Questions ────────────────────────────────────
