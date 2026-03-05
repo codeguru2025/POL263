@@ -12,6 +12,7 @@ import compression from "compression";
 import cookieParser from "cookie-parser";
 import { pool } from "./db";
 import csurf from "csurf";
+import { createRedisStore } from "./rate-limit-redis-store";
 
 const app = express();
 const httpServer = createServer(app);
@@ -80,55 +81,72 @@ if (process.env.ENABLE_CSRF_PROTECTION === "true") {
   });
 }
 
-// Global API rate limit: 200 requests per minute per IP
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 200,
-  message: { message: "Too many requests, please slow down" },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => !req.path.startsWith("/api"),
-});
-app.use("/api", apiLimiter);
+// Rate limiters (optional Redis when REDIS_URL set); then health, auth, routes
+(async () => {
+  const getRedisStore = await createRedisStore({ prefix: "rl:pol263" });
+  const limiterOpts = { standardHeaders: true, legacyHeaders: false };
 
-// Stricter rate limit on auth endpoints: 20 per 15 min
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { message: "Too many authentication attempts, please try again later" },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use("/api/auth", authLimiter);
-app.use("/api/agent-auth", authLimiter);
-app.use("/api/client-auth", authLimiter);
-app.use("/api/security-questions", authLimiter);
-app.use("/api/agents/by-referral", authLimiter);
+  app.use(
+    "/api",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("api"),
+      windowMs: 60 * 1000,
+      max: 200,
+      message: { message: "Too many requests, please slow down" },
+      skip: (req) => !req.path.startsWith("/api"),
+    })
+  );
 
-// Stricter rate limit on Paynow webhook to mitigate DDoS / replay: 60/min per IP
-const paynowWebhookLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-  message: { message: "Too many requests" },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use("/api/payments/paynow/result", paynowWebhookLimiter);
+  const authLimiter = rateLimit({
+    ...limiterOpts,
+    store: getRedisStore?.("auth"),
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { message: "Too many authentication attempts, please try again later" },
+  });
+  app.use("/api/auth", authLimiter);
+  app.use("/api/agent-auth", authLimiter);
+  app.use("/api/client-auth", authLimiter);
+  app.use("/api/security-questions", authLimiter);
+  app.use("/api/agents/by-referral", authLimiter);
 
-app.get("/api/health", async (_req, res) => {
-  try {
-    const result = await pool.query("SELECT 1");
-    const dbConnected = result.rowCount === 1;
-    return res.json({ status: "ok", dbConnected });
-  } catch {
-    return res.status(503).json({ status: "degraded", dbConnected: false });
-  }
-});
+  app.use(
+    "/api/payments/paynow/result",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("paynow"),
+      windowMs: 60 * 1000,
+      max: 60,
+      message: { message: "Too many requests" },
+    })
+  );
 
-setupAuth(app);
-setupClientAuth(app);
+  const reportExportLimiter = rateLimit({
+    ...limiterOpts,
+    store: getRedisStore?.("reports"),
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    message: { message: "Too many report requests, please try again later" },
+    skip: (req) => !req.path.startsWith("/api/reports") && req.path !== "/api/dashboard/stats",
+  });
+  app.use("/api/reports", reportExportLimiter);
+  app.use("/api/dashboard/stats", reportExportLimiter);
 
-app.use((req, res, next) => {
+  app.get("/api/health", async (_req, res) => {
+    try {
+      const result = await pool.query("SELECT 1");
+      const dbConnected = result.rowCount === 1;
+      return res.json({ status: "ok", dbConnected });
+    } catch {
+      return res.status(503).json({ status: "degraded", dbConnected: false });
+    }
+  });
+
+  setupAuth(app);
+  setupClientAuth(app);
+
+  app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
@@ -156,9 +174,8 @@ app.use((req, res, next) => {
   });
 
   next();
-});
+  });
 
-(async () => {
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

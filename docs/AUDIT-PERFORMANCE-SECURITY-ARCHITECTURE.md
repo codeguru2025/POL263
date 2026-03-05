@@ -86,8 +86,9 @@ The codebase was audited for **performance**, **payment security**, **DDoS resil
 
 ### 3.2 Recommendations
 
-- Consider **Redis (or other store) for rate limit state** in production so limits are shared across multiple server instances (`express-rate-limit` store).
+- **Redis store (implemented):** When `REDIS_URL` is set, rate limiters use a Redis-backed store so limits are shared across multiple server instances. When not set, in-memory store is used. Set `REDIS_URL` in production (e.g. DigitalOcean Redis) for multi-instance deployments.
 - Optional: **per-user** or **per-tenant** limits on expensive endpoints (e.g. report exports) if abuse appears.
+- **Report/export limit (implemented):** 30 per 15 min per IP on `/api/reports` and `/api/dashboard/stats`.
 - Keep **webhook rate limit** below Paynow’s expected delivery rate; 60/min is conservative and can be increased if needed (e.g. 120/min).
 
 ---
