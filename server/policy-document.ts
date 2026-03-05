@@ -48,6 +48,7 @@ async function resolveImageForPdf(url: string | null | undefined): Promise<Buffe
   const relativePath = u.replace(/^\/+/, "");
   const bases: { base: string; subPath: string }[] = [
     { base: path.join(process.cwd(), "uploads"), subPath: relativePath.startsWith("uploads/") ? relativePath.slice(8) : relativePath },
+    { base: path.join(process.cwd(), "public", "uploads"), subPath: relativePath.startsWith("uploads/") ? relativePath.slice(8) : relativePath },
     { base: path.join(process.cwd(), "dist", "public"), subPath: relativePath },
     { base: path.join(process.cwd(), "client", "public"), subPath: relativePath },
     { base: process.cwd(), subPath: relativePath },
@@ -136,11 +137,11 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", options?.inline ? `inline; filename="Policy-${policy.policyNumber}.pdf"` : `attachment; filename="Policy-${policy.policyNumber}.pdf"`);
   doc.pipe(res);
-  const primaryColor = org?.primaryColor || "#D4AF37";
+  const docBlack = "#000000";
   const logoBuffer = await resolveImageForPdf(org?.logoUrl);
   const signatureBuffer = await resolveImageForPdf(org?.signatureUrl);
   doc.rect(0, 0, doc.page.width, 100).fill("#FFFFFF");
-  doc.moveTo(0, 100).lineTo(doc.page.width, 100).strokeColor(primaryColor).lineWidth(2).stroke();
+  doc.moveTo(0, 100).lineTo(doc.page.width, 100).strokeColor(docBlack).lineWidth(2).stroke();
   if (logoBuffer) {
     try {
       doc.image(logoBuffer, 50, 15, { width: 70, height: 70 });
@@ -148,7 +149,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   }
   const headerLeft = logoBuffer ? 130 : 50;
   doc
-    .fillColor(primaryColor)
+    .fillColor(docBlack)
     .fontSize(22)
     .font("Helvetica-Bold")
     .text(org?.name || "POL263", headerLeft, 25, { align: "left" });
@@ -162,7 +163,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   if (org?.email) headerRight.push(org.email);
   if (org?.website) headerRight.push(org.website);
   if (headerRight.length > 0) {
-    doc.fillColor(primaryColor).fontSize(8).text(headerRight.join(" | "), 50, 75, {
+    doc.fillColor(docBlack).fontSize(8).text(headerRight.join(" | "), 50, 75, {
       align: "right",
       width: doc.page.width - 100,
     });
@@ -181,7 +182,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     .text(`Date Issued: ${new Date().toLocaleDateString("en-GB")} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`, 50, y);
   y += 20;
   doc
-    .fillColor(primaryColor)
+    .fillColor(docBlack)
     .fontSize(12)
     .font("Helvetica-Bold")
     .text("Policy Details", 50, y);
@@ -189,7 +190,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   doc
     .moveTo(50, y + 12)
     .lineTo(545, y + 12)
-    .strokeColor(primaryColor)
+    .strokeColor(docBlack)
     .lineWidth(1)
     .stroke();
   y += 20;
@@ -226,7 +227,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
         y = 50;
       }
       doc
-        .fillColor(primaryColor)
+        .fillColor(docBlack)
         .fontSize(12)
         .font("Helvetica-Bold")
         .text("Agent", 50, y);
@@ -234,7 +235,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       doc
         .moveTo(50, y + 12)
         .lineTo(545, y + 12)
-        .strokeColor(primaryColor)
+        .strokeColor(docBlack)
         .lineWidth(1)
         .stroke();
       y += 20;
@@ -253,7 +254,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   }
   if (client) {
     doc
-      .fillColor(primaryColor)
+      .fillColor(docBlack)
       .fontSize(12)
       .font("Helvetica-Bold")
       .text("Principal Member", 50, y);
@@ -261,7 +262,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     doc
       .moveTo(50, y + 12)
       .lineTo(545, y + 12)
-      .strokeColor(primaryColor)
+      .strokeColor(docBlack)
       .lineWidth(1)
       .stroke();
     y += 20;
@@ -298,7 +299,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       y = 50;
     }
     doc
-      .fillColor(primaryColor)
+      .fillColor(docBlack)
       .fontSize(12)
       .font("Helvetica-Bold")
       .text("Policy Members", 50, y);
@@ -306,7 +307,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     doc
       .moveTo(50, y + 12)
       .lineTo(545, y + 12)
-      .strokeColor(primaryColor)
+      .strokeColor(docBlack)
       .lineWidth(1)
       .stroke();
     y += 20;
@@ -350,9 +351,9 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   const bp = policy as any;
   if (bp.beneficiaryFirstName) {
     if (y > 680) { doc.addPage(); y = 50; }
-    doc.fillColor(primaryColor).fontSize(12).font("Helvetica-Bold").text("Designated Beneficiary", 50, y);
+    doc.fillColor(docBlack).fontSize(12).font("Helvetica-Bold").text("Designated Beneficiary", 50, y);
     y += 5;
-    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(primaryColor).lineWidth(1).stroke();
+    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(docBlack).lineWidth(1).stroke();
     y += 20;
     const bFields = [
       ["Name", `${bp.beneficiaryFirstName} ${bp.beneficiaryLastName || ""}`],
@@ -374,7 +375,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       y = 50;
     }
     doc
-      .fillColor(primaryColor)
+      .fillColor(docBlack)
       .fontSize(12)
       .font("Helvetica-Bold")
       .text("Coverage Details", 50, y);
@@ -382,7 +383,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     doc
       .moveTo(50, y + 12)
       .lineTo(545, y + 12)
-      .strokeColor(primaryColor)
+      .strokeColor(docBlack)
       .lineWidth(1)
       .stroke();
     y += 20;
@@ -418,7 +419,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     ]);
 
     doc
-      .fillColor(primaryColor)
+      .fillColor(docBlack)
       .fontSize(12)
       .font("Helvetica-Bold")
       .text(sectionHeader, 50, y);
@@ -426,7 +427,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     doc
       .moveTo(50, y + 12)
       .lineTo(545, y + 12)
-      .strokeColor(primaryColor)
+      .strokeColor(docBlack)
       .lineWidth(1)
       .stroke();
     y += 20;
@@ -549,7 +550,6 @@ export function registerPolicyDocumentRoute(app: Express) {
       if (txId) receiptMap[txId] = { receiptNumber: r.receiptNumber };
     }
 
-    const primaryColor = org?.primaryColor || "#D4AF37";
     const docBlack = "#000000";
     const logoBufferEstatement = await resolveImageForPdf(org?.logoUrl);
     const signatureBufferEstatement = await resolveImageForPdf(org?.signatureUrl);

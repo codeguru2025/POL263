@@ -287,6 +287,19 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     }))
     .filter((group) => group.items.length > 0);
 
+  const currentOrg = isPlatformOwner
+    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) || orgs[0] : undefined)
+    : (Array.isArray(orgs) ? orgs[0] : undefined);
+
+  // When whitelabeled, set app title to tenant name (must run every render to satisfy hooks order)
+  useEffect(() => {
+    if (isWhitelabeled && currentOrg?.name) {
+      const prev = document.title;
+      document.title = currentOrg.name;
+      return () => { document.title = prev; };
+    }
+  }, [isWhitelabeled, currentOrg?.name]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -299,9 +312,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     return null;
   }
 
-  const currentOrg = isPlatformOwner
-    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) || orgs[0] : undefined)
-    : (Array.isArray(orgs) ? orgs[0] : undefined);
   const currentBranch = branchesList?.[0];
   const primaryRole = safeRoles[0]?.name || "staff";
   const initials = (user?.displayName || user?.email || "U")
@@ -315,15 +325,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     await logout();
     setLocation("/");
   };
-
-  // When whitelabeled, set app title to tenant name
-  useEffect(() => {
-    if (isWhitelabeled && currentOrg?.name) {
-      const prev = document.title;
-      document.title = currentOrg.name;
-      return () => { document.title = prev; };
-    }
-  }, [isWhitelabeled, currentOrg?.name]);
 
   const displayName = user?.displayName || user?.email || "User";
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });

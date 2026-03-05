@@ -1765,7 +1765,8 @@ export class DatabaseStorage implements IStorage {
         }
       }
     }
-    const [created] = await db.insert(paymentReceipts).values(receipt).returning();
+    const tdb = await getDbForOrg(receipt.organizationId);
+    const [created] = await tdb.insert(paymentReceipts).values(receipt).returning();
     return created;
   }
   async getPaymentReceiptById(id: string, orgId: string): Promise<PaymentReceipt | undefined> {

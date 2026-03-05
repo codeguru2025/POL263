@@ -15,7 +15,7 @@ import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPay
 import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
-import { runApplyCreditBalances } from "./credit-apply";
+import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -1565,43 +1565,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       if (tx.status === "cleared" && tx.policyId && policy) {
-        if (policy.status === "inactive") {
-          const todayDate = new Date().toISOString().split("T")[0];
-          await txDb.update(policies).set({
-            status: "active",
-            inceptionDate: todayDate,
-            ...(!policy.effectiveDate ? { effectiveDate: todayDate } : {}),
-            version: sql`version + 1`,
-          }).where(eq(policies.id, tx.policyId));
-        } else if (policy.status === "grace") {
-          await txDb.update(policies).set({
-            status: "active",
-            graceEndDate: null,
-            version: sql`version + 1`,
-          }).where(eq(policies.id, tx.policyId));
-        } else if (policy.status === "lapsed") {
-          await txDb.update(policies).set({
-            status: "active",
-            graceEndDate: null,
-            version: sql`version + 1`,
-          }).where(eq(policies.id, tx.policyId));
-        }
+        const todayDate = new Date().toISOString().split("T")[0];
+        const updated = await applyPolicyStatusForClearedPayment(txDb, tx.policyId, policy, todayDate, " (recorded)", user.id);
+        const policyStatusChange = updated
+          ? { from: policy.status, to: "active" as const, reason: policy.status === "inactive" ? "First premium paid — conversion" : policy.status === "grace" ? "Payment received" : "Reinstatement — payment received" }
+          : null;
+        return { tx, receipt, policyStatusChange };
       }
 
-      return { tx, receipt, policyStatusChange: (tx.status === "cleared" && tx.policyId && policy) ? { from: policy.status, to: "active" as const, reason: policy.status === "inactive" ? "First premium paid — conversion" : policy.status === "grace" ? "Payment received" : "Reinstatement — payment received" } : null };
+      return { tx, receipt, policyStatusChange: null };
     });
-
-    if (result.policyStatusChange) {
-      const policyId = result.tx.policyId!;
-      const { from, to, reason } = result.policyStatusChange;
-      const orgId = user.organizationId;
-      const changedBy = user.id;
-      setImmediate(() => {
-        storage.createPolicyStatusHistory(policyId, from, to, reason, changedBy, orgId).catch((e) => {
-          structuredLog("warn", "createPolicyStatusHistory after payment failed", { error: (e as Error).message, policyId });
-        });
-      });
-    }
 
     if (result.tx.status === "cleared" && result.tx.policyId && policy?.status === "lapsed") {
       await rollbackClawbacks(user.organizationId, policy);
@@ -1828,34 +1801,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }).returning();
 
       // Transition policy status atomically within the same transaction
-      if (policy.status === "inactive") {
-        const todayDate = new Date().toISOString().split("T")[0];
-        await txDb.update(policies).set({
-          status: "active",
-          inceptionDate: todayDate,
-          ...(!policy.effectiveDate ? { effectiveDate: todayDate } : {}),
-          version: sql`version + 1`,
-        }).where(eq(policies.id, policyId));
-        await storage.createPolicyStatusHistory(policyId, "inactive", "active", "First premium paid — conversion (cash)", user.id);
-      } else if (policy.status === "grace") {
-        await txDb.update(policies).set({
-          status: "active",
-          graceEndDate: null,
-          version: sql`version + 1`,
-        }).where(eq(policies.id, policyId));
-        await storage.createPolicyStatusHistory(policyId, "grace", "active", "Payment received (cash)", user.id);
-      } else if (policy.status === "lapsed") {
-        await txDb.update(policies).set({
-          status: "active",
-          graceEndDate: null,
-          version: sql`version + 1`,
-        }).where(eq(policies.id, policyId));
-        await storage.createPolicyStatusHistory(policyId, "lapsed", "active", "Reinstatement — payment received (cash)", user.id);
-        await rollbackClawbacks(user.organizationId, policy);
-      }
+      await applyPolicyStatusForClearedPayment(txDb, policyId, policy, today, " (cash)", user.id);
 
       return { tx, receipt };
     });
+
+    if (policy.status === "lapsed") {
+      await rollbackClawbacks(user.organizationId, policy);
+    }
 
     // Non-transactional follow-ups (PDF generation, commission, revenue share)
     const { generateReceiptPdf } = await import("./receipt-pdf");
@@ -1971,7 +1924,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           paymentChannel: "bank",
           issuedByUserId: user.id,
           status: "issued",
-          metadataJson: { monthEndRunId: run.id },
+          metadataJson: { monthEndRunId: run.id, transactionId: tx.id },
         });
         receipted++;
         if (policy.status === "inactive") {
@@ -2079,7 +2032,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         paymentChannel: "cash",
         issuedByUserId: user.id,
         status: "issued",
-        metadataJson: { groupId },
+        metadataJson: { groupId, transactionId: tx.id },
       });
       if (policy.status === "inactive") {
         await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, user.organizationId);

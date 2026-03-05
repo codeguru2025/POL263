@@ -4,10 +4,14 @@
  */
 
 import { storage, findPaymentIntentById } from "./storage";
+import { withOrgTransaction } from "./tenant-db";
+import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { getPaynowConfig, getPaynowIntegrationId } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaymentReceipt } from "@shared/schema";
 import type { Policy } from "@shared/schema";
+import { paymentTransactions, paymentReceipts, paymentIntents } from "@shared/schema";
+import { eq } from "drizzle-orm";
 import { structuredLog } from "./logger";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
@@ -551,28 +555,8 @@ export async function applyPaymentToPolicy(
   const policy = await storage.getPolicy(intent.policyId, orgId);
   if (!policy) return { ok: false, error: "Policy not found" };
 
-  try {
   const today = new Date().toISOString().split("T")[0];
   const effectiveUserId = eventActorId(actorType, actorId);
-  const txData = {
-    organizationId: intent.organizationId,
-    policyId: intent.policyId,
-    clientId: intent.clientId,
-    amount: String(intent.amount),
-    currency: intent.currency,
-    paymentMethod: "paynow",
-    status: "cleared" as const,
-    reference: intent.merchantReference,
-    paynowReference: intent.paynowReference ?? undefined,
-    idempotencyKey: `paynow-${intent.id}`,
-    receivedAt: new Date(),
-    postedDate: today,
-    valueDate: today,
-    recordedBy: effectiveUserId ?? undefined,
-  };
-  const transaction = await storage.createPaymentTransaction(txData);
-
-  const receiptNumber = await storage.getNextPaymentReceiptNumber(intent.organizationId);
   const channelMap: Record<string, string> = {
     ecocash: "paynow_ecocash",
     onemoney: "paynow_ecocash",
@@ -581,24 +565,63 @@ export async function applyPaymentToPolicy(
     omari: "paynow_ecocash",
   };
   const paymentChannel = channelMap[intent.methodSelected ?? ""] ?? "paynow_ecocash";
-  const receiptData: InsertPaymentReceipt = {
-    organizationId: intent.organizationId,
-    branchId: policy.branchId ?? undefined,
-    receiptNumber,
-    paymentIntentId: intent.id,
-    policyId: intent.policyId,
-    clientId: intent.clientId,
-    amount: String(intent.amount),
-    currency: intent.currency,
-    paymentChannel,
-    issuedByUserId: effectiveUserId ?? undefined,
-    status: "issued",
-    printFormat: "thermal_80mm",
-    metadataJson: { transactionId: transaction.id, paynowReference: intent.paynowReference },
-  };
-  const receipt = await storage.createPaymentReceipt(receiptData);
 
-  await storage.updatePaymentIntent(intent.id, { status: "paid" }, orgId);
+  let transaction: { id: string };
+  let receipt: { id: string };
+  let receiptNumber: string;
+
+  try {
+    receiptNumber = await storage.getNextPaymentReceiptNumber(intent.organizationId);
+
+    const result = await withOrgTransaction(orgId, async (txDb) => {
+      const [tx] = await txDb.insert(paymentTransactions).values({
+        organizationId: intent.organizationId,
+        policyId: intent.policyId,
+        clientId: intent.clientId,
+        amount: String(intent.amount),
+        currency: intent.currency,
+        paymentMethod: "paynow",
+        status: "cleared",
+        reference: intent.merchantReference,
+        paynowReference: intent.paynowReference ?? undefined,
+        idempotencyKey: `paynow-${intent.id}`,
+        receivedAt: new Date(),
+        postedDate: today,
+        valueDate: today,
+        recordedBy: effectiveUserId ?? undefined,
+      }).returning();
+      transaction = tx;
+
+      const [rec] = await txDb.insert(paymentReceipts).values({
+        organizationId: intent.organizationId,
+        branchId: policy.branchId ?? undefined,
+        receiptNumber,
+        paymentIntentId: intent.id,
+        policyId: intent.policyId,
+        clientId: intent.clientId,
+        amount: String(intent.amount),
+        currency: intent.currency,
+        paymentChannel,
+        issuedByUserId: effectiveUserId ?? undefined,
+        status: "issued",
+        printFormat: "thermal_80mm",
+        metadataJson: { transactionId: tx.id, paynowReference: intent.paynowReference },
+      }).returning();
+      receipt = rec;
+
+      await txDb.update(paymentIntents).set({ status: "paid" }).where(eq(paymentIntents.id, intent.id));
+      await applyPolicyStatusForClearedPayment(txDb, intent.policyId, policy, today, "", effectiveUserId);
+
+      return { transaction: tx, receipt: rec };
+    });
+
+    transaction = result.transaction;
+    receipt = result.receipt;
+  } catch (err: any) {
+    structuredLog("error", "applyPaymentToPolicy failed", { intentId, error: err?.message || String(err), stack: err?.stack });
+    return { ok: false, error: err?.message || "Failed to apply payment" };
+  }
+
   await storage.createPaymentEvent({
     paymentIntentId: intent.id,
     organizationId: orgId,
@@ -608,19 +631,7 @@ export async function applyPaymentToPolicy(
     actorId: eventActorId(actorType, actorId),
   });
 
-  if (policy.status === "inactive") {
-    const today = new Date().toISOString().split("T")[0];
-    const update: { status: string; inceptionDate?: string; effectiveDate?: string } = { status: "active" };
-    update.inceptionDate = today;
-    if (!policy.effectiveDate) update.effectiveDate = today;
-    await storage.updatePolicy(intent.policyId, update, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "inactive", "active", "First premium paid — conversion", effectiveUserId ?? undefined);
-  } else if (policy.status === "grace") {
-    await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null }, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "grace", "active", "Payment received", effectiveUserId ?? undefined);
-  } else if (policy.status === "lapsed") {
-    await storage.updatePolicy(intent.policyId, { status: "active", graceEndDate: null }, orgId);
-    await storage.createPolicyStatusHistory(intent.policyId, "lapsed", "active", "Reinstatement — payment received", effectiveUserId ?? undefined);
+  if (policy.status === "lapsed") {
     await rollbackClawbacksForPolicy(orgId, policy);
   }
 
@@ -684,10 +695,6 @@ export async function applyPaymentToPolicy(
   }
 
   return { ok: true, transactionId: transaction.id, receiptId: receipt.id };
-  } catch (err: any) {
-    structuredLog("error", "applyPaymentToPolicy failed", { intentId, error: err?.message || String(err), stack: err?.stack });
-    return { ok: false, error: err?.message || "Failed to apply payment" };
-  }
 }
 
 /** Apply group PayNow payment: create transaction + receipt per allocation, update policies, mark group intent paid. Idempotent. */
@@ -717,7 +724,7 @@ export async function applyGroupPaymentToPolicies(
     if (!policy) continue;
     const amount = String(alloc.amount);
     const currency = alloc.currency || groupIntent.currency || "USD";
-    await storage.createPaymentTransaction({
+    const transaction = await storage.createPaymentTransaction({
       organizationId: orgId,
       policyId: alloc.policyId,
       clientId: policy.clientId!,
@@ -747,7 +754,7 @@ export async function applyGroupPaymentToPolicies(
       paymentChannel: "paynow_ecocash",
       issuedByUserId: actorId ?? undefined,
       status: "issued",
-      metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference },
+      metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference, transactionId: transaction.id },
     });
     if (policy.status === "inactive") {
       await storage.updatePolicy(alloc.policyId, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, orgId);

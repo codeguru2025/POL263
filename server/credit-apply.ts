@@ -75,7 +75,7 @@ export async function applyCreditBalanceToPolicy(
     valueDate: today,
     notes: "Auto-applied from policy credit balance",
   };
-  await storage.createPaymentTransaction(txData);
+  const tx = await storage.createPaymentTransaction(txData);
 
   const receiptNumber = await storage.getNextPaymentReceiptNumber(orgId);
   const receiptData: InsertPaymentReceipt = {
@@ -88,7 +88,7 @@ export async function applyCreditBalanceToPolicy(
     currency,
     paymentChannel: "credit_balance",
     status: "issued",
-    metadataJson: { source: "credit_balance_auto_apply" },
+    metadataJson: { transactionId: tx.id, source: "credit_balance_auto_apply" },
   };
   await storage.createPaymentReceipt(receiptData);
 
