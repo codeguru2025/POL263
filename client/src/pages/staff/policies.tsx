@@ -53,6 +53,14 @@ function getStatusColor(status: string) {
   }
 }
 
+const NATIONAL_ID_REGEX = /^\d+[A-Z]\d{2}$/;
+function toUpper(value: string) { return value.trim().toUpperCase(); }
+function isValidNationalId(value: string | null | undefined): boolean {
+  if (!value || !value.trim()) return false;
+  const n = value.trim().toUpperCase();
+  return NATIONAL_ID_REGEX.test(n);
+}
+
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -277,9 +285,9 @@ export default function StaffPolicies() {
     if (paymentSchedule === "monthly") {
       base = currency === "ZAR" ? parseFloat(selectedVersion.premiumMonthlyZar || "0") : parseFloat(selectedVersion.premiumMonthlyUsd || "0");
     } else if (paymentSchedule === "weekly") {
-      base = parseFloat(selectedVersion.premiumWeeklyUsd || "0");
+      base = currency === "ZAR" ? parseFloat((selectedVersion as any).premiumWeeklyZar || "0") : parseFloat(selectedVersion.premiumWeeklyUsd || "0");
     } else if (paymentSchedule === "biweekly") {
-      base = parseFloat(selectedVersion.premiumBiweeklyUsd || "0");
+      base = currency === "ZAR" ? parseFloat((selectedVersion as any).premiumBiweeklyZar || "0") : parseFloat(selectedVersion.premiumBiweeklyUsd || "0");
     }
     if (base === 0) return null;
 
@@ -348,14 +356,19 @@ export default function StaffPolicies() {
         if (!data.newClient.firstName || !data.newClient.lastName) {
           throw new Error("First name and last name are required to create a new client.");
         }
+        if (!data.newClient.nationalId?.trim()) throw new Error("National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38).");
+        if (!isValidNationalId(data.newClient.nationalId)) throw new Error("National ID must be digits, one letter, then two digits (e.g. 08833089H38).");
+        if (!data.newClient.phone?.trim()) throw new Error("Phone is required.");
+        if (!data.newClient.dateOfBirth) throw new Error("Date of birth is required.");
+        if (!data.newClient.gender) throw new Error("Gender is required.");
         const clientRes = await apiRequest("POST", "/api/clients", {
-          firstName: data.newClient.firstName,
-          lastName: data.newClient.lastName,
-          phone: data.newClient.phone || undefined,
-          email: data.newClient.email || undefined,
-          nationalId: data.newClient.nationalId || undefined,
+          firstName: toUpper(data.newClient.firstName),
+          lastName: toUpper(data.newClient.lastName),
+          phone: data.newClient.phone ? toUpper(data.newClient.phone) : undefined,
+          email: data.newClient.email?.trim() || undefined,
+          nationalId: data.newClient.nationalId ? toUpper(data.newClient.nationalId) : undefined,
           dateOfBirth: data.newClient.dateOfBirth || undefined,
-          gender: data.newClient.gender || undefined,
+          gender: data.newClient.gender ? toUpper(data.newClient.gender) : undefined,
         });
         const newClient = await clientRes.json();
         clientId = newClient.id;
@@ -384,7 +397,19 @@ export default function StaffPolicies() {
           };
         }
       } else if (data.beneficiaryManual.firstName && data.beneficiaryManual.lastName) {
-        beneficiary = { ...data.beneficiaryManual };
+        if (!data.beneficiaryManual.relationship?.trim() || !data.beneficiaryManual.nationalId?.trim() || !data.beneficiaryManual.phone?.trim()) {
+          throw new Error("Beneficiary: all fields are required (first name, last name, relationship, national ID, phone).");
+        }
+        if (!isValidNationalId(data.beneficiaryManual.nationalId)) {
+          throw new Error("Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38).");
+        }
+        beneficiary = {
+          firstName: toUpper(data.beneficiaryManual.firstName),
+          lastName: toUpper(data.beneficiaryManual.lastName),
+          relationship: toUpper(data.beneficiaryManual.relationship),
+          nationalId: data.beneficiaryManual.nationalId ? toUpper(data.beneficiaryManual.nationalId) : "",
+          phone: data.beneficiaryManual.phone ? toUpper(data.beneficiaryManual.phone) : "",
+        };
       }
 
       const res = await apiRequest("POST", "/api/policies", {
@@ -1535,13 +1560,14 @@ export default function StaffPolicies() {
                     </>
                   ) : (
                     <div className="border rounded-md p-3 space-y-3 bg-muted/20">
-                      <p className="text-xs text-muted-foreground">A client record will be auto-created when the policy is saved.</p>
+                      <p className="text-xs text-muted-foreground">A client record will be auto-created when the policy is saved. All fields required except email. Text is stored in uppercase. National ID: digits + check letter + 2 digits (e.g. 08833089H38).</p>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <Label className="text-xs">First Name *</Label>
                           <Input
                             value={createForm.newClient.firstName}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, firstName: e.target.value } })}
+                            onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, firstName: toUpper(e.target.value) } })}
                             placeholder="First name"
                           />
                         </div>
@@ -1550,14 +1576,16 @@ export default function StaffPolicies() {
                           <Input
                             value={createForm.newClient.lastName}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, lastName: e.target.value } })}
+                            onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, lastName: toUpper(e.target.value) } })}
                             placeholder="Last name"
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Phone</Label>
+                          <Label className="text-xs">Phone *</Label>
                           <Input
                             value={createForm.newClient.phone}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, phone: e.target.value } })}
+                            onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, phone: toUpper(e.target.value) } })}
                             placeholder="Phone number"
                           />
                         </div>
@@ -1571,15 +1599,16 @@ export default function StaffPolicies() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">National ID</Label>
+                          <Label className="text-xs">National ID *</Label>
                           <Input
                             value={createForm.newClient.nationalId}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, nationalId: e.target.value } })}
-                            placeholder="ID number"
+                            onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, nationalId: toUpper(e.target.value) } })}
+                            placeholder="e.g. 08833089H38"
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Date of Birth</Label>
+                          <Label className="text-xs">Date of Birth *</Label>
                           <Input
                             type="date"
                             value={createForm.newClient.dateOfBirth}
@@ -1587,7 +1616,7 @@ export default function StaffPolicies() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Gender</Label>
+                          <Label className="text-xs">Gender *</Label>
                           <Select
                             value={createForm.newClient.gender}
                             onValueChange={(v) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, gender: v } })}
@@ -1690,14 +1719,15 @@ export default function StaffPolicies() {
                     )}
                     {showAddDep && (
                       <div className="border rounded-md p-3 mt-2 space-y-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">All fields required except National ID. Text stored in uppercase.</p>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <Label className="text-xs">First Name *</Label>
-                            <Input value={newDep.firstName} onChange={(e) => setNewDep({ ...newDep, firstName: e.target.value })} placeholder="First name" />
+                            <Input value={newDep.firstName} onChange={(e) => setNewDep({ ...newDep, firstName: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, firstName: toUpper(e.target.value) })} placeholder="First name" />
                           </div>
                           <div>
                             <Label className="text-xs">Last Name *</Label>
-                            <Input value={newDep.lastName} onChange={(e) => setNewDep({ ...newDep, lastName: e.target.value })} placeholder="Last name" />
+                            <Input value={newDep.lastName} onChange={(e) => setNewDep({ ...newDep, lastName: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, lastName: toUpper(e.target.value) })} placeholder="Last name" />
                           </div>
                           <div>
                             <Label className="text-xs">Relationship *</Label>
@@ -1712,14 +1742,14 @@ export default function StaffPolicies() {
                           </div>
                           <div>
                             <Label className="text-xs">National ID</Label>
-                            <Input value={newDep.nationalId} onChange={(e) => setNewDep({ ...newDep, nationalId: e.target.value })} placeholder="ID number" />
+                            <Input value={newDep.nationalId} onChange={(e) => setNewDep({ ...newDep, nationalId: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, nationalId: toUpper(e.target.value) })} placeholder="e.g. 08833089H38" />
                           </div>
                           <div>
-                            <Label className="text-xs">Date of Birth</Label>
+                            <Label className="text-xs">Date of Birth *</Label>
                             <Input type="date" value={newDep.dateOfBirth} onChange={(e) => setNewDep({ ...newDep, dateOfBirth: e.target.value })} />
                           </div>
                           <div>
-                            <Label className="text-xs">Gender</Label>
+                            <Label className="text-xs">Gender *</Label>
                             <Select value={newDep.gender} onValueChange={(v) => setNewDep({ ...newDep, gender: v })}>
                               <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
                               <SelectContent>
@@ -1734,7 +1764,7 @@ export default function StaffPolicies() {
                           <Button
                             size="sm"
                             onClick={() => addDepMutation.mutate(newDep)}
-                            disabled={!newDep.firstName || !newDep.lastName || !newDep.relationship || addDepMutation.isPending}
+                            disabled={!newDep.firstName?.trim() || !newDep.lastName?.trim() || !newDep.relationship || !newDep.dateOfBirth || !newDep.gender || addDepMutation.isPending}
                           >
                             {addDepMutation.isPending && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
                             Save Dependent
@@ -1778,14 +1808,15 @@ export default function StaffPolicies() {
                     )}
                     {!createForm.beneficiaryId && (
                       <div className="border rounded-md p-3 mt-2 space-y-3 bg-muted/20">
+                        <p className="text-xs text-muted-foreground">All beneficiary fields required. National ID: digits + check letter + 2 digits (e.g. 08833089H38).</p>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <Label className="text-xs">First Name *</Label>
-                            <Input value={createForm.beneficiaryManual.firstName} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, firstName: e.target.value } })} placeholder="First name" />
+                            <Input value={createForm.beneficiaryManual.firstName} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, firstName: e.target.value } })} onBlur={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, firstName: toUpper(e.target.value) } })} placeholder="First name" />
                           </div>
                           <div>
                             <Label className="text-xs">Last Name *</Label>
-                            <Input value={createForm.beneficiaryManual.lastName} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, lastName: e.target.value } })} placeholder="Last name" />
+                            <Input value={createForm.beneficiaryManual.lastName} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, lastName: e.target.value } })} onBlur={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, lastName: toUpper(e.target.value) } })} placeholder="Last name" />
                           </div>
                           <div>
                             <Label className="text-xs">Relationship *</Label>
@@ -1799,12 +1830,12 @@ export default function StaffPolicies() {
                             </Select>
                           </div>
                           <div>
-                            <Label className="text-xs">National ID</Label>
-                            <Input value={createForm.beneficiaryManual.nationalId} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, nationalId: e.target.value } })} placeholder="ID number" />
+                            <Label className="text-xs">National ID *</Label>
+                            <Input value={createForm.beneficiaryManual.nationalId} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, nationalId: e.target.value } })} onBlur={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, nationalId: toUpper(e.target.value) } })} placeholder="e.g. 08833089H38" />
                           </div>
                           <div>
-                            <Label className="text-xs">Phone</Label>
-                            <Input value={createForm.beneficiaryManual.phone} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, phone: e.target.value } })} placeholder="Phone number" />
+                            <Label className="text-xs">Phone *</Label>
+                            <Input value={createForm.beneficiaryManual.phone} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, phone: e.target.value } })} onBlur={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, phone: toUpper(e.target.value) } })} placeholder="Phone number" />
                           </div>
                         </div>
                       </div>
@@ -2003,8 +2034,21 @@ export default function StaffPolicies() {
                 disabled={
                   (createStep === 1 && (
                     (clientMode === "search" && !createForm.clientId) ||
-                    (clientMode === "new" && (!createForm.newClient.firstName || !createForm.newClient.lastName)) ||
-                    (!createForm.beneficiaryId && (!createForm.beneficiaryManual.firstName || !createForm.beneficiaryManual.lastName || !createForm.beneficiaryManual.relationship))
+                    (clientMode === "new" && (
+                      !createForm.newClient.firstName?.trim() ||
+                      !createForm.newClient.lastName?.trim() ||
+                      !createForm.newClient.nationalId?.trim() ||
+                      !createForm.newClient.phone?.trim() ||
+                      !createForm.newClient.dateOfBirth ||
+                      !createForm.newClient.gender
+                    )) ||
+                    (!createForm.beneficiaryId && (
+                      !createForm.beneficiaryManual.firstName?.trim() ||
+                      !createForm.beneficiaryManual.lastName?.trim() ||
+                      !createForm.beneficiaryManual.relationship?.trim() ||
+                      !createForm.beneficiaryManual.nationalId?.trim() ||
+                      !createForm.beneficiaryManual.phone?.trim()
+                    ))
                   )) ||
                   (createStep === 2 && (!createForm.selectedProductId || !createForm.productVersionId))
                 }
@@ -2020,7 +2064,14 @@ export default function StaffPolicies() {
                 disabled={
                   createMutation.isPending ||
                   (clientMode === "search" && !createForm.clientId) ||
-                  (clientMode === "new" && (!createForm.newClient.firstName || !createForm.newClient.lastName)) ||
+                  (clientMode === "new" && (
+                    !createForm.newClient.firstName?.trim() ||
+                    !createForm.newClient.lastName?.trim() ||
+                    !createForm.newClient.nationalId?.trim() ||
+                    !createForm.newClient.phone?.trim() ||
+                    !createForm.newClient.dateOfBirth ||
+                    !createForm.newClient.gender
+                  )) ||
                   !createForm.productVersionId ||
                   !calculatedPremium
                 }

@@ -16,15 +16,22 @@ async function run() {
     console.error("DATABASE_URL is not set.");
     process.exit(1);
   }
+  let connectionString = process.env.DATABASE_URL;
   const acceptSelfSigned =
     process.env.DB_ACCEPT_SELF_SIGNED === "true" ||
     process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
-    process.env.DATABASE_URL.includes("supabase") ||
-    /digitalocean|\.ondigitalocean\.com/i.test(process.env.DATABASE_URL || "");
+    connectionString.includes("supabase") ||
+    /digitalocean|\.ondigitalocean\.com/i.test(connectionString || "");
 
-  // Use SSL (keep URL as-is so sslmode=require keeps connection encrypted) but accept self-signed/DO cert
+  if (acceptSelfSigned && connectionString) {
+    connectionString = connectionString
+      .replace(/\?sslmode=[^&]*&?/gi, "?")
+      .replace(/&sslmode=[^&]*/gi, "")
+      .replace(/\?$/, "");
+  }
+
   const poolConfig: pg.PoolConfig = {
-    connectionString: process.env.DATABASE_URL,
+    connectionString,
     ...(acceptSelfSigned && { ssl: { rejectUnauthorized: false } }),
   };
   let pool = new pg.Pool(poolConfig);
@@ -32,13 +39,22 @@ async function run() {
   try {
     await pool.query("SELECT 1");
   } catch (firstErr: any) {
-    if (firstErr?.code === "SELF_SIGNED_CERT_IN_CHAIN" && !acceptSelfSigned) {
-      await pool.end();
+    const isSelfSigned = firstErr?.code === "SELF_SIGNED_CERT_IN_CHAIN" ||
+      (firstErr?.message && String(firstErr.message).toLowerCase().includes("self-signed"));
+    if (isSelfSigned && !acceptSelfSigned) {
+      await pool.end().catch(() => {});
       console.warn("Database uses a self-signed certificate. Retrying with SSL verification disabled. Set DB_ACCEPT_SELF_SIGNED=true to avoid this.");
-      pool = new pg.Pool({ ...poolConfig, ssl: { rejectUnauthorized: false } });
+      const retryConfig: pg.PoolConfig = {
+        connectionString: (process.env.DATABASE_URL || "")
+          .replace(/\?sslmode=[^&]*&?/gi, "?")
+          .replace(/&sslmode=[^&]*/gi, "")
+          .replace(/\?$/, ""),
+        ssl: { rejectUnauthorized: false },
+      };
+      pool = new pg.Pool(retryConfig);
       await pool.query("SELECT 1");
     } else {
-      await pool.end();
+      await pool.end().catch(() => {});
       throw firstErr;
     }
   }

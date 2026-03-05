@@ -317,6 +317,7 @@ export interface IStorage {
   getPaymentIntentByMerchantReference(orgId: string, merchantReference: string): Promise<PaymentIntent | undefined>;
   getPaymentIntentsByOrg(orgId: string, limit?: number): Promise<PaymentIntent[]>;
   getPaymentIntentsByClient(clientId: string, orgId: string): Promise<PaymentIntent[]>;
+  getPaymentIntentsByPolicy(policyId: string, orgId: string): Promise<PaymentIntent[]>;
   createPaymentIntent(intent: InsertPaymentIntent): Promise<PaymentIntent>;
   updatePaymentIntent(id: string, data: Partial<InsertPaymentIntent>, orgId: string): Promise<PaymentIntent | undefined>;
   createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent>;
@@ -1722,6 +1723,11 @@ export class DatabaseStorage implements IStorage {
   async getPaymentIntentsByClient(clientId: string, orgId: string): Promise<PaymentIntent[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(paymentIntents).where(eq(paymentIntents.clientId, clientId))
+      .orderBy(desc(paymentIntents.createdAt));
+  }
+  async getPaymentIntentsByPolicy(policyId: string, orgId: string): Promise<PaymentIntent[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(paymentIntents).where(and(eq(paymentIntents.organizationId, orgId), eq(paymentIntents.policyId, policyId)))
       .orderBy(desc(paymentIntents.createdAt));
   }
   async createPaymentIntent(intent: InsertPaymentIntent): Promise<PaymentIntent> {

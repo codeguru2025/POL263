@@ -1077,7 +1077,9 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [premiumMonthlyUsd, setPremiumMonthlyUsd] = useState("");
   const [premiumMonthlyZar, setPremiumMonthlyZar] = useState("");
   const [premiumWeeklyUsd, setPremiumWeeklyUsd] = useState("");
+  const [premiumWeeklyZar, setPremiumWeeklyZar] = useState("");
   const [premiumBiweeklyUsd, setPremiumBiweeklyUsd] = useState("");
+  const [premiumBiweeklyZar, setPremiumBiweeklyZar] = useState("");
   const [waitingPeriodDays, setWaitingPeriodDays] = useState("90");
   const [waitingAccidental, setWaitingAccidental] = useState("0");
   const [waitingSuicide, setWaitingSuicide] = useState("0");
@@ -1107,7 +1109,9 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       premiumMonthlyUsd: premiumMonthlyUsd || undefined,
       premiumMonthlyZar: premiumMonthlyZar || undefined,
       premiumWeeklyUsd: premiumWeeklyUsd || undefined,
+      premiumWeeklyZar: premiumWeeklyZar || undefined,
       premiumBiweeklyUsd: premiumBiweeklyUsd || undefined,
+      premiumBiweeklyZar: premiumBiweeklyZar || undefined,
       waitingPeriodDays: waitingPeriodDays ? parseInt(waitingPeriodDays) : undefined,
       waitingPeriodAccidentalDeath: waitingAccidental ? parseInt(waitingAccidental) : undefined,
       waitingPeriodSuicide: waitingSuicide ? parseInt(waitingSuicide) : undefined,
@@ -1160,8 +1164,16 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-version-premium-weekly" />
             </div>
             <div className="space-y-2">
+              <Label>Weekly Premium (ZAR)</Label>
+              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" />
+            </div>
+            <div className="space-y-2">
               <Label>Bi-weekly Premium (USD)</Label>
               <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-version-premium-biweekly" />
+            </div>
+            <div className="space-y-2">
+              <Label>Bi-weekly Premium (ZAR)</Label>
+              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" />
             </div>
           </div>
 
@@ -1322,7 +1334,9 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [premiumMonthlyUsd, setPremiumMonthlyUsd] = useState(version.premiumMonthlyUsd || "");
   const [premiumMonthlyZar, setPremiumMonthlyZar] = useState(version.premiumMonthlyZar || "");
   const [premiumWeeklyUsd, setPremiumWeeklyUsd] = useState(version.premiumWeeklyUsd || "");
+  const [premiumWeeklyZar, setPremiumWeeklyZar] = useState((version as any).premiumWeeklyZar || "");
   const [premiumBiweeklyUsd, setPremiumBiweeklyUsd] = useState(version.premiumBiweeklyUsd || "");
+  const [premiumBiweeklyZar, setPremiumBiweeklyZar] = useState((version as any).premiumBiweeklyZar || "");
   const [waitingPeriodDays, setWaitingPeriodDays] = useState(String(version.waitingPeriodDays ?? "90"));
   const [waitingAccidental, setWaitingAccidental] = useState(String(version.waitingPeriodAccidentalDeath ?? "0"));
   const [waitingSuicide, setWaitingSuicide] = useState(String(version.waitingPeriodSuicide ?? "0"));
@@ -1353,7 +1367,9 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       premiumMonthlyUsd: premiumMonthlyUsd || null,
       premiumMonthlyZar: premiumMonthlyZar || null,
       premiumWeeklyUsd: premiumWeeklyUsd || null,
+      premiumWeeklyZar: premiumWeeklyZar || null,
       premiumBiweeklyUsd: premiumBiweeklyUsd || null,
+      premiumBiweeklyZar: premiumBiweeklyZar || null,
       waitingPeriodDays: waitingPeriodDays ? parseInt(waitingPeriodDays) : null,
       waitingPeriodAccidentalDeath: waitingAccidental ? parseInt(waitingAccidental) : null,
       waitingPeriodSuicide: waitingSuicide ? parseInt(waitingSuicide) : null,
@@ -1413,8 +1429,16 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-edit-version-premium-weekly" />
             </div>
             <div className="space-y-2">
+              <Label>Weekly Premium (ZAR)</Label>
+              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" />
+            </div>
+            <div className="space-y-2">
               <Label>Bi-weekly Premium (USD)</Label>
               <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-edit-version-premium-biweekly" />
+            </div>
+            <div className="space-y-2">
+              <Label>Bi-weekly Premium (ZAR)</Label>
+              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" />
             </div>
           </div>
 

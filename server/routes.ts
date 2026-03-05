@@ -16,6 +16,7 @@ import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
+import { toUpperTrim, normalizeNationalId, isValidNationalId } from "../shared/validation";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -213,9 +214,9 @@ async function computePolicyPremium(
   if (paymentSchedule === "monthly") {
     base = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
   } else if (paymentSchedule === "weekly") {
-    base = parseFloat(String(pv.premiumWeeklyUsd ?? 0));
+    base = currency === "ZAR" ? parseFloat(String((pv as any).premiumWeeklyZar ?? 0)) : parseFloat(String(pv.premiumWeeklyUsd ?? 0));
   } else if (paymentSchedule === "biweekly") {
-    base = parseFloat(String(pv.premiumBiweeklyUsd ?? 0));
+    base = currency === "ZAR" ? parseFloat(String((pv as any).premiumBiweeklyZar ?? 0)) : parseFloat(String(pv.premiumBiweeklyUsd ?? 0));
   }
 
   let addOnTotal = 0;
@@ -855,11 +856,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    const firstName = toUpperTrim(req.body.firstName, false);
+    const lastName = toUpperTrim(req.body.lastName, false);
+    const nationalIdNorm = normalizeNationalId(req.body.nationalId);
+    if (!firstName || !lastName) {
+      return res.status(400).json({ message: "First name and last name are required." });
+    }
+    if (!nationalIdNorm) {
+      return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
+    }
+    if (!isValidNationalId(req.body.nationalId)) {
+      return res.status(400).json({ message: "National ID must be digits, then one letter, then two digits (e.g. 08833089H38)." });
+    }
+    const phone = toUpperTrim(req.body.phone, false);
+    const address = toUpperTrim(req.body.address, true);
+    if (!phone) {
+      return res.status(400).json({ message: "Phone is required." });
+    }
+    const dateOfBirth = req.body.dateOfBirth ? String(req.body.dateOfBirth).trim() : null;
+    const gender = req.body.gender ? toUpperTrim(req.body.gender, false) : null;
+    if (!dateOfBirth) {
+      return res.status(400).json({ message: "Date of birth is required." });
+    }
+    if (!gender) {
+      return res.status(400).json({ message: "Gender is required." });
+    }
+
     const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const userRolesForCreate = await storage.getUserRoles(user.id, user.organizationId);
     const creatorIsAgent = userRolesForCreate.some((r: { name?: string }) => r?.name === "agent");
     const parsed = insertClientSchema.parse({
       ...req.body,
+      firstName: firstName!,
+      lastName: lastName!,
+      nationalId: nationalIdNorm,
+      phone: phone!,
+      dateOfBirth,
+      gender: gender!,
+      address: address || undefined,
       organizationId: user.organizationId,
       branchId: req.body.branchId || user.branchId,
       activationCode,
@@ -913,8 +947,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const client = await storage.getClient(req.params.clientId as string, user.organizationId);
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    const body = req.body as any;
+    const depFirstName = toUpperTrim(body.firstName, false);
+    const depLastName = toUpperTrim(body.lastName, false);
+    const relationship = toUpperTrim(body.relationship, false);
+    const dateOfBirth = body.dateOfBirth ? String(body.dateOfBirth).trim() : null;
+    const gender = body.gender ? toUpperTrim(body.gender, false) : null;
+    const nationalIdDep = body.nationalId ? normalizeNationalId(body.nationalId) : null;
+    if (!depFirstName || !depLastName) return res.status(400).json({ message: "First name and last name are required for dependants." });
+    if (!relationship) return res.status(400).json({ message: "Relationship is required for dependants." });
+    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required for dependants." });
+    if (!gender) return res.status(400).json({ message: "Gender is required for dependants." });
+    if (nationalIdDep && !isValidNationalId(nationalIdDep)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
     const parsed = insertDependentSchema.parse({
-      ...req.body,
+      ...body,
+      firstName: depFirstName,
+      lastName: depLastName,
+      relationship,
+      dateOfBirth,
+      gender,
+      nationalId: nationalIdDep || undefined,
       organizationId: user.organizationId,
       clientId: req.params.clientId,
     });
@@ -1220,6 +1272,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete body.premiumAmount;
 
     const beneficiary = req.body.beneficiary || null;
+    if (beneficiary && (beneficiary.firstName || beneficiary.lastName)) {
+      const benFirst = toUpperTrim(beneficiary.firstName, false);
+      const benLast = toUpperTrim(beneficiary.lastName, false);
+      const benRel = toUpperTrim(beneficiary.relationship, false);
+      const benNationalId = beneficiary.nationalId ? normalizeNationalId(beneficiary.nationalId) : null;
+      const benPhone = toUpperTrim(beneficiary.phone, false);
+      if (!benFirst || !benLast) return res.status(400).json({ message: "Beneficiary first and last name are required." });
+      if (!benRel) return res.status(400).json({ message: "Beneficiary relationship is required." });
+      if (!benNationalId) return res.status(400).json({ message: "Beneficiary national ID is required." });
+      if (!isValidNationalId(beneficiary.nationalId)) return res.status(400).json({ message: "Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+      if (!benPhone) return res.status(400).json({ message: "Beneficiary phone is required." });
+      beneficiary.firstName = benFirst;
+      beneficiary.lastName = benLast;
+      beneficiary.relationship = benRel;
+      beneficiary.nationalId = benNationalId;
+      beneficiary.phone = benPhone;
+    }
     const parsed = insertPolicySchema.parse({
       ...body,
       organizationId: user.organizationId,
@@ -1493,13 +1562,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const policyId = req.params.id as string;
     const orgId = user.organizationId;
-    const policy = await storage.getPolicy(policyId, orgId);
-    if (policy?.clientId) {
-      const intents = await storage.getPaymentIntentsByClient(policy.clientId, orgId);
-      const paidForPolicy = intents.filter((i: any) => i.policyId === policyId && i.status === "paid");
-      for (const intent of paidForPolicy) {
-        await applyPaymentToPolicy(intent.id, "system", null);
-      }
+    const intents = await storage.getPaymentIntentsByPolicy(policyId, orgId);
+    const paidForPolicy = intents.filter((i: any) => i.status === "paid");
+    for (const intent of paidForPolicy) {
+      await applyPaymentToPolicy(intent.id, "system", null);
     }
     return res.json(await storage.getPaymentsByPolicy(policyId, orgId));
   });
@@ -2665,6 +2731,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (missingFields.length > 0) {
       return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
     }
+    const nationalIdNorm = normalizeNationalId(nationalId);
+    if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
+    if (!isValidNationalId(nationalId)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+    if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
+    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
+    if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
     const agent = await storage.getUserByReferralCode(referralCode);
     if (!agent) return res.status(400).json({ message: "Invalid referral code" });
     if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
@@ -2678,7 +2750,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Reuse existing client when identified by email or national ID (no duplicate clients)
     let client: Awaited<ReturnType<typeof storage.createClient>>;
     const emailTrim = email ? String(email).trim() : "";
-    const nationalIdTrim = nationalId ? String(nationalId).trim() : "";
+    const nationalIdTrim = nationalIdNorm;
     let existing = emailTrim ? await storage.getClientByEmail(orgId, emailTrim) : undefined;
     if (!existing && nationalIdTrim) existing = await storage.getClientByNationalId(orgId, nationalIdTrim);
     if (existing) {
@@ -2701,12 +2773,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const clientParsed = insertClientSchema.parse({
         organizationId: orgId,
         branchId: effectiveBranchId,
-        firstName: String(firstName).trim(),
-        lastName: String(lastName).trim(),
+        firstName: toUpperTrim(firstName, false)!,
+        lastName: toUpperTrim(lastName, false)!,
         email: emailTrim || null,
-        phone: phone ? String(phone).trim() : null,
+        phone: toUpperTrim(phone, false) || null,
         dateOfBirth: dateOfBirth || null,
-        nationalId: nationalIdTrim || null,
+        nationalId: nationalIdTrim,
+        gender: req.body.gender ? toUpperTrim(req.body.gender, false) : null,
         activationCode,
         isEnrolled: false,
         agentId: agent.id,
@@ -2726,22 +2799,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const depsList = Array.isArray(rawDeps) ? rawDeps : [];
       const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
       for (const d of depsList) {
-        if (d.firstName && d.lastName && d.relationship) {
-          const dep = await storage.createDependent({
-            organizationId: orgId,
-            clientId: client.id,
-            firstName: String(d.firstName).trim(),
-            lastName: String(d.lastName).trim(),
-            relationship: String(d.relationship).trim(),
-            dateOfBirth: d.dateOfBirth || null,
-            nationalId: d.nationalId ? String(d.nationalId).trim() : null,
-            gender: d.gender || null,
-          });
-          createdDeps.push(dep);
-        }
+        const dFirst = toUpperTrim(d.firstName, false);
+        const dLast = toUpperTrim(d.lastName, false);
+        const dRel = toUpperTrim(d.relationship, false);
+        const dDob = d.dateOfBirth ? String(d.dateOfBirth).trim() : null;
+        const dGender = d.gender ? toUpperTrim(d.gender, false) : null;
+        const dNationalId = d.nationalId ? normalizeNationalId(d.nationalId) : null;
+        if (!dFirst || !dLast) continue;
+        if (!dRel) continue;
+        if (!dDob) continue;
+        if (!dGender) continue;
+        if (dNationalId && !isValidNationalId(dNationalId)) continue;
+        const dep = await storage.createDependent({
+          organizationId: orgId,
+          clientId: client.id,
+          firstName: dFirst,
+          lastName: dLast,
+          relationship: dRel,
+          dateOfBirth: dDob,
+          nationalId: dNationalId || null,
+          gender: dGender,
+        });
+        createdDeps.push(dep);
       }
 
-      const ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
+      let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
+      if (ben) {
+        const benFirst = toUpperTrim(ben.firstName, false);
+        const benLast = toUpperTrim(ben.lastName, false);
+        const benRel = toUpperTrim(ben.relationship, false);
+        const benNationalId = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
+        const benPhone = toUpperTrim(ben.phone, false);
+        if (!benFirst || !benLast || !benRel || !benNationalId || !benPhone) ben = null;
+        else if (!isValidNationalId(ben.nationalId)) ben = null;
+        else {
+          ben = { firstName: benFirst, lastName: benLast, relationship: benRel, nationalId: benNationalId, phone: benPhone };
+        }
+      }
       const policyParsed = insertPolicySchema.parse({
         organizationId: orgId,
         branchId: effectiveBranchId,
