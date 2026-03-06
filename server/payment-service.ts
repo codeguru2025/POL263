@@ -20,6 +20,13 @@ const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction"
 const REINSTATEMENT_PURPOSE = "reinstatement";
 const GROUP_PAYMENT_STATUS_PAID = "paid";
 
+function isPaynowPaidStatus(status: string): boolean {
+  return status === "paid" || status === "sent" || status === "awaiting delivery" || status === "delivered";
+}
+function isPaynowFailedStatus(status: string): boolean {
+  return status === "cancelled" || status === "failed" || status === "disputed";
+}
+
 async function rollbackClawbacksForPolicy(orgId: string, policy: any) {
   if (!policy.agentId) return;
   try {
@@ -403,7 +410,7 @@ export async function submitOmariOtp(intentId: string, orgId: string, otp: strin
     paynowReference: paynowRef,
   }, orgId);
 
-  if (status === "paid" || status === "sent" || status === "awaiting delivery") {
+  if (isPaynowPaidStatus(status)) {
     const applied = await applyPaymentToPolicy(intent.id, actorType, actorId);
     if (!applied.ok) {
       structuredLog("error", "applyPaymentToPolicy failed after Paynow status", { intentId: intent.id, error: applied.error });
@@ -448,25 +455,32 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
       actorId: null,
     });
 
-    if (intent.status === "paid" || intent.status === "failed") {
+    if (intent.status === "paid") {
       return { ok: true };
     }
 
-    if (status === "paid" || status === "sent") {
+    if (isPaynowPaidStatus(status)) {
+      if (intent.status === "failed") {
+        structuredLog("warn", "Paynow webhook recovering failed intent", { intentId: intent.id, paynowStatus: status });
+      }
       const applied = await applyPaymentToPolicy(intent.id, "system", null);
       if (!applied.ok) structuredLog("error", "handlePaynowResult applyPaymentToPolicy failed", { intentId: intent.id, error: applied.error });
       return { ok: true };
     }
-    if (status === "cancelled" || status === "failed" || status === "disputed") {
-      await storage.updatePaymentIntent(intent.id, { status: "failed" }, intent.organizationId);
-      await storage.createPaymentEvent({
-        paymentIntentId: intent.id,
-        organizationId: intent.organizationId,
-        type: "marked_failed",
-        payloadJson: postedFields,
-        actorType: "system",
-        actorId: null,
-      });
+    if (isPaynowFailedStatus(status)) {
+      if (intent.status !== "failed") {
+        await storage.updatePaymentIntent(intent.id, { status: "failed" }, intent.organizationId);
+        await storage.createPaymentEvent({
+          paymentIntentId: intent.id,
+          organizationId: intent.organizationId,
+          type: "marked_failed",
+          payloadJson: postedFields,
+          actorType: "system",
+          actorId: null,
+        });
+      }
+    } else {
+      structuredLog("warn", "Paynow webhook unhandled status", { intentId: intent.id, status, reference });
     }
     return { ok: true };
   }
@@ -484,13 +498,20 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
     return { ok: true };
   }
   if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) return { ok: true };
-  if (status === "paid" || status === "sent") {
+  if (isPaynowPaidStatus(status)) {
+    if (groupIntent.status === "failed") {
+      structuredLog("warn", "Paynow webhook recovering failed group intent", { groupIntentId: groupIntent.id, paynowStatus: status });
+    }
     const applied = await applyGroupPaymentToPolicies(groupIntent.id, groupOrgId, "system", null);
     if (!applied.ok) structuredLog("error", "handlePaynowResult applyGroupPaymentToPolicies failed", { groupIntentId: groupIntent.id, error: applied.error });
     return { ok: true };
   }
-  if (status === "cancelled" || status === "failed" || status === "disputed") {
-    await storage.updateGroupPaymentIntent(groupIntent.id, { status: "failed" }, groupOrgId);
+  if (isPaynowFailedStatus(status)) {
+    if (groupIntent.status !== "failed") {
+      await storage.updateGroupPaymentIntent(groupIntent.id, { status: "failed" }, groupOrgId);
+    }
+  } else {
+    structuredLog("warn", "Paynow webhook unhandled group status", { groupIntentId: groupIntent.id, status, reference });
   }
   return { ok: true };
 }
@@ -522,14 +543,17 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
       actorType: "system",
       actorId: null,
     });
-    if (status === "paid" || status === "sent") {
+    if (isPaynowPaidStatus(status)) {
       const applied = await applyPaymentToPolicy(intent.id, "system", null);
       if (!applied.ok) return { status: intent.status, paid: false, error: applied.error || "Failed to apply payment" };
       return { status: "paid", paid: true };
     }
-    if (status === "cancelled" || status === "failed") {
+    if (isPaynowFailedStatus(status)) {
       await storage.updatePaymentIntent(intent.id, { status: "failed" }, orgId);
       return { status: "failed" };
+    }
+    if (status && status !== "created") {
+      structuredLog("info", "Paynow poll unhandled status", { intentId: intent.id, status });
     }
     return { status: intent.status };
   } catch (err) {
@@ -893,13 +917,16 @@ export async function pollGroupPaynowStatus(groupIntentId: string, orgId: string
     if (!verifyPaynowHash(Object.fromEntries(parsed))) {
       return { status: groupIntent.status, error: "Invalid poll response hash" };
     }
-    if (status === "paid" || status === "sent") {
+    if (isPaynowPaidStatus(status)) {
       await applyGroupPaymentToPolicies(groupIntentId, orgId, "system", null);
       return { status: "paid", paid: true };
     }
-    if (status === "cancelled" || status === "failed") {
+    if (isPaynowFailedStatus(status)) {
       await storage.updateGroupPaymentIntent(groupIntentId, { status: "failed" }, orgId);
       return { status: "failed" };
+    }
+    if (status && status !== "created") {
+      structuredLog("info", "Paynow group poll unhandled status", { groupIntentId, status });
     }
     return { status: groupIntent.status };
   } catch (err) {
