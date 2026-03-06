@@ -41,7 +41,7 @@ import {
   Users,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -315,8 +315,12 @@ export default function StaffSettings() {
     if (!file || !currentOrg) return;
     const formData = new FormData();
     formData.append("file", file);
+    const headers: Record<string, string> = {};
+    const csrf = getCsrfToken();
+    if (csrf) headers["X-XSRF-TOKEN"] = csrf;
     const res = await fetch(getApiBase() + "/api/upload/logo", {
       method: "POST",
+      headers,
       body: formData,
       credentials: "include",
     });
@@ -339,8 +343,12 @@ export default function StaffSettings() {
     if (!file || !currentOrg) return;
     const formData = new FormData();
     formData.append("file", file);
+    const headers: Record<string, string> = {};
+    const csrf = getCsrfToken();
+    if (csrf) headers["X-XSRF-TOKEN"] = csrf;
     const res = await fetch(getApiBase() + "/api/upload/logo", {
       method: "POST",
+      headers,
       body: formData,
       credentials: "include",
     });

@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw } from "lucide-react";
-import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { useAuth } from "@/hooks/use-auth";
@@ -28,7 +28,10 @@ function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
       if (!file) throw new Error("Select a file");
       const form = new FormData();
       form.set("file", file);
-      const res = await fetch(getApiBase() + "/api/month-end-run", { method: "POST", body: form, credentials: "include" });
+      const headers: Record<string, string> = {};
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
+      const res = await fetch(getApiBase() + "/api/month-end-run", { method: "POST", headers, body: form, credentials: "include" });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.message || res.statusText);
@@ -126,7 +129,10 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
     queryKey: ["/api/group-payment-intents", paynowIntentId, "poll"],
     queryFn: async () => {
       if (!paynowIntentId) return null;
-      const res = await fetch(getApiBase() + `/api/group-payment-intents/${paynowIntentId}/poll`, { method: "POST", credentials: "include" });
+      const pollHeaders: Record<string, string> = {};
+      const pollCsrf = getCsrfToken();
+      if (pollCsrf) pollHeaders["X-XSRF-TOKEN"] = pollCsrf;
+      const res = await fetch(getApiBase() + `/api/group-payment-intents/${paynowIntentId}/poll`, { method: "POST", headers: pollHeaders, credentials: "include" });
       if (!res.ok) return null;
       return res.json();
     },

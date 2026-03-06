@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { KeyRound, Loader2 } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
-import { getApiBase } from "@/lib/queryClient";
+import { getApiBase, getCsrfToken } from "@/lib/queryClient";
 
 export default function ClientResetPassword() {
   const [policyNumber, setPolicyNumber] = useState("");
@@ -16,9 +16,12 @@ export default function ClientResetPassword() {
 
   const resetMutation = useMutation({
     mutationFn: async (body: { policyNumber: string; securityAnswer: string; newPassword: string }) => {
+      const resetHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      const csrf = getCsrfToken();
+      if (csrf) resetHeaders["X-XSRF-TOKEN"] = csrf;
       const res = await fetch(getApiBase() + "/api/client-auth/reset-password", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: resetHeaders,
         credentials: "include",
         body: JSON.stringify(body),
       });

@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getApiBase } from "@/lib/queryClient";
+import { getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -156,10 +156,14 @@ export default function JoinRegisterPage() {
           phone: beneficiary.phone.trim() || undefined,
         };
       }
+      const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      const csrf = getCsrfToken();
+      if (csrf) regHeaders["X-XSRF-TOKEN"] = csrf;
       const res = await fetch(getApiBase() + "/api/public/register-policy", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: regHeaders,
         body: JSON.stringify(payload),
+        credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

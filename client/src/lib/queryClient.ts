@@ -5,7 +5,7 @@ export function getApiBase(): string {
   return (import.meta.env.VITE_API_BASE as string) || "";
 }
 
-function getCsrfToken(): string | null {
+export function getCsrfToken(): string | null {
   try {
     const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/);
     return match ? decodeURIComponent(match[1]) : null;

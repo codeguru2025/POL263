@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -815,7 +815,10 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch(getApiBase() + "/api/upload", { method: "POST", body: formData, credentials: "include" });
+      const headers: Record<string, string> = {};
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
+      const res = await fetch(getApiBase() + "/api/upload", { method: "POST", headers, body: formData, credentials: "include" });
       if (!res.ok) throw new Error("Upload failed");
       const data = await res.json();
       setCasketImageUrl(data.url);
@@ -967,7 +970,10 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch(getApiBase() + "/api/upload", { method: "POST", body: formData, credentials: "include" });
+      const headers: Record<string, string> = {};
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
+      const res = await fetch(getApiBase() + "/api/upload", { method: "POST", headers, body: formData, credentials: "include" });
       if (!res.ok) throw new Error("Upload failed");
       const data = await res.json();
       setCasketImageUrl(data.url);
