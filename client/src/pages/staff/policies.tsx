@@ -81,6 +81,11 @@ export default function StaffPolicies() {
   const safePermissions = Array.isArray(permissions) ? permissions : [];
   const isAgent = safeRoles.some((r: any) => r.name === "agent");
   const canWriteFinance = safePermissions.includes("write:finance");
+  const canDeletePolicy = safePermissions.includes("delete:policy");
+  const canEditPayment = safePermissions.includes("edit:payment");
+  const canDeletePayment = safePermissions.includes("delete:payment");
+  const canEditReceipt = safePermissions.includes("edit:receipt");
+  const canDeleteReceipt = safePermissions.includes("delete:receipt");
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
@@ -875,7 +880,7 @@ export default function StaffPolicies() {
             >
               <Pencil className="h-4 w-4" /> Edit
             </Button>
-            {isPlatformOwner && (
+            {canDeletePolicy && (
               <Button
                 variant="destructive"
                 className="gap-2"
@@ -1209,7 +1214,7 @@ export default function StaffPolicies() {
                       <TableHead>Method</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Reference</TableHead>
-                      {isPlatformOwner && <TableHead className="text-right pr-6">Actions</TableHead>}
+                      {(canEditPayment || canDeletePayment) && <TableHead className="text-right pr-6">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1224,18 +1229,22 @@ export default function StaffPolicies() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-muted-foreground">{p.reference || "—"}</TableCell>
-                        {isPlatformOwner && (
+                        {(canEditPayment || canDeletePayment) && (
                           <TableCell className="text-right pr-6">
                             <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" title="Edit payment" data-testid={`btn-edit-payment-${p.id}`} onClick={() => {
-                                setEditPaymentId(p.id);
-                                setEditPaymentForm({ amount: String(p.amount), status: p.status, reference: p.reference || "", notes: p.notes || "" });
-                              }}>
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" title="Delete payment" data-testid={`btn-delete-payment-${p.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeletePayment(p.id)}>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                              {canEditPayment && (
+                                <Button variant="ghost" size="icon" title="Edit payment" data-testid={`btn-edit-payment-${p.id}`} onClick={() => {
+                                  setEditPaymentId(p.id);
+                                  setEditPaymentForm({ amount: String(p.amount), status: p.status, reference: p.reference || "", notes: p.notes || "" });
+                                }}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
+                              {canDeletePayment && (
+                                <Button variant="ghost" size="icon" title="Delete payment" data-testid={`btn-delete-payment-${p.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeletePayment(p.id)}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
                             </div>
                           </TableCell>
                         )}
@@ -1287,16 +1296,16 @@ export default function StaffPolicies() {
                               <Button variant="ghost" size="icon" title="Download receipt" onClick={() => window.open(receiptUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
                               <Button variant="ghost" size="icon" title="Print receipt" onClick={() => printDocument(receiptUrl)}><Printer className="h-4 w-4" /></Button>
                               <Button variant="ghost" size="icon" title="Share receipt" onClick={() => shareDocument(receiptUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
-                              {isPlatformOwner && (
-                                <>
-                                  <Button variant="ghost" size="icon" title="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
-                                    setEditReceiptId(r.id);
-                                    setEditReceiptForm({ amount: String(r.amount), status: r.status || "issued", paymentChannel: r.paymentChannel || "" });
-                                  }}><Pencil className="h-4 w-4" /></Button>
-                                  <Button variant="ghost" size="icon" title="Delete receipt" data-testid={`btn-delete-receipt-${r.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeleteReceipt(r.id)}>
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </>
+                              {canEditReceipt && (
+                                <Button variant="ghost" size="icon" title="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
+                                  setEditReceiptId(r.id);
+                                  setEditReceiptForm({ amount: String(r.amount), status: r.status || "issued", paymentChannel: r.paymentChannel || "" });
+                                }}><Pencil className="h-4 w-4" /></Button>
+                              )}
+                              {canDeleteReceipt && (
+                                <Button variant="ghost" size="icon" title="Delete receipt" data-testid={`btn-delete-receipt-${r.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeleteReceipt(r.id)}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
                               )}
                             </div>
                           </TableCell>
@@ -2168,7 +2177,7 @@ export default function StaffPolicies() {
                                 ))}
                               </>
                             )}
-                            {isPlatformOwner && (
+                            {canDeletePolicy && (
                               <>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => { setSelectedPolicy(policy); setConfirmDeletePolicy(true); }} data-testid={`menu-delete-${policy.id}`}>

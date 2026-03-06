@@ -736,9 +736,14 @@ export function setupClientAuth(app: Express) {
     const receipt = await storage.getPaymentReceiptById(receiptId, clientOrgId);
     if (!receipt || receipt.clientId !== clientId) return res.status(404).json({ message: "Not found" });
     const { getReceiptPdfPath } = await import("./receipt-pdf");
-    const filePath = getReceiptPdfPath(receipt.pdfStorageKey);
-    if (!filePath) return res.status(404).json({ message: "Receipt PDF not available" });
-    return res.download(filePath, `receipt-${receipt.receiptNumber}.pdf`);
+    const result = await getReceiptPdfPath(receipt.pdfStorageKey);
+    if (!result) return res.status(404).json({ message: "Receipt PDF not available" });
+    if (Buffer.isBuffer(result)) {
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="receipt-${receipt.receiptNumber}.pdf"`);
+      return res.send(result);
+    }
+    return res.download(result, `receipt-${receipt.receiptNumber}.pdf`);
   });
 
   app.get("/api/client-auth/paynow-config", (_req: Request, res: Response) => {

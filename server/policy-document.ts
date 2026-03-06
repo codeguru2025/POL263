@@ -1,6 +1,4 @@
 import type { Express, Request, Response } from "express";
-import path from "path";
-import fs from "fs";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import { requireAuth } from "./auth";
@@ -31,51 +29,11 @@ async function translateBatch(texts: string[], targetLang: string): Promise<stri
   return results;
 }
 
-/** Resolve logo or signature image for PDF: tenant setting can be a path (/uploads/... or /assets/...) or full URL. */
+import { resolveImage } from "./object-storage";
+
+/** Resolve logo or signature image for PDF embedding. Delegates to the centralized object-storage resolver. */
 async function resolveImageForPdf(url: string | null | undefined): Promise<Buffer | null> {
-  if (!url || !url.trim()) return null;
-  const u = url.trim();
-  if (u.startsWith("http://") || u.startsWith("https://")) {
-    try {
-      const res = await fetch(u, { headers: { "User-Agent": "POL263" } });
-      if (!res.ok) return null;
-      const ab = await res.arrayBuffer();
-      return Buffer.from(ab);
-    } catch {
-      return null;
-    }
-  }
-  const relativePath = u.replace(/^\/+/, "");
-  const bases: { base: string; subPath: string }[] = [
-    { base: path.join(process.cwd(), "uploads"), subPath: relativePath.startsWith("uploads/") ? relativePath.slice(8) : relativePath },
-    { base: path.join(process.cwd(), "public", "uploads"), subPath: relativePath.startsWith("uploads/") ? relativePath.slice(8) : relativePath },
-    { base: path.join(process.cwd(), "dist", "public"), subPath: relativePath },
-    { base: path.join(process.cwd(), "client", "public"), subPath: relativePath },
-    { base: process.cwd(), subPath: relativePath },
-  ];
-  for (const { base, subPath } of bases) {
-    const localPath = path.resolve(base, subPath);
-    if (fs.existsSync(localPath)) {
-      try {
-        return fs.readFileSync(localPath);
-      } catch {
-        continue;
-      }
-    }
-  }
-  // Local file not found — try fetching via the app's own base URL as a fallback
-  const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
-  if (appBase) {
-    try {
-      const fullUrl = `${appBase}${u.startsWith("/") ? u : `/${u}`}`;
-      const res = await fetch(fullUrl, { headers: { "User-Agent": "POL263" } });
-      if (res.ok) {
-        const ab = await res.arrayBuffer();
-        return Buffer.from(ab);
-      }
-    } catch {}
-  }
-  return null;
+  return resolveImage(url);
 }
 
 function ageFromDob(dob: string | null | undefined): number | null {

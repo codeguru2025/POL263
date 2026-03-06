@@ -21,47 +21,11 @@ const LOGO_SIZE = 40;
 const FALLBACK_ISSUER_NAME = process.env.RECEIPT_ISSUER_NAME || "POL263";
 const FALLBACK_FOOTER_TEXT = process.env.RECEIPT_FOOTER_TEXT || "Thank you for your payment.";
 
+import { resolveImage } from "./object-storage";
+import * as objectStorage from "./object-storage";
+
 async function resolveLogoForReceipt(logoUrl: string | null | undefined): Promise<Buffer | string | null> {
-  if (!logoUrl || !logoUrl.trim()) return null;
-  const u = logoUrl.trim();
-  if (u.startsWith("http://") || u.startsWith("https://")) {
-    try {
-      const res = await fetch(u, { headers: { "User-Agent": "POL263" } });
-      if (!res.ok) return null;
-      const ab = await res.arrayBuffer();
-      return Buffer.from(ab);
-    } catch {
-      return null;
-    }
-  }
-  const relativePath = u.replace(/^\/+/, "");
-  const bases = [
-    path.join(process.cwd(), "uploads"),
-    path.join(process.cwd(), "dist", "public"),
-    path.join(process.cwd(), "client", "public"),
-    process.cwd(),
-  ];
-  for (const base of bases) {
-    const localPath = path.resolve(base, relativePath.startsWith("uploads/") ? relativePath.slice(8) : relativePath);
-    if (fs.existsSync(localPath)) return localPath;
-  }
-  if (path.isAbsolute(relativePath) || relativePath.startsWith("uploads/")) {
-    const cwdPath = path.resolve(process.cwd(), relativePath);
-    if (fs.existsSync(cwdPath)) return cwdPath;
-  }
-  // Local file not found — try fetching via the app's own base URL as a fallback
-  const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
-  if (appBase) {
-    try {
-      const fullUrl = `${appBase}${u.startsWith("/") ? u : `/${u}`}`;
-      const res = await fetch(fullUrl, { headers: { "User-Agent": "POL263" } });
-      if (res.ok) {
-        const ab = await res.arrayBuffer();
-        return Buffer.from(ab);
-      }
-    } catch {}
-  }
-  return null;
+  return resolveImage(logoUrl);
 }
 
 export async function generateReceiptPdf(receiptId: string): Promise<string | null> {
@@ -73,17 +37,14 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
   const org = await storage.getOrganization(orgId);
   if (!policy || !client || !org) return null;
 
-  const receiptsDir = path.resolve(process.cwd(), "uploads", "receipts");
-  if (!fs.existsSync(receiptsDir)) fs.mkdirSync(receiptsDir, { recursive: true });
   const filename = `RCP-${receipt.receiptNumber.replace(/\s/g, "-")}-${receiptId.slice(0, 8)}.pdf`;
-  const filepath = path.join(receiptsDir, filename);
 
   const logoData = await resolveLogoForReceipt(org.logoUrl);
 
   return new Promise((resolve) => {
     const doc = new PDFDocument({ size: [WIDTH_PT, 600], margin: MARGIN, bufferPages: true });
-    const stream = fs.createWriteStream(filepath);
-    doc.pipe(stream);
+    const chunks: Buffer[] = [];
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
 
     doc.fontSize(FONT_SIZE);
     let y = MARGIN;
@@ -141,17 +102,31 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     line(`${generatedAt.toLocaleDateString("en-GB")} ${generatedAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
 
     doc.end();
-    stream.on("finish", () => {
-      const relativeKey = path.join("receipts", filename).replace(/\\/g, "/");
-      resolve(relativeKey);
+    doc.on("end", async () => {
+      try {
+        const pdfBuffer = Buffer.concat(chunks);
+        const { key } = await objectStorage.uploadFile(pdfBuffer, filename, "application/pdf", "receipts");
+        resolve(key);
+      } catch {
+        resolve(null);
+      }
     });
-    stream.on("error", () => resolve(null));
+    doc.on("error", () => resolve(null));
   });
 }
 
-/** Resolve PDF path for download (uploads/receipts/... or receipts/...). */
-export function getReceiptPdfPath(pdfStorageKey: string | null): string | null {
+/**
+ * Resolve receipt PDF for download. Returns either a local file path (string)
+ * or an object-storage Buffer, or null if not found.
+ */
+export async function getReceiptPdfPath(pdfStorageKey: string | null): Promise<string | Buffer | null> {
   if (!pdfStorageKey) return null;
+
+  if (objectStorage.isObjectStorageEnabled) {
+    const buf = await objectStorage.fetchFile(pdfStorageKey);
+    if (buf) return buf;
+  }
+
   const normalized = path.normalize(pdfStorageKey).replace(/^(\.\.(\/|\\))+/g, "");
   const full = path.resolve(process.cwd(), "uploads", normalized);
   return fs.existsSync(full) ? full : null;

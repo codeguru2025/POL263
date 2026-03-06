@@ -47,6 +47,7 @@ export function setupAuth(app: Express) {
         pool: pool as any,
         tableName: "sessions",
         createTableIfMissing: true,
+        pruneSessionInterval: 15 * 60,
       }),
       secret: sessionSecret,
       resave: false,

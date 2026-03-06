@@ -140,6 +140,7 @@ export default function StaffSettings() {
   const [changePasswordCurrent, setChangePasswordCurrent] = useState("");
   const [changePasswordNew, setChangePasswordNew] = useState("");
   const [changePasswordConfirm, setChangePasswordConfirm] = useState("");
+  const canManagePermissions = permissions.includes("manage:permissions");
 
   const [tenantAddOpen, setTenantAddOpen] = useState(false);
   const [tenantEditId, setTenantEditId] = useState<string | null>(null);
@@ -443,6 +444,24 @@ export default function StaffSettings() {
   const permsByRoleId: Record<string, any[] | undefined> = {};
   (rolesList ?? []).forEach((role: any, idx: number) => {
     permsByRoleId[role.id] = rolePermResults[idx]?.data as any[] | undefined;
+  });
+
+  const syncPermissionsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/sync-permissions");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/permissions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/roles"] });
+      (rolesList ?? []).forEach((r: any) => {
+        queryClient.invalidateQueries({ queryKey: [`/api/roles/${r.id}/permissions`] });
+      });
+      toast({ title: "Permissions synced", description: "All roles and permissions have been synchronized with the latest configuration." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Sync failed", description: err.message || "Could not synchronize permissions.", variant: "destructive" });
+    },
   });
 
   return (
@@ -874,11 +893,11 @@ export default function StaffSettings() {
                       )}
                     </div>
                     <div className="space-y-2">
-                      <input id="logo-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleLogoUpload} />
+                      <input id="logo-upload" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg" className="hidden" onChange={handleLogoUpload} />
                       <Button type="button" variant="outline" onClick={() => document.getElementById("logo-upload")?.click()}>
                         Upload Logo
                       </Button>
-                      <p className="text-xs text-muted-foreground">PNG, WebP or SVG. Transparent background recommended.</p>
+                      <p className="text-xs text-muted-foreground">PNG, JPG, WebP or SVG. Transparent background recommended.</p>
                     </div>
                   </div>
                 </div>
@@ -1241,12 +1260,27 @@ export default function StaffSettings() {
           <TabsContent value="rbac" className="mt-6">
             <Card className="shadow-sm">
               <CardHeader>
-                <CardTitle>Role Permissions Mapping</CardTitle>
-                <CardDescription>
-                  {canEditRbac
-                    ? "Click a cell to toggle permissions for each role. Superuser always has all permissions."
-                    : "Live DB-driven RBAC configuration. Roles and permissions are fetched from the database."}
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Role Permissions Mapping</CardTitle>
+                    <CardDescription className="mt-1.5">
+                      {canEditRbac
+                        ? "Click a cell to toggle permissions for each role. Superuser always has all permissions."
+                        : "Live DB-driven RBAC configuration. Roles and permissions are fetched from the database."}
+                    </CardDescription>
+                  </div>
+                  {canManagePermissions && (
+                    <Button
+                      variant="outline"
+                      onClick={() => syncPermissionsMutation.mutate()}
+                      disabled={syncPermissionsMutation.isPending}
+                      data-testid="btn-sync-permissions"
+                    >
+                      {syncPermissionsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Shield className="h-4 w-4 mr-2" />}
+                      Sync Permissions
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
                 {rolesList && permsList ? (

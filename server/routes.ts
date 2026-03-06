@@ -13,6 +13,7 @@ import fs from "fs";
 import express from "express";
 import { registerPolicyDocumentRoute } from "./policy-document";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
+import * as objectStorage from "./object-storage";
 import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
@@ -48,7 +49,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-  app.use("/uploads", express.static(uploadsDir, { maxAge: "1d" }));
+  // Serve local uploads; when object storage is enabled, /uploads/* is proxied below
+  if (!objectStorage.isObjectStorageEnabled) {
+    app.use("/uploads", express.static(uploadsDir, { maxAge: "1d" }));
+  } else {
+    app.get("/uploads/*", (req, res) => {
+      const key = req.path.replace(/^\/uploads\//, "");
+      const publicUrl = process.env.R2_PUBLIC_URL?.replace(/\/$/, "");
+      if (publicUrl) {
+        return res.redirect(301, `${publicUrl}/${key}`);
+      }
+      return res.status(404).json({ message: "File not found" });
+    });
+  }
 
   // Paynow result URL (webhook) — no auth; hash verified in handler. Always return 200 to avoid Paynow retries.
   app.post("/api/payments/paynow/result", express.urlencoded({ extended: false }), async (req, res) => {
@@ -57,17 +70,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(200).send(result.ok ? "OK" : "Error");
   });
 
-  const uploadStorage = multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadsDir),
-    filename: (_req, file, cb) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const ext = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, "").slice(0, 10);
-      cb(null, uniqueSuffix + ext);
-    },
-  });
-
-  const upload = multer({
-    storage: uploadStorage,
+  const memUpload = multer({
+    storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       const allowed = /\.(jpg|jpeg|png|gif|webp|svg)$/i;
@@ -78,8 +82,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     },
   });
 
-  const logoUpload = multer({
-    storage: uploadStorage,
+  const logoMemUpload = multer({
+    storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       const allowed = /\.(png|jpg|jpeg|webp|svg)$/i;
@@ -99,17 +103,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     next(err);
   }
 
-  app.post("/api/upload", requireAuth, requireTenantScope, upload.single("file"), (req, res) => {
+  app.post("/api/upload", requireAuth, requireTenantScope, memUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-    const url = `/uploads/${req.file.filename}`;
-    return res.json({ url, filename: req.file.filename });
+    const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+    return res.json({ url, filename: key });
   });
   app.use("/api/upload", handleMulterError);
 
-  app.post("/api/upload/logo", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoUpload.single("file"), (req, res) => {
+  app.post("/api/upload/logo", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoMemUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-    const url = `/uploads/${req.file.filename}`;
-    return res.json({ url, filename: req.file.filename });
+    const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "logos");
+    return res.json({ url, filename: key });
   });
   app.use("/api/upload/logo", handleMulterError);
 
@@ -277,6 +281,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           "manage:approvals", "backdate:payment",
           "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
           "view:own_clients", "view:all_clients",
+          "delete:policy", "delete:payment", "delete:receipt", "edit:payment", "edit:receipt",
         ],
         cashier: [
           "read:policy", "read:client", "read:finance", "write:finance", "read:report",
@@ -1260,22 +1265,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
-  // ─── Superuser: hard-delete a policy and all related records ──
-  app.delete("/api/policies/:id", requireAuth, requireTenantScope, async (req, res) => {
+  // ─── Hard-delete a policy and all related records (RBAC-gated) ──
+  app.delete("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("delete:policy"), async (req, res) => {
     const user = req.user as any;
-    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     await storage.deletePolicy(policy.id, user.organizationId);
     await auditLog(req, "DELETE_POLICY", "Policy", policy.id, policy, null);
-    structuredLog("warn", "Superuser hard-deleted policy", { userId: user.id, email: user.email, policyId: policy.id, policyNumber: policy.policyNumber });
+    structuredLog("warn", "Hard-deleted policy", { userId: user.id, email: user.email, policyId: policy.id, policyNumber: policy.policyNumber });
     return res.json({ message: "Policy permanently deleted" });
   });
 
-  // ─── Superuser: edit a payment transaction ──
-  app.patch("/api/payments/:id", requireAuth, requireTenantScope, async (req, res) => {
+  // ─── Edit a payment transaction (RBAC-gated) ──
+  app.patch("/api/payments/:id", requireAuth, requireTenantScope, requirePermission("edit:payment"), async (req, res) => {
     const user = req.user as any;
-    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
     const before = await storage.getPaymentTransaction(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const body = { ...req.body };
@@ -1284,26 +1287,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete body.createdAt;
     const updated = await storage.updatePaymentTransaction(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_PAYMENT", "PaymentTransaction", req.params.id as string, before, updated);
-    structuredLog("warn", "Superuser edited payment transaction", { userId: user.id, email: user.email, transactionId: req.params.id });
+    structuredLog("warn", "Edited payment transaction", { userId: user.id, email: user.email, transactionId: req.params.id });
     return res.json(updated);
   });
 
-  // ─── Superuser: delete a payment transaction ──
-  app.delete("/api/payments/:id", requireAuth, requireTenantScope, async (req, res) => {
+  // ─── Delete a payment transaction (RBAC-gated) ──
+  app.delete("/api/payments/:id", requireAuth, requireTenantScope, requirePermission("delete:payment"), async (req, res) => {
     const user = req.user as any;
-    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
     const tx = await storage.getPaymentTransaction(req.params.id as string, user.organizationId);
     if (!tx || tx.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     await storage.deletePaymentTransaction(tx.id, user.organizationId);
     await auditLog(req, "DELETE_PAYMENT", "PaymentTransaction", tx.id, tx, null);
-    structuredLog("warn", "Superuser hard-deleted payment transaction", { userId: user.id, email: user.email, transactionId: tx.id });
+    structuredLog("warn", "Hard-deleted payment transaction", { userId: user.id, email: user.email, transactionId: tx.id });
     return res.json({ message: "Payment transaction permanently deleted" });
   });
 
-  // ─── Superuser: edit a receipt ──
-  app.patch("/api/receipts/:id", requireAuth, requireTenantScope, async (req, res) => {
+  // ─── Edit a receipt (RBAC-gated) ──
+  app.patch("/api/receipts/:id", requireAuth, requireTenantScope, requirePermission("edit:receipt"), async (req, res) => {
     const user = req.user as any;
-    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
     const before = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const body = { ...req.body };
@@ -1312,19 +1313,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete body.createdAt;
     const updated = await storage.updatePaymentReceipt(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_RECEIPT", "PaymentReceipt", req.params.id as string, before, updated);
-    structuredLog("warn", "Superuser edited receipt", { userId: user.id, email: user.email, receiptId: req.params.id });
+    structuredLog("warn", "Edited receipt", { userId: user.id, email: user.email, receiptId: req.params.id });
     return res.json(updated);
   });
 
-  // ─── Superuser: delete a receipt ──
-  app.delete("/api/receipts/:id", requireAuth, requireTenantScope, async (req, res) => {
+  // ─── Delete a receipt (RBAC-gated) ──
+  app.delete("/api/receipts/:id", requireAuth, requireTenantScope, requirePermission("delete:receipt"), async (req, res) => {
     const user = req.user as any;
-    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
     const receipt = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
     if (!receipt || receipt.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     await storage.deletePaymentReceipt(receipt.id, user.organizationId);
     await auditLog(req, "DELETE_RECEIPT", "PaymentReceipt", receipt.id, receipt, null);
-    structuredLog("warn", "Superuser hard-deleted receipt", { userId: user.id, email: user.email, receiptId: receipt.id, receiptNumber: receipt.receiptNumber });
+    structuredLog("warn", "Hard-deleted receipt", { userId: user.id, email: user.email, receiptId: receipt.id, receiptNumber: receipt.receiptNumber });
     return res.json({ message: "Receipt permanently deleted" });
   });
 
@@ -1759,9 +1759,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       : await findPaymentReceiptById(id);
     if (!receipt) return res.status(404).json({ message: "Not found" });
     if (user.organizationId && receipt.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
-    const filePath = getReceiptPdfPath(receipt.pdfStorageKey);
-    if (!filePath) return res.status(404).json({ message: "Receipt PDF not available" });
-    return res.download(filePath, `receipt-${receipt.receiptNumber}.pdf`);
+    const result = await getReceiptPdfPath(receipt.pdfStorageKey);
+    if (!result) return res.status(404).json({ message: "Receipt PDF not available" });
+    if (Buffer.isBuffer(result)) {
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="receipt-${receipt.receiptNumber}.pdf"`);
+      return res.send(result);
+    }
+    return res.download(result, `receipt-${receipt.receiptNumber}.pdf`);
   });
 
   app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -2440,7 +2445,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/fleet", requireAuth, requireTenantScope, requirePermission("read:fleet"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getFleetVehicles(user.organizationId));
+    const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const rows = await storage.getFleetVehicles(user.organizationId);
+    return res.json(rows.slice(offset, offset + limit));
   });
 
   app.post("/api/fleet", requireAuth, requireTenantScope, requirePermission("write:fleet"), async (req, res) => {
@@ -2472,7 +2480,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
     const agentId = req.query.agentId as string | undefined;
     const filterAgent = isAgent ? user.id : agentId;
-    return res.json(await storage.getCommissionLedgerDetailedByOrg(user.organizationId, filterAgent));
+    const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const rows = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, filterAgent);
+    return res.json(rows.slice(offset, offset + limit));
   });
 
   // ─── Leads / Pipeline ──────────────────────────────────────
@@ -2638,7 +2649,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/payroll/employees", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getPayrollEmployees(user.organizationId));
+    const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const rows = await storage.getPayrollEmployees(user.organizationId);
+    return res.json(rows.slice(offset, offset + limit));
   });
 
   app.post("/api/payroll/employees", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
@@ -2650,7 +2664,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/payroll/runs", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getPayrollRuns(user.organizationId));
+    const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const rows = await storage.getPayrollRuns(user.organizationId);
+    return res.json(rows.slice(offset, offset + limit));
   });
 
   app.post("/api/payroll/runs", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
@@ -2987,7 +3004,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/settlements", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getSettlements(user.organizationId));
+    const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const rows = await storage.getSettlements(user.organizationId);
+    return res.json(rows.slice(offset, offset + limit));
   });
 
   app.post("/api/settlements", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
