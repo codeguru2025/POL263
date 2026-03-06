@@ -19,24 +19,21 @@ export function verifyPaynowHash(postedFields: Record<string, string>): boolean 
   const key = getPaynowIntegrationKey();
   if (!key) return false;
 
-  const sortedKeys = Object.keys(postedFields)
-    .filter((k) => k.toLowerCase() !== "hash")
-    .sort();
+  const allKeys = Object.keys(postedFields).filter((k) => k.toLowerCase() !== "hash");
+  const decodeValue = (raw: string) => {
+    try { return decodeURIComponent(String(raw).replace(/\+/g, " ")); }
+    catch { return raw; }
+  };
+  const computeHash = (keys: string[]) => {
+    const concatenated = keys.map((k) => decodeValue(postedFields[k])).join("");
+    return crypto.createHash("sha512").update(concatenated + key).digest("hex").toUpperCase();
+  };
+  const upperReceived = receivedHash.toUpperCase();
 
-  const concatenated = sortedKeys
-    .map((k) => {
-      const raw = postedFields[k];
-      try {
-        return decodeURIComponent(String(raw).replace(/\+/g, " "));
-      } catch {
-        return raw;
-      }
-    })
-    .join("");
-
-  const toHash = concatenated + key;
-  const computedHash = crypto.createHash("sha512").update(toHash).digest("hex").toUpperCase();
-  return computedHash === receivedHash.toUpperCase();
+  // Paynow uses order-of-appearance for hashing; try insertion order first, then alphabetical as fallback
+  if (computeHash(allKeys) === upperReceived) return true;
+  const sorted = [...allKeys].sort();
+  return computeHash(sorted) === upperReceived;
 }
 
 /**

@@ -425,7 +425,11 @@ export async function submitOmariOtp(intentId: string, orgId: string, otp: strin
 /** Handle Paynow result URL POST (webhook). Verify hash, update intent, apply payment if paid. */
 export async function handlePaynowResult(postedFields: Record<string, string>): Promise<{ ok: boolean; reason?: string }> {
   if (!verifyPaynowHash(postedFields)) {
-    structuredLog("warn", "Paynow result hash mismatch");
+    structuredLog("warn", "Paynow result hash mismatch", {
+      status: (postedFields.status ?? "").toLowerCase(),
+      reference: postedFields.reference ?? postedFields.merchantreference,
+      keys: Object.keys(postedFields).filter((k) => k.toLowerCase() !== "hash").join(","),
+    });
     return { ok: false, reason: "Invalid hash" };
   }
 
@@ -533,6 +537,11 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
     const parsed = new URLSearchParams(text);
     const status = (parsed.get("status") ?? "").toLowerCase();
     if (!verifyPaynowHash(Object.fromEntries(parsed))) {
+      structuredLog("warn", "Paynow poll hash mismatch", {
+        intentId: intent.id,
+        paynowStatus: status,
+        keys: [...parsed.keys()].filter((k) => k.toLowerCase() !== "hash").join(","),
+      });
       return { status: intent.status, error: "Invalid poll response hash" };
     }
     await storage.createPaymentEvent({

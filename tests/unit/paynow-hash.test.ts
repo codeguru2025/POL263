@@ -39,4 +39,13 @@ describe("Paynow hash", () => {
     const correctHash = generatePaynowHash({ reference: "R", status: "paid" });
     expect(verifyPaynowHash({ ...params, hash: correctHash })).toBe(true);
   });
+
+  it("verifyPaynowHash accepts hash generated with order-of-appearance (non-alphabetical)", () => {
+    const key = process.env.PAYNOW_INTEGRATION_KEY!;
+    // Simulate Paynow sending fields in non-alphabetical order: status, reference, amount
+    const fields = { status: "Paid", reference: "REF-002", amount: "25.00" };
+    const concat = "Paid" + "REF-002" + "25.00" + key;
+    const hash = require("crypto").createHash("sha512").update(concat).digest("hex").toUpperCase();
+    expect(verifyPaynowHash({ ...fields, hash })).toBe(true);
+  });
 });
