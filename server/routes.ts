@@ -3197,15 +3197,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const reportType = req.params.type as string;
     const reportFilters = await enforceAgentScope(req, parseReportFilters(req.query));
 
+    const CURRENCIES = ["USD", "ZAR", "ZIG"] as const;
+    const currencyHeaders = (label: string) => CURRENCIES.map(c => `${label} (${c})`);
+    const currencyAmounts = (amount: any, currency: string) => {
+      const num = parseFloat(String(amount ?? 0)) || 0;
+      const norm = (currency || "USD").toUpperCase();
+      return CURRENCIES.map(c => c === norm ? num.toFixed(2) : "");
+    };
+
     try {
       let rows: any[] = [];
       let headers: string[] = [];
+      let currencyTotals: Record<string, Record<string, number>> | null = null;
 
       switch (reportType) {
         case "policies": {
-          rows = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
-          rows = rows.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          const polRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          currencyTotals = { Premium: {} };
+          rows = polRaw.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
+            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+          });
           break;
         }
         case "policy-details": {
@@ -3264,39 +3279,74 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "finance": {
           const reportRows = await storage.getFinanceReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
-            "Policy Number", "Status", "Currency", "Premium", "Capture Date", "Inception Date", "Cover Date", "Due Date", "Date Paid", "Receipt Count", "Months Paid", "Grace Days Used", "Grace Days Remaining", "Outstanding Premium", "Advance Premium",
+            "Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"),
+            "Capture Date", "Inception Date", "Cover Date", "Due Date", "Date Paid", "Receipt Count", "Months Paid", "Grace Days Used", "Grace Days Remaining",
+            "Outstanding Premium", ...currencyHeaders("Outstanding"),
+            "Advance Premium",
             "Client Name", "Product", "Product Code", "Branch", "Group", "Agent",
           ];
-          rows = reportRows.map((r: any) => [
-            r.policyNumber, r.status, r.currency, r.premiumAmount, r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.waitingPeriodEndDate ?? "", r.dueDate ?? "", r.datePaid ?? "", r.receiptCount, r.monthsPaid, r.graceDaysUsed, r.graceDaysRemaining ?? "", r.outstandingPremium, r.advancePremium,
-            [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), r.productName ?? "", r.productCode ?? "", r.branchName ?? "", r.groupName ?? "", r.agentDisplayName ?? r.agentEmail ?? "",
-          ]);
+          currencyTotals = { Premium: {}, Outstanding: {} };
+          rows = reportRows.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const prem = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            const outstanding = parseFloat(String(r.outstandingPremium ?? 0)) || 0;
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + prem;
+            if (outstanding > 0) currencyTotals!.Outstanding[c] = (currencyTotals!.Outstanding[c] || 0) + outstanding;
+            return [
+              r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency),
+              r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.waitingPeriodEndDate ?? "", r.dueDate ?? "", r.datePaid ?? "", r.receiptCount, r.monthsPaid, r.graceDaysUsed, r.graceDaysRemaining ?? "",
+              r.outstandingPremium, ...currencyAmounts(r.outstandingPremium, r.currency),
+              r.advancePremium,
+              [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), r.productName ?? "", r.productCode ?? "", r.branchName ?? "", r.groupName ?? "", r.agentDisplayName ?? r.agentEmail ?? "",
+            ];
+          });
           break;
         }
         case "underwriter-payable": {
           const result = await storage.getUnderwriterPayableReport(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
             "Policy Number", "Status", "Currency", "Client First Name", "Client Last Name", "Client Phone", "Client Email", "Product Name", "Product Code", "Branch",
-            "Adults", "Children", "Underwriter Amount Adult", "Underwriter Amount Child", "Advance Months", "Monthly Payable", "Total Payable",
+            "Adults", "Children", "Underwriter Amount Adult", "Underwriter Amount Child", "Advance Months",
+            "Monthly Payable", ...currencyHeaders("Monthly Payable"),
+            "Total Payable", ...currencyHeaders("Total Payable"),
           ];
-          rows = result.rows.map((r: any) => [
-            r.policyNumber, r.status, r.currency || "USD", r.clientFirstName ?? "", r.clientLastName ?? "", r.clientPhone ?? "", r.clientEmail ?? "",
-            r.productName ?? "", r.productCode ?? "", r.branchName ?? "",
-            r.adults, r.children, r.underwriterAmountAdult ?? "", r.underwriterAmountChild ?? "", r.underwriterAdvanceMonths,
-            r.monthlyPayable.toFixed(2), r.totalPayable.toFixed(2),
-          ]);
+          currencyTotals = { "Monthly Payable": {}, "Total Payable": {} };
+          rows = result.rows.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            currencyTotals!["Monthly Payable"][c] = (currencyTotals!["Monthly Payable"][c] || 0) + (r.monthlyPayable || 0);
+            currencyTotals!["Total Payable"][c] = (currencyTotals!["Total Payable"][c] || 0) + (r.totalPayable || 0);
+            return [
+              r.policyNumber, r.status, r.currency || "USD", r.clientFirstName ?? "", r.clientLastName ?? "", r.clientPhone ?? "", r.clientEmail ?? "",
+              r.productName ?? "", r.productCode ?? "", r.branchName ?? "",
+              r.adults, r.children, r.underwriterAmountAdult ?? "", r.underwriterAmountChild ?? "", r.underwriterAdvanceMonths,
+              r.monthlyPayable.toFixed(2), ...currencyAmounts(r.monthlyPayable, r.currency),
+              r.totalPayable.toFixed(2), ...currencyAmounts(r.totalPayable, r.currency),
+            ];
+          });
           break;
         }
         case "claims": {
-          rows = await storage.getClaimsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Claim Number", "Type", "Status", "Currency", "Approved Amount", "Deceased Name", "Created"];
-          rows = rows.map((r: any) => [r.claimNumber, r.claimType, r.status, r.currency || "USD", r.approvedAmount ?? "", r.deceasedName || "", r.createdAt]);
+          const claimRaw = await storage.getClaimsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = ["Claim Number", "Type", "Status", "Currency", "Approved Amount", ...currencyHeaders("Approved"), "Deceased Name", "Created"];
+          currencyTotals = { Approved: {} };
+          rows = claimRaw.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.approvedAmount ?? 0)) || 0;
+            if (amt > 0) currencyTotals!.Approved[c] = (currencyTotals!.Approved[c] || 0) + amt;
+            return [r.claimNumber, r.claimType, r.status, r.currency || "USD", r.approvedAmount ?? "", ...currencyAmounts(r.approvedAmount, r.currency), r.deceasedName || "", r.createdAt];
+          });
           break;
         }
         case "payments": {
-          rows = await storage.getPaymentsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Reference", "Amount", "Currency", "Method", "Status", "Received At"];
-          rows = rows.map((r: any) => [r.reference || "", r.amount, r.currency, r.paymentMethod, r.status, r.receivedAt]);
+          const payRaw = await storage.getPaymentsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = ["Reference", "Amount", "Currency", ...currencyHeaders("Amount"), "Method", "Status", "Received At"];
+          currencyTotals = { Amount: {} };
+          rows = payRaw.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.amount ?? 0)) || 0;
+            currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
+            return [r.reference || "", r.amount, r.currency, ...currencyAmounts(r.amount, r.currency), r.paymentMethod, r.status, r.receivedAt];
+          });
           break;
         }
         case "funerals": {
@@ -3313,22 +3363,40 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "expenditures": {
           const exps = await storage.getExpenditures(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Description", "Category", "Amount", "Currency", "Date", "Receipt Ref"];
-          rows = exps.map((r: any) => [r.description, r.category, r.amount, r.currency, r.spentAt || r.createdAt, r.receiptRef || ""]);
+          headers = ["Description", "Category", "Amount", "Currency", ...currencyHeaders("Amount"), "Date", "Receipt Ref"];
+          currencyTotals = { Amount: {} };
+          rows = exps.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.amount ?? 0)) || 0;
+            currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
+            return [r.description, r.category, r.amount, r.currency, ...currencyAmounts(r.amount, r.currency), r.spentAt || r.createdAt, r.receiptRef || ""];
+          });
           break;
         }
         case "payroll": {
           const employees = await storage.getPayrollEmployees(user.organizationId);
-          headers = ["Employee Name", "ID Number", "Position", "Department", "Currency", "Basic Salary", "Status"];
-          rows = employees.map((r: any) => [r.employeeName, r.idNumber, r.position, r.department, r.currency || "USD", r.basicSalary, r.status]);
+          headers = ["Employee Name", "ID Number", "Position", "Department", "Currency", "Basic Salary", ...currencyHeaders("Salary"), "Status"];
+          currencyTotals = { Salary: {} };
+          rows = employees.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.basicSalary ?? 0)) || 0;
+            currencyTotals!.Salary[c] = (currencyTotals!.Salary[c] || 0) + amt;
+            return [r.employeeName, r.idNumber, r.position, r.department, r.currency || "USD", r.basicSalary, ...currencyAmounts(r.basicSalary, r.currency), r.status];
+          });
           break;
         }
         case "commissions": {
           const agentFilter = typeof req.query.agentId === "string" ? req.query.agentId : null;
           if (agentFilter) {
             const ledger = await storage.getCommissionLedgerByAgent(agentFilter, user.organizationId);
-            headers = ["Agent ID", "Entry Type", "Amount", "Currency", "Description", "Period Start", "Period End", "Status", "Created"];
-            rows = ledger.map((r: any) => [r.agentId, r.entryType, r.amount, r.currency, r.description || "", r.periodStart || "", r.periodEnd || "", r.status, r.createdAt]);
+            headers = ["Agent ID", "Entry Type", "Amount", "Currency", ...currencyHeaders("Amount"), "Description", "Period Start", "Period End", "Status", "Created"];
+            currencyTotals = { Amount: {} };
+            rows = ledger.map((r: any) => {
+              const c = (r.currency || "USD").toUpperCase();
+              const amt = parseFloat(String(r.amount ?? 0)) || 0;
+              currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
+              return [r.agentId, r.entryType, r.amount, r.currency, ...currencyAmounts(r.amount, r.currency), r.description || "", r.periodStart || "", r.periodEnd || "", r.status, r.createdAt];
+            });
           } else {
             const plans = await storage.getCommissionPlans(user.organizationId);
             headers = ["Plan Name", "Type", "Rate (%)", "Status", "Created"];
@@ -3338,8 +3406,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "platform": {
           const receivables = await storage.getPlatformReceivables(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Description", "Amount", "Currency", "Settled", "Created"];
-          rows = receivables.map((r: any) => [r.description, r.amount, r.currency, r.isSettled ? "Yes" : "No", r.createdAt]);
+          headers = ["Description", "Amount", "Currency", ...currencyHeaders("Amount"), "Settled", "Created"];
+          currencyTotals = { Amount: {} };
+          rows = receivables.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.amount ?? 0)) || 0;
+            currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
+            return [r.description, r.amount, r.currency, ...currencyAmounts(r.amount, r.currency), r.isSettled ? "Yes" : "No", r.createdAt];
+          });
           break;
         }
         case "reinstatements": {
@@ -3362,75 +3436,119 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "active-policies": {
           const active = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "active" });
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
-          rows = active.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          currencyTotals = { Premium: {} };
+          rows = active.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
+            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+          });
           break;
         }
         case "awaiting-payments": {
           const awaiting = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
-          rows = awaiting.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          currencyTotals = { Premium: {} };
+          rows = awaiting.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
+            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+          });
           break;
         }
         case "overdue":
         case "pre-lapse": {
           const grace = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Grace End Date", "Created"];
-          rows = grace.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.graceEndDate || "", r.createdAt]);
+          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
+          currencyTotals = { Premium: {} };
+          rows = grace.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
+            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.graceEndDate || "", r.createdAt];
+          });
           break;
         }
         case "lapsed": {
           const lapsed = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "lapsed" });
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
-          rows = lapsed.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          currencyTotals = { Premium: {} };
+          rows = lapsed.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
+            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+          });
           break;
         }
         case "issued-policies": {
           const issued = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["inactive", "active", "grace", "lapsed", "cancelled"] });
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
-          rows = issued.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          currencyTotals = { Premium: {} };
+          rows = issued.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
+            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+          });
           break;
         }
         case "cashups": {
           const cashupsList = await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...reportFilters, preparedBy: reportFilters.userId });
-          headers = ["Cashup Date", "Currency", "Total Amount", "Transaction Count", "Status", "Locked", "Prepared By", "Confirmed By", "Discrepancy Amount", "Discrepancy Notes", "Created"];
-          rows = cashupsList.map((r: any) => [
-            r.cashupDate, r.currency || "USD", r.totalAmount, r.transactionCount, r.status || "—", r.isLocked ? "Yes" : "No", r.preparedBy,
-            r.confirmedBy || "—", r.discrepancyAmount ?? "—", r.discrepancyNotes ?? "—", r.createdAt,
-          ]);
+          headers = ["Cashup Date", "Currency", "Total Amount", ...currencyHeaders("Total"), "Transaction Count", "Status", "Locked", "Prepared By", "Confirmed By", "Discrepancy Amount", "Discrepancy Notes", "Created"];
+          currencyTotals = { Total: {} };
+          rows = cashupsList.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.totalAmount ?? 0)) || 0;
+            currencyTotals!.Total[c] = (currencyTotals!.Total[c] || 0) + amt;
+            return [
+              r.cashupDate, r.currency || "USD", r.totalAmount, ...currencyAmounts(r.totalAmount, r.currency), r.transactionCount, r.status || "—", r.isLocked ? "Yes" : "No", r.preparedBy,
+              r.confirmedBy || "—", r.discrepancyAmount ?? "—", r.discrepancyNotes ?? "—", r.createdAt,
+            ];
+          });
           break;
         }
         case "receipts": {
           const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
             "Receipt Number", "Date Paid", "Timestamp", "Payment Method", "Currency", "Total",
+            ...currencyHeaders("Total"),
             "Premium Currency", "Premium Amount", "Remarks", "Agent", "Months Paid", "Policy / Surname",
             "Reference", "Product", "Inception Date", "Month Number", "Year Number",
             "Receipt Counter", "Receipt Branch", "Payment Branch", "Policy Status",
           ];
-          rows = receiptRows.map((r: any, idx: number) => [
-            r.receiptNumber,
-            r.issuedAt ? new Date(r.issuedAt).toISOString().split("T")[0] : "",
-            r.issuedAt ? new Date(r.issuedAt).toISOString() : "",
-            r.paymentChannel || r.txPaymentMethod || "",
-            r.currency || "USD",
-            r.amount,
-            r.policyCurrency || r.currency || "USD",
-            r.premiumAmount || "",
-            r.txNotes || "",
-            r.agentDisplayName || r.agentEmail || "",
-            r.paymentSchedule || "",
-            `${r.policyNumber || ""} / ${[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}`,
-            r.txReference || "",
-            r.productName || "",
-            r.inceptionDate || "",
-            r.monthNumber ?? "",
-            r.yearNumber ?? "",
-            idx + 1,
-            r.receiptBranchName || "",
-            r.paymentBranchName || r.policyBranchName || "",
-            r.policyStatus || "",
-          ]);
+          currencyTotals = { Total: {} };
+          rows = receiptRows.map((r: any, idx: number) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(r.amount ?? 0)) || 0;
+            currencyTotals!.Total[c] = (currencyTotals!.Total[c] || 0) + amt;
+            return [
+              r.receiptNumber,
+              r.issuedAt ? new Date(r.issuedAt).toISOString().split("T")[0] : "",
+              r.issuedAt ? new Date(r.issuedAt).toISOString() : "",
+              r.paymentChannel || r.txPaymentMethod || "",
+              r.currency || "USD",
+              r.amount,
+              ...currencyAmounts(r.amount, r.currency),
+              r.policyCurrency || r.currency || "USD",
+              r.premiumAmount || "",
+              r.txNotes || "",
+              r.agentDisplayName || r.agentEmail || "",
+              r.paymentSchedule || "",
+              `${r.policyNumber || ""} / ${[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}`,
+              r.txReference || "",
+              r.productName || "",
+              r.inceptionDate || "",
+              r.monthNumber ?? "",
+              r.yearNumber ?? "",
+              idx + 1,
+              r.receiptBranchName || "",
+              r.paymentBranchName || r.policyBranchName || "",
+              r.policyStatus || "",
+            ];
+          });
           break;
         }
         default:
@@ -3448,6 +3566,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const csvLines = [headers.join(",")];
       for (const row of rows) {
         csvLines.push(row.map(escapeCsv).join(","));
+      }
+
+      if (currencyTotals && Object.keys(currencyTotals).length > 0) {
+        csvLines.push("");
+        csvLines.push(`CURRENCY TOTALS (${rows.length} rows)`);
+        for (const [label, totals] of Object.entries(currencyTotals)) {
+          for (const cur of CURRENCIES) {
+            const val = totals[cur];
+            if (val) csvLines.push(`${escapeCsv(`${label} (${cur})`)},${val.toFixed(2)}`);
+          }
+        }
       }
 
       res.setHeader("Content-Type", "text/csv");
