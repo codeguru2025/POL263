@@ -82,25 +82,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     storage: uploadStorage,
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
-      const allowed = /\.(png|webp|svg)$/i;
+      const allowed = /\.(png|jpg|jpeg|webp|svg)$/i;
       const hasAllowedExtension = allowed.test(path.extname(file.originalname));
-      const allowedMimes = ["image/png", "image/webp", "image/svg+xml"];
+      const allowedMimes = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
       if (hasAllowedExtension && allowedMimes.includes(file.mimetype)) cb(null, true);
-      else cb(new Error("Logo and signature files must be PNG, WebP, or SVG (formats that support transparency)"));
+      else cb(new Error("Logo must be PNG, JPG, WebP, or SVG"));
     },
   });
+
+  function handleMulterError(err: any, _req: any, res: any, next: any) {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") return res.status(400).json({ message: "File too large (max 5MB)" });
+      return res.status(400).json({ message: err.message });
+    }
+    if (err?.message) return res.status(400).json({ message: err.message });
+    next(err);
+  }
 
   app.post("/api/upload", requireAuth, requireTenantScope, upload.single("file"), (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     const url = `/uploads/${req.file.filename}`;
     return res.json({ url, filename: req.file.filename });
   });
+  app.use("/api/upload", handleMulterError);
 
   app.post("/api/upload/logo", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoUpload.single("file"), (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     const url = `/uploads/${req.file.filename}`;
     return res.json({ url, filename: req.file.filename });
   });
+  app.use("/api/upload/logo", handleMulterError);
 
   // ─── Platform Owner: Tenant Switching ──────────────────────────
 

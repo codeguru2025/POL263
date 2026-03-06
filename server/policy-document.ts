@@ -63,6 +63,18 @@ async function resolveImageForPdf(url: string | null | undefined): Promise<Buffe
       }
     }
   }
+  // Local file not found — try fetching via the app's own base URL as a fallback
+  const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+  if (appBase) {
+    try {
+      const fullUrl = `${appBase}${u.startsWith("/") ? u : `/${u}`}`;
+      const res = await fetch(fullUrl, { headers: { "User-Agent": "POL263" } });
+      if (res.ok) {
+        const ab = await res.arrayBuffer();
+        return Buffer.from(ab);
+      }
+    } catch {}
+  }
   return null;
 }
 
