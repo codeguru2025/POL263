@@ -1028,6 +1028,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    const policyPayments = await storage.getPaymentsByPolicy(policy.id, user.organizationId);
+    const totalPaid = policyPayments
+      .filter((p: any) => p.status === "cleared")
+      .reduce((sum: number, p: any) => sum + parseFloat(p.amount || "0"), 0);
+
+    const premium = parseFloat(policy.premiumAmount || "0");
+    const startDate = policy.inceptionDate || policy.effectiveDate;
+    let totalDue = 0;
+    let periodsElapsed = 0;
+    if (startDate && premium > 0) {
+      const start = new Date(startDate);
+      const now = new Date();
+      if (!isNaN(start.getTime()) && start <= now) {
+        const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
+        const schedule = policy.paymentSchedule || "monthly";
+        const periodDays = schedule === "weekly" ? 7 : schedule === "biweekly" ? 14 : schedule === "quarterly" ? 91.31 : schedule === "annually" ? 365.25 : 30.44;
+        periodsElapsed = Math.ceil(daysElapsed / periodDays);
+        totalDue = periodsElapsed * premium;
+      }
+    }
+    const balance = totalPaid - totalDue;
+
     return res.json({
       ...policy,
       claimable,
@@ -1036,6 +1058,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       productVersionLabel,
       waitingPeriodDays,
       clientActivationCode,
+      totalPaid: totalPaid.toFixed(2),
+      totalDue: totalDue.toFixed(2),
+      balance: balance.toFixed(2),
+      periodsElapsed,
     });
   });
 

@@ -624,8 +624,37 @@ export function registerPolicyDocumentRoute(app: Express) {
     const totalPaid = filteredPayments
       .filter((p) => p.status === "cleared")
       .reduce((sum, p) => sum + parseFloat(p.amount || "0"), 0);
+
+    const allCleared = payments
+      .filter((p) => p.status === "cleared")
+      .reduce((sum, p) => sum + parseFloat(p.amount || "0"), 0);
+    const premium = parseFloat(policy.premiumAmount || "0");
+    const startDate = policy.inceptionDate || policy.effectiveDate;
+    let totalDue = 0;
+    if (startDate && premium > 0) {
+      const start = new Date(startDate);
+      const now = new Date();
+      if (!isNaN(start.getTime()) && start <= now) {
+        const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
+        const schedule = policy.paymentSchedule || "monthly";
+        const periodDays = schedule === "weekly" ? 7 : schedule === "biweekly" ? 14 : schedule === "quarterly" ? 91.31 : schedule === "annually" ? 365.25 : 30.44;
+        const periodsElapsed = Math.ceil(daysElapsed / periodDays);
+        totalDue = periodsElapsed * premium;
+      }
+    }
+    const accountBalance = allCleared - totalDue;
+
     doc.font("Helvetica-Bold").text(`Total paid in period:`, 50, y, { continued: true, width: 150 });
     doc.font("Helvetica").text(`  ${policy.currency} ${totalPaid.toFixed(2)}`, { width: 200 });
+    y += 14;
+    doc.font("Helvetica-Bold").text(`Total paid (all time):`, 50, y, { continued: true, width: 150 });
+    doc.font("Helvetica").text(`  ${policy.currency} ${allCleared.toFixed(2)}`, { width: 200 });
+    y += 14;
+    doc.font("Helvetica-Bold").text(`Total premiums due:`, 50, y, { continued: true, width: 150 });
+    doc.font("Helvetica").text(`  ${policy.currency} ${totalDue.toFixed(2)}`, { width: 200 });
+    y += 14;
+    doc.font("Helvetica-Bold").text(`Account Balance:`, 50, y, { continued: true, width: 150 });
+    doc.font("Helvetica").text(`  ${policy.currency} ${accountBalance.toFixed(2)} ${accountBalance > 0 ? "(Advance)" : accountBalance < 0 ? "(Arrears)" : "(Up to date)"}`, { width: 300 });
     y += 20;
 
     doc.fillColor(docBlack).fontSize(12).font("Helvetica-Bold").text("Payment History", 50, y);

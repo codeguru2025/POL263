@@ -703,6 +703,24 @@ export default function StaffPolicies() {
                   <p className="text-lg font-bold" data-testid="text-premium-amount">{displayPolicy.currency} {Number(displayPolicy.premiumAmount).toFixed(2)}</p>
                   <p className="text-xs text-muted-foreground capitalize">{displayPolicy.paymentSchedule}</p>
                 </div>
+                {displayPolicy.balance != null && (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Balance</p>
+                    <p className={`text-lg font-bold ${Number(displayPolicy.balance) > 0 ? "text-emerald-600" : Number(displayPolicy.balance) < 0 ? "text-destructive" : ""}`} data-testid="text-balance">
+                      {displayPolicy.currency} {Number(displayPolicy.balance).toFixed(2)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {Number(displayPolicy.balance) > 0 ? "Advance" : Number(displayPolicy.balance) < 0 ? "Arrears" : "Up to date"}
+                    </p>
+                  </div>
+                )}
+                {displayPolicy.totalPaid != null && (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Total Paid</p>
+                    <p className="text-lg font-bold">{displayPolicy.currency} {Number(displayPolicy.totalPaid).toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground">{displayPolicy.periodsElapsed ?? 0} period{(displayPolicy.periodsElapsed ?? 0) !== 1 ? "s" : ""} elapsed</p>
+                  </div>
+                )}
                 <div>
                   <p className="text-muted-foreground text-xs">Client</p>
                   <p className="font-semibold" data-testid="text-policy-client">{getClientName(displayPolicy.clientId)}</p>

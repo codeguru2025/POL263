@@ -317,6 +317,10 @@ interface Policy {
   graceEndDate: string | null;
   productVersionId: string | null;
   createdAt: string;
+  balance?: string;
+  totalPaid?: string;
+  totalDue?: string;
+  periodsElapsed?: number;
 }
 
 interface Payment {
@@ -522,6 +526,15 @@ export default function ClientDashboard() {
                         <p className="text-sm text-muted-foreground">Current Cycle</p>
                         <p className="font-medium">{formatDate(activePolicy.currentCycleStart)} — {formatDate(activePolicy.currentCycleEnd)}</p>
                       </div>
+                      {activePolicy.balance != null && (
+                        <div>
+                          <p className="text-sm text-muted-foreground">Balance</p>
+                          <p className={`font-bold ${Number(activePolicy.balance) > 0 ? "text-emerald-600" : Number(activePolicy.balance) < 0 ? "text-red-600" : ""}`}>
+                            {formatCurrency(Math.abs(Number(activePolicy.balance)).toFixed(2), activePolicy.currency)}
+                            {Number(activePolicy.balance) > 0 ? " (Advance)" : Number(activePolicy.balance) < 0 ? " (Arrears)" : " (Up to date)"}
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {activePolicy.waitingPeriodEndDate && daysUntil(activePolicy.waitingPeriodEndDate) !== null && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0 && (

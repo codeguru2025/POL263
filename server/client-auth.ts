@@ -271,18 +271,54 @@ export function setupClientAuth(app: Express) {
     if (!clientId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
+
+    async function enrichWithBalance(policies: any[], orgId: string) {
+      const enriched = [];
+      for (const p of policies) {
+        const payments = await storage.getPaymentsByPolicy(p.id, orgId);
+        const totalPaid = payments
+          .filter((tx: any) => tx.status === "cleared")
+          .reduce((sum: number, tx: any) => sum + parseFloat(tx.amount || "0"), 0);
+        const premium = parseFloat(p.premiumAmount || "0");
+        const startDate = p.inceptionDate || p.effectiveDate;
+        let totalDue = 0;
+        let periodsElapsed = 0;
+        if (startDate && premium > 0) {
+          const start = new Date(startDate);
+          const now = new Date();
+          if (!isNaN(start.getTime()) && start <= now) {
+            const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
+            const schedule = p.paymentSchedule || "monthly";
+            const periodDays = schedule === "weekly" ? 7 : schedule === "biweekly" ? 14 : schedule === "quarterly" ? 91.31 : schedule === "annually" ? 365.25 : 30.44;
+            periodsElapsed = Math.ceil(daysElapsed / periodDays);
+            totalDue = periodsElapsed * premium;
+          }
+        }
+        const balance = totalPaid - totalDue;
+        enriched.push({
+          ...p,
+          totalPaid: totalPaid.toFixed(2),
+          totalDue: totalDue.toFixed(2),
+          balance: balance.toFixed(2),
+          periodsElapsed,
+        });
+      }
+      return enriched;
+    }
+
     if (!clientOrgId) {
       const orgs = await storage.getOrganizations();
       for (const org of orgs) {
         const c = await storage.getClient(clientId, org.id);
         if (c) {
-          return res.json(await storage.getPoliciesByClient(clientId, c.organizationId));
+          const rawPolicies = await storage.getPoliciesByClient(clientId, c.organizationId);
+          return res.json(await enrichWithBalance(rawPolicies, c.organizationId));
         }
       }
       return res.json([]);
     }
     const clientPolicies = await storage.getPoliciesByClient(clientId, clientOrgId);
-    return res.json(clientPolicies);
+    return res.json(await enrichWithBalance(clientPolicies, clientOrgId));
   });
 
   /** Look up another client to pay for their policy. Supports phone, policy number, and national ID lookup. */
