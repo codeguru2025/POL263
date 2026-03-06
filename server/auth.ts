@@ -154,7 +154,6 @@ export function setupAuth(app: Express) {
                 }
               }
 
-              // Link Google identity to this user
               user = await storage.updateUser(user.id, {
                 googleId: profile.id,
                 displayName: profile.displayName,
@@ -162,18 +161,22 @@ export function setupAuth(app: Express) {
               });
             }
 
-            if (!user!.isActive) {
+            if (!user) {
+              return done(new Error("User record not found after lookup"), undefined);
+            }
+
+            if (!user.isActive) {
               return done(null, false, { message: "Account is disabled" });
             }
 
             structuredLog("info", "Google OAuth login", {
-              userId: user!.id,
-              email: user!.email,
+              userId: user.id,
+              email: user.email,
               isPlatformOwner: owner,
-              hasOrg: Boolean(user!.organizationId),
+              hasOrg: Boolean(user.organizationId),
             });
 
-            done(null, user!);
+            done(null, user);
           } catch (err) {
             done(err as Error, undefined);
           }
@@ -272,10 +275,21 @@ export function setupAuth(app: Express) {
     });
   } else {
     structuredLog("warn", "Google OAuth credentials not configured.");
+
+    app.get("/api/auth/google", (_req: Request, res: Response) => {
+      const msg = encodeURIComponent("Google OAuth is not configured. Use demo login or configure GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.");
+      return res.redirect(`/staff/login?error=${msg}`);
+    });
   }
 
   const demoLoginEnabled =
     process.env.ENABLE_DEMO_LOGIN === "true" && process.env.NODE_ENV !== "production";
+
+  const googleConfigured = !!(googleClientId && googleClientSecret);
+
+  app.get("/api/public/auth-config", (_req: Request, res: Response) => {
+    res.json({ demoLoginEnabled, googleConfigured });
+  });
 
   if (demoLoginEnabled) {
     app.post("/api/auth/demo-login", async (req: Request, res: Response) => {
@@ -376,7 +390,11 @@ export function setupAuth(app: Express) {
       if (err) {
         return res.status(500).json({ message: "Logout failed" });
       }
-      res.json({ message: "Logged out" });
+      req.session.destroy((destroyErr) => {
+        if (destroyErr) structuredLog("warn", "Session destroy failed on logout", { error: (destroyErr as Error).message });
+        res.clearCookie("connect.sid");
+        res.json({ message: "Logged out" });
+      });
     });
   });
 

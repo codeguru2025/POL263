@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
-import { getApiBase } from "@/lib/queryClient";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { useBranding } from "@/hooks/use-branding";
@@ -38,18 +38,8 @@ export default function AgentLogin() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch(getApiBase() + "/api/agent-auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
+      const res = await apiRequest("POST", "/api/agent-auth/login", { email: email.trim(), password });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msg = data.message || (res.status === 401 ? "Invalid email or password. Use the email and password set by your administrator." : "Login failed");
-        setError(msg);
-        return;
-      }
       if (data.redirect) {
         const base = getApiBase();
         const path = typeof data.redirect === "string" && data.redirect.startsWith("/") ? data.redirect : "/staff";
@@ -58,8 +48,18 @@ export default function AgentLogin() {
       } else {
         setLocation("/staff");
       }
-    } catch {
-      setError("Network error. Please try again.");
+    } catch (err: any) {
+      const msg = err.message || "Login failed";
+      if (msg.includes("401")) {
+        setError("Invalid email or password. Use the email and password set by your administrator.");
+      } else if (msg.includes("403")) {
+        const jsonMatch = msg.match(/\d+:\s*(.+)/);
+        let parsed: any = {};
+        if (jsonMatch) try { parsed = JSON.parse(jsonMatch[1]); } catch {}
+        setError(parsed.message || "Access denied. Please contact your administrator.");
+      } else {
+        setError("Network error. Please try again.");
+      }
     } finally {
       setSubmitting(false);
     }

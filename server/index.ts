@@ -97,7 +97,6 @@ if (enableCsrf) {
       windowMs: 60 * 1000,
       max: 200,
       message: { message: "Too many requests, please slow down" },
-      skip: (req) => !req.path.startsWith("/api"),
     })
   );
 
@@ -131,7 +130,6 @@ if (enableCsrf) {
     windowMs: 15 * 60 * 1000,
     max: 30,
     message: { message: "Too many report requests, please try again later" },
-    skip: (req) => !req.path.startsWith("/api/reports") && req.path !== "/api/dashboard/stats",
   });
   app.use("/api/reports", reportExportLimiter);
   app.use("/api/dashboard/stats", reportExportLimiter);
@@ -168,52 +166,57 @@ if (enableCsrf) {
     }
   });
 
+  app.use((req, res, next) => {
+    const start = Date.now();
+    const path = req.path;
+
+    res.on("finish", () => {
+      const duration = Date.now() - start;
+      if (path.startsWith("/api")) {
+        const user = (req as any).user;
+        structuredLog("info", `${req.method} ${path} ${res.statusCode} in ${duration}ms`, {
+          requestId: (req as any).requestId,
+          userId: user?.id,
+          tenantId: user?.organizationId,
+          method: req.method,
+          path,
+          statusCode: res.statusCode,
+          duration,
+        });
+      }
+    });
+
+    next();
+  });
+
   setupAuth(app);
   setupClientAuth(app);
-
-  app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      const user = (req as any).user;
-      structuredLog("info", `${req.method} ${path} ${res.statusCode} in ${duration}ms`, {
-        requestId: (req as any).requestId,
-        userId: user?.id,
-        tenantId: user?.organizationId,
-        method: req.method,
-        path,
-        statusCode: res.statusCode,
-        duration,
-      });
-    }
-  });
-
-  next();
-  });
-
   await registerRoutes(httpServer, app);
+
+  if (process.env.NODE_ENV === "production") {
+    serveStatic(app);
+  } else {
+    const { setupVite } = await import("./vite");
+    await setupVite(httpServer, app);
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    const message =
-      process.env.NODE_ENV === "production"
-        ? "Internal Server Error"
-        : err.message || "Internal Server Error";
+
+    let message: string;
+    if (err.code === "EBADCSRFTOKEN") {
+      message = "Session expired. Please reload the page and try again.";
+    } else if (process.env.NODE_ENV === "production") {
+      message = "Internal Server Error";
+    } else {
+      message = err.message || "Internal Server Error";
+    }
 
     structuredLog("error", "Unhandled error", {
       error: err.message,
       stack: err.stack,
       status,
+      code: err.code,
     });
 
     if (res.headersSent) {
@@ -223,13 +226,6 @@ if (enableCsrf) {
     return res.status(status).json({ message });
   });
 
-  if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
-  } else {
-    const { setupVite } = await import("./vite");
-    await setupVite(httpServer, app);
-  }
-
   const port = parseInt(process.env.PORT || "5000", 10);
   const host = process.env.HOST || (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
   httpServer.listen(
@@ -238,4 +234,7 @@ if (enableCsrf) {
       structuredLog("info", `POL263 serving on ${host}:${port}`);
     }
   );
-})();
+})().catch((err) => {
+  structuredLog("error", "Fatal startup error", { error: err?.message, stack: err?.stack });
+  process.exit(1);
+});

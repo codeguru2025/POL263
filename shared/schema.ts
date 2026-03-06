@@ -1639,8 +1639,9 @@ export type PolicyStatus = typeof POLICY_STATUSES[number];
 export const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
   inactive: ["active", "cancelled"],
   active: ["grace", "cancelled"],
-  grace: ["active", "lapsed"],
+  grace: ["active", "lapsed", "cancelled"],
   lapsed: ["active", "cancelled"],
+  cancelled: [],
 };
 
 export const CLAIM_STATUSES = ["submitted", "verified", "approved", "scheduled", "payable", "completed", "paid", "closed", "rejected"] as const;

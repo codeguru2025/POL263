@@ -1,18 +1,25 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 
-export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any) {
+export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string) {
   const user = req.user as any;
+  const organizationId = orgIdOverride || user?.organizationId;
+  if (!organizationId) {
+    structuredLog("warn", "auditLog skipped — no organizationId", { action, entityType, entityId, userId: user?.id });
+    return Promise.resolve(undefined as any);
+  }
   return storage.createAuditLog({
-    organizationId: user.organizationId,
-    actorId: user.id,
-    actorEmail: user.email,
+    organizationId,
+    actorId: user?.id,
+    actorEmail: user?.email,
     action,
     entityType,
     entityId,
     before,
     after,
     requestId: req.requestId,
+  }).catch((err: any) => {
+    structuredLog("error", "auditLog write failed", { error: err?.message, action, entityType, entityId });
   });
 }
 
@@ -203,6 +210,7 @@ export async function rollbackClawbacks(orgId: string, policy: any) {
 
 export async function enforceAgentScope(req: any, filters: any): Promise<any> {
   const user = req.user as any;
+  if (!user) return filters;
   if (user.isPlatformOwner) return filters;
   const perms = await storage.getUserEffectivePermissions(user.id);
   if (perms.includes("read:report") || perms.includes("read:finance")) return filters;

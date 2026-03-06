@@ -132,7 +132,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       tenantName: org.name,
       ip: req.ip,
     });
-    await auditLog(req, "SWITCH_TENANT", "Organization", tenantId, { previousTenantId }, { newTenantId: tenantId, tenantName: org.name });
+    await auditLog(req, "SWITCH_TENANT", "Organization", tenantId, { previousTenantId }, { newTenantId: tenantId, tenantName: org.name }, tenantId);
     return res.json({ activeTenantId: tenantId, tenantName: org.name });
   });
 
@@ -193,6 +193,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(403).json({ message: "Cross-tenant access denied or insufficient permissions" });
     }
     const isPlatformOwner = user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+    delete req.body.id;
+    delete req.body.createdAt;
     if (!isPlatformOwner) {
       delete req.body.databaseUrl;
       delete req.body.isWhitelabeled;
@@ -200,7 +202,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
     const updated = await storage.updateOrganization(id, req.body);
-    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, updated);
+    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, updated, id);
     return res.json(updated);
   });
 
@@ -331,7 +333,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ...org,
         defaultBranchId: defaultBranch.id,
         ...(adminUser ? { adminUserId: adminUser.id, adminEmail } : {}),
-      });
+      }, org.id);
       return res.status(201).json({
         ...org,
         defaultBranchId: defaultBranch.id,
@@ -376,7 +378,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     await storage.updateOrganization(id, { name: org.name + " (deleted)" });
-    await auditLog(req, "DELETE_ORGANIZATION", "Organization", id, org, null);
+    await auditLog(req, "DELETE_ORGANIZATION", "Organization", id, org, null, id);
     return res.status(204).send();
   });
 
@@ -730,6 +732,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const agentClients = await storage.getClientsByAgent(user.id, user.organizationId, 10000, 0);
       if (!agentClients.some((c: any) => c.id === before.id)) return res.status(403).json({ message: "Access denied" });
     }
+    delete req.body.id;
+    delete req.body.organizationId;
+    delete req.body.createdAt;
     const updated = await storage.updateClient(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_CLIENT", "Client", req.params.id as string, before, updated);
     return res.json(updated);
@@ -1199,9 +1204,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
     if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
-    // Premium cannot be updated manually; strip it if sent
     const body = { ...req.body };
     delete body.premiumAmount;
+    delete body.organizationId;
+    delete body.id;
+    delete body.createdAt;
+    delete body.policyNumber;
+    if (!user.isPlatformOwner) delete body.agentId;
     const updated = await storage.updatePolicy(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);
     return res.json(updated);
@@ -1238,6 +1247,74 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     await auditLog(req, "TRANSITION_POLICY", "Policy", policy.id, before, updated);
     return res.json(updated);
+  });
+
+  // ─── Superuser: hard-delete a policy and all related records ──
+  app.delete("/api/policies/:id", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    await storage.deletePolicy(policy.id, user.organizationId);
+    await auditLog(req, "DELETE_POLICY", "Policy", policy.id, policy, null);
+    structuredLog("warn", "Superuser hard-deleted policy", { userId: user.id, email: user.email, policyId: policy.id, policyNumber: policy.policyNumber });
+    return res.json({ message: "Policy permanently deleted" });
+  });
+
+  // ─── Superuser: edit a payment transaction ──
+  app.patch("/api/payments/:id", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const before = await storage.getPaymentTransaction(req.params.id as string, user.organizationId);
+    if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const body = { ...req.body };
+    delete body.id;
+    delete body.organizationId;
+    delete body.createdAt;
+    const updated = await storage.updatePaymentTransaction(req.params.id as string, body, user.organizationId);
+    await auditLog(req, "UPDATE_PAYMENT", "PaymentTransaction", req.params.id as string, before, updated);
+    structuredLog("warn", "Superuser edited payment transaction", { userId: user.id, email: user.email, transactionId: req.params.id });
+    return res.json(updated);
+  });
+
+  // ─── Superuser: delete a payment transaction ──
+  app.delete("/api/payments/:id", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const tx = await storage.getPaymentTransaction(req.params.id as string, user.organizationId);
+    if (!tx || tx.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    await storage.deletePaymentTransaction(tx.id, user.organizationId);
+    await auditLog(req, "DELETE_PAYMENT", "PaymentTransaction", tx.id, tx, null);
+    structuredLog("warn", "Superuser hard-deleted payment transaction", { userId: user.id, email: user.email, transactionId: tx.id });
+    return res.json({ message: "Payment transaction permanently deleted" });
+  });
+
+  // ─── Superuser: edit a receipt ──
+  app.patch("/api/receipts/:id", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const before = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
+    if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    const body = { ...req.body };
+    delete body.id;
+    delete body.organizationId;
+    delete body.createdAt;
+    const updated = await storage.updatePaymentReceipt(req.params.id as string, body, user.organizationId);
+    await auditLog(req, "UPDATE_RECEIPT", "PaymentReceipt", req.params.id as string, before, updated);
+    structuredLog("warn", "Superuser edited receipt", { userId: user.id, email: user.email, receiptId: req.params.id });
+    return res.json(updated);
+  });
+
+  // ─── Superuser: delete a receipt ──
+  app.delete("/api/receipts/:id", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const receipt = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
+    if (!receipt || receipt.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    await storage.deletePaymentReceipt(receipt.id, user.organizationId);
+    await auditLog(req, "DELETE_RECEIPT", "PaymentReceipt", receipt.id, receipt, null);
+    structuredLog("warn", "Superuser hard-deleted receipt", { userId: user.id, email: user.email, receiptId: receipt.id, receiptNumber: receipt.receiptNumber });
+    return res.json({ message: "Receipt permanently deleted" });
   });
 
   app.get("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -2332,6 +2409,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/funeral-cases/:id/tasks", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+    if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
     const parsed = insertFuneralTaskSchema.parse({ ...req.body, funeralCaseId: req.params.id as string });
     const task = await storage.createFuneralTask(parsed);
     return res.status(201).json(task);
@@ -2341,6 +2421,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const updated = await storage.updateFuneralTask(id, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Funeral task not found" });
     return res.json(updated);
   });
 
@@ -2524,6 +2605,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/approvals/:id/resolve", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
     const user = req.user as any;
     const { action, rejectionReason } = req.body;
+    if (action !== "approve" && action !== "reject") {
+      return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
+    }
     const before = await storage.getApprovalRequests(user.organizationId);
     const approval = before.find(a => a.id === req.params.id as string);
     if (!approval) return res.status(404).json({ message: "Not found" });
@@ -2828,7 +2912,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Groups ──────────────────────────────────────────────
 
-  app.get("/api/groups", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/groups", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getGroupsByOrg(user.organizationId));
   });
@@ -3806,7 +3890,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/admin/run-notifications", requireAuth, requirePermission("manage:settings"), async (req, res) => {
+  app.post("/api/admin/run-notifications", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     const orgId = user.organizationId;
     const today = new Date();
@@ -3895,7 +3979,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ birthdayCount, preLapseCount, lapseCount, anniversaryCount, premiumDueCount });
   });
 
-  app.post("/api/admin/sync-permissions", requireAuth, requireTenantScope, async (req, res) => {
+  app.post("/api/admin/sync-permissions", requireAuth, requireTenantScope, requirePermission("manage:permissions"), async (req, res) => {
     const user = req.user as any;
     try {
       const { seedDatabase } = await import("./seed");

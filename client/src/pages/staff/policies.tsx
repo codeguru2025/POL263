@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ClientSearchInput } from "@/components/client-search-input";
@@ -15,8 +16,9 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2 } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
+import { shareDocument } from "@/lib/share-document";
 import { useSearch } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
@@ -74,7 +76,7 @@ function useDebounce<T>(value: T, delay: number): T {
 export default function StaffPolicies() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { user, roles, permissions } = useAuth();
+  const { user, roles, permissions, isPlatformOwner } = useAuth();
   const safeRoles = Array.isArray(roles) ? roles : [];
   const safePermissions = Array.isArray(permissions) ? permissions : [];
   const isAgent = safeRoles.some((r: any) => r.name === "agent");
@@ -107,6 +109,22 @@ export default function StaffPolicies() {
   const [pnPhase, setPnPhase] = useState<"select" | "waiting">("select");
   const [showEstatementViewer, setShowEstatementViewer] = useState(false);
   const [estatementViewerUrl, setEstatementViewerUrl] = useState<string>("");
+  const [showReceiptSuccess, setShowReceiptSuccess] = useState(false);
+  const [receiptSuccessData, setReceiptSuccessData] = useState<any>(null);
+
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editForm, setEditForm] = useState({
+    currency: "",
+    paymentSchedule: "",
+    effectiveDate: "",
+    branchId: "",
+    agentId: "",
+    beneficiaryFirstName: "",
+    beneficiaryLastName: "",
+    beneficiaryRelationship: "",
+    beneficiaryNationalId: "",
+    beneficiaryPhone: "",
+  });
 
   const [createForm, setCreateForm] = useState({
     clientId: "",
@@ -163,6 +181,9 @@ export default function StaffPolicies() {
   });
   const { data: agents = [] } = useQuery<any[]>({
     queryKey: ["/api/agents"],
+  });
+  const { data: branches = [] } = useQuery<any[]>({
+    queryKey: ["/api/branches"],
   });
 
   const { data: selectedClient } = useQuery<any>({
@@ -348,6 +369,17 @@ export default function StaffPolicies() {
     },
   });
 
+  const { data: policyReceipts } = useQuery<any[]>({
+    queryKey: ["/api/policies", selectedPolicy?.id, "receipts"],
+    enabled: !!selectedPolicy?.id && showDetailView,
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/receipts`, { credentials: "include" });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    },
+  });
+
   const createMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
       let clientId = data.clientId;
@@ -473,6 +505,147 @@ export default function StaffPolicies() {
     },
   });
 
+  const editPolicyMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, any> }) => {
+      const res = await apiRequest("PATCH", `/api/policies/${id}`, data);
+      return res.json();
+    },
+    onSuccess: (updated: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "detail"] });
+      setShowEditDialog(false);
+      if (showDetailView) setSelectedPolicy(updated);
+      toast({ title: "Policy updated", description: "Policy details have been saved." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const openEditDialog = (policy: any) => {
+    setEditForm({
+      currency: policy.currency || "USD",
+      paymentSchedule: policy.paymentSchedule || "monthly",
+      effectiveDate: policy.effectiveDate || "",
+      branchId: policy.branchId || "",
+      agentId: policy.agentId || "",
+      beneficiaryFirstName: policy.beneficiaryFirstName || "",
+      beneficiaryLastName: policy.beneficiaryLastName || "",
+      beneficiaryRelationship: policy.beneficiaryRelationship || "",
+      beneficiaryNationalId: policy.beneficiaryNationalId || "",
+      beneficiaryPhone: policy.beneficiaryPhone || "",
+    });
+    setShowEditDialog(true);
+  };
+
+  const handleEditSubmit = () => {
+    if (!selectedPolicy) return;
+    const data: Record<string, any> = {};
+    if (editForm.currency !== (displayPolicy.currency || "USD")) data.currency = editForm.currency;
+    if (editForm.paymentSchedule !== (displayPolicy.paymentSchedule || "monthly")) data.paymentSchedule = editForm.paymentSchedule;
+    if (editForm.effectiveDate !== (displayPolicy.effectiveDate || "")) data.effectiveDate = editForm.effectiveDate || null;
+    if (editForm.branchId !== (displayPolicy.branchId || "")) data.branchId = editForm.branchId || null;
+    if (isPlatformOwner && editForm.agentId !== (displayPolicy.agentId || "")) data.agentId = editForm.agentId || null;
+    if (editForm.beneficiaryFirstName !== (displayPolicy.beneficiaryFirstName || "")) data.beneficiaryFirstName = editForm.beneficiaryFirstName || null;
+    if (editForm.beneficiaryLastName !== (displayPolicy.beneficiaryLastName || "")) data.beneficiaryLastName = editForm.beneficiaryLastName || null;
+    if (editForm.beneficiaryRelationship !== (displayPolicy.beneficiaryRelationship || "")) data.beneficiaryRelationship = editForm.beneficiaryRelationship || null;
+    if (editForm.beneficiaryNationalId !== (displayPolicy.beneficiaryNationalId || "")) data.beneficiaryNationalId = editForm.beneficiaryNationalId || null;
+    if (editForm.beneficiaryPhone !== (displayPolicy.beneficiaryPhone || "")) data.beneficiaryPhone = editForm.beneficiaryPhone || null;
+    if (Object.keys(data).length === 0) {
+      setShowEditDialog(false);
+      return;
+    }
+    editPolicyMutation.mutate({ id: selectedPolicy.id, data });
+  };
+
+  const [confirmDeletePolicy, setConfirmDeletePolicy] = useState(false);
+  const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
+  const [editPaymentForm, setEditPaymentForm] = useState({ amount: "", status: "", reference: "", notes: "" });
+  const [confirmDeletePayment, setConfirmDeletePayment] = useState<string | null>(null);
+  const [editReceiptId, setEditReceiptId] = useState<string | null>(null);
+  const [editReceiptForm, setEditReceiptForm] = useState({ amount: "", status: "", paymentChannel: "" });
+  const [confirmDeleteReceipt, setConfirmDeleteReceipt] = useState<string | null>(null);
+
+  const deletePolicyMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/policies/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      setShowDetailView(false);
+      setSelectedPolicy(null);
+      setConfirmDeletePolicy(false);
+      toast({ title: "Policy deleted", description: "Policy and all related records have been permanently removed." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const editPaymentMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, any> }) => {
+      const res = await apiRequest("PATCH", `/api/payments/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "payments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "detail"] });
+      setEditPaymentId(null);
+      toast({ title: "Payment updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deletePaymentMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/payments/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "payments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "receipts"] });
+      setConfirmDeletePayment(null);
+      toast({ title: "Payment deleted", description: "Payment transaction permanently removed." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const editReceiptMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, any> }) => {
+      const res = await apiRequest("PATCH", `/api/receipts/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "receipts"] });
+      setEditReceiptId(null);
+      toast({ title: "Receipt updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteReceiptMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/receipts/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "receipts"] });
+      setConfirmDeleteReceipt(null);
+      toast({ title: "Receipt deleted", description: "Receipt permanently removed." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const resetPnState = () => {
     setPnIntentId(null); setPnPolling(false); setPnInnbucksCode(""); setPnInnbucksExpiry("");
     setPnNeedsOtp(false); setPnOtpRef(""); setPnOtp(""); setPnPhase("select");
@@ -484,13 +657,21 @@ export default function StaffPolicies() {
       const res = await apiRequest("POST", "/api/payments", data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
-      if (selectedPolicy) queryClient.invalidateQueries({ queryKey: [`/api/policies/${selectedPolicy.id}/payments`] });
+      if (selectedPolicy) {
+        queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy.id, "payments"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy.id, "receipts"] });
+      }
       setShowInPolicyReceiptDialog(false);
       resetPnState();
-      toast({ title: "Payment recorded", description: "Receipt generated successfully." });
+      if (data?.receipt?.id) {
+        setReceiptSuccessData({ ...data, receipt: data.receipt, policyNumber: displayPolicy?.policyNumber });
+        setShowReceiptSuccess(true);
+      } else {
+        toast({ title: "Payment recorded", description: "Receipt generated successfully." });
+      }
     },
     onError: (err: Error) => toast({ title: "Payment failed", description: err.message, variant: "destructive" }),
   });
@@ -546,8 +727,10 @@ export default function StaffPolicies() {
       if (data.paid) {
         queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
         queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+        if (selectedPolicy) queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy.id, "receipts"] });
         setShowInPolicyReceiptDialog(false); resetPnState();
-        toast({ title: "Payment successful" });
+        setReceiptSuccessData({ paynow: true, policyId: selectedPolicy?.id, policyNumber: displayPolicy?.policyNumber });
+        setShowReceiptSuccess(true);
       } else { setPnPolling(true); setPnNeedsOtp(false); toast({ title: "OTP accepted", description: "Processing..." }); }
     },
     onError: (e: Error) => toast({ title: "OTP failed", description: e.message, variant: "destructive" }),
@@ -570,8 +753,10 @@ export default function StaffPolicies() {
       setPnPolling(false);
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+      if (selectedPolicy) queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy.id, "receipts"] });
       setShowInPolicyReceiptDialog(false); resetPnState();
-      toast({ title: "Payment successful", description: "Paynow payment confirmed." });
+      setReceiptSuccessData({ paynow: true, policyId: selectedPolicy?.id, policyNumber: displayPolicy?.policyNumber });
+      setShowReceiptSuccess(true);
     }
     if (pnPollData.status === "failed") { setPnPolling(false); toast({ title: "Payment failed", variant: "destructive" }); }
   }, [pnPollData]);
@@ -668,18 +853,44 @@ export default function StaffPolicies() {
             </Button>
             <Button
               variant="outline"
+              size="icon"
+              title="Share policy document"
+              onClick={() => shareDocument(getApiBase() + `/api/policies/${selectedPolicy.id}/document?lang=${docLang}`, `Policy-${displayPolicy.policyNumber}`)}
+            >
+              <Share2 className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
               className="gap-2"
               onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`, "_blank", "noopener")}
               data-testid="btn-download-estatement"
             >
               <FileText className="h-4 w-4" /> E-Statement
             </Button>
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => openEditDialog(displayPolicy)}
+              data-testid="btn-edit-policy"
+            >
+              <Pencil className="h-4 w-4" /> Edit
+            </Button>
+            {isPlatformOwner && (
+              <Button
+                variant="destructive"
+                className="gap-2"
+                onClick={() => setConfirmDeletePolicy(true)}
+                data-testid="btn-delete-policy"
+              >
+                <Trash2 className="h-4 w-4" /> Delete
+              </Button>
+            )}
             {(canWriteFinance || isAgent) && (
               <Button
                 className="gap-2"
                 onClick={() => {
                   setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
-                  setInPolicyReceiptCurrency(displayPolicy.premiumCurrency || "USD");
+                  setInPolicyReceiptCurrency(displayPolicy.currency || "USD");
                   const clientPhone = displayPolicy.clientId ? (clientMap[displayPolicy.clientId]?.phone || "").trim() : "";
                   setInPolicyReceiptRef(clientPhone);
                   setInPolicyReceiptNotes("");
@@ -998,6 +1209,7 @@ export default function StaffPolicies() {
                       <TableHead>Method</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Reference</TableHead>
+                      {isPlatformOwner && <TableHead className="text-right pr-6">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1012,12 +1224,89 @@ export default function StaffPolicies() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-muted-foreground">{p.reference || "—"}</TableCell>
+                        {isPlatformOwner && (
+                          <TableCell className="text-right pr-6">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button variant="ghost" size="icon" title="Edit payment" data-testid={`btn-edit-payment-${p.id}`} onClick={() => {
+                                setEditPaymentId(p.id);
+                                setEditPaymentForm({ amount: String(p.amount), status: p.status, reference: p.reference || "", notes: p.notes || "" });
+                              }}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button variant="ghost" size="icon" title="Delete payment" data-testid={`btn-delete-payment-${p.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeletePayment(p.id)}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               ) : (
                 <div className="p-6 text-center text-muted-foreground" data-testid="text-no-payments">No payments recorded for this policy.</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm border-border/60">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Receipt className="h-5 w-5 text-primary" /> Receipts</CardTitle>
+              <CardDescription>Payment receipts issued for this policy</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {(policyReceipts ?? []).length > 0 ? (
+                <Table>
+                  <TableHeader className="bg-muted/50">
+                    <TableRow>
+                      <TableHead className="pl-6">Receipt #</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Channel</TableHead>
+                      <TableHead>Issued</TableHead>
+                      <TableHead className="text-right pr-6">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(policyReceipts ?? []).map((r: any) => {
+                      const receiptUrl = getApiBase() + `/api/receipts/${r.id}/download`;
+                      const displayNum = /^\d+$/.test(String(r.receiptNumber).trim())
+                        ? `RCP-${String(r.receiptNumber).padStart(5, "0")}`
+                        : r.receiptNumber;
+                      return (
+                        <TableRow key={r.id} data-testid={`row-receipt-${r.id}`}>
+                          <TableCell className="pl-6 font-mono font-medium">{displayNum}</TableCell>
+                          <TableCell>{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
+                          <TableCell className="capitalize">{r.paymentChannel}</TableCell>
+                          <TableCell>{new Date(r.issuedAt).toLocaleDateString()}</TableCell>
+                          <TableCell className="text-right pr-6">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button variant="ghost" size="icon" title="View receipt" onClick={() => {
+                                setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum });
+                                setShowReceiptSuccess(true);
+                              }}><Eye className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Download receipt" onClick={() => window.open(receiptUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Print receipt" onClick={() => printDocument(receiptUrl)}><Printer className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Share receipt" onClick={() => shareDocument(receiptUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
+                              {isPlatformOwner && (
+                                <>
+                                  <Button variant="ghost" size="icon" title="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
+                                    setEditReceiptId(r.id);
+                                    setEditReceiptForm({ amount: String(r.amount), status: r.status || "issued", paymentChannel: r.paymentChannel || "" });
+                                  }}><Pencil className="h-4 w-4" /></Button>
+                                  <Button variant="ghost" size="icon" title="Delete receipt" data-testid={`btn-delete-receipt-${r.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeleteReceipt(r.id)}>
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="p-6 text-center text-muted-foreground">No receipts issued for this policy.</div>
               )}
             </CardContent>
           </Card>
@@ -1099,6 +1388,22 @@ export default function StaffPolicies() {
                 >
                   <Printer className="h-4 w-4" /> Print
                 </Button>
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => {
+                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
+                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
+                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
+                    const params = new URLSearchParams();
+                    if (from) params.set("dateFrom", from);
+                    if (to) params.set("dateTo", to);
+                    if (params.toString()) url += "?" + params.toString();
+                    shareDocument(url, `E-Statement-${displayPolicy.policyNumber}`);
+                  }}
+                >
+                  <Share2 className="h-4 w-4" /> Share
+                </Button>
               </div>
               <p className="text-xs text-muted-foreground">Leave dates empty for full payment history. Uses tenant logo and signature from Settings.</p>
             </CardContent>
@@ -1130,9 +1435,87 @@ export default function StaffPolicies() {
                   >
                     <Download className="h-4 w-4" /> Download
                   </Button>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const u = new URL(estatementViewerUrl);
+                      u.searchParams.delete("inline");
+                      printDocument(u.toString());
+                    }}
+                  >
+                    <Printer className="h-4 w-4" /> Print
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const u = new URL(estatementViewerUrl);
+                      u.searchParams.delete("inline");
+                      shareDocument(u.toString(), `E-Statement-${displayPolicy.policyNumber}`);
+                    }}
+                  >
+                    <Share2 className="h-4 w-4" /> Share
+                  </Button>
                   <Button variant="outline" onClick={() => setShowEstatementViewer(false)}>Close</Button>
                 </div>
               </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={showReceiptSuccess} onOpenChange={setShowReceiptSuccess}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                  {receiptSuccessData?.viewOnly ? "Receipt" : "Payment Successful"}
+                </DialogTitle>
+                <DialogDescription>
+                  {receiptSuccessData?.viewOnly
+                    ? `Viewing receipt ${receiptSuccessData?.receiptNumber || ""}`
+                    : `Payment has been recorded for policy ${receiptSuccessData?.policyNumber || ""}.`
+                  }
+                </DialogDescription>
+              </DialogHeader>
+              {receiptSuccessData && (() => {
+                const receiptId = receiptSuccessData.viewOnly
+                  ? receiptSuccessData.receiptId
+                  : receiptSuccessData.receipt?.id;
+                if (!receiptId) return (
+                  <div className="text-center py-4 text-muted-foreground">
+                    {receiptSuccessData.paynow ? "Paynow payment processed. Receipt will appear shortly." : "No receipt ID available."}
+                  </div>
+                );
+                const receiptUrl = getApiBase() + `/api/receipts/${receiptId}/download`;
+                return (
+                  <div className="space-y-4">
+                    <div className="border rounded-md overflow-hidden bg-muted/30">
+                      <iframe
+                        title="Receipt Preview"
+                        src={receiptUrl + "?inline=1"}
+                        className="w-full h-[400px]"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" className="gap-2" onClick={() => window.open(receiptUrl, "_blank", "noopener")}>
+                        <Download className="h-4 w-4" /> Download
+                      </Button>
+                      <Button variant="outline" className="gap-2" onClick={() => printDocument(receiptUrl)}>
+                        <Printer className="h-4 w-4" /> Print
+                      </Button>
+                      <Button variant="outline" className="gap-2" onClick={() => {
+                        const num = receiptSuccessData.receipt?.receiptNumber || receiptSuccessData.receiptNumber || "";
+                        shareDocument(receiptUrl, `Receipt-${num}`);
+                      }}>
+                        <Share2 className="h-4 w-4" /> Share
+                      </Button>
+                      <Button variant="outline" onClick={() => { setShowReceiptSuccess(false); setReceiptSuccessData(null); }}>
+                        Close
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
             </DialogContent>
           </Dialog>
         </div>
@@ -1165,6 +1548,120 @@ export default function StaffPolicies() {
               >
                 {transitionMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Confirm Transition
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+          <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Policy Details</DialogTitle>
+              <DialogDescription>
+                Update details for policy <strong>{displayPolicy?.policyNumber}</strong>.{!isPlatformOwner && " Agent assignment cannot be changed."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs">Currency</Label>
+                  <CurrencySelect value={editForm.currency} onValueChange={(v) => setEditForm({ ...editForm, currency: v })} />
+                </div>
+                <div>
+                  <Label className="text-xs">Payment Schedule</Label>
+                  <Select value={editForm.paymentSchedule} onValueChange={(v) => setEditForm({ ...editForm, paymentSchedule: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="weekly">Weekly</SelectItem>
+                      <SelectItem value="biweekly">Bi-weekly</SelectItem>
+                      <SelectItem value="quarterly">Quarterly</SelectItem>
+                      <SelectItem value="annually">Annually</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Effective Date</Label>
+                  <Input type="date" value={editForm.effectiveDate} onChange={(e) => setEditForm({ ...editForm, effectiveDate: e.target.value })} />
+                </div>
+                <div>
+                  <Label className="text-xs">Branch</Label>
+                  <Select value={editForm.branchId || "none"} onValueChange={(v) => setEditForm({ ...editForm, branchId: v === "none" ? "" : v })}>
+                    <SelectTrigger><SelectValue placeholder="No branch" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No branch</SelectItem>
+                      {branches.map((b: any) => (
+                        <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {isPlatformOwner && (
+                  <div className="col-span-2">
+                    <Label className="text-xs">Agent</Label>
+                    <Select value={editForm.agentId || "walk-in"} onValueChange={(v) => setEditForm({ ...editForm, agentId: v === "walk-in" ? "" : v })}>
+                      <SelectTrigger><SelectValue placeholder="Walk-in" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="walk-in">Walk-in (no agent)</SelectItem>
+                        {agents.map((a: any) => (
+                          <SelectItem key={a.id} value={a.id}>{a.displayName || a.email}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-sm font-semibold mb-3">Beneficiary</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs">First Name</Label>
+                    <Input value={editForm.beneficiaryFirstName} onChange={(e) => setEditForm({ ...editForm, beneficiaryFirstName: e.target.value })} placeholder="First name" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Last Name</Label>
+                    <Input value={editForm.beneficiaryLastName} onChange={(e) => setEditForm({ ...editForm, beneficiaryLastName: e.target.value })} placeholder="Last name" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Relationship</Label>
+                    <Select value={editForm.beneficiaryRelationship || "none"} onValueChange={(v) => setEditForm({ ...editForm, beneficiaryRelationship: v === "none" ? "" : v })}>
+                      <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Not set</SelectItem>
+                        {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
+                          <SelectItem key={r} value={r}>{r}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">National ID</Label>
+                    <Input value={editForm.beneficiaryNationalId} onChange={(e) => setEditForm({ ...editForm, beneficiaryNationalId: e.target.value })} placeholder="ID number" />
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-xs">Phone</Label>
+                    <Input value={editForm.beneficiaryPhone} onChange={(e) => setEditForm({ ...editForm, beneficiaryPhone: e.target.value })} placeholder="Phone number" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
+                <strong>Note:</strong> {isPlatformOwner
+                  ? "Premium amount, policy number, and client cannot be changed. Agent can be reassigned above."
+                  : "Agent assignment, premium amount, policy number, and client cannot be changed after policy creation."
+                }
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>
+              <Button
+                onClick={handleEditSubmit}
+                disabled={editPolicyMutation.isPending}
+                data-testid="btn-save-policy-edit"
+              >
+                {editPolicyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save Changes
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1391,6 +1888,171 @@ export default function StaffPolicies() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Superuser: confirm delete policy */}
+        <AlertDialog open={confirmDeletePolicy} onOpenChange={setConfirmDeletePolicy}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Permanently Delete Policy?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete policy <strong>{displayPolicy?.policyNumber}</strong> and all related records
+                including payments, receipts, members, claims, and commission entries. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => deletePolicyMutation.mutate(selectedPolicy.id)}
+                disabled={deletePolicyMutation.isPending}
+              >
+                {deletePolicyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Delete Permanently
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Superuser: edit payment dialog */}
+        <Dialog open={!!editPaymentId} onOpenChange={(open) => { if (!open) setEditPaymentId(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Edit Payment Transaction</DialogTitle>
+              <DialogDescription>Modify payment details. Changes are audit-logged.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs">Amount</Label>
+                <Input type="number" step="0.01" value={editPaymentForm.amount} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, amount: e.target.value })} />
+              </div>
+              <div>
+                <Label className="text-xs">Status</Label>
+                <Select value={editPaymentForm.status} onValueChange={(v) => setEditPaymentForm({ ...editPaymentForm, status: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="cleared">Cleared</SelectItem>
+                    <SelectItem value="reversed">Reversed</SelectItem>
+                    <SelectItem value="failed">Failed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Reference</Label>
+                <Input value={editPaymentForm.reference} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, reference: e.target.value })} />
+              </div>
+              <div>
+                <Label className="text-xs">Notes</Label>
+                <Textarea value={editPaymentForm.notes} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, notes: e.target.value })} rows={2} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditPaymentId(null)}>Cancel</Button>
+              <Button onClick={() => {
+                if (!editPaymentId) return;
+                editPaymentMutation.mutate({ id: editPaymentId, data: { amount: editPaymentForm.amount, status: editPaymentForm.status, reference: editPaymentForm.reference || null, notes: editPaymentForm.notes || null } });
+              }} disabled={editPaymentMutation.isPending}>
+                {editPaymentMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Superuser: confirm delete payment */}
+        <AlertDialog open={!!confirmDeletePayment} onOpenChange={(open) => { if (!open) setConfirmDeletePayment(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Payment Transaction?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete this payment transaction and any linked receipts. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => { if (confirmDeletePayment) deletePaymentMutation.mutate(confirmDeletePayment); }}
+                disabled={deletePaymentMutation.isPending}
+              >
+                {deletePaymentMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Superuser: edit receipt dialog */}
+        <Dialog open={!!editReceiptId} onOpenChange={(open) => { if (!open) setEditReceiptId(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Edit Receipt</DialogTitle>
+              <DialogDescription>Modify receipt details. Changes are audit-logged.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs">Amount</Label>
+                <Input type="number" step="0.01" value={editReceiptForm.amount} onChange={(e) => setEditReceiptForm({ ...editReceiptForm, amount: e.target.value })} />
+              </div>
+              <div>
+                <Label className="text-xs">Status</Label>
+                <Select value={editReceiptForm.status} onValueChange={(v) => setEditReceiptForm({ ...editReceiptForm, status: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="issued">Issued</SelectItem>
+                    <SelectItem value="voided">Voided</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Payment Channel</Label>
+                <Select value={editReceiptForm.paymentChannel} onValueChange={(v) => setEditReceiptForm({ ...editReceiptForm, paymentChannel: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="paynow_ecocash">EcoCash</SelectItem>
+                    <SelectItem value="paynow_card">Card</SelectItem>
+                    <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditReceiptId(null)}>Cancel</Button>
+              <Button onClick={() => {
+                if (!editReceiptId) return;
+                editReceiptMutation.mutate({ id: editReceiptId, data: { amount: editReceiptForm.amount, status: editReceiptForm.status, paymentChannel: editReceiptForm.paymentChannel } });
+              }} disabled={editReceiptMutation.isPending}>
+                {editReceiptMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Superuser: confirm delete receipt */}
+        <AlertDialog open={!!confirmDeleteReceipt} onOpenChange={(open) => { if (!open) setConfirmDeleteReceipt(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Receipt?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete this receipt. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => { if (confirmDeleteReceipt) deleteReceiptMutation.mutate(confirmDeleteReceipt); }}
+                disabled={deleteReceiptMutation.isPending}
+              >
+                {deleteReceiptMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </StaffLayout>
     );
   }
@@ -1493,6 +2155,9 @@ export default function StaffPolicies() {
                             <DropdownMenuItem onClick={() => openDetail(policy)} data-testid={`menu-view-${policy.id}`}>
                               <Eye className="h-4 w-4 mr-2" /> View Details
                             </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => { openDetail(policy); setTimeout(() => openEditDialog(policy), 100); }} data-testid={`menu-edit-${policy.id}`}>
+                              <Pencil className="h-4 w-4 mr-2" /> Edit
+                            </DropdownMenuItem>
                             {!isAgent && (VALID_POLICY_TRANSITIONS[policy.status] || []).length > 0 && (
                               <>
                                 <DropdownMenuSeparator />
@@ -1501,6 +2166,14 @@ export default function StaffPolicies() {
                                     <ArrowRightLeft className="h-4 w-4 mr-2" /> → {STATUS_LABELS[t] || t}
                                   </DropdownMenuItem>
                                 ))}
+                              </>
+                            )}
+                            {isPlatformOwner && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => { setSelectedPolicy(policy); setConfirmDeletePolicy(true); }} data-testid={`menu-delete-${policy.id}`}>
+                                  <Trash2 className="h-4 w-4 mr-2" /> Delete
+                                </DropdownMenuItem>
                               </>
                             )}
                           </DropdownMenuContent>
@@ -2119,6 +2792,29 @@ export default function StaffPolicies() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={confirmDeletePolicy && !showDetailView} onOpenChange={setConfirmDeletePolicy}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permanently Delete Policy?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete policy <strong>{selectedPolicy?.policyNumber}</strong> and all related records
+              including payments, receipts, members, claims, and commission entries. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => selectedPolicy && deletePolicyMutation.mutate(selectedPolicy.id)}
+              disabled={deletePolicyMutation.isPending}
+            >
+              {deletePolicyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete Permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </StaffLayout>
   );
 }

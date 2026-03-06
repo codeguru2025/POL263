@@ -1,6 +1,6 @@
 import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, type SQL } from "drizzle-orm";
 import { db } from "./db";
-import { getDbForOrg } from "./tenant-db";
+import { getDbForOrg, withOrgTransaction } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
@@ -330,6 +330,11 @@ export interface IStorage {
   getPaymentReceiptsByClient(clientId: string, orgId: string): Promise<PaymentReceipt[]>;
   getNextPaymentReceiptNumber(orgId: string): Promise<string>;
   updatePaymentReceipt(id: string, data: Partial<InsertPaymentReceipt>, orgId: string): Promise<PaymentReceipt | undefined>;
+  updatePaymentTransaction(id: string, data: Partial<InsertPaymentTransaction>, orgId: string): Promise<PaymentTransaction | undefined>;
+  deletePolicy(id: string, orgId: string): Promise<void>;
+  deletePaymentTransaction(id: string, orgId: string): Promise<void>;
+  deleteReceipt(id: string, orgId: string): Promise<void>;
+  deletePaymentReceipt(id: string, orgId: string): Promise<void>;
   getClaimsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<Claim[]>;
   getClaimsByPolicy(policyId: string, orgId: string): Promise<Claim[]>;
   getClaimsByClient(clientId: string, orgId: string): Promise<Claim[]>;
@@ -362,7 +367,7 @@ export interface IStorage {
   createCommissionLedgerEntry(entry: InsertCommissionLedgerEntry): Promise<CommissionLedgerEntry>;
   getNotificationTemplates(orgId: string): Promise<NotificationTemplate[]>;
   createNotificationTemplate(tmpl: InsertNotificationTemplate): Promise<NotificationTemplate>;
-  createNotificationLog(orgId: string, data: { recipientType: string; recipientId: string | null; channel: string; subject?: string | null; body?: string | null; templateId?: string | null; status?: string }): Promise<NotificationLog>;
+  createNotificationLog(orgId: string, data: { recipientType: string; recipientId: string | null; channel: string; subject?: string | null; body?: string | null; templateId?: string | null; policyId?: string | null; status?: string }): Promise<NotificationLog>;
   getLeadsByOrg(orgId: string, limit?: number, offset?: number): Promise<Lead[]>;
   getLeadsByAgent(agentId: string, orgId: string): Promise<Lead[]>;
   getLead(id: string, orgId: string): Promise<Lead | undefined>;
@@ -899,6 +904,8 @@ export class DatabaseStorage implements IStorage {
       if (row && Number(row.count) > 0) {
         return { ok: false, reason: "Cannot delete product: one or more policies use this product." };
       }
+      await tdb.delete(productBenefitBundleLinks).where(inArray(productBenefitBundleLinks.productVersionId, versionIds));
+      await tdb.delete(termsAndConditions).where(inArray(termsAndConditions.productVersionId, versionIds));
     }
     await tdb.delete(productVersions).where(eq(productVersions.productId, id));
     await tdb.delete(products).where(eq(products.id, id));
@@ -1815,6 +1822,59 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(paymentReceipts).set(data).where(eq(paymentReceipts.id, id)).returning();
     return updated;
+  }
+  async updatePaymentTransaction(id: string, data: Partial<InsertPaymentTransaction>, orgId: string): Promise<PaymentTransaction | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(paymentTransactions).set(data).where(eq(paymentTransactions.id, id)).returning();
+    return updated;
+  }
+  async deletePolicy(id: string, orgId: string): Promise<void> {
+    await withOrgTransaction(orgId, async (tx) => {
+      await tx.delete(costLineItems).where(sql`cost_sheet_id IN (SELECT id FROM cost_sheets WHERE claim_id IN (SELECT id FROM claims WHERE policy_id = ${id}))`);
+      await tx.delete(costSheets).where(sql`claim_id IN (SELECT id FROM claims WHERE policy_id = ${id})`);
+      await tx.delete(driverAssignments).where(sql`funeral_case_id IN (SELECT id FROM funeral_cases WHERE policy_id = ${id})`);
+      await tx.delete(funeralTasks).where(sql`funeral_case_id IN (SELECT id FROM funeral_cases WHERE policy_id = ${id})`);
+      await tx.delete(funeralCases).where(eq(funeralCases.policyId, id));
+      await tx.delete(policyAddOns).where(eq(policyAddOns.policyId, id));
+      await tx.delete(policyMembers).where(eq(policyMembers.policyId, id));
+      await tx.delete(policyStatusHistory).where(eq(policyStatusHistory.policyId, id));
+      await tx.delete(claimStatusHistory).where(sql`claim_id IN (SELECT id FROM claims WHERE policy_id = ${id})`);
+      await tx.delete(claimDocuments).where(sql`claim_id IN (SELECT id FROM claims WHERE policy_id = ${id})`);
+      await tx.delete(claims).where(eq(claims.policyId, id));
+      await tx.delete(commissionLedgerEntries).where(eq(commissionLedgerEntries.policyId, id));
+      await tx.delete(creditNotes).where(eq(creditNotes.policyId, id));
+      await tx.delete(policyCreditBalances).where(eq(policyCreditBalances.policyId, id));
+      await tx.delete(paymentReceipts).where(eq(paymentReceipts.policyId, id));
+      await tx.delete(paymentEvents).where(sql`payment_intent_id IN (SELECT id FROM payment_intents WHERE policy_id = ${id})`);
+      await tx.delete(groupPaymentAllocations).where(sql`policy_id = ${id}`);
+      await tx.delete(paymentIntents).where(eq(paymentIntents.policyId, id));
+      await tx.delete(receipts).where(eq(receipts.policyId, id));
+      await tx.delete(platformReceivables).where(sql`source_transaction_id IN (SELECT id FROM payment_transactions WHERE policy_id = ${id})`);
+      await tx.delete(reversalEntries).where(sql`original_transaction_id IN (SELECT id FROM payment_transactions WHERE policy_id = ${id})`);
+      await tx.delete(reversalEntries).where(sql`reversal_transaction_id IN (SELECT id FROM payment_transactions WHERE policy_id = ${id})`);
+      await tx.delete(paymentTransactions).where(eq(paymentTransactions.policyId, id));
+      await tx.delete(policies).where(eq(policies.id, id));
+    });
+  }
+  async deletePaymentTransaction(id: string, orgId: string): Promise<void> {
+    await withOrgTransaction(orgId, async (tx) => {
+      await tx.delete(reversalEntries).where(or(
+        eq(reversalEntries.originalTransactionId, id),
+        eq(reversalEntries.reversalTransactionId, id),
+      ));
+      await tx.delete(commissionLedgerEntries).where(eq(commissionLedgerEntries.transactionId, id));
+      await tx.delete(platformReceivables).where(eq(platformReceivables.sourceTransactionId, id));
+      await tx.delete(receipts).where(eq(receipts.transactionId, id));
+      await tx.delete(paymentTransactions).where(eq(paymentTransactions.id, id));
+    });
+  }
+  async deleteReceipt(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(receipts).where(eq(receipts.id, id));
+  }
+  async deletePaymentReceipt(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(paymentReceipts).where(eq(paymentReceipts.id, id));
   }
 
   // ─── Claims ────────────────────────────────────────────────

@@ -5,6 +5,15 @@ export function getApiBase(): string {
   return (import.meta.env.VITE_API_BASE as string) || "";
 }
 
+function getCsrfToken(): string | null {
+  try {
+    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -18,9 +27,14 @@ export async function apiRequest(
   data?: unknown | undefined,
 ): Promise<Response> {
   const fullUrl = url.startsWith("http") ? url : getApiBase() + url;
+  const headers: Record<string, string> = {};
+  if (data) headers["Content-Type"] = "application/json";
+  const csrf = getCsrfToken();
+  if (csrf) headers["X-XSRF-TOKEN"] = csrf;
+
   const res = await fetch(fullUrl, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers,
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });

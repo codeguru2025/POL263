@@ -9,3 +9,4 @@ vite.config.ts.*
 .env.*.local
 .env.production
 uploads
+testsprite_tests/tmp/

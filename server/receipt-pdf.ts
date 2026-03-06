@@ -21,12 +21,20 @@ const LOGO_SIZE = 40;
 const FALLBACK_ISSUER_NAME = process.env.RECEIPT_ISSUER_NAME || "POL263";
 const FALLBACK_FOOTER_TEXT = process.env.RECEIPT_FOOTER_TEXT || "Thank you for your payment.";
 
-function resolveLogoPath(logoUrl: string | null | undefined): string | null {
+async function resolveLogoForReceipt(logoUrl: string | null | undefined): Promise<Buffer | string | null> {
   if (!logoUrl || !logoUrl.trim()) return null;
   const u = logoUrl.trim();
-  if (u.startsWith("http://") || u.startsWith("https://")) return null;
+  if (u.startsWith("http://") || u.startsWith("https://")) {
+    try {
+      const res = await fetch(u, { headers: { "User-Agent": "POL263" } });
+      if (!res.ok) return null;
+      const ab = await res.arrayBuffer();
+      return Buffer.from(ab);
+    } catch {
+      return null;
+    }
+  }
   const relativePath = u.replace(/^\/+/, "");
-  // Resolve /uploads/filename relative to cwd so tenant uploads are found
   const bases = [
     path.join(process.cwd(), "uploads"),
     path.join(process.cwd(), "dist", "public"),
@@ -58,6 +66,8 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
   const filename = `RCP-${receipt.receiptNumber.replace(/\s/g, "-")}-${receiptId.slice(0, 8)}.pdf`;
   const filepath = path.join(receiptsDir, filename);
 
+  const logoData = await resolveLogoForReceipt(org.logoUrl);
+
   return new Promise((resolve) => {
     const doc = new PDFDocument({ size: [WIDTH_PT, 600], margin: MARGIN, bufferPages: true });
     const stream = fs.createWriteStream(filepath);
@@ -76,12 +86,10 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
       doc.text(text, MARGIN, y, { width: WIDTH_PT - 2 * MARGIN });
       y += LINE_HEIGHT;
     };
-
-    const logoPath = resolveLogoPath(org.logoUrl);
-    if (logoPath) {
+    if (logoData) {
       try {
         const logoX = Math.round((WIDTH_PT - LOGO_SIZE) / 2);
-        doc.image(logoPath, logoX, y, { width: LOGO_SIZE, height: LOGO_SIZE });
+        doc.image(logoData, logoX, y, { width: LOGO_SIZE, height: LOGO_SIZE });
         y += LOGO_SIZE + 4;
       } catch (_) { /* skip logo if unreadable */ }
     }
