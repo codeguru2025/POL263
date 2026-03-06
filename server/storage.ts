@@ -232,10 +232,11 @@ export interface IStorage {
   getPermissions(): Promise<Permission[]>;
   createPermission(perm: InsertPermission): Promise<Permission>;
   getRolePermissions(roleId: string, organizationId: string): Promise<Permission[]>;
-  addRolePermission(roleId: string, permissionId: string): Promise<void>;
-  removeRolePermission(roleId: string, permissionId: string): Promise<void>;
+  addRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void>;
+  removeRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void>;
   getUserRoles(userId: string, organizationId: string): Promise<(Role & { branchId: string | null })[]>;
-  addUserRole(userId: string, roleId: string, branchId?: string): Promise<void>;
+  getUserRolesBatch(userIds: string[], organizationId: string): Promise<Record<string, (Role & { branchId: string | null })[]>>;
+  addUserRole(userId: string, roleId: string, orgId: string, branchId?: string): Promise<void>;
   removeUserRole(userId: string, roleId: string): Promise<void>;
   clearUserRoles(userId: string): Promise<void>;
   getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]>;
@@ -299,6 +300,7 @@ export interface IStorage {
   getConversionHistory(organizationId: string, filters?: ReportFilters): Promise<ConversionEntry[]>;
   getActivationHistory(organizationId: string, filters?: ReportFilters): Promise<ActivationEntry[]>;
   getPolicyMembers(policyId: string, orgId: string): Promise<PolicyMember[]>;
+  getPolicyMembersBatch(policyIds: string[], orgId: string): Promise<Record<string, PolicyMember[]>>;
   countCoveredLives(orgId: string): Promise<{ coveredLives: number; activePolicyCount: number }>;
   createPolicyMember(member: InsertPolicyMember): Promise<PolicyMember>;
   getPolicyAddOns(policyId: string, orgId: string): Promise<PolicyAddOn[]>;
@@ -415,7 +417,7 @@ export interface IStorage {
   deductPolicyCreditBalance(orgId: string, policyId: string, amount: string): Promise<PolicyCreditBalance | undefined>;
   getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
   addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
-  removeClientDeviceToken(orgId: string, token: string): Promise<void>;
+  removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void>;
   getNextCreditNoteNumber(orgId: string): Promise<string>;
   createCreditNote(note: InsertCreditNote): Promise<CreditNote>;
   getCreditNotesByClient(clientId: string, orgId: string): Promise<CreditNote[]>;
@@ -534,29 +536,17 @@ export class DatabaseStorage implements IStorage {
       .where(eq(rolePermissions.roleId, roleId));
     return rows.map((r) => r.permission);
   }
-  async addRolePermission(roleId: string, permissionId: string): Promise<void> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
-      const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
-      if (role) {
-        await tdb.insert(rolePermissions).values({ roleId, permissionId }).onConflictDoNothing();
-        return;
-      }
-    }
-    await db.insert(rolePermissions).values({ roleId, permissionId }).onConflictDoNothing();
+  async addRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+    if (!role) throw new Error("Role not found in organization");
+    await tdb.insert(rolePermissions).values({ roleId, permissionId }).onConflictDoNothing();
   }
-  async removeRolePermission(roleId: string, permissionId: string): Promise<void> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
-      const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
-      if (role) {
-        await tdb.delete(rolePermissions).where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)));
-        return;
-      }
-    }
-    await db.delete(rolePermissions).where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)));
+  async removeRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+    if (!role) throw new Error("Role not found in organization");
+    await tdb.delete(rolePermissions).where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)));
   }
   async getUserRoles(userId: string, organizationId: string): Promise<(Role & { branchId: string | null })[]> {
     const tdb = await getDbForOrg(organizationId);
@@ -565,17 +555,25 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userRoles.userId, userId));
     return rows.map((r) => ({ ...r.role, branchId: r.branchId }));
   }
-  async addUserRole(userId: string, roleId: string, branchId?: string): Promise<void> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
-      const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
-      if (role) {
-        await tdb.insert(userRoles).values({ userId, roleId, branchId: branchId ?? null });
-        return;
-      }
+  async getUserRolesBatch(userIds: string[], organizationId: string): Promise<Record<string, (Role & { branchId: string | null })[]>> {
+    if (userIds.length === 0) return {};
+    const tdb = await getDbForOrg(organizationId);
+    const rows = await tdb.select({ userId: userRoles.userId, role: roles, branchId: userRoles.branchId }).from(userRoles)
+      .innerJoin(roles, eq(userRoles.roleId, roles.id))
+      .where(inArray(userRoles.userId, userIds));
+    const result: Record<string, (Role & { branchId: string | null })[]> = {};
+    for (const uid of userIds) result[uid] = [];
+    for (const r of rows) {
+      if (!result[r.userId]) result[r.userId] = [];
+      result[r.userId].push({ ...r.role, branchId: r.branchId });
     }
-    await db.insert(userRoles).values({ userId, roleId, branchId: branchId ?? null });
+    return result;
+  }
+  async addUserRole(userId: string, roleId: string, orgId: string, branchId?: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+    if (!role) throw new Error("Role not found in organization");
+    await tdb.insert(userRoles).values({ userId, roleId, branchId: branchId ?? null });
   }
   async removeUserRole(userId: string, roleId: string): Promise<void> {
     const orgs = await db.select({ id: organizations.id }).from(organizations);
@@ -1257,7 +1255,7 @@ export class DatabaseStorage implements IStorage {
         membersByPolicy[m.policyId].push({ clientId: m.clientId, dependentId: m.dependentId, role: m.role });
       }
     }
-    const dependentIds = [...new Set(allMembers.map((m) => m.dependentId).filter(Boolean) as string[])];
+    const dependentIds = Array.from(new Set(allMembers.map((m) => m.dependentId).filter(Boolean) as string[]));
     const dependentDobMap: Record<string, string | null> = {};
     if (dependentIds.length > 0) {
       const deps = await tdb.select({ id: dependents.id, dateOfBirth: dependents.dateOfBirth }).from(dependents).where(inArray(dependents.id, dependentIds));
@@ -1510,6 +1508,18 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(policyMembers).where(eq(policyMembers.policyId, policyId));
   }
+  async getPolicyMembersBatch(policyIds: string[], orgId: string): Promise<Record<string, PolicyMember[]>> {
+    if (policyIds.length === 0) return {};
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(policyMembers).where(inArray(policyMembers.policyId, policyIds));
+    const result: Record<string, PolicyMember[]> = {};
+    for (const pid of policyIds) result[pid] = [];
+    for (const r of rows) {
+      if (!result[r.policyId]) result[r.policyId] = [];
+      result[r.policyId].push(r);
+    }
+    return result;
+  }
   async countCoveredLives(orgId: string): Promise<{ coveredLives: number; activePolicyCount: number }> {
     const tdb = await getDbForOrg(orgId);
     const [memberResult] = await tdb
@@ -1655,7 +1665,7 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(policies, eq(paymentReceipts.policyId, policies.id))
       .leftJoin(clients, eq(paymentReceipts.clientId, clients.id))
       .leftJoin(users, eq(policies.agentId, users.id))
-      .leftJoin(paymentTransactions, eq(paymentReceipts.paymentIntentId, paymentTransactions.id))
+      .leftJoin(paymentTransactions, sql`${paymentTransactions.id} = (${paymentReceipts.metadataJson}->>'transactionId')::uuid`)
       .where(and(...conditions))
       .orderBy(desc(paymentReceipts.issuedAt))
       .limit(limit)
@@ -2241,12 +2251,12 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await tdb.update(cashups).set(data).where(eq(cashups.id, id)).returning();
     return updated;
   }
-  async getReceiptTotalsByUserDate(orgId: string, userId: string, date: string): Promise<{ amountsByMethod: Record<string, string>; transactionCount: number }> {
+  async getReceiptTotalsByUserDate(orgId: string, userId: string, date: string): Promise<{ amountsByMethod: Record<string, string>; transactionCount: number; currency: string }> {
     const tdb = await getDbForOrg(orgId);
     const dayStart = new Date(date + "T00:00:00.000Z");
     const dayEnd = new Date(date + "T23:59:59.999Z");
     const rows = await tdb
-      .select({ paymentChannel: paymentReceipts.paymentChannel, amount: paymentReceipts.amount })
+      .select({ paymentChannel: paymentReceipts.paymentChannel, amount: paymentReceipts.amount, currency: paymentReceipts.currency })
       .from(paymentReceipts)
       .where(and(
         eq(paymentReceipts.organizationId, orgId),
@@ -2256,13 +2266,17 @@ export class DatabaseStorage implements IStorage {
         lte(paymentReceipts.issuedAt, dayEnd),
       ));
     const amountsByMethod: Record<string, string> = { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
+    const currencyCounts: Record<string, number> = {};
     for (const r of rows) {
       const ch = (r.paymentChannel || "other").toLowerCase();
       const key = ch === "cash" ? "cash" : ch === "paynow_ecocash" ? "paynow_ecocash" : ch === "paynow_card" ? "paynow_card" : "other";
       const prev = parseFloat(amountsByMethod[key] || "0");
       amountsByMethod[key] = (prev + parseFloat(String(r.amount || "0"))).toFixed(2);
+      const cur = r.currency || "USD";
+      currencyCounts[cur] = (currencyCounts[cur] || 0) + 1;
     }
-    return { amountsByMethod, transactionCount: rows.length };
+    const currency = Object.entries(currencyCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "USD";
+    return { amountsByMethod, transactionCount: rows.length, currency };
   }
 
   // ─── Security Questions ────────────────────────────────────
@@ -2598,10 +2612,11 @@ export class DatabaseStorage implements IStorage {
       });
     }
   }
-  async removeClientDeviceToken(orgId: string, token: string): Promise<void> {
+  async removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    await tdb.delete(clientDeviceTokens)
-      .where(and(eq(clientDeviceTokens.organizationId, orgId), eq(clientDeviceTokens.token, token.trim())));
+    const conditions = [eq(clientDeviceTokens.organizationId, orgId), eq(clientDeviceTokens.token, token.trim())];
+    if (clientId) conditions.push(eq(clientDeviceTokens.clientId, clientId));
+    await tdb.delete(clientDeviceTokens).where(and(...conditions));
   }
   async getNextCreditNoteNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);

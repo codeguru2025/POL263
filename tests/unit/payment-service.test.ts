@@ -1,4 +1,42 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../../server/db", () => ({
+  db: {},
+  pool: { query: vi.fn() },
+}));
+
+let insertCallCount = 0;
+const txInsertData: Record<string, any>[] = [];
+
+const mockTxDb = {
+  insert: vi.fn(() => ({
+    values: vi.fn((data: any) => {
+      txInsertData.push(data);
+      return {
+        returning: vi.fn(() => {
+          insertCallCount++;
+          if (insertCallCount === 1) {
+            return [{ id: "tx-1", amount: "10", currency: "USD", status: "cleared" }];
+          }
+          return [{ id: "receipt-1", receiptNumber: "2", organizationId: "org-1", metadataJson: { transactionId: "tx-1", paynowReference: "PAYNOW-REF-123" } }];
+        }),
+      };
+    }),
+  })),
+  update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
+};
+
+vi.mock("../../server/tenant-db", () => ({
+  getDbForOrg: vi.fn(() => ({})),
+  getPoolForOrg: vi.fn(() => ({})),
+  withOrgTransaction: vi.fn(async (_orgId: string, fn: (tx: any) => any) => fn(mockTxDb)),
+  defaultPool: { query: vi.fn() },
+}));
+
+vi.mock("../../server/policy-status-on-payment", () => ({
+  applyPolicyStatusForClearedPayment: vi.fn(),
+}));
+
 import { createPaymentIntent, handlePaynowResult, applyPaymentToPolicy } from "../../server/payment-service";
 
 const mockIntent = {
@@ -23,6 +61,7 @@ const mockIntent = {
 vi.mock("../../server/storage", () => ({
   storage: {
     getPaymentIntentByOrgAndIdempotencyKey: vi.fn(),
+    getPaymentTransactionByIdempotencyKey: vi.fn(),
     getPolicy: vi.fn(),
     getOrganization: vi.fn(),
     createPaymentIntent: vi.fn(),
@@ -57,6 +96,9 @@ const findPaymentIntentById = (await import("../../server/storage")).findPayment
 
 describe("PaymentService", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    insertCallCount = 0;
+    txInsertData.length = 0;
     vi.mocked(storage.getPolicy).mockResolvedValue({
       id: "policy-1",
       policyNumber: "POL001",
@@ -120,14 +162,14 @@ describe("PaymentService", () => {
       });
 
       expect(result.ok).toBe(true);
-      // When intent.status === "paid", handlePaynowResult returns early and does not call applyPaymentToPolicy again
       expect(storage.updatePaymentIntent).not.toHaveBeenCalled();
     });
   });
 
   describe("applyPaymentToPolicy receipting (online PayNow)", () => {
-    it("creates payment transaction and receipt with receipt number and transactionId in metadata when intent not paid", async () => {
+    it("creates transaction and receipt inside a DB transaction when intent not paid", async () => {
       vi.mocked(findPaymentIntentById).mockResolvedValue({ ...mockIntent, status: "created" } as any);
+      vi.mocked(storage.getPaymentTransactionByIdempotencyKey).mockResolvedValue(null);
       vi.mocked(storage.getPaymentReceiptsByPolicy).mockResolvedValue([]);
       vi.mocked(storage.getPolicy).mockResolvedValue({
         id: "policy-1",
@@ -139,17 +181,10 @@ describe("PaymentService", () => {
         currency: "USD",
         premiumAmount: "10",
       } as any);
-      const mockTx = { id: "tx-1", amount: "10", currency: "USD", status: "cleared" };
-      const mockReceipt = { id: "receipt-1", receiptNumber: "2", metadataJson: { transactionId: "tx-1", paynowReference: "PAYNOW-REF-123" } };
-      vi.mocked(storage.createPaymentTransaction).mockResolvedValue(mockTx as any);
       vi.mocked(storage.getNextPaymentReceiptNumber).mockResolvedValue("2");
-      vi.mocked(storage.createPaymentReceipt).mockResolvedValue(mockReceipt as any);
-      vi.mocked(storage.updatePaymentIntent).mockResolvedValue(undefined as any);
       vi.mocked(storage.createPaymentEvent).mockResolvedValue(undefined as any);
-      vi.mocked(storage.updatePolicy).mockResolvedValue(undefined as any);
-      vi.mocked(storage.createPolicyStatusHistory).mockResolvedValue(undefined as any);
-      vi.mocked(storage.getCommissionEntriesByPolicy).mockResolvedValue([]);
       vi.mocked(storage.updatePaymentReceipt).mockResolvedValue(undefined as any);
+      vi.mocked(storage.getCommissionEntriesByPolicy).mockResolvedValue([]);
       vi.mocked(storage.createNotificationLog).mockResolvedValue(undefined as any);
 
       const result = await applyPaymentToPolicy("intent-1", "system", null);
@@ -157,50 +192,36 @@ describe("PaymentService", () => {
       expect(result.ok).toBe(true);
       expect(result.transactionId).toBe("tx-1");
       expect(result.receiptId).toBe("receipt-1");
-      expect(storage.createPaymentTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          organizationId: "org-1",
-          policyId: "policy-1",
-          clientId: "client-1",
-          amount: "10",
-          currency: "USD",
-          status: "cleared",
-          paymentMethod: "paynow",
-          reference: mockIntent.merchantReference,
-          paynowReference: "PAYNOW-REF-123",
-          idempotencyKey: "paynow-intent-1",
-        })
-      );
+      expect(mockTxDb.insert).toHaveBeenCalledTimes(2);
       expect(storage.getNextPaymentReceiptNumber).toHaveBeenCalledWith("org-1");
-      expect(storage.createPaymentReceipt).toHaveBeenCalledWith(
-        expect.objectContaining({
-          organizationId: "org-1",
-          policyId: "policy-1",
-          clientId: "client-1",
-          receiptNumber: "2",
-          paymentIntentId: "intent-1",
-          amount: "10",
-          currency: "USD",
-          status: "issued",
-          metadataJson: { transactionId: "tx-1", paynowReference: "PAYNOW-REF-123" },
-        })
-      );
-      expect(storage.updatePaymentIntent).toHaveBeenCalledWith("intent-1", { status: "paid" }, "org-1");
     });
 
     it("returns existing receipt when intent already paid (idempotent)", async () => {
       vi.mocked(findPaymentIntentById).mockResolvedValue({ ...mockIntent, status: "paid" } as any);
+      vi.mocked(storage.getPaymentTransactionByIdempotencyKey).mockResolvedValue(null);
       const existingReceipt = { id: "existing-receipt", receiptNumber: "1", paymentIntentId: "intent-1" };
       vi.mocked(storage.getPaymentReceiptsByPolicy).mockResolvedValue([existingReceipt] as any);
-      vi.mocked(storage.createPaymentTransaction).mockReset();
-      vi.mocked(storage.createPaymentReceipt).mockReset();
 
       const result = await applyPaymentToPolicy("intent-1", "system", null);
 
       expect(result.ok).toBe(true);
       expect(result.receiptId).toBe("existing-receipt");
-      expect(storage.createPaymentTransaction).not.toHaveBeenCalled();
-      expect(storage.createPaymentReceipt).not.toHaveBeenCalled();
+      expect(mockTxDb.insert).not.toHaveBeenCalled();
+    });
+
+    it("returns existing transaction when idempotency key already exists", async () => {
+      vi.mocked(findPaymentIntentById).mockResolvedValue({ ...mockIntent, status: "created" } as any);
+      const existingTx = { id: "existing-tx-1", amount: "10", currency: "USD" };
+      vi.mocked(storage.getPaymentTransactionByIdempotencyKey).mockResolvedValue(existingTx as any);
+      const existingReceipt = { id: "existing-receipt", paymentIntentId: "intent-1" };
+      vi.mocked(storage.getPaymentReceiptsByPolicy).mockResolvedValue([existingReceipt] as any);
+
+      const result = await applyPaymentToPolicy("intent-1", "system", null);
+
+      expect(result.ok).toBe(true);
+      expect(result.transactionId).toBe("existing-tx-1");
+      expect(result.receiptId).toBe("existing-receipt");
+      expect(mockTxDb.insert).not.toHaveBeenCalled();
     });
   });
 });

@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CurrencySelect } from "@/components/currency-select";
 import { useToast } from "@/hooks/use-toast";
 import {
   Plus, Search, Loader2, BookOpen, DollarSign, FileSpreadsheet,
@@ -299,7 +300,7 @@ export default function StaffPriceBook() {
                           </TableCell>
                           <TableCell className="text-muted-foreground">{item.unit}</TableCell>
                           <TableCell className="text-right font-semibold">
-                            {item.currency === "USD" ? "$" : item.currency}{parseFloat(item.priceAmount).toFixed(2)}
+                            {item.currency} {parseFloat(item.priceAmount).toFixed(2)}
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">
                             {item.effectiveFrom || "—"} {item.effectiveTo ? `→ ${item.effectiveTo}` : ""}
@@ -443,12 +444,10 @@ export default function StaffPriceBook() {
                                   <TableCell className="font-medium pl-6">{li.description}</TableCell>
                                   <TableCell className="text-right">{parseFloat(li.quantity).toFixed(0)}</TableCell>
                                   <TableCell className="text-right">
-                                    {selectedSheet.currency === "USD" ? "$" : selectedSheet.currency}
-                                    {parseFloat(li.unitPrice).toFixed(2)}
+                                    {selectedSheet.currency} {parseFloat(li.unitPrice).toFixed(2)}
                                   </TableCell>
                                   <TableCell className="text-right font-semibold pr-6">
-                                    {selectedSheet.currency === "USD" ? "$" : selectedSheet.currency}
-                                    {parseFloat(li.totalPrice).toFixed(2)}
+                                    {selectedSheet.currency} {parseFloat(li.totalPrice).toFixed(2)}
                                   </TableCell>
                                 </TableRow>
                               ))}
@@ -457,8 +456,7 @@ export default function StaffPriceBook() {
                           <div className="border-t bg-muted/30 px-6 py-4 flex items-center justify-between">
                             <span className="text-sm font-medium text-muted-foreground">Grand Total</span>
                             <span className="text-xl font-display font-bold" data-testid="text-costsheet-total">
-                              {selectedSheet.currency === "USD" ? "$" : selectedSheet.currency}
-                              {lineItemsTotal.toFixed(2)}
+                              {selectedSheet.currency} {lineItemsTotal.toFixed(2)}
                             </span>
                           </div>
                         </>
@@ -593,16 +591,7 @@ function CreatePriceBookItemDialog({
             </div>
             <div className="space-y-2">
               <Label>Currency</Label>
-              <Select value={currency} onValueChange={setCurrency}>
-                <SelectTrigger data-testid="select-pricebook-currency">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="ZAR">ZAR</SelectItem>
-                  <SelectItem value="MWK">MWK</SelectItem>
-                </SelectContent>
-              </Select>
+              <CurrencySelect value={currency} onValueChange={setCurrency} />
             </div>
           </div>
           <div className="space-y-2">
@@ -675,16 +664,7 @@ function CreateCostSheetDialog({
           </div>
           <div className="space-y-2">
             <Label>Currency</Label>
-            <Select value={currency} onValueChange={setCurrency}>
-              <SelectTrigger data-testid="select-costsheet-currency">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="USD">USD</SelectItem>
-                <SelectItem value="ZAR">ZAR</SelectItem>
-                <SelectItem value="MWK">MWK</SelectItem>
-              </SelectContent>
-            </Select>
+            <CurrencySelect value={currency} onValueChange={setCurrency} />
           </div>
         </div>
         <DialogFooter>
@@ -759,7 +739,7 @@ function AddLineItemDialog({
               <SelectContent>
                 {priceBookItems.filter((i) => i.isActive).map((item) => (
                   <SelectItem key={item.id} value={item.id}>
-                    {item.name} — {item.currency === "USD" ? "$" : item.currency}{parseFloat(item.priceAmount).toFixed(2)}/{item.unit}
+                    {item.name} — {item.currency} {parseFloat(item.priceAmount).toFixed(2)}/{item.unit}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -781,7 +761,7 @@ function AddLineItemDialog({
           </div>
           <div className="bg-muted/50 rounded-lg px-4 py-3 flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Line Total</span>
-            <span className="font-display font-bold text-lg" data-testid="text-lineitem-total">${total}</span>
+            <span className="font-display font-bold text-lg" data-testid="text-lineitem-total">{total}</span>
           </div>
         </div>
         <DialogFooter>

@@ -33,7 +33,7 @@ export async function createRedisStore(
 
     const basePrefix = (options.prefix ?? PREFIX).replace(/:$/, "");
 
-    function getStore(limiterPrefix: string): Store {
+    const getStore = (limiterPrefix: string): Store => {
       const prefix = `${basePrefix}:${limiterPrefix}:`;
       const store: Store = {
         init(opts: Options): void {
@@ -44,7 +44,7 @@ export async function createRedisStore(
           const windowMs = (store as any)._windowMs ?? 60_000;
           const multi = client.multi();
           multi.incr(k);
-          multi.pTtl(k);
+          multi.pTTL(k);
           const results = await multi.exec();
           if (!results || results.length < 2) {
             return { totalHits: 1, resetTime: new Date(Date.now() + windowMs) };
@@ -69,7 +69,7 @@ export async function createRedisStore(
       };
       (store as any)._windowMs = 60_000;
       return store;
-    }
+    };
 
     structuredLog("info", "Rate limit store using Redis", { redisUrl: REDIS_URL.replace(/:[^:@]+@/, ":****@") });
     return getStore;

@@ -48,13 +48,15 @@ export default function Home() {
   const { data: clientMe, isFetched: clientMeFetched } = useQuery<{ client: { id: string } | null }>({
     queryKey: ["/api/client-auth/me"],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/client-auth/me", { credentials: "include" });
-      if (res.status === 401 || res.status === 403) return { client: null };
-      if (!res.ok) throw new Error("Failed to fetch");
-      return res.json();
+      try {
+        const res = await fetch(getApiBase() + "/api/client-auth/me", { credentials: "include" });
+        if (!res.ok) return { client: null };
+        return res.json();
+      } catch {
+        return { client: null };
+      }
     },
     retry: false,
-    // Fetch when we have returnTo=/client... or when on home with no returnTo (to redirect already-logged-in clients)
     enabled: !!returnTo?.startsWith("/client") || (typeof window !== "undefined" && !returnTo),
   });
 

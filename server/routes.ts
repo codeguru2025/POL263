@@ -5,6 +5,7 @@ import { storage, findPaymentReceiptById } from "./storage";
 import { withOrgTransaction } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
+import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordAgentCommission, recordClawback, rollbackClawbacks, enforceAgentScope } from "./route-helpers";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -16,7 +17,8 @@ import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
-import { toUpperTrim, normalizeNationalId, isValidNationalId } from "../shared/validation";
+import { runApplyCreditBalances } from "./credit-apply";
+import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, SUPPORTED_CURRENCIES } from "../shared/validation";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -34,222 +36,7 @@ import {
 } from "@shared/schema";
 import { sql, eq } from "drizzle-orm";
 import { notifyClient } from "./notifications";
-
-
-async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
-  if (!policy.agentId) return;
-  try {
-    // Product-version-level commission takes priority over org-wide plan
-    let firstMonths = 0, firstRate = 0, recurringStart = 0, recurringRate = 0;
-    let sourceLabel = "org plan";
-
-    if (policy.productVersionId) {
-      const pv = await storage.getProductVersion(policy.productVersionId, orgId);
-      if (pv?.commissionFirstMonthsRate != null) {
-        firstMonths = Number(pv.commissionFirstMonthsCount) || 2;
-        firstRate = Number(pv.commissionFirstMonthsRate) || 0;
-        recurringStart = Number(pv.commissionRecurringStartMonth) || firstMonths + 1;
-        recurringRate = Number(pv.commissionRecurringRate) || 0;
-        sourceLabel = "product version";
-      }
-    }
-
-    if (firstRate === 0 && recurringRate === 0) {
-      const plans = await storage.getCommissionPlans(orgId);
-      const activePlan = plans.find((p) => p.isActive);
-      if (!activePlan) return;
-      firstMonths = Number(activePlan.firstMonthsCount) || 2;
-      firstRate = Number(activePlan.firstMonthsRate) || 50;
-      recurringStart = Number(activePlan.recurringStartMonth) || 5;
-      recurringRate = Number(activePlan.recurringRate) || 10;
-      sourceLabel = "org plan";
-    }
-
-    const existingPayments = await storage.getPaymentsByPolicy(policy.id, orgId);
-    const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
-
-    let rate = 0;
-    let entryType = "recurring";
-    if (clearedCount <= firstMonths) {
-      rate = firstRate;
-      entryType = "first_months";
-    } else {
-      rate = recurringRate;
-      entryType = "recurring";
-    }
-
-    if (rate <= 0) return;
-
-    const amount = (parseFloat(paymentAmount) * rate / 100).toFixed(2);
-    await storage.createCommissionLedgerEntry({
-      organizationId: orgId,
-      agentId: policy.agentId,
-      policyId: policy.id,
-      transactionId,
-      entryType,
-      amount,
-      currency: policy.currency || "USD",
-      description: `${rate}% commission on payment #${clearedCount} (${entryType === "first_months" ? "initial" : "recurring"}, ${sourceLabel})`,
-      status: "earned",
-    });
-  } catch (err) {
-    structuredLog("error", "Commission calculation failed", { error: (err as Error).message, policyId: policy.id });
-  }
-}
-
-async function recordClawback(orgId: string, policy: any, reason: string) {
-  if (!policy.agentId) return;
-  try {
-    let clawbackThreshold = 4;
-    if (policy.productVersionId) {
-      const pv = await storage.getProductVersion(policy.productVersionId, orgId);
-      if (pv?.commissionClawbackThreshold != null) {
-        clawbackThreshold = Number(pv.commissionClawbackThreshold);
-      }
-    }
-    if (clawbackThreshold <= 0) {
-      const plans = await storage.getCommissionPlans(orgId);
-      const activePlan = plans.find((p) => p.isActive);
-      if (activePlan) clawbackThreshold = Number(activePlan.clawbackThresholdPayments) || 4;
-    }
-
-    const existingPayments = await storage.getPaymentsByPolicy(policy.id, orgId);
-    const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
-    if (clearedCount >= clawbackThreshold) return;
-
-    const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
-    const earnedEntries = entries.filter((e) => e.status === "earned" && (e.entryType === "first_months" || e.entryType === "recurring"));
-    if (earnedEntries.length === 0) return;
-
-    const totalClawback = earnedEntries.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0);
-    if (totalClawback <= 0) return;
-
-    await storage.createCommissionLedgerEntry({
-      organizationId: orgId,
-      agentId: policy.agentId,
-      policyId: policy.id,
-      entryType: "clawback",
-      amount: (-totalClawback).toFixed(2),
-      currency: policy.currency || "USD",
-      description: `Clawback — ${reason} (${clearedCount} of ${clawbackThreshold} threshold payments)`,
-      status: "earned",
-    });
-  } catch (err) {
-    structuredLog("error", "Clawback recording failed", { error: (err as Error).message, policyId: policy.id });
-  }
-}
-
-async function rollbackClawbacks(orgId: string, policy: any) {
-  if (!policy.agentId) return;
-  try {
-    const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
-    const clawbacks = entries.filter((e) => e.entryType === "clawback" && e.status === "earned");
-    const existingRollbacks = entries.filter((e) => e.entryType === "rollback");
-
-    const clawbackTotal = clawbacks.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0);
-    const rollbackTotal = existingRollbacks.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0);
-    const unreversed = clawbackTotal + rollbackTotal;
-    if (unreversed >= 0) return;
-
-    await storage.createCommissionLedgerEntry({
-      organizationId: orgId,
-      agentId: policy.agentId,
-      policyId: policy.id,
-      entryType: "rollback",
-      amount: Math.abs(unreversed).toFixed(2),
-      currency: policy.currency || "USD",
-      description: `Rollback — policy reinstated, clawback reversed`,
-      status: "earned",
-    });
-  } catch (err) {
-    structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId: policy.id });
-  }
-}
-
-function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any) {
-  const user = req.user as any;
-  return storage.createAuditLog({
-    organizationId: user.organizationId,
-    actorId: user.id,
-    actorEmail: user.email,
-    action,
-    entityType,
-    entityId,
-    before,
-    after,
-    requestId: req.requestId,
-  });
-}
-
-function getAddOnPrice(ao: any, paymentSchedule: string): number {
-  if (ao.pricingMode === "percentage") {
-    return parseFloat(String(ao.priceAmount ?? ao.priceMonthly ?? 0));
-  }
-  if (paymentSchedule === "weekly" && ao.priceWeekly) {
-    return parseFloat(String(ao.priceWeekly));
-  }
-  if (paymentSchedule === "biweekly" && ao.priceBiweekly) {
-    return parseFloat(String(ao.priceBiweekly));
-  }
-  return parseFloat(String(ao.priceMonthly ?? ao.priceAmount ?? 0));
-}
-
-/**
- * Compute policy premium from product version and per-member add-ons.
- * Add-on prices are matched to the policy's payment schedule using explicit
- * priceMonthly / priceWeekly / priceBiweekly fields set in the product builder.
- */
-async function computePolicyPremium(
-  orgId: string,
-  productVersionId: string,
-  currency: string,
-  paymentSchedule: string,
-  addOnIds: string[],
-  memberAddOns?: { memberRef: string; addOnId: string }[],
-  memberCount?: number,
-): Promise<string> {
-  const pv = await storage.getProductVersion(productVersionId, orgId);
-  if (!pv) return "0";
-  let base = 0;
-  if (paymentSchedule === "monthly") {
-    base = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
-  } else if (paymentSchedule === "weekly") {
-    base = currency === "ZAR" ? parseFloat(String((pv as any).premiumWeeklyZar ?? 0)) : parseFloat(String(pv.premiumWeeklyUsd ?? 0));
-  } else if (paymentSchedule === "biweekly") {
-    base = currency === "ZAR" ? parseFloat(String((pv as any).premiumBiweeklyZar ?? 0)) : parseFloat(String(pv.premiumBiweeklyUsd ?? 0));
-  }
-
-  let addOnTotal = 0;
-  const orgAddOns = await storage.getAddOns(orgId);
-
-  if (memberAddOns && memberAddOns.length > 0) {
-    for (const ma of memberAddOns) {
-      const ao = orgAddOns.find((a: any) => a.id === ma.addOnId);
-      if (!ao) continue;
-      const price = getAddOnPrice(ao, paymentSchedule);
-      if (ao.pricingMode === "percentage") {
-        addOnTotal += base * (price / 100);
-      } else {
-        addOnTotal += price;
-      }
-    }
-  } else if (addOnIds.length > 0) {
-    const count = memberCount || 1;
-    for (const id of addOnIds) {
-      const ao = orgAddOns.find((a: any) => a.id === id);
-      if (!ao) continue;
-      const price = getAddOnPrice(ao, paymentSchedule);
-      if (ao.pricingMode === "percentage") {
-        addOnTotal += base * (price / 100) * count;
-      } else {
-        addOnTotal += price * count;
-      }
-    }
-  }
-
-  const total = Number.isFinite(base + addOnTotal) && (base + addOnTotal) >= 0 ? base + addOnTotal : 0;
-  return total.toFixed(2);
-}
+import { enqueueJob, getJobStats } from "./job-queue";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
@@ -274,7 +61,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     destination: (_req, _file, cb) => cb(null, uploadsDir),
     filename: (_req, file, cb) => {
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      cb(null, uniqueSuffix + path.extname(file.originalname));
+      const ext = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, "").slice(0, 10);
+      cb(null, uniqueSuffix + ext);
     },
   });
 
@@ -302,13 +90,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     },
   });
 
-  app.post("/api/upload", requireAuth, upload.single("file"), (req, res) => {
+  app.post("/api/upload", requireAuth, requireTenantScope, upload.single("file"), (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     const url = `/uploads/${req.file.filename}`;
     return res.json({ url, filename: req.file.filename });
   });
 
-  app.post("/api/upload/logo", requireAuth, logoUpload.single("file"), (req, res) => {
+  app.post("/api/upload/logo", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoUpload.single("file"), (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     const url = `/uploads/${req.file.filename}`;
     return res.json({ url, filename: req.file.filename });
@@ -322,13 +110,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(403).json({ message: "Platform owner access required" });
     }
     const { tenantId } = req.body;
+    const previousTenantId = (req.session as any)?.activeTenantId || null;
     if (!tenantId) {
       delete (req.session as any).activeTenantId;
+      structuredLog("info", "Platform owner cleared active tenant", {
+        userId: user.id,
+        email: user.email,
+        previousTenantId,
+        ip: req.ip,
+      });
       return res.json({ activeTenantId: null });
     }
     const org = await storage.getOrganization(tenantId);
     if (!org) return res.status(404).json({ message: "Tenant not found" });
     (req.session as any).activeTenantId = tenantId;
+    structuredLog("info", "Platform owner switched tenant", {
+      userId: user.id,
+      email: user.email,
+      previousTenantId,
+      newTenantId: tenantId,
+      tenantName: org.name,
+      ip: req.ip,
+    });
+    await auditLog(req, "SWITCH_TENANT", "Organization", tenantId, { previousTenantId }, { newTenantId: tenantId, tenantName: org.name });
     return res.json({ activeTenantId: tenantId, tenantName: org.name });
   });
 
@@ -500,7 +304,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (roleName !== "superuser") {
           for (const permName of permNames) {
             const permId = permMap.get(permName);
-            if (permId) await storage.addRolePermission(role.id, permId);
+            if (permId) await storage.addRolePermission(role.id, permId, org.id);
           }
         }
       }
@@ -520,7 +324,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
 
         const adminRoleId = roleMap.get("administrator");
-        if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId);
+        if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId, org.id);
       }
 
       await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, {
@@ -598,14 +402,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const usersList = await storage.getUsersByOrg(user.organizationId, limit, offset);
-    const usersWithRoles = await Promise.all(usersList.map(async (u) => {
-      const userRoles = await storage.getUserRoles(u.id, user.organizationId);
-      return {
-        id: u.id, email: u.email, displayName: u.displayName,
-        avatarUrl: u.avatarUrl, isActive: u.isActive, createdAt: u.createdAt,
-        referralCode: u.referralCode, branchId: u.branchId,
-        roles: userRoles.map(r => ({ id: r.id, name: r.name })),
-      };
+    const rolesByUser = await storage.getUserRolesBatch(usersList.map(u => u.id), user.organizationId);
+    const usersWithRoles = usersList.map((u) => ({
+      id: u.id, email: u.email, displayName: u.displayName,
+      avatarUrl: u.avatarUrl, isActive: u.isActive, createdAt: u.createdAt,
+      referralCode: u.referralCode, branchId: u.branchId,
+      roles: (rolesByUser[u.id] || []).map(r => ({ id: r.id, name: r.name })),
     }));
     return res.json(usersWithRoles);
   });
@@ -613,16 +415,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/agents", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     const usersList = await storage.getUsersByOrg(user.organizationId, 500, 0);
-    const agentsList = [];
-    for (const u of usersList) {
-      const userRoles = await storage.getUserRoles(u.id, user.organizationId);
-      if (userRoles.some(r => r.name === "agent")) {
-        agentsList.push({
-          id: u.id, email: u.email, displayName: u.displayName,
-          referralCode: u.referralCode,
-        });
-      }
-    }
+    const rolesByUser = await storage.getUserRolesBatch(usersList.map(u => u.id), user.organizationId);
+    const agentsList = usersList
+      .filter(u => (rolesByUser[u.id] || []).some(r => r.name === "agent"))
+      .map(u => ({
+        id: u.id, email: u.email, displayName: u.displayName,
+        referralCode: u.referralCode,
+      }));
     return res.json(agentsList);
   });
 
@@ -678,7 +477,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     if (roleIds && Array.isArray(roleIds)) {
       for (const roleId of roleIds) {
-        await storage.addUserRole(newUser.id, roleId);
+        await storage.addUserRole(newUser.id, roleId, currentUser.organizationId);
       }
     }
 
@@ -726,7 +525,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (roleIds && Array.isArray(roleIds)) {
       await storage.clearUserRoles(req.params.id as string);
       for (const roleId of roleIds) {
-        await storage.addUserRole(req.params.id as string, roleId);
+        await storage.addUserRole(req.params.id as string, roleId, currentUser.organizationId);
       }
     }
 
@@ -762,12 +561,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/roles/:id/permissions/:permId", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
-    await storage.addRolePermission(req.params.id as string, req.params.permId as string);
+    const user = req.user as any;
+    await storage.addRolePermission(req.params.id as string, req.params.permId as string, user.organizationId);
     return res.json({ ok: true });
   });
 
   app.delete("/api/roles/:id/permissions/:permId", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
-    await storage.removeRolePermission(req.params.id as string, req.params.permId as string);
+    const user = req.user as any;
+    await storage.removeRolePermission(req.params.id as string, req.params.permId as string, user.organizationId);
     return res.json({ ok: true });
   });
 
@@ -1656,35 +1457,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await rollbackClawbacks(user.organizationId, policy);
     }
 
-    try {
-      if (result.receipt) {
+    await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", result.tx.id, null, result.tx);
+    if (result.receipt) await auditLog(req, "CREATE_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
+
+    const txSnapshot = { ...result.tx };
+    const receiptSnapshot = result.receipt ? { ...result.receipt } : null;
+    const orgIdSnap = user.organizationId;
+    const policySnap = policy ? { ...policy } : null;
+    enqueueJob("payment-followup", { txId: txSnapshot.id }, async () => {
+      if (receiptSnapshot) {
         const { generateReceiptPdf } = await import("./receipt-pdf");
-        const pdfPath = await generateReceiptPdf(result.receipt.id);
-        if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, user.organizationId);
+        const pdfPath = await generateReceiptPdf(receiptSnapshot.id);
+        if (pdfPath) await storage.updatePaymentReceipt(receiptSnapshot.id, { pdfStorageKey: pdfPath }, orgIdSnap);
       }
-      if (result.tx.status === "cleared") {
-        const chibAmount = (parseFloat(result.tx.amount) * 0.025).toFixed(2);
+      if (txSnapshot.status === "cleared") {
+        const chibAmount = (parseFloat(txSnapshot.amount) * 0.025).toFixed(2);
         await storage.createPlatformReceivable({
-          organizationId: user.organizationId,
-          sourceTransactionId: result.tx.id,
+          organizationId: orgIdSnap,
+          sourceTransactionId: txSnapshot.id,
           amount: chibAmount,
-          currency: result.tx.currency,
-          description: `2.5% on payment ${result.tx.id}`,
+          currency: txSnapshot.currency,
+          description: `2.5% on payment ${txSnapshot.id}`,
           isSettled: false,
         });
+        if (txSnapshot.policyId) {
+          const commPolicy = await storage.getPolicy(txSnapshot.policyId, orgIdSnap);
+          if (commPolicy) await recordAgentCommission(orgIdSnap, commPolicy, txSnapshot.id, txSnapshot.amount);
+        }
       }
-      await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", result.tx.id, null, result.tx);
-      if (result.receipt) await auditLog(req, "CREATE_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
-      if (result.tx.status === "cleared" && result.tx.policyId) {
-        const commPolicy = await storage.getPolicy(result.tx.policyId, user.organizationId);
-        if (commPolicy) await recordAgentCommission(user.organizationId, commPolicy, result.tx.id, result.tx.amount);
+      if (txSnapshot.status === "cleared" && txSnapshot.clientId && txSnapshot.policyId && policySnap) {
+        await notifyClient(orgIdSnap, txSnapshot.clientId, "Payment received", `Your payment of ${txSnapshot.currency} ${txSnapshot.amount} for policy ${policySnap.policyNumber} has been received. Thank you.`);
       }
-      if (result.tx.status === "cleared" && result.tx.clientId && result.tx.policyId && policy) {
-        await notifyClient(user.organizationId, result.tx.clientId, "Payment received", `Your payment of ${result.tx.currency} ${result.tx.amount} for policy ${policy.policyNumber} has been received. Thank you.`);
-      }
-    } catch (postErr: any) {
-      structuredLog("warn", "POST /api/payments post-commit step failed (payment already saved)", { error: postErr?.message || String(postErr), stack: postErr?.stack });
-    }
+    });
+
     return res.status(201).json({ ...result.tx, receipt: result.receipt });
     } catch (err: any) {
       if (err?.name === "ZodError" && err?.errors?.length) {
@@ -1803,7 +1608,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/receipts/:id/download", requireAuth, async (req, res) => {
+  app.get("/api/receipts/:id/download", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const receipt = user.organizationId
@@ -1886,23 +1691,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await rollbackClawbacks(user.organizationId, policy);
     }
 
-    // Non-transactional follow-ups (PDF generation, commission, revenue share)
-    const { generateReceiptPdf } = await import("./receipt-pdf");
-    const pdfPath = await generateReceiptPdf(result.receipt.id);
-    if (pdfPath) await storage.updatePaymentReceipt(result.receipt.id, { pdfStorageKey: pdfPath }, result.receipt.organizationId);
+    await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
 
-    const chibAmount = (parseFloat(String(amount)) * 0.025).toFixed(2);
-    await storage.createPlatformReceivable({
-      organizationId: user.organizationId,
-      sourceTransactionId: result.tx.id,
-      amount: chibAmount,
-      currency: result.tx.currency,
-      description: `2.5% on cash payment ${result.tx.id}`,
-      isSettled: false,
+    const cashReceiptId = result.receipt.id;
+    const cashTxId = result.tx.id;
+    const cashTxCurrency = result.tx.currency;
+    const cashOrgId = user.organizationId;
+    const cashPolicyCopy = { ...policy };
+    const cashAmount = String(amount);
+    enqueueJob("cash-receipt-followup", { receiptId: cashReceiptId }, async () => {
+      const { generateReceiptPdf } = await import("./receipt-pdf");
+      const pdfPath = await generateReceiptPdf(cashReceiptId);
+      if (pdfPath) await storage.updatePaymentReceipt(cashReceiptId, { pdfStorageKey: pdfPath }, cashOrgId);
+
+      const chibAmount = (parseFloat(cashAmount) * 0.025).toFixed(2);
+      await storage.createPlatformReceivable({
+        organizationId: cashOrgId,
+        sourceTransactionId: cashTxId,
+        amount: chibAmount,
+        currency: cashTxCurrency,
+        description: `2.5% on cash payment ${cashTxId}`,
+        isSettled: false,
+      });
+
+      await recordAgentCommission(cashOrgId, cashPolicyCopy, cashTxId, cashAmount);
     });
 
-    await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
-    await recordAgentCommission(user.organizationId, policy, result.tx.id, String(amount));
     return res.status(201).json({ transaction: result.tx, receipt: result.receipt });
     } catch (err: any) {
       structuredLog("error", "POST /api/admin/receipts/cash failed", { error: err?.message || String(err), stack: err?.stack });
@@ -1967,7 +1781,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (parts.length < 2) continue;
       const policyNumber = parts[0];
       const amountStr = parts[1] || "0";
-      const currency = (parts[2] || "USD").toUpperCase();
+      const currency = normalizeCurrency(parts[2]);
       const amount = parseFloat(amountStr);
       if (!policyNumber || !Number.isFinite(amount) || amount < 0) continue;
       const policy = await storage.getPolicyByNumber(policyNumber, user.organizationId);
@@ -2254,6 +2068,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       branchId: body.branchId || undefined,
       cashupDate: body.cashupDate,
       totalAmount: String(totalAmount.toFixed(2)),
+      currency: body.currency || "USD",
       transactionCount: typeof body.transactionCount === "number" ? body.transactionCount : parseInt(String(body.transactionCount || "0"), 10) || 0,
       amountsByMethod,
       status: "draft",
@@ -2655,7 +2470,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Security Questions (for client auth) ───────────────────
 
-  app.get("/api/security-questions", async (req, res) => {
+  app.get("/api/security-questions", requireAuth, async (req, res) => {
     const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
     if (orgIdParam) {
       return res.json(await storage.getSecurityQuestions(orgIdParam));
@@ -2706,12 +2521,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
     const orgId = agent.organizationId;
     const products = await storage.getProductsByOrg(orgId);
-    const withVersions = await Promise.all(
-      products.filter((p) => p.isActive).map(async (p) => {
-        const versions = await storage.getProductVersions(p.id, orgId);
-        return { ...p, versions: versions.filter((v) => v.isActive !== false) };
-      })
-    );
+    const allVersions = await storage.getAllProductVersions(orgId);
+    const versionsByProduct: Record<string, typeof allVersions> = {};
+    for (const v of allVersions) {
+      if (!versionsByProduct[v.productId]) versionsByProduct[v.productId] = [];
+      versionsByProduct[v.productId].push(v);
+    }
+    const withVersions = products.filter((p) => p.isActive).map((p) => ({
+      ...p,
+      versions: (versionsByProduct[p.id] || []).filter((v) => v.isActive !== false),
+    }));
     const branches = await storage.getBranchesByOrg(orgId);
     return res.json({
       agentName: agent.displayName || agent.email,
@@ -3141,11 +2960,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (isAgent) {
       const agentPolicies = await storage.getPoliciesByAgent(user.id, user.organizationId);
       const activePolicies = agentPolicies.filter((p: any) => p.status === "active");
+      const policyIds = activePolicies.map(p => p.id);
+      const membersByPolicy = await storage.getPolicyMembersBatch(policyIds, user.organizationId);
       let coveredLives = 0;
-      for (const p of activePolicies) {
-        const members = await storage.getPolicyMembers(p.id, user.organizationId);
-        coveredLives += members.length;
-      }
+      for (const pid of policyIds) coveredLives += (membersByPolicy[pid] || []).length;
       return res.json({ coveredLives, activePolicyCount: activePolicies.length });
     }
     const result = await storage.countCoveredLives(user.organizationId);
@@ -3166,10 +2984,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       : allPaymentsRaw;
 
     const pvToProductId: Record<string, string> = {};
-    for (const prod of allProducts) {
-      const versions = await storage.getProductVersions(prod.id, user.organizationId);
-      versions.forEach((v: { id: string }) => { pvToProductId[v.id] = prod.id; });
-    }
+    const allVersions = await storage.getAllProductVersions(user.organizationId);
+    for (const v of allVersions) pvToProductId[v.id] = v.productId;
     const policyByProduct: Record<string, { total: number; active: number; lapsed: number }> = {};
     allPolicies.forEach((p: any) => {
       const pid = pvToProductId[p.productVersionId] || "unknown";
@@ -3180,10 +2996,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
 
     const revenueByProduct: Record<string, number> = {};
+    const currencyByProduct: Record<string, string> = {};
     allPayments.filter((p: any) => p.status === "cleared").forEach((p: any) => {
       const pol = allPolicies.find((pol: any) => pol.id === p.policyId);
       const pid = pol ? (pvToProductId[pol.productVersionId] || "unknown") : "unknown";
       revenueByProduct[pid] = (revenueByProduct[pid] || 0) + parseFloat(p.amount || "0");
+      if (p.currency && !currencyByProduct[pid]) currencyByProduct[pid] = p.currency;
     });
 
     const performance = allProducts.map((prod: any) => ({
@@ -3193,6 +3011,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       activePolicies: policyByProduct[prod.id]?.active || 0,
       lapsedPolicies: policyByProduct[prod.id]?.lapsed || 0,
       revenue: revenueByProduct[prod.id] || 0,
+      currency: currencyByProduct[prod.id] || "USD",
     }));
 
     return res.json(performance);
@@ -3275,16 +3094,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const statuses = Array.isArray(q.statuses) ? q.statuses.filter((s: unknown) => typeof s === "string") : undefined;
     return { fromDate, toDate, userId, branchId, productId, agentId, status, statuses };
   };
-
-  async function enforceAgentScope(req: Request, filters: ReturnType<typeof parseReportFilters>) {
-    const user = req.user as any;
-    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
-    if (isAgent) {
-      filters.agentId = user.id;
-    }
-    return filters;
-  }
 
   app.get("/api/reports/policy-details", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -3467,11 +3276,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "underwriter-payable": {
           const result = await storage.getUnderwriterPayableReport(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
-            "Policy Number", "Status", "Client First Name", "Client Last Name", "Client Phone", "Client Email", "Product Name", "Product Code", "Branch",
+            "Policy Number", "Status", "Currency", "Client First Name", "Client Last Name", "Client Phone", "Client Email", "Product Name", "Product Code", "Branch",
             "Adults", "Children", "Underwriter Amount Adult", "Underwriter Amount Child", "Advance Months", "Monthly Payable", "Total Payable",
           ];
           rows = result.rows.map((r: any) => [
-            r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientPhone ?? "", r.clientEmail ?? "",
+            r.policyNumber, r.status, r.currency || "USD", r.clientFirstName ?? "", r.clientLastName ?? "", r.clientPhone ?? "", r.clientEmail ?? "",
             r.productName ?? "", r.productCode ?? "", r.branchName ?? "",
             r.adults, r.children, r.underwriterAmountAdult ?? "", r.underwriterAmountChild ?? "", r.underwriterAdvanceMonths,
             r.monthlyPayable.toFixed(2), r.totalPayable.toFixed(2),
@@ -3480,8 +3289,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "claims": {
           rows = await storage.getClaimsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Claim Number", "Type", "Status", "Deceased Name", "Created"];
-          rows = rows.map((r: any) => [r.claimNumber, r.claimType, r.status, r.deceasedName || "", r.createdAt]);
+          headers = ["Claim Number", "Type", "Status", "Currency", "Approved Amount", "Deceased Name", "Created"];
+          rows = rows.map((r: any) => [r.claimNumber, r.claimType, r.status, r.currency || "USD", r.approvedAmount ?? "", r.deceasedName || "", r.createdAt]);
           break;
         }
         case "payments": {
@@ -3510,8 +3319,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "payroll": {
           const employees = await storage.getPayrollEmployees(user.organizationId);
-          headers = ["Employee Name", "ID Number", "Position", "Department", "Basic Salary", "Status"];
-          rows = employees.map((r: any) => [r.employeeName, r.idNumber, r.position, r.department, r.basicSalary, r.status]);
+          headers = ["Employee Name", "ID Number", "Position", "Department", "Currency", "Basic Salary", "Status"];
+          rows = employees.map((r: any) => [r.employeeName, r.idNumber, r.position, r.department, r.currency || "USD", r.basicSalary, r.status]);
           break;
         }
         case "commissions": {
@@ -3584,9 +3393,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "cashups": {
           const cashupsList = await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...reportFilters, preparedBy: reportFilters.userId });
-          headers = ["Cashup Date", "Total Amount", "Transaction Count", "Status", "Locked", "Prepared By", "Confirmed By", "Discrepancy Amount", "Discrepancy Notes", "Created"];
+          headers = ["Cashup Date", "Currency", "Total Amount", "Transaction Count", "Status", "Locked", "Prepared By", "Confirmed By", "Discrepancy Amount", "Discrepancy Notes", "Created"];
           rows = cashupsList.map((r: any) => [
-            r.cashupDate, r.totalAmount, r.transactionCount, r.status || "—", r.isLocked ? "Yes" : "No", r.preparedBy,
+            r.cashupDate, r.currency || "USD", r.totalAmount, r.transactionCount, r.status || "—", r.isLocked ? "Yes" : "No", r.preparedBy,
             r.confirmedBy || "—", r.discrepancyAmount ?? "—", r.discrepancyNotes ?? "—", r.createdAt,
           ]);
           break;
@@ -3594,8 +3403,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "receipts": {
           const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
-            "Receipt Number", "Date Paid", "Timestamp", "Payment Method", "Total",
-            "Premium Amount", "Remarks", "Agent", "Months Paid", "Policy / Surname",
+            "Receipt Number", "Date Paid", "Timestamp", "Payment Method", "Currency", "Total",
+            "Premium Currency", "Premium Amount", "Remarks", "Agent", "Months Paid", "Policy / Surname",
             "Reference", "Product", "Inception Date", "Month Number", "Year Number",
             "Receipt Counter", "Receipt Branch", "Payment Branch", "Policy Status",
           ];
@@ -3604,7 +3413,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             r.issuedAt ? new Date(r.issuedAt).toISOString().split("T")[0] : "",
             r.issuedAt ? new Date(r.issuedAt).toISOString() : "",
             r.paymentChannel || r.txPaymentMethod || "",
+            r.currency || "USD",
             r.amount,
+            r.policyCurrency || r.currency || "USD",
             r.premiumAmount || "",
             r.txNotes || "",
             r.agentDisplayName || r.agentEmail || "",
@@ -3643,7 +3454,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.setHeader("Content-Disposition", `attachment; filename="${reportType}-report.csv"`);
       return res.send(csvLines.join("\n"));
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3673,14 +3484,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } catch {
         dbConnected = false;
       }
+      const { getTenantPoolStats } = await import("./tenant-db");
       return res.json({
         dbConnected,
         uptime: process.uptime(),
         tableCounts,
+        tenantPools: getTenantPoolStats(),
+        backgroundJobs: getJobStats(),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3702,7 +3516,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }));
       return res.json(rows);
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3723,7 +3537,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }));
       return res.json(rows);
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3744,7 +3558,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }));
       return res.json(rows);
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3756,7 +3570,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await (db as any).execute(sql`CREATE INDEX IF NOT EXISTS tc_pv_idx ON terms_and_conditions(product_version_id)`);
       return res.json({ success: true, message: "Migration complete: product_version_id column added to terms_and_conditions" });
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3806,7 +3620,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await seedDatabase();
       return res.json({ success: true, message: "Permissions and roles synchronized" });
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 

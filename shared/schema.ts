@@ -837,6 +837,7 @@ export const cashups = pgTable(
     branchId: uuid("branch_id").references(() => branches.id),
     cashupDate: date("cashup_date").notNull(),
     totalAmount: numeric("total_amount").notNull(),
+    currency: text("currency").default("USD").notNull(),
     transactionCount: integer("transaction_count").notNull(),
     /** Expected amounts per payment method: cash, paynow_ecocash, paynow_card, other. */
     amountsByMethod: jsonb("amounts_by_method"),
@@ -894,6 +895,7 @@ export const claims = pgTable(
     dateOfDeath: date("date_of_death"),
     causeOfDeath: text("cause_of_death"),
     cashInLieuAmount: numeric("cash_in_lieu_amount"),
+    currency: text("currency").default("USD").notNull(),
     isWaitingPeriodWaived: boolean("is_waiting_period_waived").default(false),
     fraudFlags: jsonb("fraud_flags"),
     submittedBy: uuid("submitted_by").references(() => users.id),

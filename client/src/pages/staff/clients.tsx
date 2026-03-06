@@ -203,6 +203,7 @@ export default function StaffClients() {
     queryKey: ["/api/clients", selectedClientId],
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/clients/${selectedClientId}`, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return null;
       if (!res.ok) throw new Error("Failed to fetch client");
       return res.json();
     },
@@ -218,6 +219,7 @@ export default function StaffClients() {
     queryKey: ["/api/clients", selectedClientId, "dependents"],
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/clients/${selectedClientId}/dependents`, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return [];
       if (!res.ok) throw new Error("Failed to fetch dependents");
       return res.json();
     },

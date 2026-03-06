@@ -53,7 +53,10 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 
-if (process.env.ENABLE_CSRF_PROTECTION === "true") {
+const enableCsrf = process.env.ENABLE_CSRF_PROTECTION !== undefined
+  ? process.env.ENABLE_CSRF_PROTECTION !== "false"
+  : process.env.NODE_ENV === "production";
+if (enableCsrf) {
   const csrfProtection = csurf({
     cookie: {
       httpOnly: true,
@@ -132,6 +135,28 @@ if (process.env.ENABLE_CSRF_PROTECTION === "true") {
   });
   app.use("/api/reports", reportExportLimiter);
   app.use("/api/dashboard/stats", reportExportLimiter);
+
+  const writeLimiter = rateLimit({
+    ...limiterOpts,
+    store: getRedisStore?.("write"),
+    windowMs: 60 * 1000,
+    max: 30,
+    message: { message: "Too many write requests, please slow down" },
+  });
+  app.use("/api/policies", (req, _res, next) => {
+    if (req.method === "POST") return writeLimiter(req, _res, next);
+    next();
+  });
+  app.use("/api/payments", (req, _res, next) => {
+    if (req.method === "POST") return writeLimiter(req, _res, next);
+    next();
+  });
+  app.use("/api/month-end-run", (req, _res, next) => {
+    if (req.method === "POST") return writeLimiter(req, _res, next);
+    next();
+  });
+  app.use("/api/upload", writeLimiter);
+  app.use("/api/public/register-policy", writeLimiter);
 
   app.get("/api/health", async (_req, res) => {
     try {

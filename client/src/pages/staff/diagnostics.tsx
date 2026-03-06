@@ -40,6 +40,7 @@ interface NotificationFailure {
 interface UnallocatedPayment {
   id: string;
   amount: string;
+  currency: string;
   method: string;
   reference: string | null;
   status: string;
@@ -335,7 +336,7 @@ export default function StaffDiagnostics() {
                         {unallocated.map((p) => (
                           <TableRow key={p.id} data-testid={`row-unallocated-payment-${p.id}`}>
                             <TableCell className="font-mono font-medium">
-                              R {parseFloat(p.amount).toFixed(2)}
+                              {p.currency || "USD"} {parseFloat(p.amount).toFixed(2)}
                             </TableCell>
                             <TableCell>
                               <Badge variant="outline">{p.method}</Badge>

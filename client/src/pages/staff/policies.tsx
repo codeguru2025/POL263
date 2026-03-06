@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ClientSearchInput } from "@/components/client-search-input";
+import { CurrencySelect } from "@/components/currency-select";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -150,10 +151,8 @@ export default function StaffPolicies() {
     queryKey: ["/api/policies", { q: debouncedSearch }],
     queryFn: async () => {
       const res = await fetch(getApiBase() + policiesQueryUrl, { credentials: "include" });
-      if (!res.ok) {
-        if (res.status === 403) return [];
-        throw new Error("Failed to fetch policies");
-      }
+      if (res.status === 401 || res.status === 403) return [];
+      if (!res.ok) throw new Error("Failed to fetch policies");
       const data = await res.json();
       return Array.isArray(data) ? data : [];
     },
@@ -320,6 +319,7 @@ export default function StaffPolicies() {
     enabled: !!selectedPolicy?.id && showDetailView,
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}`, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return null;
       if (!res.ok) throw new Error("Failed to load policy detail");
       return res.json();
     },
@@ -1232,15 +1232,7 @@ export default function StaffPolicies() {
                 </div>
                 <div>
                   <Label className="text-xs">Currency</Label>
-                  <Select value={inPolicyReceiptCurrency} onValueChange={setInPolicyReceiptCurrency}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="USD">USD</SelectItem>
-                      <SelectItem value="ZAR">ZAR</SelectItem>
-                      <SelectItem value="ZWL">ZWL</SelectItem>
-                      <SelectItem value="BWP">BWP</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <CurrencySelect value={inPolicyReceiptCurrency} onValueChange={setInPolicyReceiptCurrency} />
                 </div>
               </div>
               <div>
@@ -1984,15 +1976,7 @@ export default function StaffPolicies() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Currency</Label>
-                    <Select value={createForm.currency} onValueChange={(v) => setCreateForm({ ...createForm, currency: v })}>
-                      <SelectTrigger data-testid="select-currency">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="USD">USD</SelectItem>
-                        <SelectItem value="ZAR">ZAR</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <CurrencySelect value={createForm.currency} onValueChange={(v) => setCreateForm({ ...createForm, currency: v })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">

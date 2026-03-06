@@ -51,6 +51,7 @@ export default function JoinRegisterPage() {
     productVersionId: "",
     branchId: "",
     premiumAmount: "",
+    premiumCurrency: "USD",
   });
 
   interface DependentEntry { firstName: string; lastName: string; relationship: string; dateOfBirth: string; nationalId: string }
@@ -84,6 +85,7 @@ export default function JoinRegisterPage() {
             productId: first?.id || "",
             productVersionId: firstVersion?.id || "",
             premiumAmount: firstVersion?.premiumMonthlyUsd || firstVersion?.premiumMonthlyZar || "",
+            premiumCurrency: firstVersion?.premiumMonthlyUsd ? "USD" : firstVersion?.premiumMonthlyZar ? "ZAR" : "USD",
           }));
         } else {
           setOptions(null);
@@ -110,6 +112,7 @@ export default function JoinRegisterPage() {
         ...f,
         productVersionId: first?.id || "",
         premiumAmount: first?.premiumMonthlyUsd || first?.premiumMonthlyZar || "",
+        premiumCurrency: first?.premiumMonthlyUsd ? "USD" : first?.premiumMonthlyZar ? "ZAR" : "USD",
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,6 +142,7 @@ export default function JoinRegisterPage() {
         productVersionId: form.productVersionId,
         branchId: form.branchId || undefined,
         premiumAmount: form.premiumAmount ? String(form.premiumAmount) : undefined,
+        currency: form.premiumCurrency || undefined,
       };
       if (dependentsList.length > 0) {
         payload.dependents = dependentsList;
@@ -366,6 +370,7 @@ export default function JoinRegisterPage() {
                       ...f,
                       productVersionId: e.target.value,
                       premiumAmount: v?.premiumMonthlyUsd || v?.premiumMonthlyZar || "",
+                      premiumCurrency: v?.premiumMonthlyUsd ? "USD" : v?.premiumMonthlyZar ? "ZAR" : "USD",
                     }));
                   }}
                   required
@@ -377,8 +382,10 @@ export default function JoinRegisterPage() {
                   {versions.map((v) => (
                     <option key={v.id} value={v.id}>
                       Version {v.version}
-                      {v.premiumMonthlyUsd ? ` — ${v.premiumMonthlyUsd} USD/mo` : ""}
-                      {v.premiumMonthlyZar ? ` — ${v.premiumMonthlyZar} ZAR/mo` : ""}
+                      {([["USD", v.premiumMonthlyUsd], ["ZAR", v.premiumMonthlyZar]] as const)
+                        .filter(([, val]) => val)
+                        .map(([cur, val]) => ` — ${val} ${cur}/mo`)
+                        .join("")}
                     </option>
                   ))}
                 </select>
@@ -390,7 +397,7 @@ export default function JoinRegisterPage() {
                 <Input
                   id="premiumAmount"
                   type="text"
-                  value={`${form.premiumAmount} USD/mo`}
+                  value={`${form.premiumAmount} ${form.premiumCurrency}/mo`}
                   readOnly
                   disabled
                   className="bg-muted"

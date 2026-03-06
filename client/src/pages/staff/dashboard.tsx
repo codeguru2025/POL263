@@ -74,6 +74,7 @@ interface ProductPerformance {
   activePolicies: number;
   lapsedPolicies: number;
   revenue: number;
+  currency?: string;
 }
 
 const FUNNEL_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#ddd6fe", "#ede9fe"];
@@ -86,7 +87,8 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function StaffDashboard() {
-  const { user, roles, permissions } = useAuth();
+  const { user, roles, permissions, isPlatformOwner } = useAuth();
+  const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
   const isAgent = roles.some((r) => r.name === "agent");
   const canReadFinance = permissions.includes("read:finance");
   const canReadClaims = permissions.includes("read:claim");
@@ -116,6 +118,7 @@ export default function StaffDashboard() {
     queryFn: async () => {
       const url = base + "/api/dashboard/stats" + (filterParams ? `?${filterParams}` : "");
       const res = await fetch(url, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return null;
       if (!res.ok) throw new Error("Failed to load stats");
       return res.json();
     },
@@ -133,6 +136,7 @@ export default function StaffDashboard() {
       if (dateTo) p.set("dateTo", dateTo);
       const url = base + "/api/dashboard/revenue-trend" + (p.toString() ? `?${p}` : "");
       const res = await fetch(url, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return [];
       if (!res.ok) throw new Error("Failed to load revenue trend");
       return res.json();
     },
@@ -148,6 +152,7 @@ export default function StaffDashboard() {
       if (branchFilter && branchFilter !== "all") p.set("branchId", branchFilter);
       const url = base + "/api/dashboard/policy-status-breakdown" + (p.toString() ? `?${p}` : "");
       const res = await fetch(url, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return {};
       if (!res.ok) throw new Error("Failed to load breakdown");
       return res.json();
     },
@@ -167,6 +172,7 @@ export default function StaffDashboard() {
       if (branchFilter && branchFilter !== "all") p.set("branchId", branchFilter);
       const url = base + "/api/dashboard/lapse-retention" + (p.toString() ? `?${p}` : "");
       const res = await fetch(url, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return null;
       if (!res.ok) throw new Error("Failed to load lapse retention");
       return res.json();
     },
@@ -194,7 +200,9 @@ export default function StaffDashboard() {
     enabled: canReadAuditLog,
   });
 
-  const currentOrg = orgs?.[0];
+  const currentOrg = isPlatformOwner && effectiveOrgId
+    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) ?? orgs[0] : undefined)
+    : orgs?.[0];
   const primaryRole = roles[0]?.name || "—";
 
   const filteredRevenueTrend = revenueTrend || [];
@@ -419,7 +427,7 @@ export default function StaffDashboard() {
                     <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d) => d.slice(5)} />
                     <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
                     <Tooltip
-                      formatter={(value: number) => [`$${value.toLocaleString()}`, "Revenue"]}
+                      formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), "Revenue"]}
                       labelFormatter={(label) => `Date: ${label}`}
                     />
                     <Area type="monotone" dataKey="total" stroke="#6366f1" fill="url(#colorRevenue)" strokeWidth={2} />
@@ -570,7 +578,7 @@ export default function StaffDashboard() {
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Revenue</p>
-                        <p className="text-xl font-bold text-indigo-600">${prod.revenue.toLocaleString()}</p>
+                        <p className="text-xl font-bold text-indigo-600">{prod.currency || "USD"} {(prod.revenue ?? 0).toLocaleString()}</p>
                       </div>
                     </div>
                   </CardContent>

@@ -629,13 +629,13 @@ export default function StaffReports() {
                       </Card>
                       <Card>
                         <CardContent className="pt-6">
-                          <p className="text-2xl font-bold" data-testid="text-underwriter-monthly">{underwriterPayableResult.summary.totalMonthlyPayable.toFixed(2)}</p>
+                          <p className="text-2xl font-bold" data-testid="text-underwriter-monthly">{underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalMonthlyPayable.toFixed(2)}</p>
                           <p className="text-sm text-muted-foreground">Total monthly payable</p>
                         </CardContent>
                       </Card>
                       <Card>
                         <CardContent className="pt-6">
-                          <p className="text-2xl font-bold" data-testid="text-underwriter-total">{underwriterPayableResult.summary.totalPayableIncludingAdvance.toFixed(2)}</p>
+                          <p className="text-2xl font-bold" data-testid="text-underwriter-total">{underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalPayableIncludingAdvance.toFixed(2)}</p>
                           <p className="text-sm text-muted-foreground">Total (incl. advance months)</p>
                         </CardContent>
                       </Card>
@@ -671,8 +671,8 @@ export default function StaffReports() {
                               <TableCell>{r.children}</TableCell>
                               <TableCell className="text-sm whitespace-nowrap">{r.underwriterAmountAdult ?? "—"} / {r.underwriterAmountChild ?? "—"}</TableCell>
                               <TableCell>{r.underwriterAdvanceMonths}</TableCell>
-                              <TableCell className="font-medium">{r.monthlyPayable.toFixed(2)}</TableCell>
-                              <TableCell className="font-medium">{r.totalPayable.toFixed(2)}</TableCell>
+                              <TableCell className="font-medium">{r.currency} {r.monthlyPayable.toFixed(2)}</TableCell>
+                              <TableCell className="font-medium">{r.currency} {r.totalPayable.toFixed(2)}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -901,6 +901,7 @@ export default function StaffReports() {
                         <TableHead>Claim #</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead>Approved Amount</TableHead>
                         <TableHead>Deceased</TableHead>
                         <TableHead>Created</TableHead>
                       </TableRow>
@@ -911,6 +912,7 @@ export default function StaffReports() {
                           <TableCell className="font-mono text-sm">{c.claimNumber}</TableCell>
                           <TableCell><Badge variant="outline">{c.claimType}</Badge></TableCell>
                           <TableCell><Badge>{c.status}</Badge></TableCell>
+                          <TableCell className="font-semibold">{c.approvedAmount ? `${c.currency || "USD"} ${c.approvedAmount}` : "—"}</TableCell>
                           <TableCell>{c.deceasedName || "—"}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleDateString()}</TableCell>
                         </TableRow>
@@ -1174,6 +1176,7 @@ export default function StaffReports() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Cashup date</TableHead>
+                        <TableHead>Currency</TableHead>
                         <TableHead>Total amount</TableHead>
                         <TableHead>Transaction count</TableHead>
                         <TableHead>Locked</TableHead>
@@ -1185,7 +1188,8 @@ export default function StaffReports() {
                       {cashups.map((c: any) => (
                         <TableRow key={c.id} data-testid={`row-cashup-${c.id}`}>
                           <TableCell className="font-mono text-sm">{c.cashupDate}</TableCell>
-                          <TableCell className="font-semibold">{c.totalAmount}</TableCell>
+                          <TableCell>{c.currency || "USD"}</TableCell>
+                          <TableCell className="font-semibold">{c.currency || "USD"} {c.totalAmount}</TableCell>
                           <TableCell>{c.transactionCount}</TableCell>
                           <TableCell><Badge variant={c.isLocked ? "default" : "secondary"}>{c.isLocked ? "Locked" : "Open"}</Badge></TableCell>
                           <TableCell>{(users as any[])?.find((u: any) => u.id === c.preparedBy)?.displayName || c.preparedBy || "—"}</TableCell>
@@ -1231,7 +1235,7 @@ export default function StaffReports() {
                           <TableCell className="font-mono text-sm">{emp.idNumber}</TableCell>
                           <TableCell>{emp.position}</TableCell>
                           <TableCell>{emp.department}</TableCell>
-                          <TableCell className="font-semibold">{emp.basicSalary}</TableCell>
+                          <TableCell className="font-semibold">{emp.currency || "USD"} {emp.basicSalary}</TableCell>
                           <TableCell><Badge variant={emp.status === "active" ? "default" : "secondary"}>{emp.status}</Badge></TableCell>
                         </TableRow>
                       ))}
@@ -1325,7 +1329,7 @@ export default function StaffReports() {
                       {platformReceivables.slice(0, 20).map((cr: any) => (
                         <TableRow key={cr.id} data-testid={`row-platform-receivable-${cr.id}`}>
                           <TableCell>{cr.description}</TableCell>
-                          <TableCell className="font-semibold">{cr.amount}</TableCell>
+                          <TableCell className="font-semibold">{cr.currency || "USD"} {cr.amount}</TableCell>
                           <TableCell>{cr.currency}</TableCell>
                           <TableCell><Badge variant={cr.isSettled ? "default" : "secondary"}>{cr.isSettled ? "Settled" : "Pending"}</Badge></TableCell>
                           <TableCell className="text-sm text-muted-foreground">{new Date(cr.createdAt).toLocaleDateString()}</TableCell>

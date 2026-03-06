@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { formatAmountWithCode } from "@shared/validation";
 import type { Claim } from "@shared/schema";
 
 const CLAIM_TRANSITIONS: Record<string, string[]> = {
@@ -243,7 +244,7 @@ export default function StaffClaims() {
                         </Badge>
                       </TableCell>
                       <TableCell className="font-medium">
-                        {claim.cashInLieuAmount ? `$${parseFloat(claim.cashInLieuAmount).toFixed(2)}` : "—"}
+                        {claim.cashInLieuAmount ? formatAmountWithCode(claim.cashInLieuAmount, claim.currency) : "—"}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">{formatDate(claim.createdAt as any)}</TableCell>
                       <TableCell className="text-right pr-6">
@@ -465,7 +466,7 @@ export default function StaffClaims() {
                 <div>
                   <p className="text-muted-foreground">Cash-in-Lieu</p>
                   <p className="font-medium">
-                    {selectedClaim.cashInLieuAmount ? `$${parseFloat(selectedClaim.cashInLieuAmount).toFixed(2)}` : "—"}
+                    {selectedClaim.cashInLieuAmount ? formatAmountWithCode(selectedClaim.cashInLieuAmount, selectedClaim.currency) : "—"}
                   </p>
                 </div>
                 <div>

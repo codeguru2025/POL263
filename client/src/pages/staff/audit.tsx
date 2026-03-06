@@ -1,5 +1,6 @@
 import StaffLayout from "@/components/layout/staff-layout";
 import { useQuery } from "@tanstack/react-query";
+import { getApiBase } from "@/lib/queryClient";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -71,7 +72,8 @@ export default function AuditLogs() {
   const { data, isLoading } = useQuery<{ rows: any[]; total: number }>({
     queryKey: ["/api/audit-logs", page, debouncedSearch, action, from, to],
     queryFn: async () => {
-      const res = await fetch(`/api/audit-logs?${buildParams()}`);
+      const res = await fetch(getApiBase() + `/api/audit-logs?${buildParams()}`, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return { rows: [], total: 0 };
       if (!res.ok) throw new Error("Failed to fetch audit logs");
       return res.json();
     },

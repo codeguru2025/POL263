@@ -114,6 +114,16 @@ function DeepLinkHandler() {
   return null;
 }
 
+function SafeRoute({ path, component: Comp }: { path?: string; component: React.ComponentType<any> }) {
+  return (
+    <Route path={path}>
+      <ErrorBoundary>
+        <Comp />
+      </ErrorBoundary>
+    </Route>
+  );
+}
+
 function Router() {
   return (
     <>
@@ -122,42 +132,42 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       
-      <Route path="/staff/login" component={StaffLogin} />
-      <Route path="/agent/login" component={AgentLogin} />
-      <Route path="/staff" component={StaffDashboard} />
-      <Route path="/staff/" component={StaffDashboard} />
-      <Route path="/staff/audit" component={AuditLogs} />
-      <Route path="/staff/settings" component={StaffSettings} />
-      <Route path="/staff/settings/" component={StaffSettings} />
-      <Route path="/staff/products" component={ProductBuilder} />
-      <Route path="/staff/policies" component={StaffPolicies} />
-      <Route path="/staff/clients" component={StaffClients} />
-      <Route path="/staff/claims" component={StaffClaims} />
-      <Route path="/staff/funerals" component={StaffFunerals} />
-      <Route path="/staff/finance" component={StaffFinance} />
-      <Route path="/staff/reports" component={StaffReports} />
-      <Route path="/staff/leads" component={StaffLeads} />
-      <Route path="/staff/notifications" component={StaffNotifications} />
-      <Route path="/staff/groups" component={StaffGroups} />
-      <Route path="/staff/approvals" component={StaffApprovals} />
-      <Route path="/staff/diagnostics" component={StaffDiagnostics} />
-      <Route path="/staff/pricebook" component={StaffPriceBook} />
-      <Route path="/staff/payroll" component={StaffPayroll} />
-      <Route path="/staff/users" component={StaffUsers} />
-      <Route path="/staff/tenants" component={StaffTenants} />
+      <SafeRoute path="/staff/login" component={StaffLogin} />
+      <SafeRoute path="/agent/login" component={AgentLogin} />
+      <SafeRoute path="/staff" component={StaffDashboard} />
+      <SafeRoute path="/staff/" component={StaffDashboard} />
+      <SafeRoute path="/staff/audit" component={AuditLogs} />
+      <SafeRoute path="/staff/settings" component={StaffSettings} />
+      <SafeRoute path="/staff/settings/" component={StaffSettings} />
+      <SafeRoute path="/staff/products" component={ProductBuilder} />
+      <SafeRoute path="/staff/policies" component={StaffPolicies} />
+      <SafeRoute path="/staff/clients" component={StaffClients} />
+      <SafeRoute path="/staff/claims" component={StaffClaims} />
+      <SafeRoute path="/staff/funerals" component={StaffFunerals} />
+      <SafeRoute path="/staff/finance" component={StaffFinance} />
+      <SafeRoute path="/staff/reports" component={StaffReports} />
+      <SafeRoute path="/staff/leads" component={StaffLeads} />
+      <SafeRoute path="/staff/notifications" component={StaffNotifications} />
+      <SafeRoute path="/staff/groups" component={StaffGroups} />
+      <SafeRoute path="/staff/approvals" component={StaffApprovals} />
+      <SafeRoute path="/staff/diagnostics" component={StaffDiagnostics} />
+      <SafeRoute path="/staff/pricebook" component={StaffPriceBook} />
+      <SafeRoute path="/staff/payroll" component={StaffPayroll} />
+      <SafeRoute path="/staff/users" component={StaffUsers} />
+      <SafeRoute path="/staff/tenants" component={StaffTenants} />
       
-      <Route path="/join" component={JoinPage} />
-      <Route path="/join/register" component={JoinRegisterPage} />
+      <SafeRoute path="/join" component={JoinPage} />
+      <SafeRoute path="/join/register" component={JoinRegisterPage} />
       
-      <Route path="/client/login" component={ClientLogin} />
-      <Route path="/client/claim" component={ClientClaim} />
-      <Route path="/client/reset-password" component={ClientResetPassword} />
-      <Route path="/client" component={ClientDashboard} />
-      <Route path="/client/payments" component={ClientPayments} />
-      <Route path="/client/documents" component={ClientDocuments} />
-      <Route path="/client/documents/view/:policyId" component={ClientDocumentView} />
-      <Route path="/client/claims" component={ClientClaims} />
-      <Route path="/client/feedback" component={ClientFeedback} />
+      <SafeRoute path="/client/login" component={ClientLogin} />
+      <SafeRoute path="/client/claim" component={ClientClaim} />
+      <SafeRoute path="/client/reset-password" component={ClientResetPassword} />
+      <SafeRoute path="/client" component={ClientDashboard} />
+      <SafeRoute path="/client/payments" component={ClientPayments} />
+      <SafeRoute path="/client/documents" component={ClientDocuments} />
+      <SafeRoute path="/client/documents/view/:policyId" component={ClientDocumentView} />
+      <SafeRoute path="/client/claims" component={ClientClaims} />
+      <SafeRoute path="/client/feedback" component={ClientFeedback} />
       <Route path="/client/payments/return">
         <PaynowReturnRedirect />
       </Route>

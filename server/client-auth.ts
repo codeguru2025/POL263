@@ -575,6 +575,7 @@ export function setupClientAuth(app: Express) {
         clientId: allowedClientId,
         policyId,
         amount: String(amount),
+        currency: policy?.currency || "USD",
         purpose: purpose || "premium",
         idempotencyKey,
       });
@@ -780,13 +781,14 @@ export function setupClientAuth(app: Express) {
   });
 
   app.delete("/api/client-auth/register-device", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
     const { token } = req.body || {};
     if (!token || typeof token !== "string" || !token.trim()) {
       return res.status(400).json({ message: "token is required" });
     }
-    await storage.removeClientDeviceToken(clientOrgId, token.trim());
+    await storage.removeClientDeviceToken(clientOrgId, token.trim(), clientId);
     return res.status(204).send();
   });
 

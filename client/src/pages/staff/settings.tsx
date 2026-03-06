@@ -181,6 +181,9 @@ export default function StaffSettings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/public/branding"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/product-performance"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
     },
   });
 
@@ -258,6 +261,7 @@ export default function StaffSettings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/public/branding"] });
       setTenantEditId(null);
       toast({ title: "Tenant updated" });
     },

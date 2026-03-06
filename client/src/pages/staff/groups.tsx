@@ -174,6 +174,7 @@ export default function StaffGroups() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
       setAssignPolicyId("");
       toast({ title: "Policy assigned", description: "Policy has been assigned to the group." });
     },
@@ -189,6 +190,7 @@ export default function StaffGroups() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
       toast({ title: "Policy unassigned", description: "Policy has been removed from the group." });
     },
     onError: (err: Error) => {

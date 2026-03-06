@@ -138,7 +138,7 @@ async function run() {
       if (roleName !== "superuser") {
         for (const permName of permNames) {
           const permId = permMap.get(permName);
-          if (permId) await storage.addRolePermission(role.id, permId);
+          if (permId) await storage.addRolePermission(role.id, permId, org!.id);
         }
       }
     }
@@ -169,7 +169,7 @@ async function run() {
       for (const { roleName } of u.roles) {
         if (existingRoleNames.has(roleName)) continue;
         const roleId = roleMap.get(roleName);
-        if (roleId) await storage.addUserRole(existing.id, roleId, defaultBranch.id);
+        if (roleId) await storage.addUserRole(existing.id, roleId, org!.id, defaultBranch.id);
       }
       console.log(`  Reassigned to tenant: ${u.email}`);
       created++;
@@ -190,7 +190,7 @@ async function run() {
 
     for (const { roleName } of u.roles) {
       const roleId = roleMap.get(roleName);
-      if (roleId) await storage.addUserRole(newUser.id, roleId, defaultBranch.id);
+      if (roleId) await storage.addUserRole(newUser.id, roleId, org!.id, defaultBranch.id);
     }
     console.log(`  Created: ${u.email}`);
     created++;

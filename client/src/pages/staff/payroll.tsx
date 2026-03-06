@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CurrencySelect } from "@/components/currency-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -176,7 +177,7 @@ export default function StaffPayroll() {
                 <Banknote className="h-8 w-8 text-blue-600" />
                 <div>
                   <p className="text-sm text-muted-foreground">Monthly Salary Bill</p>
-                  <p className="text-2xl font-bold" data-testid="text-salary-bill">USD {totalSalaryBill.toFixed(2)}</p>
+                  <p className="text-2xl font-bold" data-testid="text-salary-bill">{totalSalaryBill.toFixed(2)}</p>
                 </div>
               </div>
             </CardContent>
@@ -353,7 +354,7 @@ export default function StaffPayroll() {
                             </div>
                             <div className="text-right">
                               {run.totalNet && (
-                                <p className="font-semibold text-lg">Net: USD {parseFloat(run.totalNet).toFixed(2)}</p>
+                                <p className="font-semibold text-lg">Net: {run.currency} {parseFloat(run.totalNet).toFixed(2)}</p>
                               )}
                               <p className="text-xs text-muted-foreground">Created {new Date(run.createdAt).toLocaleDateString()}</p>
                             </div>
@@ -439,15 +440,7 @@ export default function StaffPayroll() {
               </div>
               <div>
                 <Label>Currency</Label>
-                <Select value={empCurrency} onValueChange={setEmpCurrency}>
-                  <SelectTrigger data-testid="select-emp-currency"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="ZAR">ZAR</SelectItem>
-                    <SelectItem value="ZWL">ZWL</SelectItem>
-                    <SelectItem value="BWP">BWP</SelectItem>
-                  </SelectContent>
-                </Select>
+                <CurrencySelect value={empCurrency} onValueChange={setEmpCurrency} />
               </div>
             </div>
           </div>

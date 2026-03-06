@@ -14,6 +14,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CurrencySelect } from "@/components/currency-select";
+import { formatAmount } from "@shared/validation";
 import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
@@ -57,7 +59,9 @@ type ProductVersion = {
   premiumMonthlyUsd: string | null;
   premiumMonthlyZar: string | null;
   premiumWeeklyUsd: string | null;
+  premiumWeeklyZar: string | null;
   premiumBiweeklyUsd: string | null;
+  premiumBiweeklyZar: string | null;
   eligibilityMinAge: number | null;
   eligibilityMaxAge: number | null;
   dependentMaxAge: number | null;
@@ -395,7 +399,7 @@ export default function ProductBuilder() {
                         <TableRow key={item.id} data-testid={`row-benefit-${item.id}`}>
                           <TableCell className="font-medium pl-6">{item.name}</TableCell>
                           <TableCell className="text-muted-foreground">{item.description || "—"}</TableCell>
-                          <TableCell>{item.internalCostDefault ? `$${item.internalCostDefault}` : "—"}</TableCell>
+                          <TableCell>{item.internalCostDefault ? formatAmount(item.internalCostDefault, "USD") : "—"}</TableCell>
                           <TableCell><Badge variant={item.isActive ? "default" : "secondary"} className={item.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{item.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                           <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingBenefit(item)}><Edit className="h-4 w-4" /></Button></TableCell>
                         </TableRow>
@@ -480,9 +484,9 @@ export default function ProductBuilder() {
                             {addon.description && <p className="text-xs text-muted-foreground">{addon.description}</p>}
                           </TableCell>
                           <TableCell><Badge variant="outline" className="font-mono text-[10px]">{addon.pricingMode}</Badge></TableCell>
-                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || "—"}%` : (addon.priceMonthly || addon.priceAmount ? `$${addon.priceMonthly || addon.priceAmount}` : "—")}</TableCell>
-                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceWeekly ? `$${addon.priceWeekly}` : "—")}</TableCell>
-                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceBiweekly ? `$${addon.priceBiweekly}` : "—")}</TableCell>
+                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || "—"}%` : (addon.priceMonthly || addon.priceAmount ? formatAmount(addon.priceMonthly || addon.priceAmount!, "USD") : "—")}</TableCell>
+                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceWeekly ? formatAmount(addon.priceWeekly, "USD") : "—")}</TableCell>
+                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceBiweekly ? formatAmount(addon.priceBiweekly, "USD") : "—")}</TableCell>
                           <TableCell><Badge variant={addon.isActive ? "default" : "secondary"} className={addon.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{addon.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                           <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingAddOn(addon)}><Edit className="h-4 w-4" /></Button></TableCell>
                         </TableRow>
@@ -739,6 +743,9 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                       <TableHead>Monthly (USD)</TableHead>
                       <TableHead>Monthly (ZAR)</TableHead>
                       <TableHead>Weekly (USD)</TableHead>
+                      <TableHead>Weekly (ZAR)</TableHead>
+                      <TableHead>Bi-wk (USD)</TableHead>
+                      <TableHead>Bi-wk (ZAR)</TableHead>
                       <TableHead>Waiting</TableHead>
                       <TableHead>Grace</TableHead>
                       <TableHead>Age Range</TableHead>
@@ -752,9 +759,12 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                       <TableRow key={v.id} data-testid={`row-version-${v.id}`}>
                         <TableCell><Badge variant="outline" className="font-mono text-[10px]">v{v.version}</Badge></TableCell>
                         <TableCell>{v.effectiveFrom}</TableCell>
-                        <TableCell className="font-semibold">{v.premiumMonthlyUsd ? `$${v.premiumMonthlyUsd}` : "—"}</TableCell>
-                        <TableCell>{v.premiumMonthlyZar ? `R${v.premiumMonthlyZar}` : "—"}</TableCell>
-                        <TableCell>{v.premiumWeeklyUsd ? `$${v.premiumWeeklyUsd}` : "—"}</TableCell>
+                        <TableCell className="font-semibold">{v.premiumMonthlyUsd ? formatAmount(v.premiumMonthlyUsd, "USD") : "—"}</TableCell>
+                        <TableCell>{v.premiumMonthlyZar ? formatAmount(v.premiumMonthlyZar, "ZAR") : "—"}</TableCell>
+                        <TableCell>{v.premiumWeeklyUsd ? formatAmount(v.premiumWeeklyUsd, "USD") : "—"}</TableCell>
+                        <TableCell>{v.premiumWeeklyZar ? formatAmount(v.premiumWeeklyZar, "ZAR") : "—"}</TableCell>
+                        <TableCell>{v.premiumBiweeklyUsd ? formatAmount(v.premiumBiweeklyUsd, "USD") : "—"}</TableCell>
+                        <TableCell>{v.premiumBiweeklyZar ? formatAmount(v.premiumBiweeklyZar, "ZAR") : "—"}</TableCell>
                         <TableCell>{v.waitingPeriodDays != null ? `${v.waitingPeriodDays}d` : "—"}</TableCell>
                         <TableCell>{v.gracePeriodDays != null ? `${v.gracePeriodDays}d` : "—"}</TableCell>
                         <TableCell>{v.eligibilityMinAge ?? "—"} – {v.eligibilityMaxAge ?? "—"}</TableCell>
@@ -883,15 +893,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
             </div>
             <div className="space-y-2">
               <Label>Cover Currency</Label>
-              <Select value={coverCurrency} onValueChange={setCoverCurrency}>
-                <SelectTrigger data-testid="select-cover-currency"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="ZAR">ZAR</SelectItem>
-                  <SelectItem value="ZWL">ZWL</SelectItem>
-                  <SelectItem value="BWP">BWP</SelectItem>
-                </SelectContent>
-              </Select>
+              <CurrencySelect value={coverCurrency} onValueChange={setCoverCurrency} />
             </div>
           </div>
 
@@ -1020,9 +1022,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
             <div className="space-y-2"><Label>Cover Amount</Label><Input type="number" step="0.01" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} /></div>
             <div className="space-y-2">
               <Label>Cover Currency</Label>
-              <Select value={coverCurrency} onValueChange={setCoverCurrency}><SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="USD">USD</SelectItem><SelectItem value="ZAR">ZAR</SelectItem><SelectItem value="ZWL">ZWL</SelectItem><SelectItem value="BWP">BWP</SelectItem></SelectContent>
-              </Select>
+              <CurrencySelect value={coverCurrency} onValueChange={setCoverCurrency} />
             </div>
           </div>
           <div className="space-y-2">
@@ -1334,9 +1334,9 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [premiumMonthlyUsd, setPremiumMonthlyUsd] = useState(version.premiumMonthlyUsd || "");
   const [premiumMonthlyZar, setPremiumMonthlyZar] = useState(version.premiumMonthlyZar || "");
   const [premiumWeeklyUsd, setPremiumWeeklyUsd] = useState(version.premiumWeeklyUsd || "");
-  const [premiumWeeklyZar, setPremiumWeeklyZar] = useState((version as any).premiumWeeklyZar || "");
+  const [premiumWeeklyZar, setPremiumWeeklyZar] = useState(version.premiumWeeklyZar || "");
   const [premiumBiweeklyUsd, setPremiumBiweeklyUsd] = useState(version.premiumBiweeklyUsd || "");
-  const [premiumBiweeklyZar, setPremiumBiweeklyZar] = useState((version as any).premiumBiweeklyZar || "");
+  const [premiumBiweeklyZar, setPremiumBiweeklyZar] = useState(version.premiumBiweeklyZar || "");
   const [waitingPeriodDays, setWaitingPeriodDays] = useState(String(version.waitingPeriodDays ?? "90"));
   const [waitingAccidental, setWaitingAccidental] = useState(String(version.waitingPeriodAccidentalDeath ?? "0"));
   const [waitingSuicide, setWaitingSuicide] = useState(String(version.waitingPeriodSuicide ?? "0"));

@@ -285,7 +285,7 @@ export default function ClientPayments() {
       const base = getApiBase();
       const params = new URLSearchParams({ type: lookupType, q });
       const res = await fetch(base + `/api/client-auth/lookup-by-phone?${params}`, { credentials: "include" });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ message: "Lookup failed" }));
       if (!res.ok) {
         setLookedUp(null);
         setLookupError(data.message || "Lookup failed");

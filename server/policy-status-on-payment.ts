@@ -20,7 +20,7 @@ import type { Policy } from "@shared/schema";
  * @returns true if policy was updated, false if no change (e.g. already active)
  */
 export async function applyPolicyStatusForClearedPayment(
-  db: { update: typeof policies; insert: typeof policyStatusHistory } & Record<string, unknown>,
+  db: { update(table: any): any; insert(table: any): any },
   policyId: string,
   policy: Policy | null,
   today: string,
@@ -32,13 +32,13 @@ export async function applyPolicyStatusForClearedPayment(
   if (fromStatus === "active") return false;
 
   if (fromStatus === "inactive") {
-    await (db as any).update(policies).set({
+    await db.update(policies).set({
       status: "active",
       inceptionDate: today,
       ...(!policy.effectiveDate ? { effectiveDate: today } : {}),
       version: sql`version + 1`,
     }).where(eq(policies.id, policyId));
-    await (db as any).insert(policyStatusHistory).values({
+    await db.insert(policyStatusHistory).values({
       policyId,
       fromStatus: "inactive",
       toStatus: "active",
@@ -49,12 +49,12 @@ export async function applyPolicyStatusForClearedPayment(
   }
 
   if (fromStatus === "grace") {
-    await (db as any).update(policies).set({
+    await db.update(policies).set({
       status: "active",
       graceEndDate: null,
       version: sql`version + 1`,
     }).where(eq(policies.id, policyId));
-    await (db as any).insert(policyStatusHistory).values({
+    await db.insert(policyStatusHistory).values({
       policyId,
       fromStatus: "grace",
       toStatus: "active",
@@ -65,12 +65,12 @@ export async function applyPolicyStatusForClearedPayment(
   }
 
   if (fromStatus === "lapsed") {
-    await (db as any).update(policies).set({
+    await db.update(policies).set({
       status: "active",
       graceEndDate: null,
       version: sql`version + 1`,
     }).where(eq(policies.id, policyId));
-    await (db as any).insert(policyStatusHistory).values({
+    await db.insert(policyStatusHistory).values({
       policyId,
       fromStatus: "lapsed",
       toStatus: "active",

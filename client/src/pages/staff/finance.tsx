@@ -17,6 +17,8 @@ import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { useAuth } from "@/hooks/use-auth";
+import { CurrencySelect } from "@/components/currency-select";
+import { formatAmount } from "@shared/validation";
 
 function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
@@ -279,6 +281,7 @@ export default function StaffFinance() {
   const [createCashupDate, setCreateCashupDate] = useState(new Date().toISOString().slice(0, 10));
   const [createCashupBranchId, setCreateCashupBranchId] = useState("");
   const [createCashupAmounts, setCreateCashupAmounts] = useState<Record<string, string>>({ cash: "", paynow_ecocash: "", paynow_card: "", other: "" });
+  const [createCashupCurrency, setCreateCashupCurrency] = useState("USD");
   const [createCashupTransactionCount, setCreateCashupTransactionCount] = useState("");
   const [createCashupNotes, setCreateCashupNotes] = useState("");
   const [showConfirmCashupDialog, setShowConfirmCashupDialog] = useState(false);
@@ -441,7 +444,7 @@ export default function StaffFinance() {
   });
 
   const createCashupMutation = useMutation({
-    mutationFn: async (data: { cashupDate: string; branchId?: string; amountsByMethod: Record<string, string>; transactionCount: number; notes?: string }) => {
+    mutationFn: async (data: { cashupDate: string; branchId?: string; currency: string; amountsByMethod: Record<string, string>; transactionCount: number; notes?: string }) => {
       const res = await apiRequest("POST", "/api/cashups", data);
       return res.json();
     },
@@ -449,6 +452,7 @@ export default function StaffFinance() {
       queryClient.invalidateQueries({ queryKey: ["/api/cashups"] });
       setShowCreateCashupDialog(false);
       setCreateCashupAmounts({ cash: "", paynow_ecocash: "", paynow_card: "", other: "" });
+      setCreateCashupCurrency("USD");
       setCreateCashupTransactionCount("");
       setCreateCashupNotes("");
       toast({ title: "Cashup draft created", description: "Submit to finance when ready." });
@@ -960,7 +964,7 @@ export default function StaffFinance() {
                         <SelectItem value="discrepancy">Discrepancy</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Button size="sm" onClick={() => { setShowCreateCashupDialog(true); setCreateCashupDate(new Date().toISOString().slice(0, 10)); setCreateCashupAmounts({ cash: "", paynow_ecocash: "", paynow_card: "", other: "" }); setCreateCashupTransactionCount(""); setCreateCashupNotes(""); }} data-testid="button-new-cashup">
+                    <Button size="sm" onClick={() => { setShowCreateCashupDialog(true); setCreateCashupDate(new Date().toISOString().slice(0, 10)); setCreateCashupAmounts({ cash: "", paynow_ecocash: "", paynow_card: "", other: "" }); setCreateCashupCurrency("USD"); setCreateCashupTransactionCount(""); setCreateCashupNotes(""); }} data-testid="button-new-cashup">
                       <Plus className="h-4 w-4 mr-1" /> New cashup
                     </Button>
                   </div>
@@ -975,6 +979,7 @@ export default function StaffFinance() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Date</TableHead>
+                        <TableHead>Ccy</TableHead>
                         <TableHead>Total</TableHead>
                         <TableHead>By method</TableHead>
                         <TableHead>Txns</TableHead>
@@ -994,7 +999,8 @@ export default function StaffFinance() {
                         return (
                           <TableRow key={c.id} data-testid={`row-cashup-${c.id}`}>
                             <TableCell className="font-mono text-sm">{c.cashupDate}</TableCell>
-                            <TableCell className="font-semibold">{c.totalAmount}</TableCell>
+                            <TableCell><Badge variant="outline" className="text-xs">{c.currency || "USD"}</Badge></TableCell>
+                            <TableCell className="font-semibold">{formatAmount(c.totalAmount, c.currency || "USD")}</TableCell>
                             <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={methodSummary}>{methodSummary}</TableCell>
                             <TableCell>{c.transactionCount}</TableCell>
                             <TableCell>
@@ -1027,10 +1033,14 @@ export default function StaffFinance() {
                 <DialogHeader><DialogTitle>New cashup</DialogTitle></DialogHeader>
                 <p className="text-sm text-muted-foreground">Enter amounts you received by payment method for this date. Use &quot;Load from my receipts&quot; to prefill from your issued receipts.</p>
                 <div className="space-y-4 pt-2">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-4">
                     <div>
                       <Label>Date *</Label>
                       <Input type="date" value={createCashupDate} onChange={(e) => setCreateCashupDate(e.target.value)} data-testid="input-cashup-date" />
+                    </div>
+                    <div>
+                      <Label>Currency</Label>
+                      <CurrencySelect value={createCashupCurrency} onValueChange={setCreateCashupCurrency} />
                     </div>
                     <div>
                       <Label>Branch</Label>
@@ -1052,6 +1062,7 @@ export default function StaffFinance() {
                         const data = await res.json();
                         setCreateCashupAmounts(data.amountsByMethod || { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" });
                         setCreateCashupTransactionCount(String(data.transactionCount ?? 0));
+                        if (data.currency) setCreateCashupCurrency(data.currency);
                       }} data-testid="button-load-from-receipts">Load from my receipts</Button>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -1078,6 +1089,7 @@ export default function StaffFinance() {
                     createCashupMutation.mutate({
                       cashupDate: createCashupDate,
                       branchId: createCashupBranchId || undefined,
+                      currency: createCashupCurrency,
                       amountsByMethod: createCashupAmounts,
                       transactionCount: parseInt(createCashupTransactionCount, 10) || 0,
                       notes: createCashupNotes || undefined,
@@ -1095,7 +1107,7 @@ export default function StaffFinance() {
                 <DialogHeader><DialogTitle>Confirm cashup</DialogTitle></DialogHeader>
                 {confirmCashup && (
                   <>
-                    <p className="text-sm text-muted-foreground">Expected total: <strong>{confirmCashup.totalAmount}</strong> ({confirmCashup.transactionCount} transactions). Enter counted total and any discrepancy notes.</p>
+                    <p className="text-sm text-muted-foreground">Expected total: <strong>{formatAmount(confirmCashup.totalAmount, confirmCashup.currency || "USD")}</strong> {confirmCashup.currency && confirmCashup.currency !== "USD" ? <Badge variant="outline" className="ml-1 text-xs">{confirmCashup.currency}</Badge> : null} ({confirmCashup.transactionCount} transactions). Enter counted total and any discrepancy notes.</p>
                     <div className="space-y-4 pt-2">
                       <div>
                         <Label>Counted total</Label>
@@ -1572,7 +1584,7 @@ export default function StaffFinance() {
                       <Badge variant={receiptDialogPolicy.status === "active" ? "default" : "secondary"}>{receiptDialogPolicy.status}</Badge>
                       {receiptDialogPolicy.premiumAmount && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          Premium: {receiptDialogPolicy.premiumCurrency || "USD"} {parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2)}
+                          Premium: {formatAmount(receiptDialogPolicy.premiumAmount, receiptDialogPolicy.premiumCurrency)}
                         </p>
                       )}
                     </div>
@@ -1598,15 +1610,7 @@ export default function StaffFinance() {
               </div>
               <div>
                 <Label>Currency</Label>
-                <Select value={paymentCurrency} onValueChange={setPaymentCurrency}>
-                  <SelectTrigger data-testid="select-currency"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="ZAR">ZAR</SelectItem>
-                    <SelectItem value="ZWL">ZWL</SelectItem>
-                    <SelectItem value="BWP">BWP</SelectItem>
-                  </SelectContent>
-                </Select>
+                <CurrencySelect value={paymentCurrency} onValueChange={setPaymentCurrency} />
               </div>
             </div>
 
@@ -1782,15 +1786,7 @@ export default function StaffFinance() {
             </div>
             <div>
               <Label>Currency</Label>
-              <Select value={cashReceiptCurrency} onValueChange={setCashReceiptCurrency}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="ZWL">ZWL</SelectItem>
-                  <SelectItem value="ZAR">ZAR</SelectItem>
-                  <SelectItem value="BWP">BWP</SelectItem>
-                </SelectContent>
-              </Select>
+              <CurrencySelect value={cashReceiptCurrency} onValueChange={setCashReceiptCurrency} />
             </div>
             <div>
               <Label>Notes (optional)</Label>
@@ -1834,15 +1830,7 @@ export default function StaffFinance() {
             </div>
             <div>
               <Label>Currency</Label>
-              <Select value={settlementCurrency} onValueChange={setSettlementCurrency}>
-                <SelectTrigger data-testid="select-settlement-currency"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="ZAR">ZAR</SelectItem>
-                  <SelectItem value="ZWL">ZWL</SelectItem>
-                  <SelectItem value="BWP">BWP</SelectItem>
-                </SelectContent>
-              </Select>
+              <CurrencySelect value={settlementCurrency} onValueChange={setSettlementCurrency} />
             </div>
             <div>
               <Label>Payment Method</Label>
