@@ -1650,7 +1650,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getReceiptsByPolicy(req.params.id as string, user.organizationId));
+    return res.json(await storage.getPaymentReceiptsByPolicy(req.params.id as string, user.organizationId));
   });
 
   // ─── Payment intents (Paynow) & receipts ─────────────────────
