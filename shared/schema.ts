@@ -1320,18 +1320,21 @@ export const notificationLogs = pgTable(
     templateId: uuid("template_id").references(() => notificationTemplates.id),
     recipientType: text("recipient_type").notNull(),
     recipientId: uuid("recipient_id"),
+    policyId: uuid("policy_id"),
     channel: text("channel").notNull(),
     subject: text("subject"),
     body: text("body"),
     status: text("status").default("pending").notNull(),
     attempts: integer("attempts").default(0).notNull(),
     failureReason: text("failure_reason"),
+    readAt: timestamp("read_at"),
     sentAt: timestamp("sent_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
     index("nl_org_idx").on(t.organizationId),
     index("nl_recipient_idx").on(t.recipientId),
+    index("nl_policy_idx").on(t.policyId),
   ]
 );
 

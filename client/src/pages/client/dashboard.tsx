@@ -180,6 +180,7 @@ function ClientChangePassword() {
 }
 
 function ClientNotificationsList() {
+  const qc = useQueryClient();
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/client-auth/notifications"],
     queryFn: async () => {
@@ -189,15 +190,33 @@ function ClientNotificationsList() {
     },
     retry: false,
   });
+
+  const markRead = async (id: string) => {
+    try {
+      await apiRequest("PATCH", `/api/client-auth/notifications/${id}/read`);
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/notifications"] });
+      qc.invalidateQueries({ queryKey: ["/api/client-auth/notifications/unread-count"] });
+    } catch {}
+  };
+
   if (!notifications.length) return null;
   return (
     <div className="space-y-2">
       <p className="text-sm font-medium text-muted-foreground">Recent notifications</p>
-      {notifications.slice(0, 10).map((n) => (
-        <div key={n.id} className="p-3 border rounded-lg bg-muted/50">
-          <p className="text-sm font-medium">{n.subject || "Notification"}</p>
-          <p className="text-xs text-muted-foreground mt-1">{n.body}</p>
-          <p className="text-xs text-muted-foreground mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+      {notifications.slice(0, 15).map((n) => (
+        <div
+          key={n.id}
+          className={`p-3 border rounded-lg cursor-pointer transition-colors ${!n.readAt ? "bg-primary/5 border-primary/20" : "bg-muted/50"}`}
+          onClick={() => { if (!n.readAt) markRead(n.id); }}
+        >
+          <div className="flex items-start gap-2">
+            {!n.readAt && <span className="mt-1 w-2 h-2 rounded-full bg-primary shrink-0" />}
+            <div className="flex-1">
+              <p className={`text-sm ${!n.readAt ? "font-semibold" : "font-medium"}`}>{n.subject || "Notification"}</p>
+              <p className="text-xs text-muted-foreground mt-1">{n.body}</p>
+              <p className="text-xs text-muted-foreground mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+            </div>
+          </div>
         </div>
       ))}
     </div>

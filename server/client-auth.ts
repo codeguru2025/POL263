@@ -754,14 +754,32 @@ export function setupClientAuth(app: Express) {
     const clientId = (req.session as any)?.clientId;
     const clientOrgId = (req.session as any)?.clientOrgId;
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
-    const tdb = await (await import("./tenant-db")).getDbForOrg(clientOrgId);
-    const { notificationLogs } = await import("@shared/schema");
-    const { eq, desc, and } = await import("drizzle-orm");
-    const logs = await tdb.select().from(notificationLogs)
-      .where(and(eq(notificationLogs.organizationId, clientOrgId), eq(notificationLogs.recipientType, "client"), eq(notificationLogs.recipientId, clientId)))
-      .orderBy(desc(notificationLogs.createdAt))
-      .limit(50);
+    const logs = await storage.getClientNotifications(clientId, clientOrgId, 50);
     return res.json(logs);
+  });
+
+  app.get("/api/client-auth/notifications/unread-count", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const count = await storage.getUnreadNotificationCount(clientId, clientOrgId);
+    return res.json({ count });
+  });
+
+  app.patch("/api/client-auth/notifications/:id/read", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    await storage.markNotificationRead(req.params.id as string, clientId, clientOrgId);
+    return res.json({ success: true });
+  });
+
+  app.patch("/api/client-auth/notifications/mark-all-read", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    await storage.markAllNotificationsRead(clientId, clientOrgId);
+    return res.json({ success: true });
   });
 
   app.get("/api/client-auth/credit-notes", async (req: Request, res: Response) => {

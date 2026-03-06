@@ -35,7 +35,7 @@ import {
   policies, paymentTransactions, paymentReceipts,
 } from "@shared/schema";
 import { sql, eq } from "drizzle-orm";
-import { notifyClient } from "./notifications";
+import { notifyClient, dispatchNotification, buildPolicyContext } from "./notifications";
 import { enqueueJob, getJobStats } from "./job-queue";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -1177,9 +1177,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
+
+      if (policy.clientId) {
+        enqueueJob("notify:policy_capture", { policyId: policy.id }, async () => {
+          const ctx = await buildPolicyContext(policy, user.organizationId);
+          await dispatchNotification(user.organizationId, "policy_capture", policy.clientId, ctx);
+        });
+      }
+
       return res.status(201).json(policy);
     } catch (err) {
-      // cleanup: policy will be orphaned but detected by audit
       console.error(`Policy creation failed after creating policy ${policy.id}, orphaned record may remain:`, err);
       throw err;
     }
@@ -1214,14 +1221,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = { ...policy };
     const updated = await storage.updatePolicy(policy.id, { status: toStatus }, user.organizationId);
     await storage.createPolicyStatusHistory(policy.id, policy.status, toStatus, reason, user.id);
-    await storage.createNotificationLog(user.organizationId, {
-      recipientType: "client",
-      recipientId: policy.clientId,
-      channel: "in_app",
-      subject: "Policy status updated",
-      body: `Policy ${policy.policyNumber} status has been updated to ${toStatus}.${reason ? ` Reason: ${reason}` : ""}`,
-      status: "sent",
-    });
+
+    if (policy.clientId) {
+      const eventMap: Record<string, string> = {
+        active: "policy_activated", grace: "grace_start", lapsed: "policy_lapsed", cancelled: "policy_cancelled",
+      };
+      const eventType = eventMap[toStatus] || "status_change";
+      enqueueJob("notify:transition", { policyId: policy.id, toStatus }, async () => {
+        const ctx = await buildPolicyContext({ ...policy, status: toStatus }, user.organizationId);
+        await dispatchNotification(user.organizationId, eventType, policy.clientId, ctx);
+      });
+    }
+
     if (toStatus === "lapsed" || toStatus === "cancelled") {
       await recordClawback(user.organizationId, policy, `Policy ${toStatus}`);
     }
@@ -1345,6 +1356,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       role: role || "dependent",
     });
     await auditLog(req, "ADD_POLICY_MEMBER", "PolicyMember", member.id, null, member);
+
+    if (policy.clientId) {
+      enqueueJob("notify:member_added", { policyId: policy.id }, async () => {
+        let memberName = "a new member";
+        if (dependentId) {
+          const dep = await storage.getDependent(dependentId, user.organizationId);
+          if (dep) memberName = `${dep.firstName} ${dep.lastName}`;
+        }
+        const ctx = await buildPolicyContext(policy, user.organizationId, { memberName });
+        await dispatchNotification(user.organizationId, "member_added", policy.clientId, ctx);
+      });
+    }
+
     return res.status(201).json(member);
   });
 
@@ -1512,7 +1536,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
       if (txSnapshot.status === "cleared" && txSnapshot.clientId && txSnapshot.policyId && policySnap) {
-        await notifyClient(orgIdSnap, txSnapshot.clientId, "Payment received", `Your payment of ${txSnapshot.currency} ${txSnapshot.amount} for policy ${policySnap.policyNumber} has been received. Thank you.`);
+        const payCtx = await buildPolicyContext(policySnap, orgIdSnap, {
+          paymentAmount: `${txSnapshot.currency} ${parseFloat(txSnapshot.amount).toFixed(2)}`,
+          paymentDate: new Date().toLocaleDateString("en-GB"),
+          paymentMethod: txSnapshot.paymentMethod || "Cash",
+        });
+        await dispatchNotification(orgIdSnap, "payment_received", txSnapshot.clientId, payCtx);
       }
     });
 
@@ -1741,6 +1770,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
 
       await recordAgentCommission(cashOrgId, cashPolicyCopy, cashTxId, cashAmount);
+
+      if (cashPolicyCopy.clientId) {
+        const ctx = await buildPolicyContext(cashPolicyCopy, cashOrgId, {
+          paymentAmount: `${cashTxCurrency} ${parseFloat(cashAmount).toFixed(2)}`,
+          paymentDate: new Date().toLocaleDateString("en-GB"),
+          paymentMethod: "Cash",
+        });
+        await dispatchNotification(cashOrgId, "payment_receipt", cashPolicyCopy.clientId, ctx);
+      }
     });
 
     return res.status(201).json({ transaction: result.tx, receipt: result.receipt });
@@ -1853,6 +1891,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
           await storage.createPolicyStatusHistory(policy.id, "lapsed", "active", "Reinstatement — payment received (month-end)", user.id);
           await rollbackClawbacks(user.organizationId, policy);
+          if (policy.clientId) {
+            enqueueJob("notify:reinstatement", { policyId: policy.id }, async () => {
+              const ctx = await buildPolicyContext({ ...policy, status: "active" }, user.organizationId);
+              await dispatchNotification(user.organizationId, "reinstatement", policy.clientId, ctx);
+            });
+          }
         }
         if (amount > premium) {
           await storage.addPolicyCreditBalance(user.organizationId, policy.id, (amount - premium).toFixed(2), currency);
@@ -2386,6 +2430,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const tmpl = await storage.createNotificationTemplate(parsed);
     await auditLog(req, "CREATE_NOTIFICATION_TEMPLATE", "NotificationTemplate", tmpl.id, null, tmpl);
     return res.status(201).json(tmpl);
+  });
+
+  app.put("/api/notification-templates/:id", requireAuth, requireTenantScope, requirePermission("write:notification"), async (req, res) => {
+    const user = req.user as any;
+    const { name, eventType, channel, subject, bodyTemplate, isActive } = req.body;
+    const updated = await storage.updateNotificationTemplate(req.params.id as string, user.organizationId, {
+      name, eventType, channel, subject, bodyTemplate, isActive,
+    });
+    if (!updated) return res.status(404).json({ message: "Template not found" });
+    await auditLog(req, "UPDATE_NOTIFICATION_TEMPLATE", "NotificationTemplate", updated.id, null, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/notification-templates/:id", requireAuth, requireTenantScope, requirePermission("write:notification"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteNotificationTemplate(req.params.id as string, user.organizationId);
+    await auditLog(req, "DELETE_NOTIFICATION_TEMPLATE", "NotificationTemplate", req.params.id as string, null, null);
+    return res.json({ success: true });
+  });
+
+  app.get("/api/notification-merge-tags", requireAuth, requireTenantScope, requirePermission("read:notification"), (_req, res) => {
+    const { MERGE_TAGS, EVENT_TYPES } = require("./notifications");
+    return res.json({ mergeTags: MERGE_TAGS, eventTypes: EVENT_TYPES });
+  });
+
+  app.post("/api/admin/notifications/broadcast", requireAuth, requireTenantScope, requirePermission("write:notification"), async (req, res) => {
+    const user = req.user as any;
+    const { subject, body } = req.body;
+    if (!subject || !body) return res.status(400).json({ message: "Subject and body are required" });
+    const { broadcastNotification } = require("./notifications");
+    const sent = await broadcastNotification(user.organizationId, subject, body);
+    await auditLog(req, "BROADCAST_NOTIFICATION", "Notification", undefined, null, { subject, sent });
+    return res.json({ sent });
   });
 
   // ─── Expenditures ──────────────────────────────────────────
@@ -3733,18 +3810,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const orgId = user.organizationId;
     const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
+    const { dispatchNotification, buildPolicyContext } = require("./notifications");
+    const org = await storage.getOrganization(orgId);
 
     let birthdayCount = 0;
     let preLapseCount = 0;
     let lapseCount = 0;
+    let anniversaryCount = 0;
+    let premiumDueCount = 0;
 
     const allClients = await storage.getClientsByOrg(orgId, 100000, 0);
     for (const c of allClients) {
       if (c.dateOfBirth) {
         const dob = new Date(c.dateOfBirth);
         if (dob.getMonth() === today.getMonth() && dob.getDate() === today.getDate()) {
-          await notifyClient(orgId, c.id, "Happy Birthday!", `Wishing you a wonderful birthday, ${c.firstName}!`);
+          const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+          await dispatchNotification(orgId, "birthday", c.id, {
+            clientName: `${c.firstName} ${c.lastName}`,
+            firstName: c.firstName,
+            lastName: c.lastName,
+            birthdayName: `${c.firstName} ${c.lastName}`,
+            birthdayDate: `${monthNames[dob.getMonth()]} ${dob.getDate()}`,
+            orgName: org?.name,
+          });
           birthdayCount++;
         }
       }
@@ -3752,20 +3840,59 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const allPolicies = await storage.getPoliciesByOrg(orgId, 100000, 0);
     for (const p of allPolicies) {
-      if (p.status === "active" && p.clientId && p.graceEndDate) {
+      if (!p.clientId) continue;
+      const ctx = await buildPolicyContext(p, orgId);
+
+      if (p.inceptionDate) {
+        const inception = new Date(p.inceptionDate);
+        if (inception.getMonth() === today.getMonth() && inception.getDate() === today.getDate() && inception.getFullYear() < today.getFullYear()) {
+          const years = today.getFullYear() - inception.getFullYear();
+          await dispatchNotification(orgId, "anniversary", p.clientId, { ...ctx, anniversaryYears: String(years) });
+          anniversaryCount++;
+        }
+      }
+
+      if (p.status === "active" && p.currentCycleEnd) {
+        const cycleEnd = new Date(p.currentCycleEnd);
+        const daysToEnd = Math.ceil((cycleEnd.getTime() - today.getTime()) / 86400000);
+        if (daysToEnd === 3) {
+          await dispatchNotification(orgId, "premium_due", p.clientId, ctx);
+          premiumDueCount++;
+        }
+      }
+
+      if ((p.status === "active" || p.status === "grace") && p.graceEndDate) {
         const graceEnd = new Date(p.graceEndDate);
         const daysToGrace = Math.ceil((graceEnd.getTime() - today.getTime()) / 86400000);
-        if (daysToGrace === 7) {
-          await notifyClient(orgId, p.clientId, "Payment Reminder", `Your policy ${p.policyNumber} payment is due. Grace period ends in 7 days.`);
+        if (daysToGrace === 7 || daysToGrace === 3 || daysToGrace === 1) {
+          await dispatchNotification(orgId, "pre_lapse_warning", p.clientId, ctx);
           preLapseCount++;
-        } else if (daysToGrace <= 0) {
-          await notifyClient(orgId, p.clientId, "Policy Lapsed", `Your policy ${p.policyNumber} has lapsed due to non-payment. Contact us to reinstate.`);
+        } else if (daysToGrace <= 0 && p.status === "grace") {
+          await dispatchNotification(orgId, "policy_lapsed", p.clientId, ctx);
           lapseCount++;
+        }
+      }
+
+      const members = await storage.getPolicyMembers(p.id, orgId);
+      for (const m of members as any[]) {
+        if (!m.dependentId) continue;
+        const dep = await storage.getDependent(m.dependentId, orgId);
+        if (!dep?.dateOfBirth) continue;
+        const dob = new Date(dep.dateOfBirth);
+        if (dob.getMonth() === today.getMonth() && dob.getDate() === today.getDate()) {
+          const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+          await dispatchNotification(orgId, "birthday", p.clientId, {
+            ...ctx,
+            birthdayName: `${dep.firstName} ${dep.lastName}`,
+            birthdayDate: `${monthNames[dob.getMonth()]} ${dob.getDate()}`,
+            memberName: `${dep.firstName} ${dep.lastName}`,
+          });
+          birthdayCount++;
         }
       }
     }
 
-    return res.json({ birthdayCount, preLapseCount, lapseCount });
+    return res.json({ birthdayCount, preLapseCount, lapseCount, anniversaryCount, premiumDueCount });
   });
 
   app.post("/api/admin/sync-permissions", requireAuth, requireTenantScope, async (req, res) => {

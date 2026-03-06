@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, type SQL } from "drizzle-orm";
+import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, type SQL } from "drizzle-orm";
 import { db } from "./db";
 import { getDbForOrg } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
@@ -2069,6 +2069,7 @@ export class DatabaseStorage implements IStorage {
     subject?: string | null;
     body?: string | null;
     templateId?: string | null;
+    policyId?: string | null;
     status?: string;
   }): Promise<NotificationLog> {
     const tdb = await getDbForOrg(orgId);
@@ -2080,11 +2081,53 @@ export class DatabaseStorage implements IStorage {
       subject: data.subject ?? null,
       body: data.body ?? null,
       templateId: data.templateId ?? null,
+      policyId: data.policyId ?? null,
       status: data.status ?? "sent",
       attempts: 1,
       sentAt: new Date(),
     }).returning();
     return created;
+  }
+  async updateNotificationTemplate(id: string, orgId: string, data: Partial<{
+    name: string; eventType: string; channel: string; subject: string | null;
+    bodyTemplate: string; isActive: boolean;
+  }>): Promise<NotificationTemplate | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(notificationTemplates).set(data)
+      .where(and(eq(notificationTemplates.id, id), eq(notificationTemplates.organizationId, orgId))).returning();
+    return updated;
+  }
+  async deleteNotificationTemplate(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(notificationTemplates)
+      .where(and(eq(notificationTemplates.id, id), eq(notificationTemplates.organizationId, orgId)));
+  }
+  async getActiveTemplatesByEvent(orgId: string, eventType: string): Promise<NotificationTemplate[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(notificationTemplates)
+      .where(and(eq(notificationTemplates.organizationId, orgId), eq(notificationTemplates.eventType, eventType), eq(notificationTemplates.isActive, true)));
+  }
+  async getClientNotifications(clientId: string, orgId: string, limit = 50): Promise<NotificationLog[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(notificationLogs)
+      .where(and(eq(notificationLogs.recipientId, clientId), eq(notificationLogs.organizationId, orgId)))
+      .orderBy(desc(notificationLogs.createdAt)).limit(limit);
+  }
+  async getUnreadNotificationCount(clientId: string, orgId: string): Promise<number> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(notificationLogs)
+      .where(and(eq(notificationLogs.recipientId, clientId), eq(notificationLogs.organizationId, orgId), isNull(notificationLogs.readAt)));
+    return rows.length;
+  }
+  async markNotificationRead(id: string, clientId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(notificationLogs).set({ readAt: new Date() })
+      .where(and(eq(notificationLogs.id, id), eq(notificationLogs.recipientId, clientId), eq(notificationLogs.organizationId, orgId)));
+  }
+  async markAllNotificationsRead(clientId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(notificationLogs).set({ readAt: new Date() })
+      .where(and(eq(notificationLogs.recipientId, clientId), eq(notificationLogs.organizationId, orgId), isNull(notificationLogs.readAt)));
   }
 
   // ─── Leads ─────────────────────────────────────────────────
