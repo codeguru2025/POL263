@@ -1,0 +1,3412 @@
+[
+  {
+    "id": "TC001",
+    "title": "Staff portal card navigates to Staff Login",
+    "description": "Verifies the landing page shows the Staff portal entry and routes to the Staff login page from the Staff portal button.",
+    "category": "Landing Page / Portal Navigation",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Staff\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Access Staff Portal\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/login\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Login\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC002",
+    "title": "Agent portal card navigates to Agent Login",
+    "description": "Verifies the landing page routes to the Agent login page from the Agent portal button.",
+    "category": "Landing Page / Portal Navigation",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Agent\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Access Agent Portal\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/agent/login\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Login\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC003",
+    "title": "Activate client account successfully and reach client login",
+    "description": "Verifies a first-time client can verify identity with activation code + policy number, set password and security question, and is redirected to the client login (or is auto-logged in).",
+    "category": "Client Enrollment (activation)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Activation\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"VALID-ACTIVATION-CODE\" into the activation code field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"POLICY-000001\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"ValidPass123!\" into the new password field"
+      },
+      {
+        "type": "action",
+        "description": "Select \"What is your mother's maiden name?\" from the security question dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Type \"TestAnswer\" into the security answer field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Activate\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/client/login\""
+      }
+    ]
+  },
+  {
+    "id": "TC004",
+    "title": "Show error for invalid activation code during verification",
+    "description": "Verifies an invalid activation code is rejected with a visible error message and does not proceed to password setup.",
+    "category": "Client Enrollment (activation)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Activation\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"INVALID-CODE\" into the activation code field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"POLICY-000001\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"invalid activation code\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is not visible"
+      }
+    ]
+  },
+  {
+    "id": "TC005",
+    "title": "Password length validation prevents activation (shorter than 8 chars)",
+    "description": "Verifies inline validation appears and activation is blocked when the password is too short.",
+    "category": "Client Enrollment (activation)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "action",
+        "description": "Type \"VALID-ACTIVATION-CODE\" into the activation code field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"POLICY-000001\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"short7\" into the new password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Activate\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"at least 8\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/client/claim\""
+      }
+    ]
+  },
+  {
+    "id": "TC006",
+    "title": "Required fields validation when verifying without inputs",
+    "description": "Verifies verification cannot proceed when activation code and policy number are missing and required-field messaging is shown.",
+    "category": "Client Enrollment (activation)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Activation\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"activation code\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"policy number\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is not visible"
+      }
+    ]
+  },
+  {
+    "id": "TC007",
+    "title": "Prevent activation if security question is not selected",
+    "description": "Verifies activation is blocked and a visible validation message is shown when the security question is not selected.",
+    "category": "Client Enrollment (activation)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "action",
+        "description": "Type \"VALID-ACTIVATION-CODE\" into the activation code field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"POLICY-000001\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"ValidPass123!\" into the new password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Activate\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"security question\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/client/claim\""
+      }
+    ]
+  },
+  {
+    "id": "TC008",
+    "title": "Prevent activation if security answer is empty",
+    "description": "Verifies activation is blocked and a visible validation message is shown when the security answer is missing.",
+    "category": "Client Enrollment (activation)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "action",
+        "description": "Type \"VALID-ACTIVATION-CODE\" into the activation code field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"POLICY-000001\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"ValidPass123!\" into the new password field"
+      },
+      {
+        "type": "action",
+        "description": "Select \"What is your mother's maiden name?\" from the security question dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Activate\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"security answer\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC009",
+    "title": "Invalid policy number shows error during verification",
+    "description": "Verifies a mismatched or invalid policy number is rejected with a visible error and does not proceed to password setup.",
+    "category": "Client Enrollment (activation)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "action",
+        "description": "Type \"VALID-ACTIVATION-CODE\" into the activation code field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"POLICY-DOES-NOT-EXIST\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"policy\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is not visible"
+      }
+    ]
+  },
+  {
+    "id": "TC010",
+    "title": "Stay on enrollment page and show error when activation fails after Verify",
+    "description": "Verifies that if activation submission fails (e.g., server-side validation) the user stays on the enrollment page and sees a visible error message.",
+    "category": "Client Enrollment (activation)",
+    "priority": "Low",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/claim"
+      },
+      {
+        "type": "action",
+        "description": "Type \"VALID-ACTIVATION-CODE\" into the activation code field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"POLICY-000001\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Verify\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Set password\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"ValidPass123!\" into the new password field"
+      },
+      {
+        "type": "action",
+        "description": "Select \"What is your mother's maiden name?\" from the security question dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Type \"TestAnswer\" into the security answer field"
+      },
+      {
+        "type": "action",
+        "description": "Click on \"Activate\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Unable\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC011",
+    "title": "Staff dashboard loads and shows KPI cards and charts",
+    "description": "Verifies the staff dashboard renders core KPI cards and main charts after successful login.",
+    "category": "Staff Dashboard (KPIs & Filters)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Active Policies\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Revenue\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Policy\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC012",
+    "title": "Apply date range filter updates dashboard view",
+    "description": "Verifies changing the date range filter updates the dashboard’s visible state (charts/KPIs section refresh indicators or updated content).",
+    "category": "Staff Dashboard (KPIs & Filters)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Date range\" filter control"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Last 30 days\" from the date range options"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Last 30 days\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Revenue trend chart\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC013",
+    "title": "Apply policy status filter updates dashboard view",
+    "description": "Verifies selecting a policy status filter reflects on the dashboard and keeps charts visible.",
+    "category": "Staff Dashboard (KPIs & Filters)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Status\" filter control"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Active\" from the status options"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Status: Active\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Policy breakdown chart\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC014",
+    "title": "Apply branch filter updates dashboard view",
+    "description": "Verifies selecting a branch filter reflects on the dashboard and preserves KPI visibility.",
+    "category": "Staff Dashboard (KPIs & Filters)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Branch\" filter control"
+      },
+      {
+        "type": "action",
+        "description": "Select the first available branch option from the branch list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Branch:\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Active Policies\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC015",
+    "title": "Combine multiple filters (date range + status + branch) and confirm dashboard remains consistent",
+    "description": "Verifies multiple filters can be applied together without breaking the dashboard view and charts remain displayed.",
+    "category": "Staff Dashboard (KPIs & Filters)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Date range\" filter control"
+      },
+      {
+        "type": "action",
+        "description": "Select \"This month\" from the date range options"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Status\" filter control"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Active\" from the status options"
+      }
+    ]
+  },
+  {
+    "id": "TC016",
+    "title": "Agent-scoped view: dashboard shows agent-only data indicator or labeling",
+    "description": "Verifies that when logged in as an agent user, the dashboard reflects agent-scoped context (visible indicator/labeling) and still renders KPIs.",
+    "category": "Staff Dashboard (KPIs & Filters)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Active Policies\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Agent\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Revenue trend chart\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC017",
+    "title": "Open sidebar from Staff dashboard and navigate to Clients",
+    "description": "Verifies the hamburger menu opens the staff sidebar and the Clients item navigates to the Clients page.",
+    "category": "Sidebar Navigation (Staff)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the hamburger menu icon"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Clients\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Clients\" navigation item"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/clients\""
+      }
+    ]
+  },
+  {
+    "id": "TC018",
+    "title": "Open sidebar from Staff dashboard and navigate to Policies",
+    "description": "Verifies the Policies navigation item is available in the sidebar and routes correctly.",
+    "category": "Sidebar Navigation (Staff)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the hamburger menu icon"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Policies\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Policies\" navigation item"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/policies\""
+      }
+    ]
+  },
+  {
+    "id": "TC019",
+    "title": "Open sidebar from Staff dashboard and navigate to Claims",
+    "description": "Verifies the Claims navigation item is visible and routes correctly from the sidebar.",
+    "category": "Sidebar Navigation (Staff)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the hamburger menu icon"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Claims\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Claims\" navigation item"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/claims\""
+      }
+    ]
+  },
+  {
+    "id": "TC020",
+    "title": "Open sidebar from Staff dashboard and navigate to Reports",
+    "description": "Verifies the Reports navigation item is present and routes to the Reports page.",
+    "category": "Sidebar Navigation (Staff)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the hamburger menu icon"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Reports\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Reports\" navigation item"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      }
+    ]
+  },
+  {
+    "id": "TC021",
+    "title": "Sign out from sidebar and return to landing page",
+    "description": "Verifies the sidebar exposes Sign out and that signing out redirects the user to the public landing page.",
+    "category": "Sidebar Navigation (Staff)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the hamburger menu icon"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Sign out\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign out\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/\""
+      }
+    ]
+  },
+  {
+    "id": "TC022",
+    "title": "Sidebar shows key navigation sections when opened",
+    "description": "Verifies that opening the hamburger menu reveals common staff navigation items (sanity check of menu content).",
+    "category": "Sidebar Navigation (Staff)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the hamburger menu icon"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Dashboard\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Clients\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC023",
+    "title": "Permission-aware menu: restricted item not visible for a limited-permission staff user",
+    "description": "Verifies that a staff user who lacks a permission does not see the corresponding restricted navigation item in the sidebar.",
+    "category": "Sidebar Navigation (Staff)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the hamburger menu icon"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Tenants\" is not visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Users\" is not visible"
+      }
+    ]
+  },
+  {
+    "id": "TC024",
+    "title": "Create a new policy from the staff policies list and verify detail tabs are accessible",
+    "description": "Verifies a staff user can create a policy and then open the new policy to view core detail tabs.",
+    "category": "Policy Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Policies\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"New Policy\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"New Policy\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC025",
+    "title": "Complete new policy form and confirm newly created policy appears in the list",
+    "description": "Verifies completing the new policy form creates a policy and returns to a list that includes the newly created record.",
+    "category": "Policy Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Policies\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"New Policy\""
+      },
+      {
+        "type": "action",
+        "description": "Select an existing client from the Client selector"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create Policy\" or \"Submit\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC026",
+    "title": "Filter policies by status and verify filtered results are shown",
+    "description": "Verifies policy list status filtering (e.g., Active) updates the visible list content.",
+    "category": "Policy Management",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Policies\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Active\" from the Status filter dropdown"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Active\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC027",
+    "title": "Attempt to create a policy with missing required fields and verify inline validation errors",
+    "description": "Verifies required-field validation prevents policy creation and displays visible error messages.",
+    "category": "Policy Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Policies\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"New Policy\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create Policy\" or \"Submit\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"required\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC028",
+    "title": "Create a new claim and submit it (without uploading documents)",
+    "description": "Verifies a staff user can create a new claim linked to a policy and submit it, and the claim appears in the list with status Submitted.",
+    "category": "Claims Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Claims\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"New Claim\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"New Claim\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC029",
+    "title": "Create a new claim linked to a policy and submit it (no document upload due to runner limitations)",
+    "description": "Verifies required claim fields can be completed, a policy can be linked, and submitting creates a claim that shows as Submitted in the list.",
+    "category": "Claims Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Claims\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"New Claim\" button"
+      },
+      {
+        "type": "action",
+        "description": "Select the first available option from the \"Linked Policy\" dropdown"
+      }
+    ]
+  },
+  {
+    "id": "TC030",
+    "title": "Claims list filtering by status shows expected results",
+    "description": "Verifies the claims list status filter can be used and the list updates to show the chosen status.",
+    "category": "Claims Management",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Claims\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Submitted\" from the status filter dropdown"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Submitted\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC031",
+    "title": "Create claim validation: attempt submit with missing required fields shows an error",
+    "description": "Verifies required fields are enforced when creating a claim and a visible validation error is shown on submit.",
+    "category": "Claims Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Claims\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"New Claim\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Submit\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC032",
+    "title": "Create a new product with a first version and verify the version appears under the product",
+    "description": "Verifies staff can create a product, add a version with pricing and eligibility, and see the version listed under the product.",
+    "category": "Product Configuration (Product Builder)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Products\" item in the main navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/products\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Create product\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC033",
+    "title": "Save a newly created product and confirm it appears in the product list",
+    "description": "Verifies the product list updates to show a newly saved product after creation.",
+    "category": "Product Configuration (Product Builder)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Products\" item in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create product\" button"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Automation Test Product\" into the product name field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"AUTO-PROD-001\" into the product code field"
+      }
+    ]
+  },
+  {
+    "id": "TC034",
+    "title": "Complete product creation by saving and verifying success state on the Products page",
+    "description": "Verifies saving a product results in a visible success outcome and the product becomes visible/accessible from the list.",
+    "category": "Product Configuration (Product Builder)",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Products\" item in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create product\" button"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Automation Test Product\" into the product name field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"AUTO-PROD-002\" into the product code field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"AUTO-PROD-002\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC035",
+    "title": "Required-field validation when creating a product without a name",
+    "description": "Verifies that saving a product without a name shows a visible validation message and does not create the product.",
+    "category": "Product Configuration (Product Builder)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Products\" item in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create product\" button"
+      },
+      {
+        "type": "action",
+        "description": "Type \"AUTO-PROD-NONAME\" into the product code field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"name\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC036",
+    "title": "Required-field validation when creating a product without a code",
+    "description": "Verifies that saving a product without a code shows a visible validation message and does not create the product.",
+    "category": "Product Configuration (Product Builder)",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Products\" item in the main navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create product\" button"
+      },
+      {
+        "type": "action",
+        "description": "Type \"No Code Product\" into the product name field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"code\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC037",
+    "title": "Access Finance module and view payment transactions list",
+    "description": "Verifies a staff user can open the Finance module and see the payment transactions list.",
+    "category": "Finance Module",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Finance\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/finance\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Payment Transactions\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC038",
+    "title": "View payment receipts from Finance module",
+    "description": "Verifies a staff user can switch to the receipts view and see receipt information.",
+    "category": "Finance Module",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Finance\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Receipts\" tab"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Receipts\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Receipts list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC039",
+    "title": "Create a new cashup and verify it appears in the cashups list",
+    "description": "Verifies a staff user can create a cashup by filling required fields and then see it in the list.",
+    "category": "Finance Module",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Finance\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Cashups\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"New Cashup\" button"
+      },
+      {
+        "type": "action",
+        "description": "Fill \"100\" into the \"Total Cash\" field"
+      },
+      {
+        "type": "action",
+        "description": "Fill \"0\" into the \"Total Card\" field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Submit\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Cashup\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC040",
+    "title": "Cashup required-field validation prevents submission",
+    "description": "Verifies the cashup form shows visible validation and does not submit when required fields are missing.",
+    "category": "Finance Module",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Finance\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Cashups\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"New Cashup\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Submit\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"required\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC041",
+    "title": "View credit notes and reversal entries",
+    "description": "Verifies a staff user can open the credit notes/reversals section and see related entries.",
+    "category": "Finance Module",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Finance\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Credit Notes\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Credit Notes\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reversals\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Reversals\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC042",
+    "title": "Track expenditures list is visible in Finance module",
+    "description": "Verifies a staff user can open the expenditures area and see an expenditures list or empty state.",
+    "category": "Finance Module",
+    "priority": "Low",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Finance\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Expenditures\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Expenditures\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Expenditures list\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC043",
+    "title": "Client can view payment history on Client Payments page",
+    "description": "Verifies a logged-in client can open the payments page and see the payment history section rendered.",
+    "category": "Client Payments",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/client\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Payments\" navigation item"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/client/payments\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Payment History\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC044",
+    "title": "Initiate payment flow reaches payment method selection",
+    "description": "Verifies a client can start a new payment from the payments page and reach the payment method selection step.",
+    "category": "Client Payments",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/client\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Payments\" navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Initiate Payment\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Select payment method\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC045",
+    "title": "Cancel out of payment initiation returns to payments page",
+    "description": "Verifies a client can back out of the initiate payment flow without submitting and returns to the payments page state.",
+    "category": "Client Payments",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Payments\" navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Initiate Payment\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Cancel\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/client/payments\""
+      }
+    ]
+  },
+  {
+    "id": "TC046",
+    "title": "Validation: submitting without choosing a payment method shows an error",
+    "description": "Verifies the UI blocks submission until a payment method is selected and shows a visible validation message.",
+    "category": "Client Payments",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Payments\" navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Initiate Payment\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Submit\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Select a payment method\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC047",
+    "title": "Polling indicator appears after payment is submitted",
+    "description": "Verifies that after submitting a payment, the UI indicates that status is being checked (polling/processing) instead of staying idle.",
+    "category": "Client Payments",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /client/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the policy number field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Payments\" navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Initiate Payment\" button"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Visa\" from the payment method options"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Submit\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Checking payment status\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC048",
+    "title": "Run Policies report with filters and view results table",
+    "description": "Verifies a staff user can select the Policies report, apply date range and filters, run it, and see a results table or a clear empty-state.",
+    "category": "Reports and CSV Export",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Policies\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid start date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid end date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a specific branch from the branch filter dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the report results table is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC049",
+    "title": "Run Finance report with minimal required filters",
+    "description": "Verifies a staff user can switch to the Finance report type, run it with a basic date range, and see the report table render.",
+    "category": "Reports and CSV Export",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Finance\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid start date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid end date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the report results table is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC050",
+    "title": "Empty-state when running a report for a date range with no data",
+    "description": "Verifies the report shows a clear empty-state message when the selected date range returns no results.",
+    "category": "Reports and CSV Export",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Policies\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a start date far in the past in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select an end date shortly after the start date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No data\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC051",
+    "title": "Export disabled or blocked when report has no data",
+    "description": "Verifies export behavior when the report result is empty: the export control is disabled or the UI indicates nothing to export.",
+    "category": "Reports and CSV Export",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Finance\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a start date far in the past in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select an end date shortly after the start date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No data\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Export to CSV\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC052",
+    "title": "Filter by Agent and rerun report updates the displayed results",
+    "description": "Verifies changing the Agent filter and refreshing updates the visible report output (table renders after rerun).",
+    "category": "Reports and CSV Export",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Policies\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid start date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid end date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a specific agent from the agent filter dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the report results table is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC053",
+    "title": "Filter by Product and Status and run report successfully",
+    "description": "Verifies the report can be executed with multiple filters (product and status) and still renders results or an empty-state cleanly.",
+    "category": "Reports and CSV Export",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Policies\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid start date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid end date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a specific product from the product filter dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a specific status from the status filter dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the report results table is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC054",
+    "title": "Validation when date range is incomplete (only start date set)",
+    "description": "Verifies the UI prevents running the report or shows a visible validation message when the date range is incomplete.",
+    "category": "Reports and CSV Export",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Finance\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid start date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"End date\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC055",
+    "title": "Validation when end date is earlier than start date",
+    "description": "Verifies the UI shows a visible validation error when an invalid date range is selected.",
+    "category": "Reports and CSV Export",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Reports\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/reports\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Policies\" from the report type dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid end date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a start date that is later than the end date in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Run\" or \"Refresh\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Invalid date range\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC056",
+    "title": "Create a new staff user with role and branch assignment",
+    "description": "Verifies a staff user can create a new user with required details, assign a role and branch, and see the new user in the list.",
+    "category": "User Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/users\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Create user\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC057",
+    "title": "Complete user creation and verify new user appears in list",
+    "description": "Verifies the create-user form can be submitted successfully and the created user is visible in the user list afterward.",
+    "category": "User Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Create user\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Email\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC058",
+    "title": "Submit create-user form with role and branch and see user in list",
+    "description": "Verifies entering email and display name, assigning role and branch, and submitting results in the new user being listed with role badge.",
+    "category": "User Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Create user\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"e2e.user+um01@example.test\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"E2E UM User 01\" into the display name field"
+      }
+    ]
+  },
+  {
+    "id": "TC059",
+    "title": "Assign role and branch during user creation and submit",
+    "description": "Verifies role assignment and branch assignment controls can be used and the form can be successfully submitted.",
+    "category": "User Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Create user\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Agent\" from the role dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Main Branch\" from the branch dropdown"
+      }
+    ]
+  },
+  {
+    "id": "TC060",
+    "title": "Email uniqueness validation when creating a user with an existing email",
+    "description": "Verifies the UI shows a visible validation error when trying to create a user with an email that already exists.",
+    "category": "User Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Create user\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Submit\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC061",
+    "title": "See visible uniqueness error message for duplicate email",
+    "description": "Verifies an explicit email uniqueness error message is displayed on the create-user form for a duplicate email submission.",
+    "category": "User Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Create user\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Submit\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"already exists\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC062",
+    "title": "Open an existing user row and access permission overrides",
+    "description": "Verifies a staff user can open a user row/details view and reach the permission overrides section.",
+    "category": "User Management",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Users\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click on the first user row in the user list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Permission overrides\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC063",
+    "title": "Toggle a permission override and save successfully",
+    "description": "Verifies permission overrides can be toggled for a user and saving shows an updated visible badge/indicator.",
+    "category": "User Management",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click on the first user row in the user list"
+      },
+      {
+        "type": "action",
+        "description": "Click the permission override toggle for \"View Reports\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Saved\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC064",
+    "title": "Verify updated permission badges appear after saving overrides",
+    "description": "Verifies the user list or user details shows updated permission badges/indicators after saving permission overrides.",
+    "category": "User Management",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Login\" button"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Users\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click on the first user row in the user list"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Overrides\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC065",
+    "title": "Save organization name and primary color; verify staff login branding updates",
+    "description": "Verifies tenant settings save successfully and updated branding is reflected on the staff login page.",
+    "category": "Settings & Whitelabel",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Settings\" in the staff navigation menu"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/settings\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Settings\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC066",
+    "title": "Update organization name and save successfully",
+    "description": "Verifies the organization name can be edited and saved with a visible success confirmation.",
+    "category": "Settings & Whitelabel",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Settings\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Fill \"TS QA Org Rename\" into the organization name field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC067",
+    "title": "Change primary color and save successfully",
+    "description": "Verifies the primary brand color can be changed and saved.",
+    "category": "Settings & Whitelabel",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Settings\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Fill \"#1E40AF\" into the primary color field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC068",
+    "title": "Reload staff login page and verify updated organization name is visible",
+    "description": "Verifies public-facing staff login reflects the updated org name after saving settings.",
+    "category": "Settings & Whitelabel",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Settings\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Fill \"TS QA Org Branding\" into the organization name field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC069",
+    "title": "Save settings with missing required organization name and verify inline error",
+    "description": "Verifies required-field validation prevents saving when the organization name is cleared.",
+    "category": "Settings & Whitelabel",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Settings\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Fill \"\" into the organization name field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC070",
+    "title": "Toggle a feature flag and save successfully",
+    "description": "Verifies a feature flag can be changed and persisted via the Save action.",
+    "category": "Settings & Whitelabel",
+    "priority": "Low",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Settings\" in the staff navigation menu"
+      },
+      {
+        "type": "action",
+        "description": "Click a feature flag toggle switch"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Save\" button"
+      }
+    ]
+  },
+  {
+    "id": "TC071",
+    "title": "View audit log list shows key columns",
+    "description": "Verifies the audit logs viewer loads and displays an entries list with expected visible fields.",
+    "category": "Audit Logs Viewer",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff/audit\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Actor\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC072",
+    "title": "Audit log list displays entry details (actor, action, entity, timestamp)",
+    "description": "Verifies at least one audit entry row exposes actor, action, entity identifier, and timestamp on the list view.",
+    "category": "Audit Logs Viewer",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Audit log entries list\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Timestamp\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC073",
+    "title": "Filter audit logs by date range returns filtered results",
+    "description": "Verifies applying a date range filter updates the visible audit entries list.",
+    "category": "Audit Logs Viewer",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Start date\" field in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select an available start date from the date picker"
+      }
+    ]
+  },
+  {
+    "id": "TC074",
+    "title": "Filter audit logs by date range can be fully applied (start and end)",
+    "description": "Verifies selecting both start and end dates applies the filter and shows filtered entries state.",
+    "category": "Audit Logs Viewer",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"End date\" field in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select an available end date from the date picker"
+      }
+    ]
+  },
+  {
+    "id": "TC075",
+    "title": "Open audit entry to view before/after change details",
+    "description": "Verifies clicking an audit entry reveals a details view with before/after change information.",
+    "category": "Audit Logs Viewer",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the first visible audit log entry in the list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Before\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC076",
+    "title": "Audit entry details show both 'Before' and 'After' sections",
+    "description": "Verifies the audit entry details view includes both sides of the change for investigation/compliance.",
+    "category": "Audit Logs Viewer",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the first visible audit log entry in the list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"After\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC077",
+    "title": "Date range filter with no matching entries shows empty state",
+    "description": "Verifies selecting a date range that yields zero results shows a clear empty-state message.",
+    "category": "Audit Logs Viewer",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Start date\" field in the date range filter"
+      },
+      {
+        "type": "action",
+        "description": "Select a far-future start date from the date picker"
+      }
+    ]
+  },
+  {
+    "id": "TC078",
+    "title": "Empty state message is displayed when no audit entries are available for range",
+    "description": "Verifies the audit viewer communicates 'no audit entries' when the current filter yields no rows.",
+    "category": "Audit Logs Viewer",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /staff/login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" or \"Log in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/staff\""
+      },
+      {
+        "type": "action",
+        "description": "Click \"Audit\" or \"Audit Trail\" in the staff navigation"
+      },
+      {
+        "type": "action",
+        "description": "Wait for the audit results area to load"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No audit entries\" is visible"
+      }
+    ]
+  }
+]

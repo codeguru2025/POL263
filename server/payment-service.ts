@@ -435,7 +435,7 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
 
   const reference = postedFields.reference ?? postedFields.merchantreference;
   const status = (postedFields.status ?? "").toLowerCase();
-  const paynowRef = postedFields.paynowreference ?? postedFields.paynowreference;
+  const paynowRef = postedFields.paynowreference ?? postedFields.PaynowReference ?? postedFields.Paynowreference;
 
   if (!reference) return { ok: false, reason: "Missing reference" };
 
@@ -521,7 +521,7 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
 }
 
 /** Poll Paynow status; update intent and apply payment if paid. */
-export async function pollPaynowStatus(intentId: string, orgId: string): Promise<{ status: string; paid?: boolean; error?: string }> {
+export async function pollPaynowStatus(intentId: string, orgId: string): Promise<{ status: string; paid?: boolean; error?: string; paynowStatus?: string }> {
   const intent = await storage.getPaymentIntentById(intentId, orgId);
   if (!intent) return { status: "unknown", error: "Intent not found" };
   if (intent.status === "paid") return { status: "paid", paid: true };
@@ -534,15 +534,24 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
   try {
     const res = await fetch(pollUrl, { method: "POST", body: "" });
     const text = await res.text();
+    structuredLog("info", "Paynow poll raw response", { intentId: intent.id, responseText: text.slice(0, 600) });
     const parsed = new URLSearchParams(text);
     const status = (parsed.get("status") ?? "").toLowerCase();
-    if (!verifyPaynowHash(Object.fromEntries(parsed))) {
+    const hashValid = verifyPaynowHash(Object.fromEntries(parsed));
+    if (!hashValid) {
       structuredLog("warn", "Paynow poll hash mismatch", {
         intentId: intent.id,
         paynowStatus: status,
         keys: [...parsed.keys()].filter((k) => k.toLowerCase() !== "hash").join(","),
       });
-      return { status: intent.status, error: "Invalid poll response hash" };
+      if (isPaynowPaidStatus(status)) {
+        structuredLog("warn", "Paynow poll hash mismatch but status is PAID — applying payment anyway", { intentId: intent.id, paynowStatus: status });
+        const applied = await applyPaymentToPolicy(intent.id, "system", null);
+        if (applied.ok) return { status: "paid", paid: true, paynowStatus: status };
+        structuredLog("error", "applyPaymentToPolicy failed after hash-mismatch paid", { intentId: intent.id, error: applied.error });
+        return { status: "paid_pending_apply", paid: false, error: applied.error || "Payment detected but recording failed — will retry", paynowStatus: status };
+      }
+      return { status: intent.status, error: "Verifying payment with gateway...", paynowStatus: status };
     }
     await storage.createPaymentEvent({
       paymentIntentId: intent.id,
@@ -554,18 +563,22 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
     });
     if (isPaynowPaidStatus(status)) {
       const applied = await applyPaymentToPolicy(intent.id, "system", null);
-      if (!applied.ok) return { status: intent.status, paid: false, error: applied.error || "Failed to apply payment" };
-      return { status: "paid", paid: true };
+      if (!applied.ok) {
+        structuredLog("error", "applyPaymentToPolicy failed", { intentId: intent.id, error: applied.error });
+        return { status: "paid_pending_apply", paid: false, error: applied.error || "Payment received but recording failed — will retry", paynowStatus: status };
+      }
+      return { status: "paid", paid: true, paynowStatus: status };
     }
     if (isPaynowFailedStatus(status)) {
       await storage.updatePaymentIntent(intent.id, { status: "failed" }, orgId);
-      return { status: "failed" };
+      return { status: "failed", paynowStatus: status };
     }
     if (status && status !== "created") {
-      structuredLog("info", "Paynow poll unhandled status", { intentId: intent.id, status });
+      structuredLog("info", "Paynow poll intermediate status", { intentId: intent.id, status });
     }
-    return { status: intent.status };
+    return { status: intent.status, paynowStatus: status };
   } catch (err) {
+    structuredLog("error", "Paynow poll fetch error", { intentId: intent.id, error: (err as Error).message });
     return { status: intent.status, error: (err as Error).message };
   }
 }

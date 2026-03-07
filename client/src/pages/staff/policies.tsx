@@ -56,6 +56,11 @@ function getStatusColor(status: string) {
   }
 }
 
+function isPaynowPaidLike(s: string) {
+  const l = s.toLowerCase();
+  return l === "paid" || l === "sent" || l === "awaiting delivery" || l === "delivered";
+}
+
 const NATIONAL_ID_REGEX = /^\d+[A-Z]\d{2}$/;
 function toUpper(value: string) { return value.trim().toUpperCase(); }
 function isValidNationalId(value: string | null | undefined): boolean {
@@ -106,6 +111,8 @@ export default function StaffPolicies() {
   const [inPolicyReceiptNotes, setInPolicyReceiptNotes] = useState("");
   const [pnIntentId, setPnIntentId] = useState<string | null>(null);
   const [pnPolling, setPnPolling] = useState(false);
+  const [pnPollStartTime, setPnPollStartTime] = useState<number>(0);
+  const [pnPollError, setPnPollError] = useState<string | null>(null);
   const [pnInnbucksCode, setPnInnbucksCode] = useState("");
   const [pnInnbucksExpiry, setPnInnbucksExpiry] = useState("");
   const [pnNeedsOtp, setPnNeedsOtp] = useState(false);
@@ -181,15 +188,18 @@ export default function StaffPolicies() {
     },
   });
 
-  const { data: clients } = useQuery<any[]>({
+  const { data: rawClients } = useQuery<any[]>({
     queryKey: ["/api/clients"],
   });
-  const { data: agents = [] } = useQuery<any[]>({
+  const clients = rawClients ?? [];
+  const { data: rawAgents } = useQuery<any[]>({
     queryKey: ["/api/agents"],
   });
-  const { data: branches = [] } = useQuery<any[]>({
+  const agents = rawAgents ?? [];
+  const { data: rawBranches } = useQuery<any[]>({
     queryKey: ["/api/branches"],
   });
+  const branches = rawBranches ?? [];
 
   const { data: selectedClient } = useQuery<any>({
     queryKey: ["/api/clients", createForm.clientId],
@@ -201,13 +211,15 @@ export default function StaffPolicies() {
     enabled: !!createForm.clientId,
   });
 
-  const { data: products } = useQuery<any[]>({
+  const { data: rawProducts } = useQuery<any[]>({
     queryKey: ["/api/products"],
   });
+  const products = rawProducts ?? [];
 
-  const { data: addOns } = useQuery<any[]>({
+  const { data: rawAddOns } = useQuery<any[]>({
     queryKey: ["/api/add-ons"],
   });
+  const addOns = rawAddOns ?? [];
 
   const { data: dependents } = useQuery<any[]>({
     queryKey: ["/api/clients", createForm.clientId, "dependents"],
@@ -652,7 +664,8 @@ export default function StaffPolicies() {
   });
 
   const resetPnState = () => {
-    setPnIntentId(null); setPnPolling(false); setPnInnbucksCode(""); setPnInnbucksExpiry("");
+    setPnIntentId(null); setPnPolling(false); setPnPollStartTime(0); setPnPollError(null);
+    setPnInnbucksCode(""); setPnInnbucksExpiry("");
     setPnNeedsOtp(false); setPnOtpRef(""); setPnOtp(""); setPnPhase("select");
     setInPolicyReceiptMethod("cash"); setInPolicyReceiptRef(""); setInPolicyReceiptNotes("");
   };
@@ -706,6 +719,8 @@ export default function StaffPolicies() {
     onSuccess: (data) => {
       if (data.message) { toast({ title: "Error", description: data.message, variant: "destructive" }); return; }
       setPnPhase("waiting");
+      setPnPollStartTime(Date.now());
+      setPnPollError(null);
       if (inPolicyReceiptMethod === "innbucks" && data.innbucksCode) {
         setPnInnbucksCode(data.innbucksCode); setPnInnbucksExpiry(data.innbucksExpiry || ""); setPnPolling(true);
         toast({ title: "InnBucks code ready" }); return;
@@ -746,7 +761,7 @@ export default function StaffPolicies() {
     queryFn: async () => {
       if (!pnIntentId) return null;
       const res = await apiRequest("POST", `/api/payment-intents/${pnIntentId}/poll`, {});
-      return res.json() as Promise<{ status: string; paid?: boolean }>;
+      return res.json() as Promise<{ status: string; paid?: boolean; error?: string; paynowStatus?: string }>;
     },
     enabled: !!pnIntentId && pnPolling,
     refetchInterval: 5000,
@@ -756,14 +771,32 @@ export default function StaffPolicies() {
     if (!pnPollData) return;
     if (pnPollData.paid || pnPollData.status === "paid") {
       setPnPolling(false);
+      setPnPollError(null);
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       if (selectedPolicy) queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy.id, "receipts"] });
       setShowInPolicyReceiptDialog(false); resetPnState();
       setReceiptSuccessData({ paynow: true, policyId: selectedPolicy?.id, policyNumber: displayPolicy?.policyNumber });
       setShowReceiptSuccess(true);
+      return;
     }
-    if (pnPollData.status === "failed") { setPnPolling(false); toast({ title: "Payment failed", variant: "destructive" }); }
+    if (pnPollData.status === "failed") {
+      setPnPolling(false);
+      toast({ title: "Payment failed", description: "The payment was declined or cancelled.", variant: "destructive" });
+      return;
+    }
+    if (pnPollData.error) {
+      setPnPollError(pnPollData.error);
+    }
+    const PN_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+    if (pnPollStartTime && Date.now() - pnPollStartTime > PN_POLL_TIMEOUT_MS) {
+      setPnPolling(false);
+      toast({
+        title: "Payment confirmation timed out",
+        description: "If the money was deducted, the payment will be recorded automatically once the gateway confirms. Check back shortly.",
+        variant: "destructive",
+      });
+    }
   }, [pnPollData]);
 
   const filteredPolicies = useMemo(() => {
@@ -1844,13 +1877,31 @@ export default function StaffPolicies() {
                     <div className="p-4 rounded-lg border-2 border-green-300 bg-green-50 space-y-3 text-center">
                       <Loader2 className="h-8 w-8 animate-spin mx-auto text-green-700" />
                       <p className="font-semibold text-green-900">
-                        {inPolicyReceiptMethod === "visa_mastercard" ? "Waiting for card payment..." : "Waiting for client approval..."}
+                        {pnPollData?.paynowStatus && isPaynowPaidLike(pnPollData.paynowStatus)
+                          ? "Payment received — recording transaction..."
+                          : inPolicyReceiptMethod === "visa_mastercard" ? "Waiting for card payment..." : "Waiting for client approval..."}
                       </p>
                       <p className="text-sm text-green-800">
-                        {inPolicyReceiptMethod === "visa_mastercard"
-                          ? "Client should complete payment in the card page."
-                          : "EcoCash/OneMoney use USSD — the client should see a prompt on their phone to enter their PIN. If nothing appears within 30 seconds, check the mobile number is correct (e.g. 0771234567) and try again."}
+                        {pnPollData?.paynowStatus && isPaynowPaidLike(pnPollData.paynowStatus)
+                          ? "The payment gateway confirmed receipt. Finalising your receipt now..."
+                          : inPolicyReceiptMethod === "visa_mastercard"
+                            ? "Client should complete payment in the card page."
+                            : "EcoCash/OneMoney use USSD — the client should see a prompt on their phone to enter their PIN. If nothing appears within 30 seconds, check the mobile number is correct (e.g. 0771234567) and try again."}
                       </p>
+                      {pnPollError && (
+                        <p className="text-xs text-amber-700 mt-1">{pnPollError}</p>
+                      )}
+                    </div>
+                  )}
+                  {!pnInnbucksCode && !pnNeedsOtp && !pnPolling && pnPhase === "waiting" && (
+                    <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 space-y-3 text-center">
+                      <p className="font-semibold text-amber-900">Confirmation timed out</p>
+                      <p className="text-sm text-amber-800">
+                        If the money was deducted, the payment will be recorded automatically once the gateway confirms. You can close this dialog and check back shortly.
+                      </p>
+                      <Button variant="outline" size="sm" onClick={() => { setPnPolling(true); setPnPollStartTime(Date.now()); setPnPollError(null); }}>
+                        Retry polling
+                      </Button>
                     </div>
                   )}
                 </>

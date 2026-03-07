@@ -1088,6 +1088,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/policies", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
+    try {
     const policyNumber = await storage.generatePolicyNumber(user.organizationId);
 
     let agentId = req.body.agentId || null;
@@ -1158,63 +1159,71 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       (p) => p.productVersionId === parsed.productVersionId && p.status !== "cancelled"
     );
     if (duplicate) {
-      res.status(400).json({
+      return res.status(400).json({
         error: "Duplicate policy",
         message: "This client already has an active policy for this product. Cancel the existing policy first if you need to create a new one.",
       });
-      return;
     }
 
     const policy = await storage.createPolicy(parsed);
-    try {
-      await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Policy created", user.id);
 
-      await storage.createPolicyMember({
-        policyId: policy.id,
-        clientId: policy.clientId,
-        role: "policy_holder",
-      });
+    await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Policy created", user.id, user.organizationId);
 
-      let dependentsToAdd = members;
-      if (dependentsToAdd.length === 0 && policy.clientId) {
-        const clientDeps = await storage.getDependentsByClient(policy.clientId, user.organizationId);
-        dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
-      }
-      for (const m of dependentsToAdd) {
-        if (m.clientId || m.dependentId) {
-          await storage.createPolicyMember({
-            policyId: policy.id,
-            clientId: m.clientId || null,
-            dependentId: m.dependentId || null,
-            role: m.role || "dependent",
-          });
-        }
-      }
+    await storage.createPolicyMember({
+      policyId: policy.id,
+      clientId: policy.clientId,
+      role: "policy_holder",
+    });
 
-      const uniqueAddOnIds = Array.from(new Set(memberAddOns.map((ma) => ma.addOnId)));
-      const allAddOnIds = uniqueAddOnIds.length > 0 ? uniqueAddOnIds : addOnIds;
-      if (allAddOnIds.length > 0) {
-        await storage.addPolicyAddOns(policy.id, allAddOnIds, user.organizationId);
-      }
-
-      await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
-
-      if (policy.clientId) {
-        enqueueJob("notify:policy_capture", { policyId: policy.id }, async () => {
-          const ctx = await buildPolicyContext(policy, user.organizationId);
-          await dispatchNotification(user.organizationId, "policy_capture", policy.clientId, ctx);
+    let dependentsToAdd = members;
+    if (dependentsToAdd.length === 0 && policy.clientId) {
+      const clientDeps = await storage.getDependentsByClient(policy.clientId, user.organizationId);
+      dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
+    }
+    for (const m of dependentsToAdd) {
+      if (m.clientId || m.dependentId) {
+        await storage.createPolicyMember({
+          policyId: policy.id,
+          clientId: m.clientId || null,
+          dependentId: m.dependentId || null,
+          role: m.role || "dependent",
         });
       }
+    }
 
-      return res.status(201).json(policy);
-    } catch (err) {
-      console.error(`Policy creation failed after creating policy ${policy.id}, orphaned record may remain:`, err);
-      throw err;
+    const uniqueAddOnIds = Array.from(new Set(memberAddOns.map((ma) => ma.addOnId)));
+    const allAddOnIds = uniqueAddOnIds.length > 0 ? uniqueAddOnIds : addOnIds;
+    if (allAddOnIds.length > 0) {
+      await storage.addPolicyAddOns(policy.id, allAddOnIds, user.organizationId);
+    }
+
+    await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
+
+    if (policy.clientId) {
+      enqueueJob("notify:policy_capture", { policyId: policy.id }, async () => {
+        const ctx = await buildPolicyContext(policy, user.organizationId);
+        await dispatchNotification(user.organizationId, "policy_capture", policy.clientId, ctx);
+      });
+    }
+
+    return res.status(201).json(policy);
+    } catch (err: any) {
+      if (err instanceof z.ZodError) throw err;
+      const dbMsg = err?.message || "";
+      if (dbMsg.includes("violates foreign key")) {
+        return res.status(400).json({ message: "Invalid reference: the selected client, product, agent, or branch no longer exists. Please refresh and try again." });
+      }
+      if (dbMsg.includes("violates unique constraint")) {
+        return res.status(409).json({ message: "A policy with this number already exists. Please try again." });
+      }
+      structuredLog("error", "POST /api/policies failed", { error: dbMsg, stack: err?.stack });
+      return res.status(500).json({ message: "Failed to create policy. Please try again or contact support." });
     }
   });
 
   app.patch("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
+    try {
     const before = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -1226,14 +1235,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete body.id;
     delete body.createdAt;
     delete body.policyNumber;
+    delete body.members;
+    delete body.memberAddOns;
+    delete body.addOnIds;
+    delete body.beneficiary;
     if (!user.isPlatformOwner) delete body.agentId;
-    const updated = await storage.updatePolicy(req.params.id as string, body, user.organizationId);
+
+    const ALLOWED_FIELDS = new Set([
+      "currency", "paymentSchedule", "effectiveDate", "branchId", "agentId", "groupId", "status",
+      "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryRelationship",
+      "beneficiaryNationalId", "beneficiaryPhone", "beneficiaryDependentId",
+    ]);
+    const sanitized: Record<string, any> = {};
+    for (const [key, value] of Object.entries(body)) {
+      if (!ALLOWED_FIELDS.has(key)) continue;
+      sanitized[key] = value === "" ? null : value;
+    }
+
+    if (Object.keys(sanitized).length === 0) {
+      return res.json(before);
+    }
+
+    const updated = await storage.updatePolicy(req.params.id as string, sanitized, user.organizationId);
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);
     return res.json(updated);
+    } catch (err: any) {
+      const dbMsg = err?.message || "";
+      if (dbMsg.includes("violates foreign key")) {
+        return res.status(400).json({ message: "Invalid reference: the selected branch, agent, or group no longer exists." });
+      }
+      if (dbMsg.includes("invalid input syntax")) {
+        return res.status(400).json({ message: "Invalid data format. Please check your input and try again." });
+      }
+      structuredLog("error", "PATCH /api/policies/:id failed", { error: dbMsg, stack: err?.stack, policyId: req.params.id });
+      return res.status(500).json({ message: "Failed to update policy. Please try again." });
+    }
   });
 
   app.post("/api/policies/:id/transition", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
+    try {
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
 
@@ -1245,7 +1286,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const before = { ...policy };
     const updated = await storage.updatePolicy(policy.id, { status: toStatus }, user.organizationId);
-    await storage.createPolicyStatusHistory(policy.id, policy.status, toStatus, reason, user.id);
+    await storage.createPolicyStatusHistory(policy.id, policy.status, toStatus, reason, user.id, user.organizationId);
 
     if (policy.clientId) {
       const eventMap: Record<string, string> = {
@@ -1263,6 +1304,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     await auditLog(req, "TRANSITION_POLICY", "Policy", policy.id, before, updated);
     return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/policies/:id/transition failed", { error: err?.message, stack: err?.stack, policyId: req.params.id });
+      return res.status(500).json({ message: "Failed to update policy status. Please try again." });
+    }
   });
 
   // ─── Hard-delete a policy and all related records (RBAC-gated) ──
