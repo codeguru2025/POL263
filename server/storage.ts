@@ -2,6 +2,7 @@ import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, ty
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
+import { structuredLog } from "./logger";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
   userRoles, userPermissionOverrides, auditLogs, clients, dependents,
@@ -751,7 +752,7 @@ export class DatabaseStorage implements IStorage {
       ...leadRows.map((r) => r.clientId),
       ...directRows.map((r) => r.id),
     ].filter(Boolean))) as string[];
-    console.log(`[getClientsByAgent] agentId=${agentId} policies=${policyRows.length} leads=${leadRows.length} direct=${directRows.length} total_unique=${clientIds.length} search=${search || "(none)"}`);
+    structuredLog("debug", "getClientsByAgent", { agentId, policies: policyRows.length, leads: leadRows.length, direct: directRows.length, totalUnique: clientIds.length, search: search || "(none)" });
     if (clientIds.length === 0) return [];
     const conditions = [eq(clients.organizationId, organizationId), inArray(clients.id, clientIds)];
     if (search && search.trim()) {
@@ -2665,14 +2666,18 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
   async addPolicyCreditBalance(orgId: string, policyId: string, amount: string, currency: string): Promise<PolicyCreditBalance | undefined> {
-    const row = await this.getOrCreatePolicyCreditBalance(orgId, policyId, currency);
     const tdb = await getDbForOrg(orgId);
-    const newBalance = (parseFloat(String(row.balance)) + parseFloat(amount)).toFixed(2);
-    const [updated] = await tdb.update(policyCreditBalances)
-      .set({ balance: newBalance, updatedAt: new Date() })
-      .where(eq(policyCreditBalances.id, row.id))
-      .returning();
-    return updated;
+    // Atomic upsert: create if missing, otherwise add to existing balance
+    const result = await tdb.execute(sql`
+      INSERT INTO policy_credit_balances (organization_id, policy_id, balance, currency, updated_at)
+      VALUES (${orgId}, ${policyId}, ${amount}::numeric, ${currency}, now())
+      ON CONFLICT (policy_id, organization_id) DO UPDATE
+        SET balance = policy_credit_balances.balance + ${amount}::numeric,
+            updated_at = now()
+      RETURNING *
+    `);
+    const rows = (result as unknown as { rows?: PolicyCreditBalance[] }).rows;
+    return rows?.[0];
   }
   async getPolicyCreditBalance(orgId: string, policyId: string): Promise<PolicyCreditBalance | undefined> {
     const tdb = await getDbForOrg(orgId);
@@ -2686,17 +2691,17 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(policyCreditBalances.organizationId, orgId), gt(policyCreditBalances.balance, "0")));
   }
   async deductPolicyCreditBalance(orgId: string, policyId: string, amount: string): Promise<PolicyCreditBalance | undefined> {
-    const row = await this.getPolicyCreditBalance(orgId, policyId);
-    if (!row) return undefined;
-    const current = parseFloat(String(row.balance));
-    const deduct = parseFloat(amount);
-    const newBalance = Math.max(0, current - deduct).toFixed(2);
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(policyCreditBalances)
-      .set({ balance: newBalance, updatedAt: new Date() })
-      .where(eq(policyCreditBalances.id, row.id))
-      .returning();
-    return updated;
+    // Atomic deduction: prevents race condition from read-then-write pattern
+    const result = await tdb.execute(sql`
+      UPDATE policy_credit_balances
+      SET balance = GREATEST('0'::numeric, balance - ${amount}::numeric),
+          updated_at = now()
+      WHERE organization_id = ${orgId} AND policy_id = ${policyId}
+      RETURNING *
+    `);
+    const rows = (result as unknown as { rows?: PolicyCreditBalance[] }).rows;
+    return rows?.[0];
   }
   async getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]> {
     const tdb = await getDbForOrg(orgId);
@@ -2813,10 +2818,15 @@ export class DatabaseStorage implements IStorage {
       .limit(Math.min(limit, 500));
   }
   async getNextCreditNoteNumber(orgId: string): Promise<string> {
-    const tdb = await getDbForOrg(orgId);
-    const [result] = await tdb.select({ cnt: count() }).from(creditNotes).where(eq(creditNotes.organizationId, orgId));
-    const num = ((result?.cnt || 0) as number) + 1;
-    return `CN-${String(num).padStart(6, "0")}`;
+    // org_policy_sequences lives in the main (registry) DB for cross-tenant consistency
+    const result = await db.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, credit_note_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET credit_note_next = org_policy_sequences.credit_note_next + 1
+      RETURNING credit_note_next
+    `);
+    const rows = (result as unknown as { rows?: { credit_note_next: number }[] }).rows;
+    const nextVal = rows?.[0]?.credit_note_next ?? 1;
+    return `CN-${String(nextVal).padStart(6, "0")}`;
   }
   async createCreditNote(note: InsertCreditNote): Promise<CreditNote> {
     const tdb = await getDbForOrg(note.organizationId);
@@ -2846,10 +2856,15 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
   async getNextMonthEndRunNumber(orgId: string): Promise<string> {
-    const tdb = await getDbForOrg(orgId);
-    const [result] = await tdb.select({ cnt: count() }).from(monthEndRuns).where(eq(monthEndRuns.organizationId, orgId));
-    const num = ((result?.cnt || 0) as number) + 1;
-    return `MER-${String(num).padStart(6, "0")}`;
+    // org_policy_sequences lives in the main (registry) DB for cross-tenant consistency
+    const result = await db.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, month_end_run_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET month_end_run_next = org_policy_sequences.month_end_run_next + 1
+      RETURNING month_end_run_next
+    `);
+    const rows = (result as unknown as { rows?: { month_end_run_next: number }[] }).rows;
+    const nextVal = rows?.[0]?.month_end_run_next ?? 1;
+    return `MER-${String(nextVal).padStart(6, "0")}`;
   }
 
   // ─── Platform Receivables ──────────────────────────────

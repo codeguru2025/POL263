@@ -11,7 +11,7 @@ import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaymentReceipt } from "@shared/schema";
 import type { Policy } from "@shared/schema";
 import { paymentTransactions, paymentReceipts, paymentIntents } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { structuredLog } from "./logger";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
@@ -769,73 +769,87 @@ export async function applyGroupPaymentToPolicies(
   if (allocations.length === 0) return { ok: false, error: "No allocations" };
 
   try {
-  const today = new Date().toISOString().split("T")[0];
-  const refPrefix = groupIntent.merchantReference;
-  const notifiedClients = new Set<string>();
+    const today = new Date().toISOString().split("T")[0];
+    const refPrefix = groupIntent.merchantReference;
+    const notifiedClients = new Set<string>();
+    let successCount = 0;
 
-  for (const alloc of allocations) {
-    const policy = await storage.getPolicy(alloc.policyId, orgId);
-    if (!policy) continue;
-    const amount = String(alloc.amount);
-    const currency = alloc.currency || groupIntent.currency || "USD";
-    const transaction = await storage.createPaymentTransaction({
-      organizationId: orgId,
-      policyId: alloc.policyId,
-      clientId: policy.clientId!,
-      amount,
-      currency,
-      paymentMethod: "paynow",
-      status: "cleared",
-      reference: refPrefix,
-      paynowReference: groupIntent.paynowReference ?? undefined,
-      idempotencyKey: `grp-${groupIntentId}-${alloc.policyId}`,
-      receivedAt: new Date(),
-      postedDate: today,
-      valueDate: today,
-      notes: "Group PayNow",
-      recordedBy: actorId ?? undefined,
-    });
-    const receiptNumber = await storage.getNextPaymentReceiptNumber(orgId);
-    await storage.createPaymentReceipt({
-      organizationId: orgId,
-      branchId: policy.branchId ?? undefined,
-      receiptNumber,
-      paymentIntentId: undefined as any,
-      policyId: alloc.policyId,
-      clientId: policy.clientId!,
-      amount,
-      currency,
-      paymentChannel: "paynow_ecocash",
-      issuedByUserId: actorId ?? undefined,
-      status: "issued",
-      metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference, transactionId: transaction.id },
-    });
-    if (policy.status === "inactive") {
-      await storage.updatePolicy(alloc.policyId, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, orgId);
-      await storage.createPolicyStatusHistory(alloc.policyId, "inactive", "active", "First premium paid — conversion (group PayNow)", actorId ?? undefined);
-    } else if (policy.status === "grace") {
-      await storage.updatePolicy(alloc.policyId, { status: "active", graceEndDate: null }, orgId);
-      await storage.createPolicyStatusHistory(alloc.policyId, "grace", "active", "Payment received (group PayNow)", actorId ?? undefined);
-    } else if (policy.status === "lapsed") {
-      await storage.updatePolicy(alloc.policyId, { status: "active", graceEndDate: null }, orgId);
-      await storage.createPolicyStatusHistory(alloc.policyId, "lapsed", "active", "Reinstatement — payment received (group PayNow)", actorId ?? undefined);
-      await rollbackClawbacksForPolicy(orgId, policy);
-    }
-    if (!notifiedClients.has(policy.clientId!)) {
-      notifiedClients.add(policy.clientId!);
-      await storage.createNotificationLog(orgId, {
-        recipientType: "client",
-        recipientId: policy.clientId!,
-        channel: "in_app",
-        subject: "Group payment received",
-        body: `Payment of ${currency} ${amount} received for policy ${policy.policyNumber}. Receipt #${receiptNumber}.`,
-        status: "sent",
+    for (const alloc of allocations) {
+      // Idempotency: skip allocations already applied
+      const existingTx = await storage.getPaymentTransactionByIdempotencyKey(`grp-${groupIntentId}-${alloc.policyId}`, orgId);
+      if (existingTx) { successCount++; continue; }
+
+      const policy = await storage.getPolicy(alloc.policyId, orgId);
+      if (!policy) continue;
+
+      const amount = String(alloc.amount);
+      const currency = alloc.currency || groupIntent.currency || "USD";
+      // Fetch receipt number outside transaction (sequence is atomic via ON CONFLICT DO UPDATE)
+      const receiptNumber = await storage.getNextPaymentReceiptNumber(orgId);
+
+      // Wrap each allocation in its own transaction for atomicity
+      const txResult = await withOrgTransaction(orgId, async (txDb) => {
+        // Lock policy row to prevent concurrent status changes
+        await txDb.execute(sql`SELECT id FROM policies WHERE id = ${alloc.policyId} FOR UPDATE`);
+
+        const [newTx] = await txDb.insert(paymentTransactions).values({
+          organizationId: orgId,
+          policyId: alloc.policyId,
+          clientId: policy.clientId!,
+          amount,
+          currency,
+          paymentMethod: "paynow",
+          status: "cleared",
+          reference: refPrefix,
+          paynowReference: groupIntent.paynowReference ?? undefined,
+          idempotencyKey: `grp-${groupIntentId}-${alloc.policyId}`,
+          receivedAt: new Date(),
+          postedDate: today,
+          valueDate: today,
+          notes: "Group PayNow",
+          recordedBy: actorId ?? undefined,
+        }).returning();
+
+        await txDb.insert(paymentReceipts).values({
+          organizationId: orgId,
+          branchId: policy.branchId ?? undefined,
+          receiptNumber,
+          policyId: alloc.policyId,
+          clientId: policy.clientId!,
+          amount,
+          currency,
+          paymentChannel: "paynow_ecocash",
+          issuedByUserId: actorId ?? undefined,
+          status: "issued",
+          metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference, transactionId: newTx.id },
+        });
+
+        await applyPolicyStatusForClearedPayment(txDb, alloc.policyId, policy, today, " (group PayNow)", actorId);
+        return newTx;
       });
-    }
-  }
 
-  await storage.updateGroupPaymentIntent(groupIntentId, { status: GROUP_PAYMENT_STATUS_PAID }, orgId);
-  return { ok: true, receiptCount: allocations.length };
+      successCount++;
+
+      // Post-transaction best-effort side effects
+      if (policy.status === "lapsed") {
+        await rollbackClawbacksForPolicy(orgId, policy);
+      }
+
+      if (!notifiedClients.has(policy.clientId!)) {
+        notifiedClients.add(policy.clientId!);
+        await storage.createNotificationLog(orgId, {
+          recipientType: "client",
+          recipientId: policy.clientId!,
+          channel: "in_app",
+          subject: "Group payment received",
+          body: `Payment of ${currency} ${amount} received for policy ${policy.policyNumber}. Receipt #${receiptNumber}.`,
+          status: "sent",
+        });
+      }
+    }
+
+    await storage.updateGroupPaymentIntent(groupIntentId, { status: GROUP_PAYMENT_STATUS_PAID }, orgId);
+    return { ok: true, receiptCount: successCount };
   } catch (err: any) {
     structuredLog("error", "applyGroupPaymentToPolicies failed", { groupIntentId, error: err?.message || String(err), stack: err?.stack });
     return { ok: false, error: err?.message || "Failed to apply group payment" };

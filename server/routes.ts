@@ -2396,44 +2396,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!policy) continue;
       const premium = parseFloat(String(policy.premiumAmount || 0));
       if (amount >= premium) {
-        const tx = await storage.createPaymentTransaction({
-          organizationId: user.organizationId,
-          policyId: policy.id,
-          clientId: policy.clientId,
-          amount: String(premium),
-          currency: policy.currency || "USD",
-          paymentMethod: "bank",
-          status: "cleared",
-          reference: `MER-${runNumber}-${policyNumber}`,
-          receivedAt: new Date(),
-          postedDate: today,
-          valueDate: today,
-          recordedBy: user.id,
-        });
+        // Fetch receipt number atomically outside transaction (main-db sequence)
         const receiptNum = await storage.getNextPaymentReceiptNumber(user.organizationId);
-        await storage.createPaymentReceipt({
-          organizationId: user.organizationId,
-          branchId: policy.branchId ?? undefined,
-          receiptNumber: receiptNum,
-          policyId: policy.id,
-          clientId: policy.clientId!,
-          amount: String(premium),
-          currency: policy.currency || "USD",
-          paymentChannel: "bank",
-          issuedByUserId: user.id,
-          status: "issued",
-          metadataJson: { monthEndRunId: run.id, transactionId: tx.id },
+        await withOrgTransaction(user.organizationId, async (txDb) => {
+          // Lock the policy row to prevent concurrent status changes
+          await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
+          const [tx] = await txDb.insert(paymentTransactions).values({
+            organizationId: user.organizationId,
+            policyId: policy.id,
+            clientId: policy.clientId,
+            amount: String(premium),
+            currency: policy.currency || "USD",
+            paymentMethod: "bank",
+            status: "cleared",
+            reference: `MER-${runNumber}-${policyNumber}`,
+            receivedAt: new Date(),
+            postedDate: today,
+            valueDate: today,
+            recordedBy: user.id,
+          }).returning();
+          await txDb.insert(paymentReceipts).values({
+            organizationId: user.organizationId,
+            branchId: policy.branchId ?? undefined,
+            receiptNumber: receiptNum,
+            policyId: policy.id,
+            clientId: policy.clientId!,
+            amount: String(premium),
+            currency: policy.currency || "USD",
+            paymentChannel: "bank",
+            issuedByUserId: user.id,
+            status: "issued",
+            metadataJson: { monthEndRunId: run.id, transactionId: tx.id },
+          });
+          await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (month-end)", user.id);
         });
         receipted++;
-        if (policy.status === "inactive") {
-          await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, user.organizationId);
-          await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "First premium paid — conversion (month-end)", user.id);
-        } else if (policy.status === "grace") {
-          await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
-          await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received (month-end)", user.id);
-        } else if (policy.status === "lapsed") {
-          await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
-          await storage.createPolicyStatusHistory(policy.id, "lapsed", "active", "Reinstatement — payment received (month-end)", user.id);
+        // Post-transaction best-effort side effects
+        if (policy.status === "lapsed") {
           await rollbackClawbacks(user.organizationId, policy);
           if (policy.clientId) {
             enqueueJob("notify:reinstatement", { policyId: policy.id }, async () => {
@@ -2506,47 +2505,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const amountNum = parseFloat(String(totalAmount));
     const today = new Date().toISOString().split("T")[0];
     const results: { policyId: string; policyNumber: string; amount: string; receiptNumber: string }[] = [];
+    const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
     for (const policy of valid) {
       const premium = parseFloat(String(policy.premiumAmount || 0));
       const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
-      const tx = await storage.createPaymentTransaction({
-        organizationId: user.organizationId,
-        policyId: policy.id,
-        clientId: policy.clientId!,
-        amount,
-        currency: currency || policy.currency || "USD",
-        paymentMethod: "cash",
-        status: "cleared",
-        reference: `GRP-${groupId.slice(0, 8)}-${Date.now()}`,
-        receivedAt: new Date(),
-        postedDate: today,
-        valueDate: today,
-        notes: "Group batch receipt",
-        recordedBy: user.id,
-      });
+      const polyCurrency = currency || policy.currency || "USD";
+      // Fetch receipt number atomically outside transaction (main-db sequence)
       const receiptNum = await storage.getNextPaymentReceiptNumber(user.organizationId);
-      await storage.createPaymentReceipt({
-        organizationId: user.organizationId,
-        branchId: policy.branchId ?? undefined,
-        receiptNumber: receiptNum,
-        policyId: policy.id,
-        clientId: policy.clientId!,
-        amount,
-        currency: currency || policy.currency || "USD",
-        paymentChannel: "cash",
-        issuedByUserId: user.id,
-        status: "issued",
-        metadataJson: { groupId, transactionId: tx.id },
+      await withOrgTransaction(user.organizationId, async (txDb) => {
+        // Lock the policy row to prevent concurrent status changes
+        await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
+        const [tx] = await txDb.insert(paymentTransactions).values({
+          organizationId: user.organizationId,
+          policyId: policy.id,
+          clientId: policy.clientId!,
+          amount,
+          currency: polyCurrency,
+          paymentMethod: "cash",
+          status: "cleared",
+          reference: groupRef,
+          receivedAt: new Date(),
+          postedDate: today,
+          valueDate: today,
+          notes: "Group batch receipt",
+          recordedBy: user.id,
+        }).returning();
+        await txDb.insert(paymentReceipts).values({
+          organizationId: user.organizationId,
+          branchId: policy.branchId ?? undefined,
+          receiptNumber: receiptNum,
+          policyId: policy.id,
+          clientId: policy.clientId!,
+          amount,
+          currency: polyCurrency,
+          paymentChannel: "cash",
+          issuedByUserId: user.id,
+          status: "issued",
+          metadataJson: { groupId, transactionId: tx.id },
+        });
+        await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", user.id);
       });
-      if (policy.status === "inactive") {
-        await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, effectiveDate: policy.effectiveDate || today }, user.organizationId);
-        await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "First premium paid — conversion (group receipt)", user.id);
-      } else if (policy.status === "grace") {
-        await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
-        await storage.createPolicyStatusHistory(policy.id, "grace", "active", "Payment received (group receipt)", user.id);
-      } else if (policy.status === "lapsed") {
-        await storage.updatePolicy(policy.id, { status: "active", graceEndDate: null }, user.organizationId);
-        await storage.createPolicyStatusHistory(policy.id, "lapsed", "active", "Reinstatement — payment received (group receipt)", user.id);
+      // Post-transaction best-effort side effects
+      if (policy.status === "lapsed") {
         await rollbackClawbacks(user.organizationId, policy);
       }
       results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum });
