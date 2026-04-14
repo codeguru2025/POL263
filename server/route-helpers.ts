@@ -41,6 +41,24 @@ export function getAddOnPrice(ao: any, paymentSchedule: string): number {
   return parseFloat(String(ao.priceMonthly ?? ao.priceAmount ?? 0));
 }
 
+function ageAt(dateOfBirth: string | null | undefined, asOf = new Date()): number | null {
+  if (!dateOfBirth) return null;
+  const birth = new Date(dateOfBirth);
+  if (Number.isNaN(birth.getTime())) return null;
+  let age = asOf.getFullYear() - birth.getFullYear();
+  const monthDelta = asOf.getMonth() - birth.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && asOf.getDate() < birth.getDate())) age -= 1;
+  return age;
+}
+
+function monthlyToScheduleFactor(paymentSchedule: string): number {
+  if (paymentSchedule === "weekly") return 12 / 52;
+  if (paymentSchedule === "biweekly") return 12 / 26;
+  if (paymentSchedule === "quarterly") return 3;
+  if (paymentSchedule === "annually") return 12;
+  return 1;
+}
+
 export async function computePolicyPremium(
   orgId: string,
   productVersionId: string,
@@ -49,9 +67,11 @@ export async function computePolicyPremium(
   addOnIds: string[],
   memberAddOns?: { memberRef: string; addOnId: string }[],
   memberCount?: number,
+  dependentDateOfBirths?: (string | null | undefined)[],
 ): Promise<string> {
   const pv = await storage.getProductVersion(productVersionId, orgId);
   if (!pv) return "0";
+  const product = await storage.getProduct(pv.productId, orgId);
   let base = 0;
   if (paymentSchedule === "monthly") {
     base = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
@@ -89,7 +109,30 @@ export async function computePolicyPremium(
     }
   }
 
-  const total = Number.isFinite(base + addOnTotal) && (base + addOnTotal) >= 0 ? base + addOnTotal : 0;
+  let dependantSurcharge = 0;
+  if (product) {
+    const includedAdults = Number(product.maxAdults ?? 2);
+    const includedChildren = Number(product.maxChildren ?? 4);
+    const childThresholdAge = Number(pv.dependentMaxAge ?? 20);
+    const adultRateMonthly = parseFloat(String(pv.underwriterAmountAdult ?? 0));
+    const childRateMonthly = parseFloat(String(pv.underwriterAmountChild ?? pv.underwriterAmountAdult ?? 0));
+
+    let adults = 1; // Policy holder.
+    let children = 0;
+    for (const dob of dependentDateOfBirths || []) {
+      const age = ageAt(dob ?? null);
+      if (age === null || age >= childThresholdAge) adults += 1;
+      else children += 1;
+    }
+
+    const extraAdults = Math.max(0, adults - includedAdults);
+    const extraChildren = Math.max(0, children - includedChildren);
+    const monthlySurcharge = (extraAdults * adultRateMonthly) + (extraChildren * childRateMonthly);
+    dependantSurcharge = monthlySurcharge * monthlyToScheduleFactor(paymentSchedule);
+  }
+
+  const totalRaw = base + addOnTotal + dependantSurcharge;
+  const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? totalRaw : 0;
   return total.toFixed(2);
 }
 

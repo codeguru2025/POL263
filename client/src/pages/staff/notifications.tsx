@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -17,6 +17,13 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface MergeTag { tag: string; description: string; example: string }
 interface EventType { value: string; label: string }
+interface PaymentAutomationSettings {
+  isEnabled: boolean;
+  daysAfterLastPayment: number;
+  repeatEveryDays: number;
+  sendPushNotifications: boolean;
+  autoRunPayments: boolean;
+}
 
 function MergeTagPicker({ tags, onInsert }: { tags: MergeTag[]; onInsert: (tag: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -64,8 +71,34 @@ export default function StaffNotifications() {
 
   const [bcSubject, setBcSubject] = useState("");
   const [bcBody, setBcBody] = useState("");
+  const [autoSettings, setAutoSettings] = useState<PaymentAutomationSettings>({
+    isEnabled: false,
+    daysAfterLastPayment: 30,
+    repeatEveryDays: 30,
+    sendPushNotifications: true,
+    autoRunPayments: true,
+  });
 
   const { data: templates = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/notification-templates"] });
+  const { data: automationRuns = [] } = useQuery<any[]>({ queryKey: ["/api/payment-automation-runs"] });
+  const { data: paymentAutomationSettings } = useQuery<PaymentAutomationSettings>({
+    queryKey: ["/api/payment-automation-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/payment-automation-settings", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load automation settings");
+      return res.json();
+    },
+  });
+  useEffect(() => {
+    if (!paymentAutomationSettings) return;
+    setAutoSettings({
+      isEnabled: !!paymentAutomationSettings.isEnabled,
+      daysAfterLastPayment: Number(paymentAutomationSettings.daysAfterLastPayment || 30),
+      repeatEveryDays: Number(paymentAutomationSettings.repeatEveryDays || 30),
+      sendPushNotifications: paymentAutomationSettings.sendPushNotifications !== false,
+      autoRunPayments: paymentAutomationSettings.autoRunPayments !== false,
+    });
+  }, [paymentAutomationSettings]);
   const { data: meta } = useQuery<{ mergeTags: MergeTag[]; eventTypes: EventType[] }>({
     queryKey: ["/api/notification-merge-tags"],
   });
@@ -125,6 +158,32 @@ export default function StaffNotifications() {
       toast({ title: "Broadcast sent", description: `Sent to ${data.sent} clients` });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const saveAutomationMutation = useMutation({
+    mutationFn: async (data: PaymentAutomationSettings) => {
+      const res = await apiRequest("PUT", "/api/payment-automation-settings", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-automation-settings"] });
+      toast({ title: "Automation settings saved" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const runAutomationNowMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/run-payment-automation", {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: "Automation run complete",
+        description: `Scanned ${data.scanned}, reminded ${data.reminded}, Paynow started ${data.attempted}, skipped ${data.skipped ?? 0}`,
+      });
+    },
+    onError: (err: any) => toast({ title: "Run failed", description: err.message, variant: "destructive" }),
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -272,6 +331,95 @@ export default function StaffNotifications() {
             </Dialog>
           </div>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Payment Automation Triggers</CardTitle>
+            <CardDescription>
+              After the thresholds below, clients get reminders and (if enabled) a Paynow collection is started on their saved mobile wallet — they confirm with their PIN on the phone. Card is not used for automation.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <Label>Enable automation</Label>
+              <Switch checked={autoSettings.isEnabled} onCheckedChange={(v) => setAutoSettings((s) => ({ ...s, isEnabled: v }))} />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Start after days since last payment</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(autoSettings.daysAfterLastPayment)}
+                  onChange={(e) => setAutoSettings((s) => ({ ...s, daysAfterLastPayment: Math.max(1, Number(e.target.value || 1)) }))}
+                />
+              </div>
+              <div>
+                <Label>Repeat every (days)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(autoSettings.repeatEveryDays)}
+                  onChange={(e) => setAutoSettings((s) => ({ ...s, repeatEveryDays: Math.max(1, Number(e.target.value || 1)) }))}
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label>Start Paynow on saved mobile</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">Initiates Paynow; client authorises on their phone (PIN). Not unattended card billing.</p>
+              </div>
+              <Switch checked={autoSettings.autoRunPayments} onCheckedChange={(v) => setAutoSettings((s) => ({ ...s, autoRunPayments: v }))} />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label>Send push reminders</Label>
+              <Switch checked={autoSettings.sendPushNotifications} onCheckedChange={(v) => setAutoSettings((s) => ({ ...s, sendPushNotifications: v }))} />
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={() => saveAutomationMutation.mutate(autoSettings)} disabled={saveAutomationMutation.isPending}>
+                {saveAutomationMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Save Triggers
+              </Button>
+              <Button variant="outline" onClick={() => runAutomationNowMutation.mutate()} disabled={runAutomationNowMutation.isPending}>
+                {runAutomationNowMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Run Now
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Automation Activity</CardTitle>
+            <CardDescription>Recent Paynow mobile initiations, skips, and reminder dispatches.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {automationRuns.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No automation activity yet.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>When</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Method</TableHead>
+                    <TableHead>Message</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {automationRuns.slice(0, 30).map((r: any) => (
+                    <TableRow key={r.id}>
+                      <TableCell>{r.createdAt ? new Date(r.createdAt).toLocaleString() : "—"}</TableCell>
+                      <TableCell className="capitalize">{String(r.actionType || "—").replace(/_/g, " ")}</TableCell>
+                      <TableCell><Badge variant="outline" className="capitalize">{r.status || "—"}</Badge></TableCell>
+                      <TableCell className="capitalize">{r.methodType || "—"}</TableCell>
+                      <TableCell className="max-w-[420px] truncate" title={r.message || ""}>{r.message || "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>

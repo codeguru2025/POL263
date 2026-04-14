@@ -36,7 +36,7 @@ import {
   policies, paymentTransactions, paymentReceipts,
 } from "@shared/schema";
 import { sql, eq } from "drizzle-orm";
-import { notifyClient, dispatchNotification, buildPolicyContext } from "./notifications";
+import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
 import { enqueueJob, getJobStats } from "./job-queue";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -45,6 +45,272 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 50000;
   const REPORT_EXPORT_MAX_ROWS =
     (process.env.REPORT_EXPORT_MAX_ROWS && parseInt(process.env.REPORT_EXPORT_MAX_ROWS, 10)) || 15000;
+  const premiumBackfillRunning = new Set<string>();
+
+  async function getActivePolicyDependentDobList(policy: any, orgId: string): Promise<(string | null | undefined)[]> {
+    if (!policy?.id || !policy?.clientId) return [];
+    const members = await storage.getPolicyMembers(policy.id, orgId);
+    const activeDependentIds = members
+      .filter((m: any) => m?.isActive !== false && !!m?.dependentId)
+      .map((m: any) => String(m.dependentId));
+    if (activeDependentIds.length === 0) return [];
+
+    const deps = await storage.getDependentsByClient(policy.clientId, orgId);
+    const depById = new Map<string, any>(deps.map((d: any) => [d.id, d]));
+    return activeDependentIds
+      .filter((id) => depById.has(id))
+      .map((id) => depById.get(id)?.dateOfBirth ?? null);
+  }
+
+  async function getPolicyAddOnIds(policyId: string, orgId: string): Promise<string[]> {
+    const policyAddOns = await storage.getPolicyAddOns(policyId, orgId);
+    return Array.from(new Set(policyAddOns.map((a: any) => a.addOnId).filter(Boolean)));
+  }
+
+  async function recalculatePolicyPremiumIfNeeded(policy: any, orgId: string): Promise<any> {
+    if (!policy?.id || !policy?.productVersionId) return policy;
+    const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, orgId);
+    const addOnIds = await getPolicyAddOnIds(policy.id, orgId);
+    const recomputedPremium = await computePolicyPremium(
+      orgId,
+      policy.productVersionId,
+      policy.currency || "USD",
+      policy.paymentSchedule || "monthly",
+      addOnIds,
+      undefined,
+      undefined,
+      dependentDateOfBirths,
+    );
+
+    const current = parseFloat(String(policy.premiumAmount ?? "0"));
+    const next = parseFloat(String(recomputedPremium ?? "0"));
+    if (Number.isFinite(current) && Number.isFinite(next) && Math.abs(current - next) >= 0.01) {
+      const updated = await storage.updatePolicy(policy.id, { premiumAmount: recomputedPremium }, orgId);
+      return updated || { ...policy, premiumAmount: recomputedPremium };
+    }
+    return policy;
+  }
+
+  function schedulePolicyPremiumBackfill(orgId: string) {
+    if (!orgId || premiumBackfillRunning.has(orgId)) return;
+    premiumBackfillRunning.add(orgId);
+    enqueueJob("policy_premium_backfill", { orgId }, async () => {
+      try {
+        let offset = 0;
+        const limit = 200;
+        while (true) {
+          const batch = await storage.getPoliciesByOrg(orgId, limit, offset);
+          if (batch.length === 0) break;
+          for (const policy of batch) {
+            await recalculatePolicyPremiumIfNeeded(policy, orgId);
+          }
+          if (batch.length < limit) break;
+          offset += batch.length;
+        }
+      } catch (err: any) {
+        structuredLog("error", "Policy premium backfill failed", { orgId, error: err?.message, stack: err?.stack });
+      } finally {
+        premiumBackfillRunning.delete(orgId);
+      }
+    });
+  }
+
+  /** Paynow mobile wallets only — recurring automation triggers USSD/PIN on the saved number, not card storage. */
+  function normalizePaymentMethodInput(raw: any): {
+    methodType: "mobile";
+    provider: string | null;
+    mobileNumber: string | null;
+    cardLast4: string | null;
+    cardBrand: string | null;
+    cardExpiryMonth: number | null;
+    cardExpiryYear: number | null;
+    cardToken: string | null;
+  } | null {
+    if (!raw || typeof raw !== "object") return null;
+    if (raw.methodType === "card") return null;
+    if (raw.methodType !== "mobile") return null;
+    const provider = typeof raw.provider === "string" && raw.provider.trim() ? raw.provider.trim().toLowerCase() : null;
+    const mobileNumber = typeof raw.mobileNumber === "string" ? raw.mobileNumber.trim() : "";
+    if (!mobileNumber) return null;
+    return {
+      methodType: "mobile",
+      provider: provider || "ecocash",
+      mobileNumber,
+      cardLast4: null,
+      cardBrand: null,
+      cardExpiryMonth: null,
+      cardExpiryYear: null,
+      cardToken: null,
+    };
+  }
+
+  async function runPaymentAutomationForOrg(orgId: string): Promise<{ scanned: number; reminded: number; attempted: number; skipped: number }> {
+    const settings = await storage.getPaymentAutomationSettings(orgId);
+    if (!settings?.isEnabled) return { scanned: 0, reminded: 0, attempted: 0, skipped: 0 };
+
+    const policies = await storage.getPoliciesByOrg(orgId, 100000, 0, { statuses: ["active", "grace"] });
+    const now = new Date();
+    const msPerDay = 24 * 60 * 60 * 1000;
+    let reminded = 0;
+    let attempted = 0;
+    let skipped = 0;
+
+    for (const policy of policies) {
+      if (!policy.clientId) continue;
+      const payments = await storage.getPaymentsByPolicy(policy.id, orgId);
+      const cleared = payments.filter((p: any) => p.status === "cleared");
+      const lastClearedAt = cleared
+        .map((p: any) => new Date(p.receivedAt || p.createdAt || policy.createdAt))
+        .filter((d: Date) => !Number.isNaN(d.getTime()))
+        .sort((a: Date, b: Date) => b.getTime() - a.getTime())[0];
+      const baseline = lastClearedAt || new Date(policy.inceptionDate || policy.effectiveDate || policy.createdAt);
+      if (Number.isNaN(baseline.getTime())) continue;
+
+      const daysSinceLastPayment = Math.floor((now.getTime() - baseline.getTime()) / msPerDay);
+      if (daysSinceLastPayment < Number(settings.daysAfterLastPayment || 30)) continue;
+
+      const lastTouchAt = policy.lastAutoReminderAt || policy.lastAutoPaymentAttemptAt;
+      if (lastTouchAt) {
+        const sinceLastTouch = Math.floor((now.getTime() - new Date(lastTouchAt).getTime()) / msPerDay);
+        if (sinceLastTouch < Number(settings.repeatEveryDays || 30)) continue;
+      }
+
+      const ctx = await buildPolicyContext(policy, orgId);
+
+      if (settings.autoRunPayments) {
+        const method = await storage.getDefaultClientPaymentMethod(policy.clientId, orgId);
+        if (!method) {
+          skipped++;
+          await storage.createPaymentAutomationRun(orgId, {
+            organizationId: orgId,
+            policyId: policy.id,
+            clientId: policy.clientId,
+            actionType: "auto_payment_attempt",
+            status: "skipped",
+            methodType: null,
+            message: "No saved default Paynow mobile wallet.",
+            metadata: null,
+          } as any);
+        } else if (method.methodType === "card") {
+          skipped++;
+          await storage.createPaymentAutomationRun(orgId, {
+            organizationId: orgId,
+            policyId: policy.id,
+            clientId: policy.clientId,
+            actionType: "auto_payment_attempt",
+            status: "skipped",
+            methodType: "card",
+            message: "Legacy saved card — automation uses Paynow on a mobile wallet (client enters PIN on phone). Update saved method to EcoCash / OneMoney / InnBucks / O'Mari.",
+            metadata: null,
+          } as any);
+        } else if (!method.mobileNumber?.trim()) {
+          skipped++;
+          await storage.createPaymentAutomationRun(orgId, {
+            organizationId: orgId,
+            policyId: policy.id,
+            clientId: policy.clientId,
+            actionType: "auto_payment_attempt",
+            status: "skipped",
+            methodType: "mobile",
+            message: "Saved mobile method has no phone number.",
+            metadata: null,
+          } as any);
+        } else {
+          const idempotencyKey = `auto-${policy.id}-${now.toISOString().slice(0, 10)}`;
+          const intentResult = await createPaymentIntent({
+            organizationId: orgId,
+            clientId: policy.clientId,
+            policyId: policy.id,
+            amount: String(policy.premiumAmount || "0"),
+            currency: policy.currency || "USD",
+            purpose: "premium",
+            idempotencyKey,
+          });
+          if (intentResult.intent) {
+            const autoResult = await initiatePaynowPayment({
+              intentId: intentResult.intent.id,
+              organizationId: orgId,
+              method: method.provider || "ecocash",
+              payerPhone: method.mobileNumber.trim(),
+              actorType: "system",
+            });
+            if (autoResult.ok) {
+              attempted++;
+              await storage.createPaymentAutomationRun(orgId, {
+                organizationId: orgId,
+                policyId: policy.id,
+                clientId: policy.clientId,
+                actionType: "auto_payment_attempt",
+                status: "success",
+                methodType: "mobile",
+                message: "Paynow mobile payment initiated (client confirms with PIN on phone).",
+                metadata: { method: method.provider || "ecocash", intentId: intentResult.intent.id },
+              } as any);
+            } else {
+              skipped++;
+              await storage.createPaymentAutomationRun(orgId, {
+                organizationId: orgId,
+                policyId: policy.id,
+                clientId: policy.clientId,
+                actionType: "auto_payment_attempt",
+                status: "failed",
+                methodType: "mobile",
+                message: autoResult.error || "Paynow initiation failed.",
+                metadata: { method: method.provider || "ecocash", intentId: intentResult.intent.id },
+              } as any);
+            }
+          }
+        }
+      }
+
+      await dispatchNotification(orgId, "premium_due", policy.clientId, {
+        ...ctx,
+        outstanding: `${policy.currency} ${parseFloat(String(policy.premiumAmount || 0)).toFixed(2)}`,
+      });
+      if (settings.sendPushNotifications) {
+        await notifyClientPush(
+          orgId,
+          policy.clientId,
+          "Premium Due Reminder",
+          `Your premium for policy ${policy.policyNumber} is overdue. Please pay to remain covered.`,
+          policy.id,
+        );
+      }
+      reminded++;
+      await storage.createPaymentAutomationRun(orgId, {
+        organizationId: orgId,
+        policyId: policy.id,
+        clientId: policy.clientId,
+        actionType: "reminder",
+        status: "success",
+        methodType: null,
+        message: "Premium due reminder sent.",
+        metadata: {
+          outstanding: `${policy.currency} ${parseFloat(String(policy.premiumAmount || 0)).toFixed(2)}`,
+        },
+      } as any);
+      await storage.updatePolicy(policy.id, { lastAutoReminderAt: now, lastAutoPaymentAttemptAt: now }, orgId);
+    }
+
+    return { scanned: policies.length, reminded, attempted, skipped };
+  }
+
+  let paymentAutomationTickRunning = false;
+  const automationTickMs = Math.max(60_000, parseInt(process.env.PAYMENT_AUTOMATION_TICK_MS || "", 10) || (6 * 60 * 60 * 1000));
+  setInterval(async () => {
+    if (paymentAutomationTickRunning) return;
+    paymentAutomationTickRunning = true;
+    try {
+      const orgs = await storage.getOrganizations();
+      for (const org of orgs) {
+        await runPaymentAutomationForOrg(org.id);
+      }
+    } catch (err: any) {
+      structuredLog("error", "Payment automation scheduler failed", { error: err?.message, stack: err?.stack });
+    } finally {
+      paymentAutomationTickRunning = false;
+    }
+  }, automationTickMs);
 
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -816,6 +1082,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(204).send();
   });
 
+  app.get("/api/clients/:clientId/payment-methods", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    const methods = await storage.getClientPaymentMethods(client.id, user.organizationId);
+    return res.json(methods);
+  });
+
+  app.put("/api/clients/:clientId/payment-methods/default", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    const normalized = normalizePaymentMethodInput(req.body);
+    if (!normalized) {
+      const wantsCard = req.body && typeof req.body === "object" && (req.body as any).methodType === "card";
+      return res.status(400).json({
+        message: wantsCard
+          ? "Card cannot be saved for automation. Use a mobile money number — overdue premiums are collected via Paynow (PIN on the client's phone)."
+          : "Invalid payment method: provide methodType mobile, provider, and mobileNumber.",
+      });
+    }
+    const saved = await storage.upsertDefaultClientPaymentMethod(user.organizationId, client.id, {
+      organizationId: user.organizationId,
+      clientId: client.id,
+      ...normalized,
+      isDefault: true,
+      isActive: true,
+    } as any);
+    await auditLog(req, "UPSERT_CLIENT_PAYMENT_METHOD", "ClientPaymentMethod", saved.id, null, saved);
+    return res.json(saved);
+  });
+
   // ─── Products ───────────────────────────────────────────────
 
   app.get("/api/products", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -980,6 +1278,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
+    schedulePolicyPremiumBackfill(user.organizationId);
     const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
@@ -1007,12 +1306,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const filters = (fromDate || toDate || status || search) ? { fromDate, toDate, status, search } : undefined;
       list = await storage.getPoliciesByOrg(user.organizationId, limit, offset, filters);
     }
+    list = await Promise.all(list.map((p: any) => recalculatePolicyPremiumIfNeeded(p, user.organizationId)));
     return res.json(list);
   });
 
   app.get("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    const rawPolicy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    const policy = rawPolicy ? await recalculatePolicyPremiumIfNeeded(rawPolicy, user.organizationId) : undefined;
     if (!policy) return res.status(404).json({ message: "Not found" });
     if (policy.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -1103,6 +1404,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const addOnIds = Array.isArray(req.body.addOnIds) ? req.body.addOnIds : [];
     const memberAddOns: { memberRef: string; addOnId: string }[] =
       Array.isArray(req.body.memberAddOns) ? req.body.memberAddOns : [];
+    const normalizedPaymentMethod = normalizePaymentMethodInput(req.body.paymentMethod);
+    let cachedClientDependents: any[] | null = null;
+    let dependentDateOfBirths: (string | null)[] = [];
+    if (req.body.clientId) {
+      cachedClientDependents = await storage.getDependentsByClient(req.body.clientId, user.organizationId);
+      const selectedDependentIds = members
+        .map((m: any) => m?.dependentId)
+        .filter((id: string | null | undefined): id is string => !!id);
+      if (selectedDependentIds.length > 0) {
+        const selectedSet = new Set(selectedDependentIds);
+        dependentDateOfBirths = cachedClientDependents
+          .filter((d: any) => selectedSet.has(d.id))
+          .map((d: any) => d.dateOfBirth || null);
+      } else if (members.length === 0) {
+        dependentDateOfBirths = cachedClientDependents.map((d: any) => d.dateOfBirth || null);
+      }
+    }
 
     let premiumAmount = "0";
     if (req.body.productVersionId) {
@@ -1114,11 +1432,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         addOnIds,
         memberAddOns,
         1 + members.length,
+        dependentDateOfBirths,
       );
     }
 
     const body = { ...req.body };
     delete body.premiumAmount;
+    delete body.paymentMethod;
 
     const beneficiary = req.body.beneficiary || null;
     if (beneficiary && (beneficiary.firstName || beneficiary.lastName)) {
@@ -1177,7 +1497,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     let dependentsToAdd = members;
     if (dependentsToAdd.length === 0 && policy.clientId) {
-      const clientDeps = await storage.getDependentsByClient(policy.clientId, user.organizationId);
+      const clientDeps = cachedClientDependents ?? await storage.getDependentsByClient(policy.clientId, user.organizationId);
       dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
     }
     for (const m of dependentsToAdd) {
@@ -1204,6 +1524,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const ctx = await buildPolicyContext(policy, user.organizationId);
         await dispatchNotification(user.organizationId, "policy_capture", policy.clientId, ctx);
       });
+      if (normalizedPaymentMethod) {
+        await storage.upsertDefaultClientPaymentMethod(user.organizationId, policy.clientId, {
+          organizationId: user.organizationId,
+          clientId: policy.clientId,
+          ...normalizedPaymentMethod,
+          isDefault: true,
+          isActive: true,
+        } as any);
+      }
     }
 
     return res.status(201).json(policy);
@@ -1269,6 +1598,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       structuredLog("error", "PATCH /api/policies/:id failed", { error: dbMsg, stack: err?.stack, policyId: req.params.id });
       return res.status(500).json({ message: "Failed to update policy. Please try again." });
+    }
+  });
+
+  app.post("/api/policies/:id/upgrade", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+      if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+      const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+      const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+      if (isAgent && (policy as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+
+      const targetProductVersionId = typeof req.body.productVersionId === "string" ? req.body.productVersionId : "";
+      if (!targetProductVersionId) return res.status(400).json({ message: "productVersionId is required" });
+      const targetPv = await storage.getProductVersion(targetProductVersionId, user.organizationId);
+      if (!targetPv) return res.status(400).json({ message: "Invalid target product version" });
+
+      const currentPv = await storage.getProductVersion(policy.productVersionId, user.organizationId);
+      if (!currentPv) return res.status(400).json({ message: "Current policy product version is invalid" });
+
+      if (targetPv.id === currentPv.id) {
+        const unchanged = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
+        return res.json(unchanged);
+      }
+
+      const existingForClient = await storage.getPoliciesByClient(policy.clientId, user.organizationId);
+      const duplicate = existingForClient.find(
+        (p) => p.id !== policy.id && p.productVersionId === targetPv.id && p.status !== "cancelled"
+      );
+      if (duplicate) {
+        return res.status(400).json({
+          error: "Duplicate policy",
+          message: "This client already has an active policy for the selected product version.",
+        });
+      }
+
+      const currency = normalizeCurrency(req.body.currency || policy.currency || "USD");
+      const paymentSchedule = typeof req.body.paymentSchedule === "string" && req.body.paymentSchedule.trim()
+        ? req.body.paymentSchedule.trim()
+        : (policy.paymentSchedule || "monthly");
+
+      const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, user.organizationId);
+      const addOnIds = await getPolicyAddOnIds(policy.id, user.organizationId);
+      const premiumAmount = await computePolicyPremium(
+        user.organizationId,
+        targetPv.id,
+        currency,
+        paymentSchedule,
+        addOnIds,
+        undefined,
+        undefined,
+        dependentDateOfBirths,
+      );
+
+      const effectiveDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
+        ? req.body.effectiveDate.trim()
+        : undefined;
+      const updates: Record<string, any> = {
+        productVersionId: targetPv.id,
+        currency,
+        paymentSchedule,
+        premiumAmount,
+      };
+      if (effectiveDate) updates.effectiveDate = effectiveDate;
+
+      const updated = await storage.updatePolicy(policy.id, updates, user.organizationId);
+      await auditLog(req, "UPGRADE_POLICY_PRODUCT", "Policy", policy.id, policy, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      const dbMsg = err?.message || "";
+      if (dbMsg.includes("violates foreign key")) {
+        return res.status(400).json({ message: "Invalid reference: selected product version no longer exists." });
+      }
+      structuredLog("error", "POST /api/policies/:id/upgrade failed", { error: dbMsg, stack: err?.stack, policyId: req.params.id });
+      return res.status(500).json({ message: "Failed to upgrade policy. Please try again." });
     }
   });
 
@@ -1488,6 +1892,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       clientId: clientId || null,
       role: role || "dependent",
     });
+    await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
     await auditLog(req, "ADD_POLICY_MEMBER", "PolicyMember", member.id, null, member);
 
     if (policy.clientId) {
@@ -1526,6 +1931,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         added++;
       }
     }
+    await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
 
     return res.json({ synced: added, total: existingMembers.length + added + (existingClientIds.has(policy.clientId) ? 0 : 1) });
   });
@@ -2613,6 +3019,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ sent });
   });
 
+  app.get("/api/payment-automation-settings", requireAuth, requireTenantScope, requirePermission("read:notification"), async (req, res) => {
+    const user = req.user as any;
+    const settings = await storage.getPaymentAutomationSettings(user.organizationId);
+    return res.json(settings ?? {
+      isEnabled: false,
+      daysAfterLastPayment: 30,
+      repeatEveryDays: 30,
+      sendPushNotifications: true,
+      autoRunPayments: true,
+    });
+  });
+
+  app.put("/api/payment-automation-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const body = req.body || {};
+    const updated = await storage.upsertPaymentAutomationSettings(user.organizationId, {
+      isEnabled: body.isEnabled === true,
+      daysAfterLastPayment: Math.max(1, Number(body.daysAfterLastPayment || 30)),
+      repeatEveryDays: Math.max(1, Number(body.repeatEveryDays || 30)),
+      sendPushNotifications: body.sendPushNotifications !== false,
+      autoRunPayments: body.autoRunPayments !== false,
+    });
+    await auditLog(req, "UPDATE_PAYMENT_AUTOMATION_SETTINGS", "PaymentAutomationSettings", updated.id, null, updated);
+    return res.json(updated);
+  });
+
+  app.get("/api/payment-automation-runs", requireAuth, requireTenantScope, requirePermission("read:notification"), async (req, res) => {
+    const user = req.user as any;
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    return res.json(await storage.getPaymentAutomationRuns(user.organizationId, limit));
+  });
+
+  app.post("/api/admin/run-payment-automation", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const result = await runPaymentAutomationForOrg(user.organizationId);
+    await auditLog(req, "RUN_PAYMENT_AUTOMATION", "PaymentAutomation", undefined, null, result);
+    return res.json(result);
+  });
+
   // ─── Expenditures ──────────────────────────────────────────
 
   app.get("/api/expenditures", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -2801,7 +3246,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/public/register-policy", express.json(), async (req, res) => {
-    const { referralCode, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, premiumAmount, currency, paymentSchedule, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
+    const { referralCode, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, premiumAmount, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
     const missingFields: string[] = [];
     if (!referralCode) missingFields.push("referralCode");
     if (!firstName) missingFields.push("firstName");
@@ -2820,6 +3265,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!agent) return res.status(400).json({ message: "Invalid referral code" });
     if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
     const orgId = agent.organizationId;
+    const normalizedPaymentMethod = normalizePaymentMethodInput(rawPaymentMethod);
     const pv = await storage.getProductVersion(productVersionId, orgId);
     if (!pv) return res.status(400).json({ message: "Invalid product version" });
     const product = await storage.getProduct(pv.productId, orgId);
@@ -2868,13 +3314,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     try {
       const policyNumber = await storage.generatePolicyNumber(orgId);
-      const premium = await computePolicyPremium(
-        orgId,
-        productVersionId,
-        currency || "USD",
-        paymentSchedule || "monthly",
-        [],
-      );
       const depsList = Array.isArray(rawDeps) ? rawDeps : [];
       const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
       for (const d of depsList) {
@@ -2901,6 +3340,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         createdDeps.push(dep);
       }
+      const premium = await computePolicyPremium(
+        orgId,
+        productVersionId,
+        currency || "USD",
+        paymentSchedule || "monthly",
+        [],
+        [],
+        undefined,
+        createdDeps.map((d) => d.dateOfBirth || null),
+      );
 
       let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
       if (ben) {
@@ -2947,6 +3396,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const policy = await storage.createPolicy(policyParsed);
       await storage.createPolicyStatusHistory(policy.id, null, "inactive", "Registered via agent link");
+      if (normalizedPaymentMethod) {
+        await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
+          organizationId: orgId,
+          clientId: client.id,
+          ...normalizedPaymentMethod,
+          isDefault: true,
+          isActive: true,
+        } as any);
+      }
       await storage.createPolicyMember({
         policyId: policy.id,
         clientId: client.id,

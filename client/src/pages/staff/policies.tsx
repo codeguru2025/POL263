@@ -85,6 +85,7 @@ export default function StaffPolicies() {
   const safeRoles = Array.isArray(roles) ? roles : [];
   const safePermissions = Array.isArray(permissions) ? permissions : [];
   const isAgent = safeRoles.some((r: any) => r.name === "agent");
+  const canWritePolicy = safePermissions.includes("write:policy");
   const canWriteFinance = safePermissions.includes("write:finance");
   const canDeletePolicy = safePermissions.includes("delete:policy");
   const canEditPayment = safePermissions.includes("edit:payment");
@@ -125,6 +126,16 @@ export default function StaffPolicies() {
   const [receiptSuccessData, setReceiptSuccessData] = useState<any>(null);
 
   const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showPaymentMethodDialog, setShowPaymentMethodDialog] = useState(false);
+  const [paymentMethodForm, setPaymentMethodForm] = useState({
+    provider: "ecocash",
+    mobileNumber: "",
+  });
+  const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
+  const [upgradeForm, setUpgradeForm] = useState({
+    selectedProductId: "",
+    productVersionId: "",
+  });
   const [editForm, setEditForm] = useState({
     currency: "",
     paymentSchedule: "",
@@ -150,6 +161,11 @@ export default function StaffPolicies() {
     currency: "USD",
     paymentSchedule: "monthly",
     effectiveDate: "",
+    paymentMethod: {
+      methodType: "mobile" as const,
+      provider: "ecocash",
+      mobileNumber: "",
+    },
     selectedAddOns: [] as string[],
     memberAddOns: {} as Record<string, string[]>,
     newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
@@ -299,6 +315,15 @@ export default function StaffPolicies() {
     },
     enabled: !!createForm.selectedProductId,
   });
+  const { data: upgradeProductVersions } = useQuery<any[]>({
+    queryKey: ["/api/products", upgradeForm.selectedProductId, "versions", "upgrade"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/products/${upgradeForm.selectedProductId}/versions`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!upgradeForm.selectedProductId && showUpgradeDialog,
+  });
 
   const clientAge = useMemo(() => {
     if (!selectedClient?.dateOfBirth) return null;
@@ -314,6 +339,11 @@ export default function StaffPolicies() {
     if (!createForm.productVersionId || !productVersions) return null;
     return productVersions.find((v: any) => v.id === createForm.productVersionId);
   }, [createForm.productVersionId, productVersions]);
+
+  const selectedProduct = useMemo(() => {
+    if (!createForm.selectedProductId || !products) return null;
+    return products.find((p: any) => p.id === createForm.selectedProductId) || null;
+  }, [createForm.selectedProductId, products]);
 
   const calculatedPremium = useMemo(() => {
     if (!selectedVersion) return null;
@@ -349,8 +379,45 @@ export default function StaffPolicies() {
         }
       }
     }
-    return (base + addOnTotal).toFixed(2);
-  }, [selectedVersion, createForm.currency, createForm.paymentSchedule, createForm.memberAddOns, addOns]);
+    const scheduleFactor = paymentSchedule === "weekly"
+      ? (12 / 52)
+      : paymentSchedule === "biweekly"
+      ? (12 / 26)
+      : paymentSchedule === "quarterly"
+      ? 3
+      : paymentSchedule === "annually"
+      ? 12
+      : 1;
+    const childThresholdAge = Number(selectedVersion.dependentMaxAge ?? 20);
+    const maxAdults = Number(selectedProduct?.maxAdults ?? 2);
+    const maxChildren = Number(selectedProduct?.maxChildren ?? 4);
+    const adultRateMonthly = parseFloat(String(selectedVersion.underwriterAmountAdult || "0"));
+    const childRateMonthly = parseFloat(String(selectedVersion.underwriterAmountChild || selectedVersion.underwriterAmountAdult || "0"));
+
+    let adults = 1; // Policy holder.
+    let children = 0;
+    const selectedDependentSet = new Set(createForm.beneficiaryDependentIds);
+    for (const dep of dependents || []) {
+      if (!selectedDependentSet.has(dep.id)) continue;
+      const dob = dep.dateOfBirth ? new Date(dep.dateOfBirth) : null;
+      if (!dob || Number.isNaN(dob.getTime())) {
+        adults += 1;
+        continue;
+      }
+      const today = new Date();
+      let age = today.getFullYear() - dob.getFullYear();
+      const m = today.getMonth() - dob.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+      if (age >= childThresholdAge) adults += 1;
+      else children += 1;
+    }
+
+    const extraAdults = Math.max(0, adults - maxAdults);
+    const extraChildren = Math.max(0, children - maxChildren);
+    const dependantSurcharge = ((extraAdults * adultRateMonthly) + (extraChildren * childRateMonthly)) * scheduleFactor;
+
+    return (base + addOnTotal + dependantSurcharge).toFixed(2);
+  }, [selectedVersion, selectedProduct, createForm.currency, createForm.paymentSchedule, createForm.memberAddOns, createForm.beneficiaryDependentIds, dependents, addOns]);
 
   const { data: policyDetail } = useQuery<any>({
     queryKey: ["/api/policies", selectedPolicy?.id, "detail"],
@@ -391,6 +458,16 @@ export default function StaffPolicies() {
     enabled: !!selectedPolicy?.id && showDetailView,
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/receipts`, { credentials: "include" });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    },
+  });
+  const { data: clientPaymentMethods } = useQuery<any[]>({
+    queryKey: ["/api/clients", displayPolicy?.clientId, "payment-methods"],
+    enabled: !!displayPolicy?.clientId && showDetailView,
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/clients/${displayPolicy.clientId}/payment-methods`, { credentials: "include" });
       if (!res.ok) return [];
       const data = await res.json();
       return Array.isArray(data) ? data : [];
@@ -469,6 +546,7 @@ export default function StaffPolicies() {
         currency: data.currency,
         paymentSchedule: data.paymentSchedule,
         effectiveDate: data.effectiveDate || undefined,
+        paymentMethod: data.paymentMethod,
         members,
         memberAddOns,
         beneficiary,
@@ -493,6 +571,11 @@ export default function StaffPolicies() {
         currency: "USD",
         paymentSchedule: "monthly",
         effectiveDate: "",
+        paymentMethod: {
+          methodType: "mobile" as const,
+          provider: "ecocash",
+          mobileNumber: "",
+        },
         selectedAddOns: [],
         memberAddOns: {},
         newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
@@ -536,6 +619,43 @@ export default function StaffPolicies() {
     },
     onError: (err: Error) => {
       toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+  const savePaymentMethodMutation = useMutation({
+    mutationFn: async () => {
+      if (!displayPolicy?.clientId) throw new Error("No client selected");
+      const res = await apiRequest("PUT", `/api/clients/${displayPolicy.clientId}/payment-methods/default`, {
+        methodType: "mobile",
+        provider: paymentMethodForm.provider,
+        mobileNumber: paymentMethodForm.mobileNumber,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", displayPolicy?.clientId, "payment-methods"] });
+      setShowPaymentMethodDialog(false);
+      toast({ title: "Payment method saved", description: "Default method updated for automation." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const upgradePolicyMutation = useMutation({
+    mutationFn: async ({ id, productVersionId }: { id: string; productVersionId: string }) => {
+      const res = await apiRequest("POST", `/api/policies/${id}/upgrade`, { productVersionId });
+      return res.json();
+    },
+    onSuccess: (updated: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "detail"] });
+      setShowUpgradeDialog(false);
+      setUpgradeForm({ selectedProductId: "", productVersionId: "" });
+      if (showDetailView) setSelectedPolicy(updated);
+      toast({ title: "Policy upgraded", description: "The policy now uses the selected product version." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Upgrade failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -830,6 +950,25 @@ export default function StaffPolicies() {
     setShowDetailView(true);
   };
 
+  const openUpgradeDialog = (policy: any) => {
+    setSelectedPolicy(policy);
+    setUpgradeForm({ selectedProductId: "", productVersionId: "" });
+    setShowUpgradeDialog(true);
+  };
+
+  const openPaymentMethodDialog = () => {
+    const current = (clientPaymentMethods || []).find((m: any) => m.isDefault && m.isActive) || (clientPaymentMethods || [])[0];
+    if (current?.methodType === "mobile") {
+      setPaymentMethodForm({
+        provider: current.provider || "ecocash",
+        mobileNumber: current.mobileNumber || "",
+      });
+    } else {
+      setPaymentMethodForm({ provider: "ecocash", mobileNumber: "" });
+    }
+    setShowPaymentMethodDialog(true);
+  };
+
   if (showDetailView && selectedPolicy) {
     const allowedTransitions = VALID_POLICY_TRANSITIONS[displayPolicy.status] || [];
     return (
@@ -861,6 +1000,16 @@ export default function StaffPolicies() {
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+            )}
+            {canWritePolicy && (
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={() => openUpgradeDialog(displayPolicy)}
+                data-testid="btn-upgrade-policy"
+              >
+                <ArrowRightLeft className="h-4 w-4" /> Upgrade Product
+              </Button>
             )}
             <Select value={docLang} onValueChange={setDocLang}>
               <SelectTrigger className="w-[140px] h-9">
@@ -1057,6 +1206,32 @@ export default function StaffPolicies() {
                   </div>
                 )}
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm border-border/60">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2"><CreditCard className="h-4 w-4 text-primary" /> Paynow mobile (automation)</CardTitle>
+                <Button variant="outline" size="sm" onClick={openPaymentMethodDialog} data-testid="btn-edit-payment-method">
+                  <Pencil className="h-4 w-4 mr-2" /> Edit
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const current = (clientPaymentMethods || []).find((m: any) => m.isDefault && m.isActive) || (clientPaymentMethods || [])[0];
+                if (!current) return <p className="text-sm text-muted-foreground">No saved mobile wallet. Add one to enable Paynow automation (PIN on the client&apos;s phone).</p>;
+                if (current.methodType === "card") {
+                  return (
+                    <div className="text-sm space-y-1">
+                      <p className="text-muted-foreground">Legacy card on file is not used for recurring collection.</p>
+                      <p className="font-medium">Replace with EcoCash / OneMoney / InnBucks / O&apos;Mari + mobile number.</p>
+                    </div>
+                  );
+                }
+                return <p className="text-sm">{(current.provider || "mobile").toUpperCase()} · {current.mobileNumber || "—"}</p>;
+              })()}
             </CardContent>
           </Card>
 
@@ -1709,6 +1884,110 @@ export default function StaffPolicies() {
           </DialogContent>
         </Dialog>
 
+        <Dialog open={showUpgradeDialog} onOpenChange={setShowUpgradeDialog}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Upgrade Policy Product</DialogTitle>
+              <DialogDescription>
+                Move policy <strong>{displayPolicy?.policyNumber}</strong> to a new product version. Premium will be recalculated automatically.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
+                Current product: <strong>{displayPolicy?.productName || "Unknown"}</strong> ({displayPolicy?.productVersionLabel || `v${displayPolicy?.version || "?"}`})
+              </div>
+              <div className="space-y-2">
+                <Label>Product</Label>
+                <Select
+                  value={upgradeForm.selectedProductId || undefined}
+                  onValueChange={(v) => setUpgradeForm({ selectedProductId: v, productVersionId: "" })}
+                >
+                  <SelectTrigger data-testid="select-upgrade-product">
+                    <SelectValue placeholder="Select product..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(products || []).map((p: any) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Product Version</Label>
+                <Select
+                  value={upgradeForm.productVersionId || undefined}
+                  onValueChange={(v) => setUpgradeForm({ ...upgradeForm, productVersionId: v })}
+                  disabled={!upgradeForm.selectedProductId}
+                >
+                  <SelectTrigger data-testid="select-upgrade-version">
+                    <SelectValue placeholder={upgradeForm.selectedProductId ? "Select version..." : "Select product first"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(upgradeProductVersions || []).map((v: any) => (
+                      <SelectItem key={v.id} value={v.id}>
+                        v{v.version} · {[
+                          v.premiumMonthlyUsd ? `USD ${Number(v.premiumMonthlyUsd).toFixed(2)}/mo` : null,
+                          v.premiumMonthlyZar ? `ZAR ${Number(v.premiumMonthlyZar).toFixed(2)}/mo` : null,
+                        ].filter(Boolean).join(" · ")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowUpgradeDialog(false)}>Cancel</Button>
+              <Button
+                onClick={() => selectedPolicy && upgradePolicyMutation.mutate({ id: selectedPolicy.id, productVersionId: upgradeForm.productVersionId })}
+                disabled={!selectedPolicy || !upgradeForm.productVersionId || upgradePolicyMutation.isPending}
+                data-testid="btn-confirm-upgrade-policy"
+              >
+                {upgradePolicyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Upgrade Policy
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={showPaymentMethodDialog} onOpenChange={setShowPaymentMethodDialog}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Paynow mobile wallet</DialogTitle>
+              <DialogDescription>
+                Saved for overdue automation: the app starts Paynow on this number; the client enters their PIN on their phone. One-off card payments still use Paynow from Finance or the client portal.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <Label>Provider</Label>
+                <Select value={paymentMethodForm.provider} onValueChange={(v) => setPaymentMethodForm({ ...paymentMethodForm, provider: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ecocash">EcoCash</SelectItem>
+                    <SelectItem value="onemoney">OneMoney</SelectItem>
+                    <SelectItem value="innbucks">InnBucks</SelectItem>
+                    <SelectItem value="omari">O'Mari</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Mobile Number</Label>
+                <Input value={paymentMethodForm.mobileNumber} onChange={(e) => setPaymentMethodForm({ ...paymentMethodForm, mobileNumber: e.target.value })} placeholder="e.g. 0771234567" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowPaymentMethodDialog(false)}>Cancel</Button>
+              <Button
+                onClick={() => savePaymentMethodMutation.mutate()}
+                disabled={savePaymentMethodMutation.isPending || !paymentMethodForm.mobileNumber.trim()}
+              >
+                {savePaymentMethodMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save wallet
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={detailAddDepOpen} onOpenChange={setDetailAddDepOpen}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
@@ -2218,6 +2497,11 @@ export default function StaffPolicies() {
                             <DropdownMenuItem onClick={() => { openDetail(policy); setTimeout(() => openEditDialog(policy), 100); }} data-testid={`menu-edit-${policy.id}`}>
                               <Pencil className="h-4 w-4 mr-2" /> Edit
                             </DropdownMenuItem>
+                            {canWritePolicy && (
+                              <DropdownMenuItem onClick={() => { openDetail(policy); setTimeout(() => openUpgradeDialog(policy), 100); }} data-testid={`menu-upgrade-${policy.id}`}>
+                                <ArrowRightLeft className="h-4 w-4 mr-2" /> Upgrade Product
+                              </DropdownMenuItem>
+                            )}
                             {!isAgent && (VALID_POLICY_TRANSITIONS[policy.status] || []).length > 0 && (
                               <>
                                 <DropdownMenuSeparator />
@@ -2754,6 +3038,40 @@ export default function StaffPolicies() {
                     />
                   </div>
                 </div>
+                <div className="space-y-3 border rounded-md p-3">
+                  <p className="text-sm font-medium">Paynow mobile wallet (saved for automation)</p>
+                  <p className="text-xs text-muted-foreground">Overdue automation starts Paynow on this number; the client confirms with their PIN. Recurring collection is not done via stored card.</p>
+                  <div>
+                    <Label>Mobile Provider</Label>
+                    <Select
+                      value={createForm.paymentMethod.provider}
+                      onValueChange={(v) => setCreateForm({
+                        ...createForm,
+                        paymentMethod: { ...createForm.paymentMethod, provider: v },
+                      })}
+                    >
+                      <SelectTrigger data-testid="select-payment-mobile-provider"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ecocash">EcoCash</SelectItem>
+                        <SelectItem value="onemoney">OneMoney</SelectItem>
+                        <SelectItem value="innbucks">InnBucks</SelectItem>
+                        <SelectItem value="omari">O'Mari</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Mobile Number</Label>
+                    <Input
+                      value={createForm.paymentMethod.mobileNumber}
+                      onChange={(e) => setCreateForm({
+                        ...createForm,
+                        paymentMethod: { ...createForm.paymentMethod, mobileNumber: e.target.value },
+                      })}
+                      placeholder="e.g. 0771234567"
+                      data-testid="input-payment-mobile-number"
+                    />
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -2807,6 +3125,7 @@ export default function StaffPolicies() {
                     !createForm.newClient.dateOfBirth ||
                     !createForm.newClient.gender
                   )) ||
+                  !createForm.paymentMethod.mobileNumber?.trim() ||
                   !createForm.productVersionId ||
                   !calculatedPremium
                 }

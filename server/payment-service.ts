@@ -542,7 +542,7 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
       structuredLog("warn", "Paynow poll hash mismatch", {
         intentId: intent.id,
         paynowStatus: status,
-        keys: [...parsed.keys()].filter((k) => k.toLowerCase() !== "hash").join(","),
+        keys: Array.from(parsed.keys()).filter((k) => k.toLowerCase() !== "hash").join(","),
       });
       if (isPaynowPaidStatus(status)) {
         structuredLog("warn", "Paynow poll hash mismatch but status is PAID — applying payment anyway", { intentId: intent.id, paynowStatus: status });

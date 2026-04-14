@@ -20,7 +20,7 @@ import {
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
   policyCreditBalances, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
-  clientDeviceTokens,
+  clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   type GroupPaymentIntent, type InsertGroupPaymentIntent,
   type GroupPaymentAllocation, type InsertGroupPaymentAllocation,
   type PolicyCreditBalance, type CreditNote, type MonthEndRun,
@@ -32,6 +32,9 @@ import {
   type Permission, type InsertPermission,
   type AuditLog, type InsertAuditLog,
   type Client, type InsertClient,
+  type ClientPaymentMethod, type InsertClientPaymentMethod,
+  type PaymentAutomationSettings, type InsertPaymentAutomationSettings,
+  type PaymentAutomationRun, type InsertPaymentAutomationRun,
   type Dependent, type InsertDependent,
   type Product, type InsertProduct,
   type ProductVersion, type InsertProductVersion,
@@ -423,6 +426,13 @@ export interface IStorage {
   getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
   addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
   removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void>;
+  getClientPaymentMethods(clientId: string, orgId: string): Promise<ClientPaymentMethod[]>;
+  upsertDefaultClientPaymentMethod(orgId: string, clientId: string, method: InsertClientPaymentMethod): Promise<ClientPaymentMethod>;
+  getDefaultClientPaymentMethod(clientId: string, orgId: string): Promise<ClientPaymentMethod | undefined>;
+  getPaymentAutomationSettings(orgId: string): Promise<PaymentAutomationSettings | undefined>;
+  upsertPaymentAutomationSettings(orgId: string, data: Partial<InsertPaymentAutomationSettings>): Promise<PaymentAutomationSettings>;
+  createPaymentAutomationRun(orgId: string, data: InsertPaymentAutomationRun): Promise<PaymentAutomationRun>;
+  getPaymentAutomationRuns(orgId: string, limit?: number): Promise<PaymentAutomationRun[]>;
   getNextCreditNoteNumber(orgId: string): Promise<string>;
   createCreditNote(note: InsertCreditNote): Promise<CreditNote>;
   getCreditNotesByClient(clientId: string, orgId: string): Promise<CreditNote[]>;
@@ -2720,6 +2730,87 @@ export class DatabaseStorage implements IStorage {
     const conditions = [eq(clientDeviceTokens.organizationId, orgId), eq(clientDeviceTokens.token, token.trim())];
     if (clientId) conditions.push(eq(clientDeviceTokens.clientId, clientId));
     await tdb.delete(clientDeviceTokens).where(and(...conditions));
+  }
+  async getClientPaymentMethods(clientId: string, orgId: string): Promise<ClientPaymentMethod[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(clientPaymentMethods)
+      .where(and(eq(clientPaymentMethods.organizationId, orgId), eq(clientPaymentMethods.clientId, clientId)))
+      .orderBy(desc(clientPaymentMethods.isDefault), desc(clientPaymentMethods.updatedAt));
+  }
+  async upsertDefaultClientPaymentMethod(orgId: string, clientId: string, method: InsertClientPaymentMethod): Promise<ClientPaymentMethod> {
+    const tdb = await getDbForOrg(orgId);
+    const existing = await this.getClientPaymentMethods(clientId, orgId);
+    const activeDefault = existing.find((m) => m.isDefault && m.isActive);
+    const normalized: InsertClientPaymentMethod = {
+      ...method,
+      organizationId: orgId,
+      clientId,
+      isDefault: true,
+      isActive: true,
+    };
+    if (activeDefault) {
+      const [updated] = await tdb.update(clientPaymentMethods).set({
+        methodType: normalized.methodType,
+        provider: normalized.provider ?? null,
+        mobileNumber: normalized.mobileNumber ?? null,
+        cardLast4: normalized.cardLast4 ?? null,
+        cardBrand: normalized.cardBrand ?? null,
+        cardExpiryMonth: normalized.cardExpiryMonth ?? null,
+        cardExpiryYear: normalized.cardExpiryYear ?? null,
+        cardToken: normalized.cardToken ?? null,
+        isActive: true,
+        updatedAt: new Date(),
+      }).where(eq(clientPaymentMethods.id, activeDefault.id)).returning();
+      return updated;
+    }
+    const [created] = await tdb.insert(clientPaymentMethods).values(normalized).returning();
+    return created;
+  }
+  async getDefaultClientPaymentMethod(clientId: string, orgId: string): Promise<ClientPaymentMethod | undefined> {
+    const methods = await this.getClientPaymentMethods(clientId, orgId);
+    return methods.find((m) => m.isDefault && m.isActive) ?? methods.find((m) => m.isActive);
+  }
+  async getPaymentAutomationSettings(orgId: string): Promise<PaymentAutomationSettings | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(paymentAutomationSettings)
+      .where(eq(paymentAutomationSettings.organizationId, orgId))
+      .limit(1);
+    return row;
+  }
+  async upsertPaymentAutomationSettings(orgId: string, data: Partial<InsertPaymentAutomationSettings>): Promise<PaymentAutomationSettings> {
+    const tdb = await getDbForOrg(orgId);
+    const existing = await this.getPaymentAutomationSettings(orgId);
+    if (existing) {
+      const [updated] = await tdb.update(paymentAutomationSettings).set({
+        ...data,
+        updatedAt: new Date(),
+      }).where(eq(paymentAutomationSettings.id, existing.id)).returning();
+      return updated;
+    }
+    const [created] = await tdb.insert(paymentAutomationSettings).values({
+      organizationId: orgId,
+      isEnabled: data.isEnabled ?? false,
+      daysAfterLastPayment: data.daysAfterLastPayment ?? 30,
+      repeatEveryDays: data.repeatEveryDays ?? 30,
+      sendPushNotifications: data.sendPushNotifications ?? true,
+      autoRunPayments: data.autoRunPayments ?? true,
+    }).returning();
+    return created;
+  }
+  async createPaymentAutomationRun(orgId: string, data: InsertPaymentAutomationRun): Promise<PaymentAutomationRun> {
+    const tdb = await getDbForOrg(orgId);
+    const [created] = await tdb.insert(paymentAutomationRuns).values({
+      ...data,
+      organizationId: orgId,
+    }).returning();
+    return created;
+  }
+  async getPaymentAutomationRuns(orgId: string, limit = 100): Promise<PaymentAutomationRun[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(paymentAutomationRuns)
+      .where(eq(paymentAutomationRuns.organizationId, orgId))
+      .orderBy(desc(paymentAutomationRuns.createdAt))
+      .limit(Math.min(limit, 500));
   }
   async getNextCreditNoteNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);

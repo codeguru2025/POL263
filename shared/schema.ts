@@ -244,6 +244,82 @@ export const clientDeviceTokens = pgTable(
   ]
 );
 
+// ─── CLIENT PAYMENT METHODS (tokenized/obfuscated only) ───
+export const clientPaymentMethods = pgTable(
+  "client_payment_methods",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    methodType: text("method_type").notNull(), // mobile | card (card legacy read-only; automation uses mobile + Paynow)
+    provider: text("provider"), // ecocash | onemoney | visa_mastercard | other
+    mobileNumber: text("mobile_number"),
+    cardLast4: text("card_last4"),
+    cardBrand: text("card_brand"),
+    cardExpiryMonth: integer("card_expiry_month"),
+    cardExpiryYear: integer("card_expiry_year"),
+    cardToken: text("card_token"),
+    isDefault: boolean("is_default").default(true).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("cpm_org_idx").on(t.organizationId),
+    index("cpm_client_idx").on(t.clientId),
+  ]
+);
+
+// ─── PAYMENT AUTOMATION SETTINGS ────────────────────────────
+export const paymentAutomationSettings = pgTable(
+  "payment_automation_settings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    isEnabled: boolean("is_enabled").default(false).notNull(),
+    /** Start automation after this many days since last cleared payment. */
+    daysAfterLastPayment: integer("days_after_last_payment").default(30).notNull(),
+    /** Repeat notification/collection attempts every N days while unpaid. */
+    repeatEveryDays: integer("repeat_every_days").default(30).notNull(),
+    sendPushNotifications: boolean("send_push_notifications").default(true).notNull(),
+    autoRunPayments: boolean("auto_run_payments").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("pas_org_unique_idx").on(t.organizationId),
+  ]
+);
+
+export const paymentAutomationRuns = pgTable(
+  "payment_automation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    policyId: uuid("policy_id").notNull(),
+    clientId: uuid("client_id").references(() => clients.id),
+    actionType: text("action_type").notNull(), // reminder | auto_payment_attempt
+    status: text("status").notNull(), // success | failed | skipped
+    methodType: text("method_type"), // mobile | card
+    message: text("message"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("par_org_idx").on(t.organizationId),
+    index("par_policy_idx").on(t.policyId),
+    index("par_created_idx").on(t.createdAt),
+  ]
+);
+
 // ─── DEPENDENTS ─────────────────────────────────────────────
 
 export const dependents = pgTable(
@@ -492,6 +568,8 @@ export const policies = pgTable(
     currentCycleStart: date("current_cycle_start"),
     currentCycleEnd: date("current_cycle_end"),
     graceEndDate: date("grace_end_date"),
+    lastAutoPaymentAttemptAt: timestamp("last_auto_payment_attempt_at"),
+    lastAutoReminderAt: timestamp("last_auto_reminder_at"),
     cancelledAt: timestamp("cancelled_at"),
     cancelReason: text("cancel_reason"),
     beneficiaryFirstName: text("beneficiary_first_name"),
@@ -1510,6 +1588,9 @@ export const insertPermissionSchema = createInsertSchema(permissions).omit({ id:
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true });
 export const insertClientSchema = createInsertSchema(clients).omit({ id: true, createdAt: true });
 export const insertDependentSchema = createInsertSchema(dependents).omit({ id: true, createdAt: true });
+export const insertClientPaymentMethodSchema = createInsertSchema(clientPaymentMethods).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPaymentAutomationSettingsSchema = createInsertSchema(paymentAutomationSettings).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPaymentAutomationRunSchema = createInsertSchema(paymentAutomationRuns).omit({ id: true, createdAt: true });
 export const insertProductSchema = createInsertSchema(products).omit({ id: true, createdAt: true });
 export const insertProductVersionSchema = createInsertSchema(productVersions).omit({ id: true, createdAt: true });
 export const insertBenefitCatalogItemSchema = createInsertSchema(benefitCatalogItems).omit({ id: true, createdAt: true });
@@ -1562,6 +1643,12 @@ export type Client = typeof clients.$inferSelect;
 export type InsertClient = z.infer<typeof insertClientSchema>;
 export type Dependent = typeof dependents.$inferSelect;
 export type InsertDependent = z.infer<typeof insertDependentSchema>;
+export type ClientPaymentMethod = typeof clientPaymentMethods.$inferSelect;
+export type InsertClientPaymentMethod = z.infer<typeof insertClientPaymentMethodSchema>;
+export type PaymentAutomationSettings = typeof paymentAutomationSettings.$inferSelect;
+export type InsertPaymentAutomationSettings = z.infer<typeof insertPaymentAutomationSettingsSchema>;
+export type PaymentAutomationRun = typeof paymentAutomationRuns.$inferSelect;
+export type InsertPaymentAutomationRun = z.infer<typeof insertPaymentAutomationRunSchema>;
 export type Product = typeof products.$inferSelect;
 export type InsertProduct = z.infer<typeof insertProductSchema>;
 export type ProductVersion = typeof productVersions.$inferSelect;

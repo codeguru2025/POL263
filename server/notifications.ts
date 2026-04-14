@@ -209,6 +209,27 @@ export async function notifyClient(orgId: string, clientId: string, subject: str
   }
 }
 
+/** Best-effort push dispatch. Currently records push logs for registered client devices. */
+export async function notifyClientPush(orgId: string, clientId: string, subject: string, body: string, policyId?: string) {
+  try {
+    const client = await storage.getClient(clientId, orgId);
+    if (!client || !(client as any).pushEnabled) return;
+    const tokens = await storage.getClientDeviceTokens(clientId, orgId);
+    if (!tokens.length) return;
+    await storage.createNotificationLog(orgId, {
+      recipientType: "client",
+      recipientId: clientId,
+      channel: "push",
+      subject,
+      body,
+      policyId: policyId ?? null,
+      status: "sent",
+    });
+  } catch (err) {
+    structuredLog("error", "Failed to create push notification log", { error: (err as Error).message, orgId, clientId });
+  }
+}
+
 /**
  * Dispatch a notification for a specific event.
  * Uses admin-configured templates if available, otherwise falls back to defaults.
