@@ -715,8 +715,24 @@ export class DatabaseStorage implements IStorage {
     const orgId = log.organizationId;
     if (!orgId) throw new Error("createAuditLog: organizationId is required");
     const tdb = await getDbForOrg(orgId);
-    const [created] = await tdb.insert(auditLogs).values(log).returning();
-    return created;
+    try {
+      const [created] = await tdb.insert(auditLogs).values(log).returning();
+      return created;
+    } catch (error: any) {
+      const fkViolation =
+        error?.message?.includes("audit_logs_actor_id_users_id_fk") ||
+        error?.constraint === "audit_logs_actor_id_users_id_fk";
+      if (fkViolation && log.actorId) {
+        // Platform owners can switch into tenant DBs where their user row does not exist.
+        // Keep the audit event by dropping actorId, but preserve actorEmail and request metadata.
+        const [createdWithoutActor] = await tdb
+          .insert(auditLogs)
+          .values({ ...log, actorId: null })
+          .returning();
+        return createdWithoutActor;
+      }
+      throw error;
+    }
   }
 
   // ─── Clients ───────────────────────────────────────────────
