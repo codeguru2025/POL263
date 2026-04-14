@@ -23,6 +23,7 @@
     "db:push:do": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push",
     "db:push:cp": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push --config=drizzle.control-plane.config.ts",
     "db:migrate:cp": "tsx script/migrate-orgs-to-control-plane.ts",
+    "db:migrate:shared-registry": "tsx script/migrate-orgs-users-to-do.ts",
     "db:push:tenant": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push --config=drizzle.tenant.config.ts",
     "db:push:falakhe": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push --config=drizzle.falakhe.config.ts",
     "db:migrate:falakhe": "tsx script/migrate-supabase-to-do.ts",

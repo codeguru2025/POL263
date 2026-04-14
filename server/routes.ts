@@ -17,6 +17,8 @@ import * as objectStorage from "./object-storage";
 import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
+import { cpDb } from "./control-plane-db";
+import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
 import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, SUPPORTED_CURRENCIES } from "../shared/validation";
@@ -433,12 +435,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/organizations", requireAuth, async (req, res) => {
     try {
       const user = req.user as any;
-      const perms = await storage.getUserEffectivePermissions(user.id);
+      const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
       const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
       if (canManageTenants) {
-        const allOrgs = await storage.getOrganizations();
-        const active = (Array.isArray(allOrgs) ? allOrgs : []).filter((o) => !o.name?.endsWith(" (deleted)"));
-        return res.json(active);
+        // Read the authoritative tenant list from the control plane so isolated
+        // tenant DBs (e.g. Falakhe) also appear in the admin portal.
+        const rows = await cpDb
+          .select({
+            id: cpTenants.id,
+            name: cpTenants.name,
+            slug: cpTenants.slug,
+            isActive: cpTenants.isActive,
+            licenseStatus: cpTenants.licenseStatus,
+            createdAt: cpTenants.createdAt,
+            primaryColor: cpTenantBranding.primaryColor,
+            logoUrl: cpTenantBranding.logoUrl,
+            address: cpTenantBranding.address,
+            phone: cpTenantBranding.phone,
+            email: cpTenantBranding.email,
+            website: cpTenantBranding.website,
+            isWhitelabeled: cpTenantBranding.isWhitelabeled,
+            footerText: cpTenantBranding.footerText,
+            policyNumberPrefix: cpTenantBranding.policyNumberPrefix,
+            policyNumberPadding: cpTenantBranding.policyNumberPadding,
+          })
+          .from(cpTenants)
+          .leftJoin(cpTenantBranding, eq(cpTenantBranding.tenantId, cpTenants.id))
+          .where(eq(cpTenants.isActive, true));
+        return res.json(rows);
       }
       if (user.organizationId) {
         const org = await storage.getOrganization(user.organizationId);
@@ -454,7 +478,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/organizations/:id", requireAuth, async (req, res) => {
     const user = req.user as any;
     const id = req.params.id as string;
-    const perms = await storage.getUserEffectivePermissions(user.id);
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
     if (!canManageTenants && id !== user.organizationId) {
       return res.status(403).json({ message: "Cross-tenant access denied" });
@@ -467,7 +491,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/organizations/:id", requireAuth, async (req, res) => {
     const user = req.user as any;
     const id = req.params.id as string;
-    const perms = await storage.getUserEffectivePermissions(user.id);
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
     const canWriteOrg = perms.includes("write:organization");
     if (!canManageTenants && (id !== user.organizationId || !canWriteOrg)) {
@@ -1969,7 +1993,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(403).json({ message: "Agents cannot process cash payments. Use a Paynow method instead." });
     }
 
-    const effectivePerms = await storage.getUserEffectivePermissions(user.id);
+    const effectivePerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     if (!effectivePerms.includes("write:finance")) {
       const method = (req.body.paymentMethod || "cash").toLowerCase();
       const methodPermMap: Record<string, string> = {
@@ -2652,7 +2676,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/cashups", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
-    const perms = await storage.getUserEffectivePermissions(user.id);
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canReadFinance = perms.includes("read:finance");
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -2697,7 +2721,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const cashup = await storage.getCashup(req.params.id as string, user.organizationId);
     if (!cashup) return res.status(404).json({ message: "Not found" });
-    const perms = await storage.getUserEffectivePermissions(user.id);
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     if (!perms.includes("read:finance") && cashup.preparedBy !== user.id) return res.status(403).json({ message: "You can only view your own cashups" });
     return res.json(cashup);
   });
@@ -2706,7 +2730,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const cashup = await storage.getCashup(req.params.id as string, user.organizationId);
     if (!cashup) return res.status(404).json({ message: "Not found" });
-    const perms = await storage.getUserEffectivePermissions(user.id);
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const hasFinance = perms.includes("write:finance");
     const body = req.body as any;
 
@@ -2805,7 +2829,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     if (["approved", "paid"].includes(toStatus)) {
-      const perms = await storage.getUserEffectivePermissions(user.id);
+      const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
       if (!perms.includes("approve:claim")) {
         return res.status(403).json({ message: "Approval permission required" });
       }
@@ -3196,14 +3220,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ name: agent.displayName || agent.email, referralCode: code });
   });
 
+  // ─── Public tenant context (no auth required) ──────────────────
+  // Returns the tenant the request is scoped to, based on subdomain/custom domain.
+  // Used by the frontend to detect which tenant subdomain it's running on.
+  app.get("/api/public/tenant-context", async (req, res) => {
+    const tenantId = (req as any).tenantId as string | undefined;
+    if (!tenantId) return res.json(null);
+    try {
+      const [row] = await cpDb
+        .select({ id: cpTenants.id, name: cpTenants.name, slug: cpTenants.slug })
+        .from(cpTenants)
+        .where(eq(cpTenants.id, tenantId))
+        .limit(1);
+      if (!row) return res.json(null);
+      return res.json(row);
+    } catch {
+      return res.json(null);
+    }
+  });
+
   // ─── Public branding (no auth required, for login/splash screens) ──
   app.get("/api/public/branding", async (req, res) => {
     const NEUTRAL = { name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#D4AF37" };
     const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
-    if (!orgIdParam) {
+    // Fall back to subdomain-resolved tenant when no explicit orgId provided
+    const orgId = orgIdParam || ((req as any).tenantId as string | undefined) || "";
+    if (!orgId) {
       return res.json(NEUTRAL);
     }
-    const org = await storage.getOrganization(orgIdParam);
+    const org = await storage.getOrganization(orgId);
     if (!org || org.name?.endsWith("(deleted)")) return res.json(NEUTRAL);
     return res.json({
       name: org.name,

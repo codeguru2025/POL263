@@ -245,7 +245,7 @@ export interface IStorage {
   clearUserRoles(userId: string): Promise<void>;
   getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]>;
   addUserPermissionOverride(userId: string, permissionId: string, isGranted: boolean): Promise<void>;
-  getUserEffectivePermissions(userId: string): Promise<string[]>;
+  getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]>;
   getAuditLogs(organizationId: string, limit?: number, offset?: number, filters?: { search?: string; action?: string; from?: string; to?: string }): Promise<{ rows: AuditLog[]; total: number }>;
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getClientsByOrg(organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
@@ -619,11 +619,12 @@ export class DatabaseStorage implements IStorage {
   async addUserPermissionOverride(userId: string, permissionId: string, isGranted: boolean): Promise<void> {
     await db.insert(userPermissionOverrides).values({ userId, permissionId, isGranted });
   }
-  async getUserEffectivePermissions(userId: string): Promise<string[]> {
-    const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-    const orgId = user?.organizationId;
-    const roleRows = orgId
-      ? await (await getDbForOrg(orgId))
+  async getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]> {
+    const lookupDb = orgId ? await getDbForOrg(orgId) : db;
+    const [user] = await lookupDb.select().from(users).where(eq(users.id, userId)).limit(1);
+    const effectiveOrgId = orgId ?? user?.organizationId;
+    const roleRows = effectiveOrgId
+      ? await (await getDbForOrg(effectiveOrgId))
           .select({
             roleId: roles.id,
             roleName: roles.name,

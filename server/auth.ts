@@ -5,8 +5,11 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import argon2 from "argon2";
 import crypto from "crypto";
+import { eq } from "drizzle-orm";
 import { pool } from "./db";
 import { storage } from "./storage";
+import { getDbForOrg } from "./tenant-db";
+import { users } from "@shared/schema";
 import { structuredLog } from "./logger";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
 
@@ -66,12 +69,32 @@ export function setupAuth(app: Express) {
   app.use(passport.session());
 
   passport.serializeUser((user: any, done) => {
-    done(null, user.id);
+    // Encode "userId:orgId" so deserializer can route to the right tenant DB.
+    // If no org (platform owner before tenant selection), just the userId.
+    const token = user.organizationId ? `${user.id}:${user.organizationId}` : user.id;
+    done(null, token);
   });
 
-  passport.deserializeUser(async (id: string, done) => {
+  passport.deserializeUser(async (token: string, done) => {
     try {
-      const user = await storage.getUser(id);
+      const colonIdx = (token as string).indexOf(":");
+      const userId = colonIdx > -1 ? token.slice(0, colonIdx) : token;
+      const orgId = colonIdx > -1 ? token.slice(colonIdx + 1) : undefined;
+
+      let user: any;
+      if (orgId) {
+        // Try tenant DB first (covers isolated tenants like Falakhe)
+        try {
+          const tenantDb = await getDbForOrg(orgId);
+          const [u] = await tenantDb.select().from(users).where(eq(users.id, userId)).limit(1);
+          user = u;
+        } catch {
+          // Fall through to shared DB
+        }
+      }
+      if (!user) {
+        user = await storage.getUser(userId);
+      }
       done(null, user || null);
     } catch (err) {
       done(err, null);
@@ -110,8 +133,9 @@ export function setupAuth(app: Express) {
           clientID: googleClientId,
           clientSecret: googleClientSecret,
           callbackURL,
+          passReqToCallback: true,
         },
-        async (_accessToken, _refreshToken, profile, done) => {
+        async (req: any, _accessToken: string, _refreshToken: string, profile: any, done: any) => {
           try {
             const email = profile.emails?.[0]?.value;
             if (!email) {
@@ -119,47 +143,82 @@ export function setupAuth(app: Express) {
             }
 
             const owner = isPlatformOwnerEmail(email);
+            // authTenantId is set by /api/auth/google when the request came from a tenant subdomain.
+            // Platform owner always resolves from the shared DB regardless.
+            const authTenantId: string | undefined = owner
+              ? undefined
+              : (req.session as any)?.authTenantId;
 
-            let user = await storage.getUserByGoogleId(profile.id);
+            // Look up user in the correct DB.
+            let user: any;
+            if (authTenantId) {
+              const tenantDb = await getDbForOrg(authTenantId);
+              const [byGoogleId] = await tenantDb
+                .select()
+                .from(users)
+                .where(eq(users.googleId, profile.id))
+                .limit(1);
+              user = byGoogleId;
+              if (!user) {
+                const [byEmail] = await tenantDb
+                  .select()
+                  .from(users)
+                  .where(eq(users.email, email.toLowerCase()))
+                  .limit(1);
+                user = byEmail;
+              }
+            } else {
+              user = await storage.getUserByGoogleId(profile.id);
+              if (!user) user = await storage.getUserByEmail(email);
+            }
+
+            if (!user && owner) {
+              // ✅ Fresh DB bootstrap: allow platform owner to be created automatically
+              user = await storage.createUser({
+                email,
+                displayName: profile.displayName,
+                avatarUrl: profile.photos?.[0]?.value,
+                googleId: profile.id,
+                isActive: true,
+                // organizationId intentionally not set here; owner can create/select tenant after login
+              });
+            }
 
             if (!user) {
-              // Try match by email first
-              user = await storage.getUserByEmail(email);
+              return done(null, false, {
+                message: "Not authorized. Ask your administrator to add your email to the system.",
+              });
+            }
 
-              // ✅ Fresh DB bootstrap: allow platform owner to be created automatically
-              if (!user && owner) {
-                user = await storage.createUser({
-                  email,
-                  displayName: profile.displayName,
-                  avatarUrl: profile.photos?.[0]?.value,
-                  googleId: profile.id,
-                  isActive: true,
-                  // organizationId intentionally not set here; owner can create/select tenant after login
-                });
-              }
-
-              if (!user) {
+            // ✅ Only check roles if tenant-scoped (never pass "" as uuid)
+            if (user.organizationId) {
+              const roles = await storage.getUserRoles(user.id, user.organizationId);
+              const isAgent = roles.some((r) => r.name === "agent");
+              if (isAgent) {
                 return done(null, false, {
-                  message: "Not authorized. Ask your administrator to add your email to the system.",
+                  message: "Agents must use the agent login page with email and password.",
                 });
               }
+            }
 
-              // ✅ Only check roles if tenant-scoped (never pass "" as uuid)
-              if (user.organizationId) {
-                const roles = await storage.getUserRoles(user.id, user.organizationId);
-                const isAgent = roles.some((r) => r.name === "agent");
-                if (isAgent) {
-                  return done(null, false, {
-                    message: "Agents must use the agent login page with email and password.",
-                  });
-                }
-              }
-
-              user = await storage.updateUser(user.id, {
+            // Link Google ID / update avatar on first OAuth login
+            if (!user.googleId || user.googleId !== profile.id) {
+              const updateData = {
                 googleId: profile.id,
                 displayName: profile.displayName,
                 avatarUrl: profile.photos?.[0]?.value,
-              });
+              };
+              if (authTenantId) {
+                const tenantDb = await getDbForOrg(authTenantId);
+                const [updated] = await tenantDb
+                  .update(users)
+                  .set(updateData)
+                  .where(eq(users.id, user.id))
+                  .returning();
+                user = updated ?? user;
+              } else {
+                user = (await storage.updateUser(user.id, updateData)) ?? user;
+              }
             }
 
             if (!user) {
@@ -175,6 +234,7 @@ export function setupAuth(app: Express) {
               email: user.email,
               isPlatformOwner: owner,
               hasOrg: Boolean(user.organizationId),
+              tenantDb: authTenantId || "shared",
             });
 
             done(null, user);
@@ -198,6 +258,13 @@ export function setupAuth(app: Express) {
 
       if (returnTo && (origin || returnTo.startsWith("/"))) {
         (req.session as any).authReturnTo = origin ? `${origin}${returnTo}` : returnTo;
+      }
+
+      // If this request came from a tenant subdomain, remember which tenant so the
+      // callback can look up the user in the right database.
+      const tenantId = (req as any).tenantId as string | undefined;
+      if (tenantId) {
+        (req.session as any).authTenantId = tenantId;
       }
 
       (req.session as any).save((err: Error | null) => {
@@ -447,7 +514,7 @@ export function setupAuth(app: Express) {
 
       const orgId = user.organizationId ?? undefined;
       const userRoles = orgId ? await storage.getUserRoles(user.id, orgId) : [];
-      const effectivePermissions = await storage.getUserEffectivePermissions(user.id);
+      const effectivePermissions = await storage.getUserEffectivePermissions(user.id, user.organizationId);
       const session = req.session as any;
       const effectiveOrganizationId = user.isPlatformOwner
         ? (session?.activeTenantId ?? user.organizationId)
@@ -495,7 +562,7 @@ export function requirePermission(...requiredPerms: string[]) {
     }
 
     const user = req.user as any;
-    const effectivePerms = await storage.getUserEffectivePermissions(user.id);
+    const effectivePerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
 
     const hasAll = requiredPerms.every((p) => effectivePerms.includes(p));
     if (!hasAll) {
@@ -519,7 +586,7 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
     }
 
     const user = req.user as any;
-    const effectivePerms = await storage.getUserEffectivePermissions(user.id);
+    const effectivePerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
 
     const hasAny = anyOfPerms.some((p) => effectivePerms.includes(p));
     if (!hasAny) {

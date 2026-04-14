@@ -6,45 +6,64 @@ import { Button } from "@/components/ui/button";
 import { Building2, Users, UserCircle } from "lucide-react";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import AppFooter from "@/components/app-footer";
-import { getDefaultLogoUrl } from "@/lib/assetUrl";
+import { getDefaultLogoUrl, resolveAssetUrl } from "@/lib/assetUrl";
 import { useAuth } from "@/hooks/use-auth";
+import { useBranding } from "@/hooks/use-branding";
 import { getApiBase } from "@/lib/queryClient";
 import { Loader2 } from "lucide-react";
 
-const portals = [
-  {
-    title: "Staff Portal",
-    description: "Manage policies, claims, funeral operations, and configure the tenant policy engine.",
-    icon: Building2,
-    href: "/staff/login",
-    buttonLabel: "Access Staff Portal",
-    testId: "link-staff-portal",
-  },
-  {
-    title: "Agent Portal",
-    description: "Sign in to access your clients, issue policies, and manage your referral links.",
-    icon: UserCircle,
-    href: "/agent/login",
-    buttonLabel: "Access Agent Portal",
-    testId: "link-agent-portal",
-  },
-  {
-    title: "Client Portal",
-    description: "Secure access for policyholders to view coverage, pay premiums, and update details.",
-    icon: Users,
-    href: "/client/login",
-    buttonLabel: "Access Client Portal",
-    testId: "link-client-portal",
-  },
-];
-
 export default function Home() {
-  const displayName = "POL263";
-  const displayLogo = getDefaultLogoUrl();
   const [, setLocation] = useLocation();
   const returnTo =
     typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("returnTo") : null;
   const { isAuthenticated, isLoading: staffAuthLoading } = useAuth();
+
+  // Detect whether we're on a tenant subdomain (e.g. falakhe.pol263.com).
+  const { data: tenantCtx } = useQuery<{ id: string; name: string; slug: string } | null>({
+    queryKey: ["/api/public/tenant-context"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/public/tenant-context", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
+  const tenantId = tenantCtx?.id ?? null;
+  const { branding, displayName, displayLogo } = useBranding(tenantId);
+
+  // Append ?orgId= to login links when on a tenant subdomain so those pages
+  // also show the correct branding.
+  const loginSuffix = tenantId ? `?orgId=${encodeURIComponent(tenantId)}` : "";
+
+  const portals = [
+    {
+      title: "Staff Portal",
+      description: "Manage policies, claims, funeral operations, and configure the tenant policy engine.",
+      icon: Building2,
+      href: `/staff/login${loginSuffix}`,
+      buttonLabel: "Access Staff Portal",
+      testId: "link-staff-portal",
+    },
+    {
+      title: "Agent Portal",
+      description: "Sign in to access your clients, issue policies, and manage your referral links.",
+      icon: UserCircle,
+      href: `/agent/login${loginSuffix}`,
+      buttonLabel: "Access Agent Portal",
+      testId: "link-agent-portal",
+    },
+    {
+      title: "Client Portal",
+      description: "Secure access for policyholders to view coverage, pay premiums, and update details.",
+      icon: Users,
+      href: `/client/login${loginSuffix}`,
+      buttonLabel: "Access Client Portal",
+      testId: "link-client-portal",
+    },
+  ];
+
   const { data: clientMe, isFetched: clientMeFetched } = useQuery<{ client: { id: string } | null }>({
     queryKey: ["/api/client-auth/me"],
     queryFn: async () => {
