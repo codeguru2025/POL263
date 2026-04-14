@@ -51,6 +51,7 @@ import { resolveAssetUrl, getDefaultLogoUrl } from "@/lib/assetUrl";
 export default function StaffSettings() {
   const { user, permissions: userPerms, isPlatformOwner } = useAuth();
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
+  const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const permissions = Array.isArray(userPerms) ? userPerms : [];
@@ -62,7 +63,9 @@ export default function StaffSettings() {
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
   const defaultTab =
-    tabParam === "tenants" && canManageTenants
+    isControlPlaneMode && canManageTenants
+      ? "tenants"
+      : tabParam === "tenants" && canManageTenants
       ? "tenants"
       : tabParam === "terms"
         ? "terms"
@@ -75,10 +78,14 @@ export default function StaffSettings() {
 
   useEffect(() => {
     const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
+    if (isControlPlaneMode && canManageTenants) {
+      setActiveTab("tenants");
+      return;
+    }
     if (t === "tenants" && canManageTenants) setActiveTab(t);
     else if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
     else setActiveTab("branding");
-  }, [search, canManageTenants]);
+  }, [search, canManageTenants, isControlPlaneMode]);
 
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -238,6 +245,7 @@ export default function StaffSettings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries();
+      setLocation("/staff");
     },
   });
 
@@ -482,12 +490,18 @@ export default function StaffSettings() {
         </div>
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-          <TabsList className={`grid w-full max-w-2xl ${canManageTenants ? "grid-cols-5" : "grid-cols-4"}`}>
+          <TabsList
+            className={`grid w-full max-w-2xl ${
+              isControlPlaneMode
+                ? (canManageTenants ? "grid-cols-2" : "grid-cols-1")
+                : (canManageTenants ? "grid-cols-5" : "grid-cols-4")
+            }`}
+          >
             {canManageTenants && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
-            <TabsTrigger value="branding">Branding</TabsTrigger>
+            {!isControlPlaneMode && <TabsTrigger value="branding">Branding</TabsTrigger>}
             <TabsTrigger value="account">Account</TabsTrigger>
-            <TabsTrigger value="terms">Terms</TabsTrigger>
-            <TabsTrigger value="rbac">RBAC</TabsTrigger>
+            {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
+            {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
           </TabsList>
 
           {canManageTenants && (

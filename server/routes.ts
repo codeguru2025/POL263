@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import argon2 from "argon2";
 import { storage, findPaymentReceiptById } from "./storage";
-import { withOrgTransaction } from "./tenant-db";
+import { withOrgTransaction, getDbForOrg } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordAgentCommission, recordClawback, rollbackClawbacks, enforceAgentScope } from "./route-helpers";
@@ -35,9 +35,9 @@ import {
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertDependentSchema, insertTermsSchema,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
-  policies, paymentTransactions, paymentReceipts,
+  policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches,
 } from "@shared/schema";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, count } from "drizzle-orm";
 import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
 import { enqueueJob, getJobStats } from "./job-queue";
 
@@ -444,6 +444,96 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ activeTenantId: null, tenant: null });
     }
     return res.json({ activeTenantId, tenant });
+  });
+
+  app.get("/api/platform/dashboard", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const canManageTenants = user.isPlatformOwner || perms.includes("create:tenant") || perms.includes("delete:tenant");
+    if (!canManageTenants) {
+      return res.status(403).json({ message: "Platform owner access required" });
+    }
+
+    const tenantRows = await cpDb
+      .select({
+        id: cpTenants.id,
+        name: cpTenants.name,
+        slug: cpTenants.slug,
+        isActive: cpTenants.isActive,
+        createdAt: cpTenants.createdAt,
+        logoUrl: cpTenantBranding.logoUrl,
+      })
+      .from(cpTenants)
+      .leftJoin(cpTenantBranding, eq(cpTenantBranding.tenantId, cpTenants.id))
+      .where(eq(cpTenants.isActive, true));
+
+    const perTenant = await Promise.all(
+      tenantRows.map(async (tenant) => {
+        try {
+          const tdb = await getDbForOrg(tenant.id);
+          const [{ usersCount }] = await tdb.select({ usersCount: count() }).from(users);
+          const [{ policiesCount }] = await tdb.select({ policiesCount: count() }).from(policies);
+          const [{ activePoliciesCount }] = await tdb
+            .select({ activePoliciesCount: count() })
+            .from(policies)
+            .where(eq(policies.status, "active"));
+          const [{ clientsCount }] = await tdb.select({ clientsCount: count() }).from(clients);
+          const [{ claimsCount }] = await tdb.select({ claimsCount: count() }).from(claims);
+          const [{ leadsCount }] = await tdb.select({ leadsCount: count() }).from(leads);
+          const [{ branchesCount }] = await tdb.select({ branchesCount: count() }).from(branches);
+
+          return {
+            ...tenant,
+            usersCount,
+            policiesCount,
+            activePoliciesCount,
+            clientsCount,
+            claimsCount,
+            leadsCount,
+            branchesCount,
+            loadError: null as string | null,
+          };
+        } catch (err: any) {
+          return {
+            ...tenant,
+            usersCount: 0,
+            policiesCount: 0,
+            activePoliciesCount: 0,
+            clientsCount: 0,
+            claimsCount: 0,
+            leadsCount: 0,
+            branchesCount: 0,
+            loadError: err?.message || "Failed to load tenant metrics",
+          };
+        }
+      })
+    );
+
+    const summary = perTenant.reduce(
+      (acc, t) => {
+        acc.tenants += 1;
+        acc.users += Number(t.usersCount || 0);
+        acc.policies += Number(t.policiesCount || 0);
+        acc.activePolicies += Number(t.activePoliciesCount || 0);
+        acc.clients += Number(t.clientsCount || 0);
+        acc.claims += Number(t.claimsCount || 0);
+        acc.leads += Number(t.leadsCount || 0);
+        acc.branches += Number(t.branchesCount || 0);
+        return acc;
+      },
+      {
+        tenants: 0,
+        users: 0,
+        policies: 0,
+        activePolicies: 0,
+        clients: 0,
+        claims: 0,
+        leads: 0,
+        branches: 0,
+      }
+    );
+
+    return res.json({ summary, tenants: perTenant });
   });
 
   // ─── Organization / Tenant ──────────────────────────────────

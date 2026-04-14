@@ -1,8 +1,9 @@
 import StaffLayout from "@/components/layout/staff-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
-import { useQuery } from "@tanstack/react-query";
-import { getApiBase } from "@/lib/queryClient";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { useLocation } from "wouter";
 import {
   Users,
   Building2,
@@ -77,6 +78,37 @@ interface ProductPerformance {
   currency?: string;
 }
 
+interface ControlPlaneTenantMetrics {
+  id: string;
+  name: string;
+  slug: string;
+  isActive: boolean;
+  createdAt: string;
+  logoUrl?: string | null;
+  usersCount: number;
+  policiesCount: number;
+  activePoliciesCount: number;
+  clientsCount: number;
+  claimsCount: number;
+  leadsCount: number;
+  branchesCount: number;
+  loadError: string | null;
+}
+
+interface ControlPlaneDashboard {
+  summary: {
+    tenants: number;
+    users: number;
+    policies: number;
+    activePolicies: number;
+    clients: number;
+    claims: number;
+    leads: number;
+    branches: number;
+  };
+  tenants: ControlPlaneTenantMetrics[];
+}
+
 const FUNNEL_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#ddd6fe", "#ede9fe"];
 const STATUS_COLORS: Record<string, string> = {
   inactive: "#3b82f6",
@@ -87,8 +119,11 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function StaffDashboard() {
+  const [, setLocation] = useLocation();
+  const queryClient = useQueryClient();
   const { user, roles, permissions, isPlatformOwner } = useAuth();
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
+  const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
   const isAgent = roles.some((r) => r.name === "agent");
   const canReadFinance = permissions.includes("read:finance");
   const canReadClaims = permissions.includes("read:claim");
@@ -100,6 +135,22 @@ export default function StaffDashboard() {
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
+
+  const { data: controlPlaneData, isLoading: cpLoading } = useQuery<ControlPlaneDashboard>({
+    queryKey: ["/api/platform/dashboard"],
+    enabled: isControlPlaneMode,
+  });
+
+  const switchTenantMutation = useMutation({
+    mutationFn: async (tenantId: string) => {
+      const res = await apiRequest("POST", "/api/platform/switch-tenant", { tenantId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+      setLocation("/staff");
+    },
+  });
 
   const filterParams = useMemo(() => {
     const p = new URLSearchParams();
@@ -122,10 +173,12 @@ export default function StaffDashboard() {
       if (!res.ok) throw new Error("Failed to load stats");
       return res.json();
     },
+    enabled: !isControlPlaneMode,
   });
 
   const { data: coveredLives } = useQuery<CoveredLives>({
     queryKey: ["/api/dashboard/covered-lives"],
+    enabled: !isControlPlaneMode,
   });
 
   const { data: revenueTrend } = useQuery<{ date: string; total: number }[]>({
@@ -140,7 +193,7 @@ export default function StaffDashboard() {
       if (!res.ok) throw new Error("Failed to load revenue trend");
       return res.json();
     },
-    enabled: canReadFinance,
+    enabled: !isControlPlaneMode && canReadFinance,
   });
 
   const { data: policyBreakdown } = useQuery<Record<string, number>>({
@@ -156,11 +209,12 @@ export default function StaffDashboard() {
       if (!res.ok) throw new Error("Failed to load breakdown");
       return res.json();
     },
+    enabled: !isControlPlaneMode,
   });
 
   const { data: leadFunnel } = useQuery<Record<string, number>>({
     queryKey: ["/api/dashboard/lead-funnel"],
-    enabled: canReadLead,
+    enabled: !isControlPlaneMode && canReadLead,
   });
 
   const { data: lapseRetention } = useQuery<LapseRetention>({
@@ -176,28 +230,32 @@ export default function StaffDashboard() {
       if (!res.ok) throw new Error("Failed to load lapse retention");
       return res.json();
     },
+    enabled: !isControlPlaneMode,
   });
 
   const { data: productPerformance } = useQuery<ProductPerformance[]>({
     queryKey: ["/api/dashboard/product-performance"],
+    enabled: !isControlPlaneMode,
   });
 
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
+    enabled: !isControlPlaneMode,
   });
 
   const { data: branchesList } = useQuery<any[]>({
     queryKey: ["/api/branches"],
-    enabled: !isAgent,
+    enabled: !isControlPlaneMode && !isAgent,
   });
 
   const { data: products } = useQuery<any[]>({
     queryKey: ["/api/products"],
+    enabled: !isControlPlaneMode,
   });
 
   const { data: auditLogs } = useQuery<any[]>({
     queryKey: ["/api/audit-logs"],
-    enabled: canReadAuditLog,
+    enabled: !isControlPlaneMode && canReadAuditLog,
   });
 
   const currentOrg = isPlatformOwner && effectiveOrgId
@@ -308,6 +366,67 @@ export default function StaffDashboard() {
   ];
 
   const statCards = allStatCards.filter((c) => c.show);
+
+  if (isControlPlaneMode) {
+    const summary = controlPlaneData?.summary;
+    const tenants = controlPlaneData?.tenants ?? [];
+    return (
+      <StaffLayout>
+        <div className="space-y-6">
+          <div>
+            <h1 className="text-3xl font-display font-bold" data-testid="text-dashboard-title">Control Plane Dashboard</h1>
+            <p className="text-muted-foreground mt-1">
+              Platform-wide overview across all active tenants.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Tenants</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.tenants ?? 0}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Users</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.users ?? 0}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Policies</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.policies ?? 0}</div><p className="text-xs text-muted-foreground">{summary?.activePolicies ?? 0} active</p></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Clients</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.clients ?? 0}</div></CardContent></Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Tenants</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {cpLoading ? (
+                <div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+              ) : tenants.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active tenants found.</p>
+              ) : (
+                <div className="space-y-3">
+                  {tenants.map((t) => (
+                    <div key={t.id} className="border rounded-lg p-4 flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{t.name}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Badge variant="outline">{t.slug}</Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {t.usersCount} users • {t.policiesCount} policies • {t.clientsCount} clients
+                          </span>
+                        </div>
+                        {t.loadError && <p className="text-xs text-destructive mt-1">Metrics unavailable: {t.loadError}</p>}
+                      </div>
+                      <button
+                        className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+                        onClick={() => switchTenantMutation.mutate(t.id)}
+                        disabled={switchTenantMutation.isPending}
+                      >
+                        Enter Tenant
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </StaffLayout>
+    );
+  }
 
   return (
     <StaffLayout>

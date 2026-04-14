@@ -201,15 +201,24 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     }
   }, [isLoading, isAuthenticated, authError, setLocation]);
 
+  const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
+  const hasTenant = !!effectiveOrgId;
+  const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
+
+  // In control-plane mode, keep navigation on control-plane pages only.
+  useEffect(() => {
+    if (!isLoading && isAuthenticated && isControlPlaneMode) {
+      const allowed = location === "/staff" || location.startsWith("/staff/settings");
+      if (!allowed) setLocation("/staff");
+    }
+  }, [isLoading, isAuthenticated, isControlPlaneMode, location, setLocation]);
+
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
     enabled: isAuthenticated,
   });
 
-  const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
-  const hasTenant = !!effectiveOrgId;
   const { displayName: brandName, displayLogo: brandLogo, isWhitelabeled } = useBranding(effectiveOrgId);
-  const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
 
   const { data: branchesList } = useQuery<any[]>({
     queryKey: ["/api/branches"],
@@ -527,15 +536,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         <div className="flex-1 overflow-auto p-4 sm:p-6 md:p-8 relative">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent pointer-events-none -z-10" />
           <div className="max-w-6xl mx-auto relative z-0 min-w-0">
-            {isControlPlaneMode && !location.startsWith("/staff/settings") ? (
-              <TenantPickerSplash
-                orgs={orgs || []}
-                onSelect={(id) => switchTenantMutation.mutate(id)}
-                isLoading={switchTenantMutation.isPending}
-              />
-            ) : (
-              children
-            )}
+            {children}
           </div>
         </div>
         <AppFooter />
