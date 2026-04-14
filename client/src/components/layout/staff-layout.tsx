@@ -206,9 +206,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     enabled: isAuthenticated,
   });
 
-  const hasTenant = !!user?.organizationId;
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
+  const hasTenant = !!effectiveOrgId;
   const { displayName: brandName, displayLogo: brandLogo, isWhitelabeled } = useBranding(effectiveOrgId);
+  const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
 
   const { data: branchesList } = useQuery<any[]>({
     queryKey: ["/api/branches"],
@@ -229,6 +230,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     },
     onSuccess: () => {
       queryClient.invalidateQueries();
+      setLocation("/staff");
     },
   });
 
@@ -277,15 +279,26 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     },
   ];
 
-  const navGroups = navGroupsRaw
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => {
-        const perms = item.permissions ?? (item.permission ? [item.permission] : []);
-        return hasAny(perms);
-      }),
-    }))
-    .filter((group) => group.items.length > 0);
+  const navGroups = isControlPlaneMode
+    ? [
+        {
+          title: "Control Plane",
+          items: [
+            { href: "/staff", label: "Dashboard", icon: Globe },
+            { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2 },
+            { href: "/staff/settings", label: "Settings", icon: Settings },
+          ],
+        },
+      ]
+    : navGroupsRaw
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => {
+            const perms = item.permissions ?? (item.permission ? [item.permission] : []);
+            return hasAny(perms);
+          }),
+        }))
+        .filter((group) => group.items.length > 0);
 
   const currentOrg = isPlatformOwner
     ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) || orgs[0] : undefined)
@@ -514,7 +527,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         <div className="flex-1 overflow-auto p-4 sm:p-6 md:p-8 relative">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent pointer-events-none -z-10" />
           <div className="max-w-6xl mx-auto relative z-0 min-w-0">
-            {isPlatformOwner && !user?.organizationId ? (
+            {isControlPlaneMode && !location.startsWith("/staff/settings") ? (
               <TenantPickerSplash
                 orgs={orgs || []}
                 onSelect={(id) => switchTenantMutation.mutate(id)}

@@ -108,7 +108,9 @@ if (enableCsrf) {
     ...limiterOpts,
     store: getRedisStore?.("auth"),
     windowMs: 15 * 60 * 1000,
-    max: 20,
+    // Dev workflows (OAuth retries, tenant switching, frequent reloads) can exceed
+    // strict auth limits quickly; keep production strict but relax in dev.
+    max: process.env.NODE_ENV === "production" ? 20 : 200,
     message: { message: "Too many authentication attempts, please try again later" },
   });
   app.use("/api/auth", authLimiter);

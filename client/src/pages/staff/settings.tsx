@@ -77,6 +77,7 @@ export default function StaffSettings() {
     const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
     if (t === "tenants" && canManageTenants) setActiveTab(t);
     else if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
+    else setActiveTab("branding");
   }, [search, canManageTenants]);
 
   const handleTabChange = (value: string) => {

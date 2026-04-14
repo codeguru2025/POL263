@@ -621,7 +621,10 @@ export class DatabaseStorage implements IStorage {
   }
   async getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]> {
     const lookupDb = orgId ? await getDbForOrg(orgId) : db;
-    const [user] = await lookupDb.select().from(users).where(eq(users.id, userId)).limit(1);
+    const [tenantOrSharedUser] = await lookupDb.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user =
+      tenantOrSharedUser ??
+      (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
     const effectiveOrgId = orgId ?? user?.organizationId;
     const roleRows = effectiveOrgId
       ? await (await getDbForOrg(effectiveOrgId))
@@ -667,7 +670,8 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (user?.email?.toLowerCase() === PLATFORM_SUPERUSER_EMAIL.toLowerCase()) {
-      const allPermsForOwner = await this.getPermissions();
+      const permissionsDb = effectiveOrgId ? await getDbForOrg(effectiveOrgId) : db;
+      const allPermsForOwner = await permissionsDb.select().from(permissions);
       for (const p of allPermsForOwner) permSet.add(p.name);
       permSet.add("create:tenant");
       permSet.add("delete:tenant");

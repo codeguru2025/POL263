@@ -512,13 +512,10 @@ export function setupAuth(app: Express) {
         }
       }
 
-      const orgId = user.organizationId ?? undefined;
+      const effectiveOrganizationId = getEffectiveOrgId(req, user);
+      const orgId = effectiveOrganizationId ?? undefined;
       const userRoles = orgId ? await storage.getUserRoles(user.id, orgId) : [];
-      const effectivePermissions = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-      const session = req.session as any;
-      const effectiveOrganizationId = user.isPlatformOwner
-        ? (session?.activeTenantId ?? user.organizationId)
-        : user.organizationId;
+      const effectivePermissions = await storage.getUserEffectivePermissions(user.id, effectiveOrganizationId);
 
       return res.json({
         user: { ...sanitizeUser(user), effectiveOrganizationId },
@@ -548,6 +545,14 @@ function sanitizeUser(user: any) {
   };
 }
 
+function getEffectiveOrgId(req: Request, user: any): string | null {
+  const session = req.session as any;
+  if (user?.isPlatformOwner) {
+    return (session?.activeTenantId ?? user.organizationId ?? null) as string | null;
+  }
+  return (user?.organizationId ?? null) as string | null;
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.isAuthenticated() || !req.user) {
     return res.status(401).json({ message: "Authentication required" });
@@ -562,7 +567,12 @@ export function requirePermission(...requiredPerms: string[]) {
     }
 
     const user = req.user as any;
-    const effectivePerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const effectiveOrgId = getEffectiveOrgId(req, user);
+    const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
+    if (effectiveOrgId) {
+      // Keep downstream handlers tenant-scoped even if they read user.organizationId directly.
+      user.organizationId = effectiveOrgId;
+    }
 
     const hasAll = requiredPerms.every((p) => effectivePerms.includes(p));
     if (!hasAll) {
@@ -586,7 +596,12 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
     }
 
     const user = req.user as any;
-    const effectivePerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const effectiveOrgId = getEffectiveOrgId(req, user);
+    const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
+    if (effectiveOrgId) {
+      // Keep downstream handlers tenant-scoped even if they read user.organizationId directly.
+      user.organizationId = effectiveOrgId;
+    }
 
     const hasAny = anyOfPerms.some((p) => effectivePerms.includes(p));
     if (!hasAny) {
@@ -605,11 +620,14 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
 
 export function requireTenantScope(req: Request, res: Response, next: NextFunction) {
   const user = req.user as any;
-  if (!user?.organizationId) {
+  const effectiveOrgId = getEffectiveOrgId(req, user);
+  if (!effectiveOrgId) {
     if (user?.isPlatformOwner) {
       return res.status(403).json({ message: "Select a tenant first", code: "NO_TENANT_SELECTED" });
     }
     return res.status(403).json({ message: "No tenant scope assigned" });
   }
+  // Keep downstream handlers tenant-scoped even if they read user.organizationId directly.
+  user.organizationId = effectiveOrgId;
   next();
 }

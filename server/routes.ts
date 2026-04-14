@@ -404,19 +404,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       return res.json({ activeTenantId: null });
     }
-    const org = await storage.getOrganization(tenantId);
-    if (!org) return res.status(404).json({ message: "Tenant not found" });
+    const [tenant] = await cpDb
+      .select({ id: cpTenants.id, name: cpTenants.name, isActive: cpTenants.isActive })
+      .from(cpTenants)
+      .where(eq(cpTenants.id, tenantId))
+      .limit(1);
+    if (!tenant || !tenant.isActive) return res.status(404).json({ message: "Tenant not found" });
     (req.session as any).activeTenantId = tenantId;
+    if (typeof (req.session as any).save === "function") {
+      await new Promise<void>((resolve, reject) => {
+        (req.session as any).save((err: Error | null) => (err ? reject(err) : resolve()));
+      });
+    }
     structuredLog("info", "Platform owner switched tenant", {
       userId: user.id,
       email: user.email,
       previousTenantId,
       newTenantId: tenantId,
-      tenantName: org.name,
+      tenantName: tenant.name,
       ip: req.ip,
     });
-    await auditLog(req, "SWITCH_TENANT", "Organization", tenantId, { previousTenantId }, { newTenantId: tenantId, tenantName: org.name }, tenantId);
-    return res.json({ activeTenantId: tenantId, tenantName: org.name });
+    await auditLog(req, "SWITCH_TENANT", "Organization", tenantId, { previousTenantId }, { newTenantId: tenantId, tenantName: tenant.name }, tenantId);
+    return res.json({ activeTenantId: tenantId, tenantName: tenant.name });
   });
 
   app.get("/api/platform/active-tenant", requireAuth, async (req, res) => {
@@ -426,8 +435,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const activeTenantId = (req.session as any)?.activeTenantId || user.organizationId || null;
     if (!activeTenantId) return res.json({ activeTenantId: null, tenant: null });
-    const org = await storage.getOrganization(activeTenantId);
-    return res.json({ activeTenantId, tenant: org || null });
+    const [tenant] = await cpDb
+      .select({ id: cpTenants.id, name: cpTenants.name, slug: cpTenants.slug, isActive: cpTenants.isActive })
+      .from(cpTenants)
+      .where(eq(cpTenants.id, activeTenantId))
+      .limit(1);
+    if (!tenant || !tenant.isActive) {
+      return res.json({ activeTenantId: null, tenant: null });
+    }
+    return res.json({ activeTenantId, tenant });
   });
 
   // ─── Organization / Tenant ──────────────────────────────────
