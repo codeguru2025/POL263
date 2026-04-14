@@ -1,4 +1,4 @@
-const CACHE_NAME = "pol263-v1";
+const CACHE_NAME = "pol263-v2";
 const PRECACHE_URLS = [
   "/",
   "/assets/logo.png",
@@ -73,14 +73,19 @@ self.addEventListener("fetch", (e) => {
         return res;
       })
       .catch(() =>
-        caches.match(req).then(
-          (cached) =>
-            cached ||
-            new Response("Offline", {
-              status: 503,
-              statusText: "Offline",
-            })
-        )
+        caches.match(req).then((cached) => {
+          if (cached) return cached;
+          // For SPA navigation requests fall back to the cached root shell
+          // so the app boots rather than showing a blank 503 page.
+          if (req.mode === "navigate" || req.destination === "document") {
+            return caches.match("/").then(
+              (shell) =>
+                shell ||
+                new Response("Offline", { status: 503, statusText: "Offline" })
+            );
+          }
+          return new Response("Offline", { status: 503, statusText: "Offline" });
+        })
       )
   );
 });
