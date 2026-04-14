@@ -9,7 +9,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import * as cpSchema from "@shared/control-plane-schema";
 import { structuredLog } from "./logger";
 
-const connectionString = (
+let connectionString = (
   process.env.CONTROL_PLANE_DATABASE_URL ||
   process.env.CONTROL_PLANE_DIRECT_URL
 )?.trim();
@@ -20,6 +20,13 @@ if (!connectionString) {
     "Get it from DigitalOcean → Databases → pol263-control-plane → Connection Details."
   );
 }
+
+// If we provide explicit ssl config, strip sslmode from URL so pg doesn't force
+// strict cert verification from connection-string parsing.
+connectionString = connectionString
+  .replace(/\?sslmode=[^&]*&?/gi, "?")
+  .replace(/&sslmode=[^&]*/gi, "")
+  .replace(/\?$/, "");
 
 export const cpPool = new pg.Pool({
   connectionString,
