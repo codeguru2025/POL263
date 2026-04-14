@@ -567,6 +567,9 @@ export function requirePermission(...requiredPerms: string[]) {
     }
 
     const user = req.user as any;
+    // Platform owners are superusers — they bypass all permission checks.
+    if (user.isPlatformOwner) return next();
+
     const effectiveOrgId = getEffectiveOrgId(req, user);
     const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
     if (effectiveOrgId) {
@@ -596,6 +599,9 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
     }
 
     const user = req.user as any;
+    // Platform owners are superusers — they bypass all permission checks.
+    if (user.isPlatformOwner) return next();
+
     const effectiveOrgId = getEffectiveOrgId(req, user);
     const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
     if (effectiveOrgId) {

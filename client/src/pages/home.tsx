@@ -123,7 +123,7 @@ export default function Home() {
         <ThemeSwitcher />
       </div>
       <div className="mb-14 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src={displayLogo} alt={displayName} className="h-20 w-20 mb-5 rounded-2xl object-contain" fetchPriority="high" />
+        <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-20 w-20 mb-5 rounded-2xl object-contain" fetchPriority="high" />
         <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">{displayName}</h1>
         <p className="text-muted-foreground text-lg font-medium mt-2">Insurance Management Platform</p>
       </div>

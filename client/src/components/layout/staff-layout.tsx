@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import {
   LayoutDashboard,
   Settings,
@@ -165,6 +166,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, roles, permissions, isAuthenticated, isPlatformOwner, isLoading, isError: authError, logout } = useAuth();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   // Close mobile sidebar when route changes
   useEffect(() => {
@@ -240,6 +242,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     onSuccess: () => {
       queryClient.invalidateQueries();
       setLocation("/staff");
+    },
+    onError: (err: any) => {
+      toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });
     },
   });
 

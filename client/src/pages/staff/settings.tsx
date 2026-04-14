@@ -228,8 +228,13 @@ export default function StaffSettings() {
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/organizations/${id}`);
     },
-    onSuccess: () => {
+    onSuccess: (_data, deletedId) => {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      // If the deleted tenant was the one we were actively managing, clear auth state
+      // so the layout reflects the owner is now in no-tenant (control-plane) mode.
+      if (deletedId === effectiveOrgId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      }
       setTenantDeleteId(null);
       toast({ title: "Tenant removed" });
     },
@@ -246,6 +251,9 @@ export default function StaffSettings() {
     onSuccess: () => {
       queryClient.invalidateQueries();
       setLocation("/staff");
+    },
+    onError: (err: any) => {
+      toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });
     },
   });
 

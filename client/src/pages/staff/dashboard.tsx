@@ -19,12 +19,15 @@ import {
   Heart,
   AlertTriangle,
   Filter,
+  Plus,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
 import { useState, useMemo } from "react";
 import {
   AreaChart,
@@ -122,6 +125,7 @@ export default function StaffDashboard() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { user, roles, permissions, isPlatformOwner } = useAuth();
+  const { toast } = useToast();
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
   const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
   const isAgent = roles.some((r) => r.name === "agent");
@@ -149,6 +153,9 @@ export default function StaffDashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries();
       setLocation("/staff");
+    },
+    onError: (err: any) => {
+      toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });
     },
   });
 
@@ -395,7 +402,13 @@ export default function StaffDashboard() {
               {cpLoading ? (
                 <div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
               ) : tenants.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No active tenants found.</p>
+                <div className="py-10 text-center space-y-4">
+                  <p className="text-sm text-muted-foreground">No tenants yet. Create your first tenant to get started.</p>
+                  <Button size="sm" onClick={() => setLocation("/staff/settings?tab=tenants")}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Create first tenant
+                  </Button>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {tenants.map((t) => (

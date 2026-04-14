@@ -396,6 +396,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const previousTenantId = (req.session as any)?.activeTenantId || null;
     if (!tenantId) {
       delete (req.session as any).activeTenantId;
+      await new Promise<void>((resolve, reject) => {
+        (req.session as any).save((err: Error | null) => (err ? reject(err) : resolve()));
+      });
       structuredLog("info", "Platform owner cleared active tenant", {
         userId: user.id,
         email: user.email,
@@ -542,7 +545,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const user = req.user as any;
       const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-      const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
+      const canManageTenants = user.isPlatformOwner || perms.includes("create:tenant") || perms.includes("delete:tenant");
       if (canManageTenants) {
         // Read the authoritative tenant list from the control plane so isolated
         // tenant DBs (e.g. Falakhe) also appear in the admin portal.
@@ -787,6 +790,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     if (isPlatformOwner && user.organizationId === id) {
       (req.session as any).activeTenantId = null;
+      await new Promise<void>((resolve, reject) => {
+        (req.session as any).save((err: Error | null) => (err ? reject(err) : resolve()));
+      });
     }
 
     await storage.updateOrganization(id, { name: org.name + " (deleted)" });
@@ -977,12 +983,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/roles/:id/permissions/:permId", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
     const user = req.user as any;
     await storage.addRolePermission(req.params.id as string, req.params.permId as string, user.organizationId);
+    await auditLog(req, "ADD_ROLE_PERMISSION", "Role", req.params.id as string, null, { roleId: req.params.id, permissionId: req.params.permId });
     return res.json({ ok: true });
   });
 
   app.delete("/api/roles/:id/permissions/:permId", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
     const user = req.user as any;
     await storage.removeRolePermission(req.params.id as string, req.params.permId as string, user.organizationId);
+    await auditLog(req, "REMOVE_ROLE_PERMISSION", "Role", req.params.id as string, { roleId: req.params.id, permissionId: req.params.permId }, null);
     return res.json({ ok: true });
   });
 
@@ -1333,6 +1341,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const parsed = insertBenefitCatalogItemSchema.parse({ ...req.body, organizationId: user.organizationId });
     const item = await storage.createBenefitCatalogItem(parsed);
+    await auditLog(req, "CREATE_BENEFIT_CATALOG_ITEM", "BenefitCatalogItem", item.id, null, item);
     return res.status(201).json(item);
   });
 
@@ -1353,6 +1362,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const parsed = insertBenefitBundleSchema.parse({ ...req.body, organizationId: user.organizationId });
     const bundle = await storage.createBenefitBundle(parsed);
+    await auditLog(req, "CREATE_BENEFIT_BUNDLE", "BenefitBundle", bundle.id, null, bundle);
     return res.status(201).json(bundle);
   });
 
@@ -1373,6 +1383,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const parsed = insertAddOnSchema.parse({ ...req.body, organizationId: user.organizationId });
     const addon = await storage.createAddOn(parsed);
+    await auditLog(req, "CREATE_ADD_ON", "AddOn", addon.id, null, addon);
     return res.status(201).json(addon);
   });
 
@@ -1393,6 +1404,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const parsed = insertAgeBandConfigSchema.parse({ ...req.body, organizationId: user.organizationId });
     const config = await storage.createAgeBandConfig(parsed);
+    await auditLog(req, "CREATE_AGE_BAND", "AgeBandConfig", config.id, null, config);
     return res.status(201).json(config);
   });
 
@@ -2276,6 +2288,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         idempotencyKey,
       });
       if (result.error) return res.status(400).json({ message: result.error });
+      await auditLog(req, "CREATE_PAYMENT_INTENT", "PaymentIntent", result.intent.id, null, result.intent);
       return res.status(201).json(result.intent);
     } catch (err) {
       structuredLog("error", "Staff create payment intent failed", { error: (err as Error).message });
@@ -2604,6 +2617,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }).catch((err) => {
       structuredLog("warn", "Month-end run update failed (run already saved)", { runId: run.id, error: (err as Error).message });
     });
+    await auditLog(req, "MONTH_END_RUN", "MonthEndRun", run.id, null, { runId: run.id, runNumber, receiptedCount: receipted, creditNoteCount: creditNotes, totalRows: rows.length, fileName: run.fileName });
     return res.status(201).json({ run: { ...run, receiptedCount: receipted, creditNoteCount: creditNotes, status: "completed" }, receiptedCount: receipted, creditNoteCount: creditNotes });
   });
 
