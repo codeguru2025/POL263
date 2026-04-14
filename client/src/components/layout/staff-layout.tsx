@@ -240,8 +240,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries();
-      setLocation("/staff");
+      window.location.href = "/staff/dashboard";
     },
     onError: (err: any) => {
       toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });

@@ -249,8 +249,7 @@ export default function StaffSettings() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries();
-      setLocation("/staff");
+      window.location.href = "/staff/dashboard";
     },
     onError: (err: any) => {
       toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });
@@ -637,8 +636,7 @@ export default function StaffSettings() {
                                   if (isPlatformOwner) {
                                     switchTenantMutation.mutate(org.id, {
                                       onSuccess: () => {
-                                        queryClient.invalidateQueries();
-                                        handleTabChange("branding");
+                                        window.location.href = "/staff/settings?tab=branding";
                                       },
                                     });
                                   } else {
