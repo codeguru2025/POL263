@@ -14,6 +14,8 @@ import { pool as defaultPool } from "./db";
 import { eq } from "drizzle-orm";
 import { organizations } from "@shared/schema";
 import { structuredLog } from "./logger";
+import { cpDb } from "./control-plane-db";
+import { tenantDatabases } from "@shared/control-plane-schema";
 
 const MAX_TENANT_POOLS = parseInt(process.env.MAX_TENANT_POOLS || "50", 10);
 
@@ -73,9 +75,26 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
     return cached;
   }
 
-  const { db } = await import("./db");
-  const [org] = await db.select({ databaseUrl: organizations.databaseUrl }).from(organizations).where(eq(organizations.id, orgId));
-  const url = org?.databaseUrl?.trim();
+  // Read routing config from the control plane (authoritative source).
+  // Falls back to the shared DB organizations table during the migration window.
+  let url: string | undefined;
+  try {
+    const [row] = await cpDb
+      .select({ databaseUrl: tenantDatabases.databaseUrl })
+      .from(tenantDatabases)
+      .where(eq(tenantDatabases.tenantId, orgId));
+    url = row?.databaseUrl?.trim() || undefined;
+  } catch {
+    // Control plane unreachable — fall back to shared DB lookup so the app
+    // keeps working during a control plane outage or before migration runs.
+    structuredLog("warn", "Control plane lookup failed, falling back to shared DB", { orgId });
+    const { db } = await import("./db");
+    const [org] = await db
+      .select({ databaseUrl: organizations.databaseUrl })
+      .from(organizations)
+      .where(eq(organizations.id, orgId));
+    url = org?.databaseUrl?.trim() || undefined;
+  }
   if (!url) {
     poolCache.set(orgId, defaultPool);
     poolLastAccess.set(orgId, Date.now());

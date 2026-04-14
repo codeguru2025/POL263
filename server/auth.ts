@@ -46,7 +46,7 @@ export function setupAuth(app: Express) {
       store: new PgSession({
         pool: pool as any,
         tableName: "sessions",
-        createTableIfMissing: true,
+        createTableIfMissing: false,
         pruneSessionInterval: 15 * 60,
       }),
       secret: sessionSecret,

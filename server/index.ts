@@ -195,6 +195,12 @@ if (enableCsrf) {
 
   setupAuth(app);
   setupClientAuth(app);
+
+  // Resolve tenant for every request. Must come after auth so session-based
+  // fallback (req.user.organizationId) is available.
+  const { tenantResolverMiddleware } = await import("./tenant-resolver");
+  app.use(tenantResolverMiddleware);
+
   await registerRoutes(httpServer, app);
 
   if (process.env.NODE_ENV === "production") {
