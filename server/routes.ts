@@ -2266,9 +2266,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const msg = err.errors.map((e: { path?: string[]; message?: string }) => `${e.path?.join(".") || "field"}: ${e.message}`).join("; ");
         return res.status(400).json({ message: msg || "Invalid payment data" });
       }
-      // Duplicate idempotency key (e.g. retry) — return 409 so client can treat as idempotent
-      if (err?.code === "23505" || (err?.message && String(err.message).includes("unique constraint") && String(err.message).includes("idempotency_key"))) {
-        return res.status(409).json({ message: "A payment with this idempotency key already exists. Duplicate request ignored." });
+      // Duplicate idempotency key only (not every 23505 — receipt number etc. must not map here)
+      const dupMsg = String(err?.message || "");
+      const dupDetail = String((err as { detail?: string })?.detail || "");
+      const dupConstraint = String((err as { constraint?: string })?.constraint || "");
+      const isIdempotencyDup =
+        err?.code === "23505" &&
+        (dupConstraint.toLowerCase().includes("idempotency") ||
+          dupMsg.includes("idempotency_key") ||
+          dupDetail.includes("idempotency_key"));
+      if (isIdempotencyDup) {
+        return res.status(409).json({
+          code: "duplicate_payment_request",
+          message:
+            "This payment was already submitted. It was not processed twice. Check payments or receipts for the existing entry, or wait a moment and try again if you do not see it yet.",
+        });
       }
       structuredLog("error", "POST /api/payments failed", { error: err?.message || String(err), stack: err?.stack });
       return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Payment failed. Please try again." : (err?.message || "Payment failed") });

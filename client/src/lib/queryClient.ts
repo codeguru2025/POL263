@@ -17,7 +17,19 @@ export function getCsrfToken(): string | null {
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    try {
+      const j = JSON.parse(text) as { message?: string };
+      if (typeof j?.message === "string" && j.message.trim()) {
+        throw new Error(j.message.trim());
+      }
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        // not JSON — fall through to generic error below
+      } else {
+        throw e;
+      }
+    }
+    throw new Error(text.trim() || res.statusText || `Request failed (${res.status})`);
   }
 }
 
