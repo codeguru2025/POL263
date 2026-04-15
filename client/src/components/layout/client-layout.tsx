@@ -184,9 +184,9 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
       <header className="h-14 sm:h-16 border-b bg-card flex items-center justify-between px-4 sm:px-6 shrink-0 sticky top-0 z-10">
         <div className="flex items-center gap-2 min-w-0">
           <img
-            src={tenant?.logoUrl ? resolveAssetUrl(tenant.logoUrl) : getDefaultLogoUrl()}
+            src={resolveAssetUrl(tenant?.logoUrl?.trim() ? tenant.logoUrl : getDefaultLogoUrl())}
             alt={tenant?.name || "Logo"}
-            className="h-8 w-8 sm:h-9 sm:w-9 rounded-lg object-contain shrink-0"
+            className="h-8 w-auto max-w-[180px] sm:h-9 sm:max-w-[220px] rounded-md object-contain object-left shrink-0"
             loading="lazy"
           />
           {tenant?.name && (
@@ -226,8 +226,8 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
             const isActive = location === item.href;
             return (
               <Link key={item.href} href={item.href}>
-                <div className={`py-3 sm:py-4 px-2 border-b-2 transition-colors cursor-pointer text-xs sm:text-sm font-medium flex items-center gap-1.5 sm:gap-2 whitespace-nowrap ${isActive ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
-                  <item.icon className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
+                <div className={`min-h-11 py-3 sm:py-4 px-3 border-b-2 transition-colors cursor-pointer text-xs sm:text-sm font-medium flex items-center gap-2 sm:gap-2 whitespace-nowrap ${isActive ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
+                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 shrink-0" />
                   {item.label}
                 </div>
               </Link>
@@ -236,8 +236,8 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
         </div>
       </div>
 
-      <main className="flex-1 overflow-auto p-4 sm:p-6">
-        <div className="max-w-5xl mx-auto min-w-0">
+      <main className="flex-1 overflow-auto px-4 py-6 sm:px-8 sm:py-10 bg-gradient-to-b from-primary/[0.03] to-background">
+        <div className="max-w-5xl mx-auto min-w-0 space-y-6">
           {children}
         </div>
       </main>

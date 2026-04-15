@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2 } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
 import { useSearch } from "wouter";
@@ -29,6 +29,8 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { Separator } from "@/components/ui/separator";
+import { PageHeader, CardSection, FilterBar, EmptyState, StatusBadge } from "@/components/ds";
 
 function readEstatementDateRange() {
   const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement | null)?.value;
@@ -479,6 +481,18 @@ export default function StaffPolicies() {
       if (!res.ok) return [];
       const data = await res.json();
       return Array.isArray(data) ? data : [];
+    },
+  });
+
+  const { data: policyHolderClient, isLoading: policyHolderLoading } = useQuery<any>({
+    queryKey: ["/api/clients", displayPolicy?.clientId, "policy-detail-holder"],
+    enabled: !!displayPolicy?.clientId && showDetailView,
+    queryFn: async () => {
+      const cid = displayPolicy!.clientId as string;
+      const res = await fetch(getApiBase() + `/api/clients/${cid}`, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return null;
+      if (!res.ok) return null;
+      return res.json();
     },
   });
 
@@ -941,6 +955,14 @@ export default function StaffPolicies() {
     return map;
   }, [clients]);
 
+  const principalPhone = useMemo(() => {
+    const cid = displayPolicy?.clientId;
+    if (!cid) return "";
+    const fromDetail = String(policyHolderClient?.phone || "").trim();
+    const fromList = String(clientMap[cid]?.phone || "").trim();
+    return fromDetail || fromList;
+  }, [displayPolicy?.clientId, policyHolderClient, clientMap]);
+
   const getClientName = (clientId: string) => {
     const c = clientMap[clientId];
     return c ? `${c.firstName} ${c.lastName}` : clientId?.slice(0, 8) + "...";
@@ -998,236 +1020,266 @@ export default function StaffPolicies() {
     return (
       <StaffLayout>
         <div className="space-y-6 min-w-0">
-          <div className="space-y-4 min-w-0">
-            <div className="flex items-start gap-3 min-w-0">
-              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => { setShowDetailView(false); setSelectedPolicy(null); }} data-testid="btn-back-policies">
-                <ChevronLeft className="h-5 w-5" />
-              </Button>
-              <div className="flex-1 min-w-0">
-                <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight break-words" data-testid="text-policy-number">{displayPolicy.policyNumber}</h1>
-                <p className="text-muted-foreground mt-1 text-sm sm:text-base">Policy details, members, and payment history</p>
+          <section
+            className="rounded-2xl border border-border/60 bg-card/90 shadow-[var(--shadow-card,0_1px_2px_rgb(0_0_0/0.05))] px-4 py-5 sm:px-6 sm:py-6 space-y-5"
+            aria-label="Policy summary"
+          >
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between min-w-0">
+              <div className="flex items-start gap-3 min-w-0">
+                <Button variant="ghost" size="icon" className="shrink-0 mt-0.5" onClick={() => { setShowDetailView(false); setSelectedPolicy(null); }} data-testid="btn-back-policies">
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Policy</p>
+                  <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight break-words tabular-nums" data-testid="text-policy-number">{displayPolicy.policyNumber}</h1>
+                  <p className="text-muted-foreground mt-1 text-sm leading-relaxed max-w-2xl">Holder, cover, lifecycle, and ledger — structured for quick scanning.</p>
+                </div>
               </div>
-              <Badge variant="outline" className={`font-medium text-sm px-3 py-1 shrink-0 ${getStatusColor(displayPolicy.status)}`} data-testid="badge-policy-status">
-                {STATUS_LABELS[displayPolicy.status] || displayPolicy.status}
-              </Badge>
+              <div className="flex flex-wrap items-center gap-2 shrink-0" data-testid="badge-policy-status">
+                <StatusBadge status={displayPolicy.status} />
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 min-w-0">
-              {!isAgent && allowedTransitions.length > 0 && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="gap-2" data-testid="btn-transition-policy">
-                      <ArrowRightLeft className="h-4 w-4" /> Transition
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent>
-                    {allowedTransitions.map((t) => (
-                      <DropdownMenuItem key={t} onClick={() => { setTransitionTarget(t); setTransitionReason(""); setShowTransitionDialog(true); }} data-testid={`menu-transition-${t}`}>
-                        → {STATUS_LABELS[t] || t}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-              {canWritePolicy && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                {(canWriteFinance || isAgent) && (
+                  <Button
+                    className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
+                    onClick={() => {
+                      setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
+                      setInPolicyReceiptCurrency(displayPolicy.currency || "USD");
+                      setInPolicyReceiptRef(principalPhone);
+                      setInPolicyReceiptNotes("");
+                      setShowInPolicyReceiptDialog(true);
+                    }}
+                    data-testid="btn-receipt-policy"
+                  >
+                    <Receipt className="h-4 w-4" /> Receipt payment
+                  </Button>
+                )}
+                <Button variant="outline" className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => openEditDialog(displayPolicy)} data-testid="btn-edit-policy">
+                  <Pencil className="h-4 w-4" /> Edit
+                </Button>
                 <Button
                   variant="outline"
-                  className="gap-2"
-                  onClick={() => openUpgradeDialog(displayPolicy)}
-                  data-testid="btn-upgrade-policy"
-                >
-                  <ArrowRightLeft className="h-4 w-4" /> Upgrade Product
-                </Button>
-              )}
-              <Select value={docLang} onValueChange={setDocLang}>
-                <SelectTrigger className="w-[140px] h-9">
-                  <SelectValue placeholder="Language" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(languages || [{ code: "en", name: "English" }]).map((l) => (
-                    <SelectItem key={l.code} value={l.code}>{l.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={() => {
-                  setPolicyDocViewerUrl(staffPolicyDocumentUrl(selectedPolicy.id, docLang));
-                  setShowPolicyDocViewer(true);
-                }}
-                data-testid="btn-view-policy-doc"
-              >
-                <Eye className="h-4 w-4" /> Policy document
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                title="Print policy document"
-                onClick={() => printDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang))}
-                data-testid="btn-print-policy-doc"
-              >
-                <Printer className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                title="Share policy document"
-                onClick={() => shareDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang), `Policy-${displayPolicy.policyNumber}`)}
-              >
-                <Share2 className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={() => {
-                  setEstatementViewerUrl(staffEstatementUrl(selectedPolicy.id));
-                  setShowEstatementViewer(true);
-                }}
-                data-testid="btn-view-estatement-toolbar"
-              >
-                <FileText className="h-4 w-4" /> E-Statement
-              </Button>
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={() => openEditDialog(displayPolicy)}
-                data-testid="btn-edit-policy"
-              >
-                <Pencil className="h-4 w-4" /> Edit
-              </Button>
-              {canDeletePolicy && (
-                <Button
-                  variant="destructive"
-                  className="gap-2"
-                  onClick={() => setConfirmDeletePolicy(true)}
-                  data-testid="btn-delete-policy"
-                >
-                  <Trash2 className="h-4 w-4" /> Delete
-                </Button>
-              )}
-              {(canWriteFinance || isAgent) && (
-                <Button
-                  className="gap-2"
+                  className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
                   onClick={() => {
-                    setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
-                    setInPolicyReceiptCurrency(displayPolicy.currency || "USD");
-                    const clientPhone = displayPolicy.clientId ? (clientMap[displayPolicy.clientId]?.phone || "").trim() : "";
-                    setInPolicyReceiptRef(clientPhone);
-                    setInPolicyReceiptNotes("");
-                    setShowInPolicyReceiptDialog(true);
+                    setPolicyDocViewerUrl(staffPolicyDocumentUrl(selectedPolicy.id, docLang));
+                    setShowPolicyDocViewer(true);
                   }}
-                  data-testid="btn-receipt-policy"
+                  data-testid="btn-view-policy-doc"
                 >
-                  <Receipt className="h-4 w-4" /> Receipt Payment
+                  <FileText className="h-4 w-4" /> Policy document
                 </Button>
-              )}
+                <Button
+                  variant="outline"
+                  className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
+                  onClick={() => {
+                    setEstatementViewerUrl(staffEstatementUrl(selectedPolicy.id));
+                    setShowEstatementViewer(true);
+                  }}
+                  data-testid="btn-view-estatement-toolbar"
+                >
+                  <FileText className="h-4 w-4" /> E-Statement
+                </Button>
+              </div>
+              <div className="h-px bg-border/60" aria-hidden />
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                {!isAgent && allowedTransitions.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="gap-2" data-testid="btn-transition-policy">
+                        <ArrowRightLeft className="h-4 w-4" /> Transition
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent>
+                      {allowedTransitions.map((t) => (
+                        <DropdownMenuItem key={t} onClick={() => { setTransitionTarget(t); setTransitionReason(""); setShowTransitionDialog(true); }} data-testid={`menu-transition-${t}`}>
+                          → {STATUS_LABELS[t] || t}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                {canWritePolicy && (
+                  <Button variant="outline" size="sm" className="gap-2" onClick={() => openUpgradeDialog(displayPolicy)} data-testid="btn-upgrade-policy">
+                    <ArrowRightLeft className="h-4 w-4" /> Upgrade product
+                  </Button>
+                )}
+                <Select value={docLang} onValueChange={setDocLang}>
+                  <SelectTrigger className="w-[140px] h-9">
+                    <SelectValue placeholder="Language" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(languages || [{ code: "en", name: "English" }]).map((l) => (
+                      <SelectItem key={l.code} value={l.code}>{l.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" title="Print policy document" onClick={() => printDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang))} data-testid="btn-print-policy-doc">
+                  <Printer className="h-4 w-4" />
+                </Button>
+                <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" title="Share policy document" onClick={() => shareDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang), `Policy-${displayPolicy.policyNumber}`)}>
+                  <Share2 className="h-4 w-4" />
+                </Button>
+                {canDeletePolicy && (
+                  <Button variant="destructive" size="sm" className="gap-2" onClick={() => setConfirmDeletePolicy(true)} data-testid="btn-delete-policy">
+                    <Trash2 className="h-4 w-4" /> Delete
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          </section>
 
-          <Card className="shadow-sm border-border/60">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2"><CalendarDays className="h-4 w-4 text-primary" /> Policy Summary</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-4 text-sm">
-                <div>
-                  <p className="text-muted-foreground text-xs">Premium</p>
-                  <p className="text-lg font-bold" data-testid="text-premium-amount">{displayPolicy.currency} {Number(displayPolicy.premiumAmount).toFixed(2)}</p>
-                  <p className="text-xs text-muted-foreground capitalize">{displayPolicy.paymentSchedule}</p>
+          <CardSection
+            title="Policy holder (principal)"
+            description="Contact and identity for the main insured person linked to this policy."
+            icon={User}
+          >
+              {!displayPolicy.clientId ? (
+                <p className="text-sm text-muted-foreground">No client is linked to this policy.</p>
+              ) : policyHolderLoading ? (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-16 w-full" />
                 </div>
-                {displayPolicy.balance != null && (
-                  <div>
-                    <p className="text-muted-foreground text-xs">Balance</p>
-                    <p className={`text-lg font-bold ${Number(displayPolicy.balance) > 0 ? "text-emerald-600" : Number(displayPolicy.balance) < 0 ? "text-destructive" : ""}`} data-testid="text-balance">
-                      {displayPolicy.currency} {Number(displayPolicy.balance).toFixed(2)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {Number(displayPolicy.balance) > 0 ? "Advance" : Number(displayPolicy.balance) < 0 ? "Arrears" : "Up to date"}
+              ) : policyHolderClient ? (
+                <>
+                  <div className="mb-5">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Full name</p>
+                    <p className="text-xl font-semibold tracking-tight break-words" data-testid="text-policy-client">
+                      {[policyHolderClient.title, policyHolderClient.firstName, policyHolderClient.lastName].filter(Boolean).join(" ")}
                     </p>
                   </div>
-                )}
-                {displayPolicy.totalPaid != null && (
-                  <div>
-                    <p className="text-muted-foreground text-xs">Total Paid</p>
-                    <p className="text-lg font-bold">{displayPolicy.currency} {Number(displayPolicy.totalPaid).toFixed(2)}</p>
-                    <p className="text-xs text-muted-foreground">{displayPolicy.periodsElapsed ?? 0} period{(displayPolicy.periodsElapsed ?? 0) !== 1 ? "s" : ""} elapsed</p>
+                  <Separator className="mb-5" />
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-5 text-sm">
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-muted-foreground text-xs flex items-center gap-1.5">
+                        <Phone className="h-3.5 w-3.5 shrink-0" />
+                        Phone
+                      </p>
+                      {policyHolderClient.phone ? (
+                        <a
+                          className="font-medium text-primary hover:underline break-all"
+                          href={`tel:${String(policyHolderClient.phone).replace(/\s+/g, "")}`}
+                          data-testid="text-policy-holder-phone"
+                        >
+                          {policyHolderClient.phone}
+                        </a>
+                      ) : (
+                        <p className="font-medium text-muted-foreground">Not on file</p>
+                      )}
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-muted-foreground text-xs flex items-center gap-1.5">
+                        <Mail className="h-3.5 w-3.5 shrink-0" />
+                        Email
+                      </p>
+                      {policyHolderClient.email ? (
+                        <a className="font-medium text-primary hover:underline break-all" href={`mailto:${policyHolderClient.email}`}>
+                          {policyHolderClient.email}
+                        </a>
+                      ) : (
+                        <p className="font-medium text-muted-foreground">Not on file</p>
+                      )}
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-muted-foreground text-xs flex items-center gap-1.5">
+                        <IdCard className="h-3.5 w-3.5 shrink-0" />
+                        National ID
+                      </p>
+                      <p className="font-medium font-mono break-all">{policyHolderClient.nationalId || "—"}</p>
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-muted-foreground text-xs">Date of birth</p>
+                      <p className="font-medium">
+                        {policyHolderClient.dateOfBirth
+                          ? new Date(policyHolderClient.dateOfBirth).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" })
+                          : "—"}
+                      </p>
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-muted-foreground text-xs">Gender</p>
+                      <p className="font-medium capitalize">{policyHolderClient.gender || "—"}</p>
+                    </div>
+                    {policyHolderClient.maritalStatus ? (
+                      <div className="min-w-0 space-y-1">
+                        <p className="text-muted-foreground text-xs">Marital status</p>
+                        <p className="font-medium capitalize">{policyHolderClient.maritalStatus}</p>
+                      </div>
+                    ) : null}
+                    {policyHolderClient.address ? (
+                      <div className="min-w-0 space-y-1 sm:col-span-2 lg:col-span-3">
+                        <p className="text-muted-foreground text-xs flex items-center gap-1.5">
+                          <MapPin className="h-3.5 w-3.5 shrink-0" />
+                          Address
+                        </p>
+                        <p className="font-medium whitespace-pre-wrap break-words">{policyHolderClient.address}</p>
+                      </div>
+                    ) : null}
+                    {policyHolderClient.location ? (
+                      <div className="min-w-0 space-y-1">
+                        <p className="text-muted-foreground text-xs">Location / area</p>
+                        <p className="font-medium break-words">{policyHolderClient.location}</p>
+                      </div>
+                    ) : null}
+                    {policyHolderClient.preferredCommMethod ? (
+                      <div className="min-w-0 space-y-1">
+                        <p className="text-muted-foreground text-xs">Preferred contact</p>
+                        <p className="font-medium capitalize">{policyHolderClient.preferredCommMethod}</p>
+                      </div>
+                    ) : null}
                   </div>
-                )}
-                <div>
-                  <p className="text-muted-foreground text-xs">Client</p>
-                  <p className="font-semibold" data-testid="text-policy-client">{getClientName(displayPolicy.clientId)}</p>
+                </>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">Could not load full client details (check access to this client).</p>
+                  <p className="font-medium" data-testid="text-policy-client">{getClientName(displayPolicy.clientId)}</p>
                 </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Product</p>
-                  <p className="font-semibold">{displayPolicy.productName || "—"}</p>
-                  {displayPolicy.productVersionLabel && <p className="text-xs text-muted-foreground">{displayPolicy.productVersionLabel}</p>}
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Capture Date</p>
-                  <p className="font-semibold">{displayPolicy.createdAt ? new Date(displayPolicy.createdAt).toLocaleDateString() : "—"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Effective Date</p>
-                  <p className="font-semibold" data-testid="text-effective-date">{displayPolicy.effectiveDate || "Not set"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Inception Date</p>
-                  <p className="font-semibold">{displayPolicy.inceptionDate || "Not set"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Waiting Period</p>
-                  {displayPolicy.waitingPeriodEndDate ? (() => {
-                    const endDate = new Date(displayPolicy.waitingPeriodEndDate);
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
-                    endDate.setHours(0, 0, 0, 0);
-                    const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                    return daysRemaining > 0 ? (
-                      <p className="font-semibold text-amber-600">{daysRemaining} days remaining</p>
-                    ) : (
-                      <p className="font-semibold text-emerald-600">Completed</p>
-                    );
-                  })() : (
-                    <p className="font-semibold">{displayPolicy.waitingPeriodDays != null ? `${displayPolicy.waitingPeriodDays} days` : "—"}</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Waiting Period End</p>
-                  <p className="font-semibold">{displayPolicy.waitingPeriodEndDate ? new Date(displayPolicy.waitingPeriodEndDate).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" }) : "—"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Grace Period</p>
-                  {displayPolicy.graceEndDate ? (() => {
-                    const endDate = new Date(displayPolicy.graceEndDate);
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
-                    endDate.setHours(0, 0, 0, 0);
-                    const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                    return daysRemaining > 0 ? (
-                      <p className="font-semibold text-amber-600">{daysRemaining} days remaining</p>
-                    ) : (
-                      <p className="font-semibold text-emerald-600">Completed</p>
-                    );
-                  })() : (
-                    <p className="font-semibold">—</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Claimability</p>
-                  <Badge variant="outline" className={displayPolicy.claimable ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}>
-                    {displayPolicy.claimable ? "Claimable" : "Not claimable"}
-                  </Badge>
-                  {displayPolicy.claimableReason && <p className="text-xs text-muted-foreground mt-1">{displayPolicy.claimableReason}</p>}
-                </div>
-                {displayPolicy.clientActivationCode && (
+              )}
+          </CardSection>
+
+          <CardSection title="Cover & product" description="Plan version, claims gate, and client portal activation when applicable." icon={ShieldCheck}>
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Product</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
                   <div>
-                    <p className="text-muted-foreground text-xs">Activation Code</p>
-                    <div className="flex items-center gap-2">
-                      <p className="font-mono font-bold text-primary" data-testid="text-activation-code">{displayPolicy.clientActivationCode}</p>
+                    <p className="text-muted-foreground text-xs">Plan</p>
+                    <p className="font-semibold">{displayPolicy.productName || "—"}</p>
+                    {displayPolicy.productVersionLabel && <p className="text-xs text-muted-foreground mt-0.5">{displayPolicy.productVersionLabel}</p>}
+                  </div>
+                </div>
+              </div>
+
+              <Separator className="my-6" />
+
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Claims</h3>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-6">
+                  <div>
+                    <p className="text-muted-foreground text-xs mb-1">Eligibility</p>
+                    <Badge variant="outline" className={displayPolicy.claimable ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}>
+                      {displayPolicy.claimable ? "Claimable" : "Not claimable"}
+                    </Badge>
+                  </div>
+                  {displayPolicy.claimableReason ? (
+                    <p className="text-sm text-muted-foreground flex-1 leading-relaxed">{displayPolicy.claimableReason}</p>
+                  ) : null}
+                </div>
+              </div>
+
+              {displayPolicy.clientActivationCode ? (
+                <>
+                  <Separator className="my-6" />
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Client portal</h3>
+                    <p className="text-muted-foreground text-xs mb-2">Activation code (client has not claimed their portal account yet)</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-mono font-bold text-primary text-lg tabular-nums" data-testid="text-activation-code">{displayPolicy.clientActivationCode}</p>
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-6 px-2 text-xs"
+                        className="h-8"
                         onClick={() => {
                           navigator.clipboard.writeText(displayPolicy.clientActivationCode);
                           toast({ title: "Copied", description: "Activation code copied to clipboard." });
@@ -1236,23 +1288,105 @@ export default function StaffPolicies() {
                         Copy
                       </Button>
                     </div>
-                    <p className="text-[10px] text-muted-foreground">Client has not yet claimed their portal account.</p>
                   </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                </>
+              ) : null}
+          </CardSection>
 
-          <Card className="shadow-sm border-border/60">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base flex items-center gap-2"><CreditCard className="h-4 w-4 text-primary" /> Automatic mobile payments</CardTitle>
-                <Button variant="outline" size="sm" onClick={openPaymentMethodDialog} data-testid="btn-edit-payment-method">
-                  <Pencil className="h-4 w-4 mr-2" /> Edit
-                </Button>
+          <CardSection title="Dates & lifecycle" description="Capture, effective dates, waiting and grace windows." icon={CalendarDays}>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-4 text-sm">
+                  <div>
+                    <p className="text-muted-foreground text-xs">Capture date</p>
+                    <p className="font-semibold tabular-nums">{displayPolicy.createdAt ? new Date(displayPolicy.createdAt).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" }) : "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Effective date</p>
+                    <p className="font-semibold tabular-nums" data-testid="text-effective-date">{displayPolicy.effectiveDate || "Not set"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Inception date</p>
+                    <p className="font-semibold tabular-nums">{displayPolicy.inceptionDate || "Not set"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Waiting period</p>
+                    {displayPolicy.waitingPeriodEndDate ? (() => {
+                      const endDate = new Date(displayPolicy.waitingPeriodEndDate);
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      endDate.setHours(0, 0, 0, 0);
+                      const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                      return daysRemaining > 0 ? (
+                        <p className="font-semibold text-amber-600">{daysRemaining} days left</p>
+                      ) : (
+                        <p className="font-semibold text-emerald-600">Completed</p>
+                      );
+                    })() : (
+                      <p className="font-semibold">{displayPolicy.waitingPeriodDays != null ? `${displayPolicy.waitingPeriodDays} days (product rule)` : "—"}</p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Waiting period ends</p>
+                    <p className="font-semibold tabular-nums">{displayPolicy.waitingPeriodEndDate ? new Date(displayPolicy.waitingPeriodEndDate).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" }) : "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Grace period</p>
+                    {displayPolicy.graceEndDate ? (() => {
+                      const endDate = new Date(displayPolicy.graceEndDate);
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      endDate.setHours(0, 0, 0, 0);
+                      const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                      return daysRemaining > 0 ? (
+                        <p className="font-semibold text-amber-600">{daysRemaining} days left</p>
+                      ) : (
+                        <p className="font-semibold text-emerald-600">Completed</p>
+                      );
+                    })() : (
+                      <p className="font-semibold">—</p>
+                    )}
+                  </div>
+                </div>
+          </CardSection>
+
+          <CardSection title="Financial position" description="Premium schedule, balance, and cumulative receipts." icon={CreditCard}>
+              <div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-4 text-sm">
+                  <div>
+                    <p className="text-muted-foreground text-xs">Premium</p>
+                    <p className="text-lg font-bold tabular-nums" data-testid="text-premium-amount">{displayPolicy.currency} {Number(displayPolicy.premiumAmount).toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{displayPolicy.paymentSchedule}</p>
+                  </div>
+                  {displayPolicy.balance != null && (
+                    <div>
+                      <p className="text-muted-foreground text-xs">Balance</p>
+                      <p className={`text-lg font-bold tabular-nums ${Number(displayPolicy.balance) > 0 ? "text-emerald-600" : Number(displayPolicy.balance) < 0 ? "text-destructive" : ""}`} data-testid="text-balance">
+                        {displayPolicy.currency} {Number(displayPolicy.balance).toFixed(2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {Number(displayPolicy.balance) > 0 ? "Advance" : Number(displayPolicy.balance) < 0 ? "Arrears" : "Up to date"}
+                      </p>
+                    </div>
+                  )}
+                  {displayPolicy.totalPaid != null && (
+                    <div>
+                      <p className="text-muted-foreground text-xs">Total paid</p>
+                      <p className="text-lg font-bold tabular-nums">{displayPolicy.currency} {Number(displayPolicy.totalPaid).toFixed(2)}</p>
+                      <p className="text-xs text-muted-foreground">{displayPolicy.periodsElapsed ?? 0} period{(displayPolicy.periodsElapsed ?? 0) !== 1 ? "s" : ""} elapsed</p>
+                    </div>
+                  )}
+                </div>
               </div>
-            </CardHeader>
-            <CardContent>
+          </CardSection>
+
+          <CardSection
+            title="Automatic mobile payments"
+            icon={CreditCard}
+            headerRight={(
+              <Button variant="outline" size="sm" onClick={openPaymentMethodDialog} data-testid="btn-edit-payment-method">
+                <Pencil className="h-4 w-4 mr-2" /> Edit
+              </Button>
+            )}
+          >
               {(() => {
                 const current = (clientPaymentMethods || []).find((m: any) => m.isDefault && m.isActive) || (clientPaymentMethods || [])[0];
                 if (!current) return <p className="text-sm text-muted-foreground">No saved mobile wallet. Add one to enable automatic collection reminders (the client confirms with their PIN on their phone).</p>;
@@ -1266,17 +1400,14 @@ export default function StaffPolicies() {
                 }
                 return <p className="text-sm">{(current.provider || "mobile").toUpperCase()} · {current.mobileNumber || "—"}</p>;
               })()}
-            </CardContent>
-          </Card>
+          </CardSection>
 
-          <Card className="shadow-sm border-border/60">
-            <CardHeader>
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div>
-                  <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-primary" /> Policy Members</CardTitle>
-                  <CardDescription>All lives covered (policy holder + dependants). Filter by age band.</CardDescription>
-                </div>
-                <div className="flex gap-2 flex-wrap items-center">
+          <CardSection
+            title="Policy members"
+            description="All lives covered (policy holder + dependants). Filter by age band."
+            icon={Users}
+            headerRight={(
+              <>
                   <Select value={membersAgeFilter} onValueChange={(v: "all" | "adult" | "child") => setMembersAgeFilter(v)}>
                     <SelectTrigger className="w-[140px] h-8">
                       <SelectValue placeholder="Age band" />
@@ -1308,10 +1439,10 @@ export default function StaffPolicies() {
                   >
                     <UserPlus className="h-3.5 w-3.5" /> Add Dependent
                   </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
+              </>
+            )}
+            flush
+          >
               {membersLoading ? (
                 <div className="p-6 space-y-2">
                   <Skeleton className="h-10 w-full" />
@@ -1325,18 +1456,19 @@ export default function StaffPolicies() {
                 return filtered.length > 0 ? (
                 <div className="overflow-x-auto">
                 <Table>
-                  <TableHeader className="bg-muted/50">
+                  <TableHeader className="bg-muted/50 sticky top-0 z-[1] shadow-sm">
                     <TableRow>
                       <TableHead className="pl-6">Member</TableHead>
                       <TableHead>Relationship</TableHead>
+                      <TableHead>Phone</TableHead>
                       <TableHead>National ID</TableHead>
                       <TableHead>DOB</TableHead>
                       <TableHead>Age</TableHead>
                       <TableHead>Gender</TableHead>
                       <TableHead>Capture Date</TableHead>
                       <TableHead>Inception</TableHead>
-                      <TableHead>Cover Date</TableHead>
-                      <TableHead>Waiting</TableHead>
+                      <TableHead>Cover starts</TableHead>
+                      <TableHead>Waiting period</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Claimable</TableHead>
                     </TableRow>
@@ -1351,6 +1483,15 @@ export default function StaffPolicies() {
                         <TableCell>
                           <Badge variant="outline">{m.relationship || m.role}</Badge>
                         </TableCell>
+                        <TableCell className="text-sm whitespace-nowrap">
+                          {(m.role === "policy_holder" || m.role === "principal") && policyHolderClient?.phone ? (
+                            <a className="text-primary hover:underline font-medium" href={`tel:${String(policyHolderClient.phone).replace(/\s+/g, "")}`}>
+                              {policyHolderClient.phone}
+                            </a>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
                         <TableCell className="font-mono text-sm">{m.nationalId || "—"}</TableCell>
                         <TableCell className="text-sm whitespace-nowrap">{m.dateOfBirth || "—"}</TableCell>
                         <TableCell className="text-sm">{m.age != null ? m.age : "—"}</TableCell>
@@ -1360,30 +1501,37 @@ export default function StaffPolicies() {
                         <TableCell className="text-sm whitespace-nowrap">
                           {m.coverDate || "—"}
                         </TableCell>
-                        <TableCell className="text-sm">
-                          {m.waitingPeriodEndDate ? (() => {
-                            const end = new Date(m.waitingPeriodEndDate);
-                            const now = new Date(); now.setHours(0,0,0,0); end.setHours(0,0,0,0);
+                        <TableCell className="text-sm align-top min-w-[140px]">
+                          {(() => {
+                            const waitEnd = m.waitingPeriodEndDate || m.coverDate;
+                            if (!waitEnd) {
+                              return m.waitingPeriodDays != null ? (
+                                <span className="text-xs text-muted-foreground">Rule: {m.waitingPeriodDays} days (no start date)</span>
+                              ) : "—";
+                            }
+                            const end = new Date(waitEnd);
+                            if (isNaN(end.getTime())) return "—";
+                            const now = new Date();
+                            now.setHours(0, 0, 0, 0);
+                            end.setHours(0, 0, 0, 0);
                             const d = Math.ceil((end.getTime() - now.getTime()) / 86400000);
-                            return d > 0 ? <span className="text-xs text-amber-600">{d}d left</span> : <span className="text-xs text-emerald-600">Done</span>;
-                          })() : m.waitingPeriodDays != null ? <span className="text-xs">{m.waitingPeriodDays}d</span> : "—"}
+                            return (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-xs text-muted-foreground">Ends</span>
+                                <span className="font-medium whitespace-nowrap">
+                                  {end.toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" })}
+                                </span>
+                                {d > 0 ? (
+                                  <span className="text-xs font-semibold text-amber-700">{d} day{d !== 1 ? "s" : ""} remaining</span>
+                                ) : (
+                                  <span className="text-xs font-semibold text-emerald-700">Completed</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={
-                            m.effectiveStatus === "active" ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" :
-                            m.effectiveStatus === "grace" ? "bg-amber-500/15 text-amber-700 border-amber-200" :
-                            m.effectiveStatus === "lapsed" ? "bg-red-500/15 text-red-700 border-red-200" :
-                            m.effectiveStatus === "cancelled" ? "bg-gray-500/15 text-gray-600 border-gray-200" :
-                            m.effectiveStatus === "removed" ? "bg-gray-500/15 text-gray-600 border-gray-200" :
-                            "bg-blue-500/15 text-blue-700 border-blue-200"
-                          }>
-                            {m.effectiveStatus === "active" ? "Active" :
-                             m.effectiveStatus === "grace" ? "Grace" :
-                             m.effectiveStatus === "lapsed" ? "Lapsed" :
-                             m.effectiveStatus === "cancelled" ? "Cancelled" :
-                             m.effectiveStatus === "removed" ? "Removed" :
-                             "Inactive"}
-                          </Badge>
+                          <StatusBadge status={m.effectiveStatus || "inactive"} />
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-col gap-1">
@@ -1404,16 +1552,10 @@ export default function StaffPolicies() {
                 </div>
               );
               })()}
-            </CardContent>
-          </Card>
+          </CardSection>
 
           {displayPolicy.beneficiaryFirstName && (
-            <Card className="shadow-sm border-border/60">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-primary" /> Beneficiary</CardTitle>
-                <CardDescription>Designated beneficiary for this policy</CardDescription>
-              </CardHeader>
-              <CardContent>
+            <CardSection title="Beneficiary" description="Designated beneficiary for this policy." icon={Users}>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   <div>
                     <p className="text-muted-foreground text-xs">Name</p>
@@ -1425,23 +1567,17 @@ export default function StaffPolicies() {
                   </div>
                   <div>
                     <p className="text-muted-foreground text-xs">National ID</p>
-                    <p className="font-medium font-mono">{displayPolicy.beneficiaryNationalId || "—"}</p>
+                    <p className="font-medium font-mono tabular-nums">{displayPolicy.beneficiaryNationalId || "—"}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground text-xs">Phone</p>
                     <p className="font-medium">{displayPolicy.beneficiaryPhone || "—"}</p>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+            </CardSection>
           )}
 
-          <Card className="shadow-sm border-border/60">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><CreditCard className="h-5 w-5 text-primary" /> Payment History</CardTitle>
-              <CardDescription>Transactions recorded against this policy</CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
+          <CardSection title="Payment history" description="Transactions recorded against this policy." icon={CreditCard} flush>
               {paymentsLoading ? (
                 <div className="p-6 space-y-2">
                   <Skeleton className="h-10 w-full" />
@@ -1449,10 +1585,10 @@ export default function StaffPolicies() {
                 </div>
               ) : (policyPayments ?? []).length > 0 ? (
                 <Table>
-                  <TableHeader className="bg-muted/50">
+                  <TableHeader className="bg-muted/50 sticky top-0 z-[1] shadow-sm">
                     <TableRow>
                       <TableHead className="pl-6">Date</TableHead>
-                      <TableHead>Amount</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
                       <TableHead>Method</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Reference</TableHead>
@@ -1462,13 +1598,15 @@ export default function StaffPolicies() {
                   <TableBody>
                     {(policyPayments ?? []).map((p: any) => (
                       <TableRow key={p.id} data-testid={`row-payment-${p.id}`}>
-                        <TableCell className="pl-6">{p.postedDate || new Date(p.receivedAt).toLocaleDateString()}</TableCell>
-                        <TableCell className="font-medium">{p.currency} {Number(p.amount).toFixed(2)}</TableCell>
+                        <TableCell className="pl-6 tabular-nums">{p.postedDate || new Date(p.receivedAt).toLocaleDateString()}</TableCell>
+                        <TableCell className="font-medium tabular-nums text-right">{p.currency} {Number(p.amount).toFixed(2)}</TableCell>
                         <TableCell>{p.paymentMethod}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={p.status === "cleared" ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/15 text-amber-700"}>
-                            {p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}
-                          </Badge>
+                          <StatusBadge
+                            status={p.status}
+                            variant="payment"
+                            label={p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : undefined}
+                          />
                         </TableCell>
                         <TableCell className="text-muted-foreground">{p.reference || "—"}</TableCell>
                         {(canEditPayment || canDeletePayment) && (
@@ -1497,18 +1635,12 @@ export default function StaffPolicies() {
               ) : (
                 <div className="p-6 text-center text-muted-foreground" data-testid="text-no-payments">No payments recorded for this policy.</div>
               )}
-            </CardContent>
-          </Card>
+          </CardSection>
 
-          <Card className="shadow-sm border-border/60">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Receipt className="h-5 w-5 text-primary" /> Receipts</CardTitle>
-              <CardDescription>Payment receipts issued for this policy</CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
+          <CardSection title="Receipts" description="Payment receipts issued for this policy." icon={Receipt} flush>
               {(policyReceipts ?? []).length > 0 ? (
                 <Table>
-                  <TableHeader className="bg-muted/50">
+                  <TableHeader className="bg-muted/50 sticky top-0 z-[1] shadow-sm">
                     <TableRow>
                       <TableHead className="pl-6">Receipt #</TableHead>
                       <TableHead>Amount</TableHead>
@@ -1559,15 +1691,9 @@ export default function StaffPolicies() {
               ) : (
                 <div className="p-6 text-center text-muted-foreground">No receipts issued for this policy.</div>
               )}
-            </CardContent>
-          </Card>
+          </CardSection>
 
-          <Card className="shadow-sm border-border/60">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5 text-primary" /> E-Statement</CardTitle>
-              <CardDescription>Open the preview to review your statement, then download from there if you need a file. Optionally filter by date range first.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
+          <CardSection title="E-Statement" description="Open the preview to review your statement, then download from there if you need a file. Optionally filter by date range first." icon={FileText} contentClassName="space-y-4">
               <div className="flex flex-wrap items-end gap-3">
                 <div className="grid gap-1.5">
                   <Label className="text-xs">From (optional)</Label>
@@ -1622,8 +1748,7 @@ export default function StaffPolicies() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">Leave dates empty for full payment history. Uses tenant logo and signature from Settings.</p>
-            </CardContent>
-          </Card>
+          </CardSection>
 
           <Dialog open={showEstatementViewer} onOpenChange={(open) => { setShowEstatementViewer(open); if (!open) setEstatementViewerUrl(""); }}>
             <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col w-[min(100vw-2rem,56rem)] overflow-x-hidden">
@@ -2452,49 +2577,51 @@ export default function StaffPolicies() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight">Policies</h1>
-            <p className="text-muted-foreground mt-1">Manage policy lifecycles, billing cycles, and status transitions.</p>
-          </div>
-          <Button className="gap-2 shadow-sm" onClick={() => setShowCreateDialog(true)} data-testid="btn-create-policy">
-            <Plus className="h-4 w-4" /> Issue New Policy
-          </Button>
-        </div>
+        <PageHeader
+          className="mb-0"
+          title={<span className="font-display font-bold">Policies</span>}
+          description="Manage policy lifecycles, billing cycles, and status transitions."
+          actions={
+            <Button className="gap-2 shadow-sm" onClick={() => setShowCreateDialog(true)} data-testid="btn-create-policy">
+              <Plus className="h-4 w-4" /> Issue New Policy
+            </Button>
+          }
+        />
 
-        <Card className="shadow-sm border-border/60">
-          <CardHeader className="pb-4">
-            <div className="flex items-center justify-between">
-              <CardTitle>Policy Directory</CardTitle>
-              <div className="flex items-center gap-2">
-                <div className="relative w-64">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search by policy number, name, ID, phone..."
-                    className="pl-9 bg-background"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    data-testid="input-search-policies"
-                  />
-                </div>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-40" data-testid="select-status-filter">
-                    <Filter className="h-4 w-4 mr-2" />
-                    <SelectValue placeholder="All Statuses" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="grace">Grace</SelectItem>
-                    <SelectItem value="lapsed">Lapsed</SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                  </SelectContent>
-                </Select>
+        <CardSection
+          flush
+          icon={FileText}
+          title="Policy Directory"
+          description="Search and filter your book of business, then open a policy to work on it."
+          headerRight={
+            <FilterBar className="w-full lg:w-auto lg:justify-end gap-2">
+              <div className="relative w-full sm:w-72 lg:w-64">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by policy number, name, ID, phone..."
+                  className="pl-9 bg-background"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  data-testid="input-search-policies"
+                />
               </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full sm:w-40 shrink-0" data-testid="select-status-filter">
+                  <Filter className="h-4 w-4 mr-2 shrink-0" />
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="grace">Grace</SelectItem>
+                  <SelectItem value="lapsed">Lapsed</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+            </FilterBar>
+          }
+        >
             {policiesLoading ? (
               <Table>
                 <TableHeader className="bg-muted/50">
@@ -2523,9 +2650,24 @@ export default function StaffPolicies() {
                 </TableBody>
               </Table>
             ) : filteredPolicies.length === 0 ? (
-              <div className="p-12 text-center text-muted-foreground" data-testid="text-no-policies">
-                {policies?.length === 0 ? "No policies found. Create your first policy to get started." : "No policies match your search criteria."}
-              </div>
+                <EmptyState
+                  dataTestId="text-no-policies"
+                  icon={FileText}
+                  title={policies?.length === 0 ? "No policies yet" : "No matching policies"}
+                  description={
+                    policies?.length === 0
+                      ? "Create your first policy to get started."
+                      : "No policies match your search criteria."
+                  }
+                  className="m-4 sm:m-6"
+                  action={
+                    policies?.length === 0 ? (
+                      <Button className="gap-2" onClick={() => setShowCreateDialog(true)} data-testid="btn-create-policy-empty">
+                        <Plus className="h-4 w-4" /> Issue New Policy
+                      </Button>
+                    ) : undefined
+                  }
+                />
             ) : (
               <Table>
                 <TableHeader className="bg-muted/50">
@@ -2602,8 +2744,7 @@ export default function StaffPolicies() {
                 </TableBody>
               </Table>
             )}
-          </CardContent>
-        </Card>
+        </CardSection>
       </div>
 
       <Dialog open={showCreateDialog} onOpenChange={(open) => { setShowCreateDialog(open); if (!open) setCreateStep(1); }}>

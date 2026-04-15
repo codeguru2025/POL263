@@ -1,5 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, KpiStatCard } from "@/components/ds";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -72,45 +73,34 @@ export default function StaffApprovals() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-display font-bold" data-testid="text-page-title">Approvals</h1>
-          <p className="text-muted-foreground mt-1">Review and manage maker-checker approval requests.</p>
-        </div>
+        <PageHeader
+          title="Approvals"
+          description="Review and manage maker-checker approval requests."
+          titleDataTestId="text-page-title"
+        />
 
-        <div className="grid grid-cols-3 gap-4">
-          <Card className="shadow-sm" data-testid="card-pending-count">
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Pending</p>
-                  <p className="text-2xl font-bold text-amber-600">{pendingApprovals.length}</p>
-                </div>
-                <Clock className="h-8 w-8 text-amber-500/30" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm" data-testid="card-approved-count">
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Approved</p>
-                  <p className="text-2xl font-bold text-emerald-600">{approvals?.filter((a) => a.status === "approved").length || 0}</p>
-                </div>
-                <CheckCircle2 className="h-8 w-8 text-emerald-500/30" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm" data-testid="card-rejected-count">
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Rejected</p>
-                  <p className="text-2xl font-bold text-red-600">{approvals?.filter((a) => a.status === "rejected").length || 0}</p>
-                </div>
-                <XCircle className="h-8 w-8 text-red-500/30" />
-              </div>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div data-testid="card-pending-count">
+            <KpiStatCard
+              label="Pending"
+              value={<span className="text-amber-600">{pendingApprovals.length}</span>}
+              icon={Clock}
+            />
+          </div>
+          <div data-testid="card-approved-count">
+            <KpiStatCard
+              label="Approved"
+              value={<span className="text-emerald-600">{approvals?.filter((a) => a.status === "approved").length || 0}</span>}
+              icon={CheckCircle2}
+            />
+          </div>
+          <div data-testid="card-rejected-count">
+            <KpiStatCard
+              label="Rejected"
+              value={<span className="text-red-600">{approvals?.filter((a) => a.status === "rejected").length || 0}</span>}
+              icon={XCircle}
+            />
+          </div>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">

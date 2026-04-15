@@ -1,5 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -278,25 +279,23 @@ export default function StaffGroups() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-groups-title">Groups</h1>
-            <p className="text-muted-foreground mt-1">Manage group policies for organizations, churches, and cooperatives.</p>
-          </div>
-          <Button
-            className="gap-2 shadow-sm"
-            onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }}
-            data-testid="btn-add-group"
-          >
-            <Plus className="h-4 w-4" /> New Group
-          </Button>
-        </div>
+        <PageHeader
+          title="Groups"
+          description="Manage group policies for organizations, churches, and cooperatives."
+          titleDataTestId="text-groups-title"
+          actions={(
+            <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }} data-testid="btn-add-group">
+              <Plus className="h-4 w-4" /> New Group
+            </Button>
+          )}
+        />
 
-        <Card className="shadow-sm border-border/60">
-          <CardHeader className="pb-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <CardTitle>Group Registry</CardTitle>
-              <div className="relative w-64">
+        <CardSection
+          title="Group registry"
+          description="Search and manage groups; assign policies from each row."
+          icon={Layers}
+          headerRight={(
+              <div className="relative w-full sm:w-64">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Search groups..."
@@ -306,20 +305,24 @@ export default function StaffGroups() {
                   data-testid="input-search-groups"
                 />
               </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
+          )}
+          flush
+        >
             {isLoading ? (
               <div className="p-8 flex items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : filteredGroups.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground" data-testid="text-no-groups">
-                {searchQuery ? "No groups match your search." : "No groups yet. Create your first group."}
-              </div>
+              <EmptyState
+                dataTestId="text-no-groups"
+                icon={Layers}
+                title={searchQuery ? "No groups match your search" : "No groups yet"}
+                description={searchQuery ? "Try a different search term." : "Create your first group to get started."}
+                className="border-0 rounded-none bg-transparent py-10"
+              />
             ) : (
-              <Table>
-                <TableHeader className="bg-muted/50">
+              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                <TableHeader className={dataTableStickyHeaderClass}>
                   <TableRow>
                     <TableHead className="pl-6">Group Name</TableHead>
                     <TableHead>Type</TableHead>
@@ -402,10 +405,9 @@ export default function StaffGroups() {
                     );
                   })}
                 </TableBody>
-              </Table>
+              </DataTable>
             )}
-          </CardContent>
-        </Card>
+        </CardSection>
 
         {filteredGroups.map((group) => {
           const gPolicies = getGroupPolicies(group.id);

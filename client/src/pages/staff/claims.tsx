@@ -3,10 +3,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader, CardSection, FilterBar, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -91,26 +90,6 @@ export default function StaffClaims() {
     },
   });
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "approved":
-      case "paid":
-      case "closed":
-        return "bg-emerald-500/15 text-emerald-700 border-emerald-200";
-      case "submitted":
-        return "bg-blue-500/15 text-blue-700 border-blue-200";
-      case "verified":
-      case "scheduled":
-      case "payable":
-      case "completed":
-        return "bg-amber-500/15 text-amber-700 border-amber-200";
-      case "rejected":
-        return "bg-destructive/15 text-destructive border-destructive/30";
-      default:
-        return "bg-muted text-muted-foreground";
-    }
-  };
-
   const filteredClaims = claims.filter((claim) => {
     const matchesSearch =
       !search ||
@@ -155,22 +134,20 @@ export default function StaffClaims() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-claims-title">Claims</h1>
-            <p className="text-muted-foreground mt-1">Manage claim submissions, document verification, and adjudication.</p>
-          </div>
-          <Button className="gap-2 shadow-sm" onClick={() => setShowCreateDialog(true)} data-testid="button-new-claim">
-            <Plus className="h-4 w-4" /> Log New Claim
-          </Button>
-        </div>
+        <PageHeader
+          title="Claims"
+          description="Manage claim submissions, document verification, and adjudication."
+          titleDataTestId="text-claims-title"
+          actions={(
+            <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => setShowCreateDialog(true)} data-testid="button-new-claim">
+              <Plus className="h-4 w-4" /> Log New Claim
+            </Button>
+          )}
+        />
 
-        <Card className="shadow-sm border-border/60">
-          <CardHeader className="pb-4">
-            <div className="flex items-center justify-between">
-              <CardTitle>Claims Register</CardTitle>
-              <div className="flex items-center gap-2">
-                <div className="relative w-64">
+        <CardSection title="Claims register" description="Search and filter the live claims ledger." flush>
+            <FilterBar className="border-b border-border/60 bg-muted/10 px-4 py-3 sm:px-6">
+                <div className="relative w-full min-w-[200px] sm:max-w-xs">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search claims..."
@@ -181,8 +158,8 @@ export default function StaffClaims() {
                   />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-40" data-testid="select-status-filter">
-                    <Filter className="h-4 w-4 mr-2" />
+                  <SelectTrigger className="w-full sm:w-40" data-testid="select-status-filter">
+                    <Filter className="h-4 w-4 mr-2 shrink-0" />
                     <SelectValue placeholder="All statuses" />
                   </SelectTrigger>
                   <SelectContent>
@@ -198,23 +175,22 @@ export default function StaffClaims() {
                     <SelectItem value="rejected">Rejected</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
+            </FilterBar>
             {isLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : filteredClaims.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground" data-testid="text-no-claims">
-                <FileWarning className="h-10 w-10 mb-3 opacity-50" />
-                <p className="text-sm font-medium">No claims found</p>
-                <p className="text-xs mt-1">Create a new claim or adjust your filters.</p>
-              </div>
+              <EmptyState
+                dataTestId="text-no-claims"
+                icon={FileWarning}
+                title="No claims found"
+                description="Create a new claim or adjust your filters."
+                className="border-0 rounded-none bg-transparent py-12"
+              />
             ) : (
-              <Table>
-                <TableHeader className="bg-muted/50">
+              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                <TableHeader className={dataTableStickyHeaderClass}>
                   <TableRow>
                     <TableHead className="pl-6">Claim #</TableHead>
                     <TableHead>Type</TableHead>
@@ -228,25 +204,25 @@ export default function StaffClaims() {
                 </TableHeader>
                 <TableBody>
                   {filteredClaims.map((claim) => (
-                    <TableRow key={claim.id} className="hover:bg-muted/30 transition-colors" data-testid={`row-claim-${claim.id}`}>
+                    <TableRow key={claim.id} className="hover:bg-muted/40 transition-colors" data-testid={`row-claim-${claim.id}`}>
                       <TableCell className="font-medium pl-6">
                         <div className="flex items-center gap-2">
-                          <FileWarning className="h-4 w-4 text-primary/70" />
+                          <FileWarning className="h-4 w-4 text-primary/70 shrink-0" />
                           {claim.claimNumber}
                         </div>
                       </TableCell>
                       <TableCell className="text-sm capitalize">{claim.claimType?.replace(/_/g, " ")}</TableCell>
                       <TableCell>{claim.deceasedName || "—"}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{formatDate(claim.dateOfDeath)}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm tabular-nums">{formatDate(claim.dateOfDeath)}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className={`font-medium text-[10px] uppercase ${getStatusColor(claim.status)}`} data-testid={`status-claim-${claim.id}`}>
-                          {claim.status}
-                        </Badge>
+                        <span data-testid={`status-claim-${claim.id}`}>
+                          <StatusBadge variant="claim" status={claim.status} />
+                        </span>
                       </TableCell>
-                      <TableCell className="font-medium">
+                      <TableCell className="font-medium tabular-nums">
                         {claim.cashInLieuAmount ? formatAmountWithCode(claim.cashInLieuAmount, claim.currency) : "—"}
                       </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{formatDate(claim.createdAt as any)}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm tabular-nums">{formatDate(claim.createdAt as any)}</TableCell>
                       <TableCell className="text-right pr-6">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -272,10 +248,9 @@ export default function StaffClaims() {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </DataTable>
             )}
-          </CardContent>
-        </Card>
+        </CardSection>
       </div>
 
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
@@ -439,9 +414,7 @@ export default function StaffClaims() {
                 </div>
                 <div>
                   <p className="text-muted-foreground">Status</p>
-                  <Badge variant="outline" className={`font-medium text-[10px] uppercase ${getStatusColor(selectedClaim.status)}`}>
-                    {selectedClaim.status}
-                  </Badge>
+                  <StatusBadge variant="claim" status={selectedClaim.status} />
                 </div>
                 <div>
                   <p className="text-muted-foreground">Claim Type</p>

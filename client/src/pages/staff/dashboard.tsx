@@ -1,5 +1,5 @@
 import StaffLayout from "@/components/layout/staff-layout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader, CardSection, KpiStatCard, EmptyState } from "@/components/ds";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
@@ -20,6 +20,7 @@ import {
   AlertTriangle,
   Filter,
   Plus,
+  BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -379,35 +380,39 @@ export default function StaffDashboard() {
     return (
       <StaffLayout>
         <div className="space-y-6">
-          <div>
-            <h1 className="text-3xl font-display font-bold" data-testid="text-dashboard-title">Control Plane Dashboard</h1>
-            <p className="text-muted-foreground mt-1">
-              Platform-wide overview across all active tenants.
-            </p>
-          </div>
+          <PageHeader
+            title="Control Plane Dashboard"
+            description="Platform-wide overview across all active tenants."
+            titleDataTestId="text-dashboard-title"
+          />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Tenants</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.tenants ?? 0}</div></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Users</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.users ?? 0}</div></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Policies</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.policies ?? 0}</div><p className="text-xs text-muted-foreground">{summary?.activePolicies ?? 0} active</p></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Clients</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{summary?.clients ?? 0}</div></CardContent></Card>
+            <KpiStatCard label="Tenants" value={summary?.tenants ?? 0} icon={Building2} />
+            <KpiStatCard label="Users" value={summary?.users ?? 0} icon={Users} />
+            <KpiStatCard
+              label="Policies"
+              value={summary?.policies ?? 0}
+              hint={<span className="tabular-nums">{summary?.activePolicies ?? 0} active</span>}
+              icon={FileStack}
+            />
+            <KpiStatCard label="Clients" value={summary?.clients ?? 0} icon={Heart} />
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Tenants</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CardSection title="Tenants" description="Switch into a tenant workspace from here." icon={Building2}>
               {cpLoading ? (
                 <div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
               ) : tenants.length === 0 ? (
-                <div className="py-10 text-center space-y-4">
-                  <p className="text-sm text-muted-foreground">No tenants yet. Create your first tenant to get started.</p>
-                  <Button size="sm" onClick={() => setLocation("/staff/settings?tab=tenants")}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Create first tenant
-                  </Button>
-                </div>
+                <EmptyState
+                  title="No tenants yet"
+                  description="Create your first tenant to get started."
+                  action={(
+                    <Button size="sm" onClick={() => setLocation("/staff/settings?tab=tenants")}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Create first tenant
+                    </Button>
+                  )}
+                  className="border-0 rounded-none bg-transparent py-10"
+                />
               ) : (
                 <div className="space-y-3">
                   {tenants.map((t) => (
@@ -433,8 +438,7 @@ export default function StaffDashboard() {
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
+          </CardSection>
         </div>
       </StaffLayout>
     );
@@ -443,22 +447,14 @@ export default function StaffDashboard() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-display font-bold" data-testid="text-dashboard-title">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">
-            Welcome back, {user?.displayName || user?.email}. Here is your overview.
-          </p>
-        </div>
+        <PageHeader
+          title="Dashboard"
+          description={`Welcome back, ${user?.displayName || user?.email}. Here is your overview.`}
+          titleDataTestId="text-dashboard-title"
+        />
 
         {!isAgent && (
-        <Card className="shadow-sm">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Filter className="h-4 w-4" />
-              Filters
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        <CardSection title="Filters" icon={Filter}>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Date From</Label>
@@ -511,40 +507,33 @@ export default function StaffDashboard() {
                 </Select>
               </div>
             </div>
-          </CardContent>
-        </Card>
+        </CardSection>
         )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {statCards.map((card) => (
-            <Card key={card.title} className="shadow-sm hover:shadow-md transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{card.title}</CardTitle>
-                <div className={`h-9 w-9 rounded-lg ${card.bgColor} flex items-center justify-center`}>
-                  <card.icon className={`h-5 w-5 ${card.color}`} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {statsLoading ? (
+            <KpiStatCard
+              key={card.title}
+              className="shadow-sm hover:shadow-md transition-shadow"
+              label={card.title}
+              icon={card.icon}
+              hint={card.subtitle}
+              value={
+                statsLoading ? (
                   <Skeleton className="h-8 w-20" />
                 ) : (
-                  <div className="text-2xl font-bold font-display" data-testid={`stat-${card.title.toLowerCase().replace(/\s+/g, "-")}`}>
+                  <span className="font-display" data-testid={`stat-${card.title.toLowerCase().replace(/\s+/g, "-")}`}>
                     {card.value}
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground mt-1">{card.subtitle}</p>
-              </CardContent>
-            </Card>
+                  </span>
+                )
+              }
+            />
           ))}
         </div>
 
         {canReadFinance && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="shadow-sm">
-            <CardHeader>
-              <CardTitle className="font-display text-base">Revenue Trend</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CardSection title="Revenue trend" icon={DollarSign} contentClassName="pt-2">
               {filteredRevenueTrend.length > 0 ? (
                 <ResponsiveContainer width="100%" height={280}>
                   <AreaChart data={filteredRevenueTrend}>
@@ -569,14 +558,9 @@ export default function StaffDashboard() {
                   No revenue data available
                 </div>
               )}
-            </CardContent>
-          </Card>
+          </CardSection>
 
-          <Card className="shadow-sm">
-            <CardHeader>
-              <CardTitle className="font-display text-base">Policy Status Breakdown</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CardSection title="Policy status breakdown" icon={FileStack} contentClassName="pt-2">
               {policyStatusData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={280}>
                   <PieChart>
@@ -603,18 +587,13 @@ export default function StaffDashboard() {
                   No policy data available
                 </div>
               )}
-            </CardContent>
-          </Card>
+          </CardSection>
         </div>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {!isAgent && canReadLead && (
-          <Card className="shadow-sm">
-            <CardHeader>
-              <CardTitle className="font-display text-base">Lead Conversion Funnel</CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CardSection title="Lead conversion funnel" icon={BarChart3} contentClassName="pt-2">
               {leadFunnelData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={280}>
                   <BarChart data={leadFunnelData} layout="vertical" margin={{ left: 20 }}>
@@ -634,131 +613,100 @@ export default function StaffDashboard() {
                   No lead data available
                 </div>
               )}
-            </CardContent>
-          </Card>
+          </CardSection>
           )}
 
-          <Card className="shadow-sm">
-            <CardHeader>
-              <CardTitle className="font-display text-base flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
-                Lapse & Retention Metrics
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
+          <CardSection title="Lapse & retention metrics" icon={AlertTriangle} contentClassName="pt-2">
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-emerald-50 rounded-lg p-4 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Retention Rate</p>
-                    <p className="text-3xl font-bold text-emerald-600" data-testid="stat-retention-rate">
+                    <p className="text-3xl font-bold text-emerald-600 tabular-nums" data-testid="stat-retention-rate">
                       {lapseRetention?.retentionRate ?? "0"}%
                     </p>
                   </div>
                   <div className="bg-red-50 rounded-lg p-4 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Lapse Rate</p>
-                    <p className="text-3xl font-bold text-red-600" data-testid="stat-lapse-rate">
+                    <p className="text-3xl font-bold text-red-600 tabular-nums" data-testid="stat-lapse-rate">
                       {lapseRetention?.lapseRate ?? "0"}%
                     </p>
                   </div>
                 </div>
                 <div className="grid grid-cols-4 gap-2 text-center">
                   <div className="bg-muted/50 rounded p-2">
-                    <p className="text-lg font-bold" data-testid="stat-active-count">{lapseRetention?.active ?? 0}</p>
+                    <p className="text-lg font-bold tabular-nums" data-testid="stat-active-count">{lapseRetention?.active ?? 0}</p>
                     <p className="text-[10px] text-muted-foreground">Active</p>
                   </div>
                   <div className="bg-muted/50 rounded p-2">
-                    <p className="text-lg font-bold" data-testid="stat-grace-count">{lapseRetention?.grace ?? 0}</p>
+                    <p className="text-lg font-bold tabular-nums" data-testid="stat-grace-count">{lapseRetention?.grace ?? 0}</p>
                     <p className="text-[10px] text-muted-foreground">Grace</p>
                   </div>
                   <div className="bg-muted/50 rounded p-2">
-                    <p className="text-lg font-bold" data-testid="stat-lapsed-count">{lapseRetention?.lapsed ?? 0}</p>
+                    <p className="text-lg font-bold tabular-nums" data-testid="stat-lapsed-count">{lapseRetention?.lapsed ?? 0}</p>
                     <p className="text-[10px] text-muted-foreground">Lapsed</p>
                   </div>
                   <div className="bg-muted/50 rounded p-2">
-                    <p className="text-lg font-bold" data-testid="stat-cancelled-count">{lapseRetention?.cancelled ?? 0}</p>
+                    <p className="text-lg font-bold tabular-nums" data-testid="stat-cancelled-count">{lapseRetention?.cancelled ?? 0}</p>
                     <p className="text-[10px] text-muted-foreground">Cancelled</p>
                   </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
+          </CardSection>
         </div>
 
         {productPerformance && productPerformance.length > 0 && (
-          <div>
-            <h2 className="text-lg font-display font-semibold mb-3">Product Performance</h2>
+          <CardSection title="Product performance" description="Totals for the selected filters." icon={Target}>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {productPerformance.map((prod) => (
-                <Card key={prod.id} className="shadow-sm hover:shadow-md transition-shadow" data-testid={`card-product-${prod.id}`}>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">{prod.name}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Policies</p>
-                        <p className="text-xl font-bold">{prod.totalPolicies}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Active</p>
-                        <p className="text-xl font-bold text-emerald-600">{prod.activePolicies}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Lapsed</p>
-                        <p className="text-xl font-bold text-red-500">{prod.lapsedPolicies}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Revenue</p>
-                        <p className="text-xl font-bold text-indigo-600">{prod.currency || "USD"} {(prod.revenue ?? 0).toLocaleString()}</p>
-                      </div>
+                <div
+                  key={prod.id}
+                  className="rounded-xl border border-border/70 bg-muted/5 p-4 shadow-sm hover:shadow-md transition-shadow"
+                  data-testid={`card-product-${prod.id}`}
+                >
+                  <p className="text-sm font-semibold mb-3">{prod.name}</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Policies</p>
+                      <p className="text-xl font-bold tabular-nums">{prod.totalPolicies}</p>
                     </div>
-                  </CardContent>
-                </Card>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Active</p>
+                      <p className="text-xl font-bold text-emerald-600 tabular-nums">{prod.activePolicies}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Lapsed</p>
+                      <p className="text-xl font-bold text-red-500 tabular-nums">{prod.lapsedPolicies}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Revenue</p>
+                      <p className="text-xl font-bold text-indigo-600 tabular-nums">{prod.currency || "USD"} {(prod.revenue ?? 0).toLocaleString()}</p>
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
-          </div>
+          </CardSection>
         )}
 
         {!isAgent && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Organization</CardTitle>
-              <Building2 className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-xl font-bold font-display" data-testid="stat-organization">
-                {currentOrg?.name || "—"}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {branchesList?.length || 0} branch(es)
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Your Role</CardTitle>
-              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-xl font-bold font-display capitalize" data-testid="stat-role">
-                {primaryRole}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {permissions.length} permissions granted
-              </p>
-            </CardContent>
-          </Card>
+          <KpiStatCard
+            label="Organization"
+            icon={Building2}
+            hint={`${branchesList?.length || 0} branch(es)`}
+            value={<span className="font-display text-xl sm:text-2xl" data-testid="stat-organization">{currentOrg?.name || "—"}</span>}
+          />
+          <KpiStatCard
+            label="Your role"
+            icon={ShieldCheck}
+            hint={`${permissions.length} permissions granted`}
+            value={<span className="font-display text-xl sm:text-2xl capitalize" data-testid="stat-role">{primaryRole}</span>}
+          />
         </div>
         )}
 
         {canReadAuditLog && (
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="font-display">Recent Audit Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <CardSection title="Recent audit activity" icon={Activity}>
             {auditLogs && auditLogs.length > 0 ? (
               <div className="space-y-4">
                 {auditLogs.slice(0, 8).map((log: any) => (
@@ -779,10 +727,9 @@ export default function StaffDashboard() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground" data-testid="text-no-audit">No audit events yet.</p>
+              <p className="text-sm text-muted-foreground py-2" data-testid="text-no-audit">No audit events yet.</p>
             )}
-          </CardContent>
-        </Card>
+        </CardSection>
         )}
       </div>
     </StaffLayout>

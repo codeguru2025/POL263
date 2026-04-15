@@ -31,7 +31,7 @@ export default function JoinPage() {
     <div className="min-h-screen bg-background flex flex-col">
       <div className="flex-1 flex flex-col items-center justify-center p-4">
       <div className="mb-8 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src={getDefaultLogoUrl()} alt="Logo" className="h-16 w-16 mb-4 rounded-2xl object-contain" />
+        <img src={getDefaultLogoUrl()} alt="POL263" className="h-12 sm:h-14 w-auto max-w-[min(320px,90vw)] mb-4 object-contain object-center" />
         <h1 className="text-3xl font-display font-bold text-foreground tracking-tight">Join</h1>
         <p className="text-muted-foreground mt-2 text-lg">Secure your family's future with comprehensive funeral cover</p>
       </div>

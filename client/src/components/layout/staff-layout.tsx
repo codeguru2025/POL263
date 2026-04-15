@@ -42,6 +42,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import AppFooter from "@/components/app-footer";
+import { AppShell } from "@/components/ds";
 import { useBranding } from "@/hooks/use-branding";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 import {
@@ -385,32 +386,29 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   return (
-    <div className="min-h-screen flex bg-background overflow-x-hidden max-w-[100vw]">
-      {/* Mobile/tablet overlay - tap to close sidebar; only when sidebar is open below lg */}
-      <button
-        type="button"
-        aria-label="Close menu"
-        className={`fixed inset-0 z-40 bg-black/60 transition-opacity lg:hidden ${sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-        onClick={() => setSidebarOpen(false)}
-      />
-
-      <aside
-        className={`
-          fixed lg:static inset-y-0 left-0 z-50 w-64 max-w-[85vw] lg:max-w-none border-r border-primary/20 bg-card flex flex-col shadow-[2px_0_20px_rgba(0,0,0,0.15)]
-          transform transition-transform duration-200 ease-out
-          lg:translate-x-0 lg:flex
-          ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
-        `}
-      >
+    <AppShell
+      overlay={
+        <button
+          type="button"
+          aria-label="Close menu"
+          className={`fixed inset-0 z-40 bg-black/60 transition-opacity lg:hidden ${sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+          onClick={() => setSidebarOpen(false)}
+        />
+      }
+      sidebarClassName={sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
+      sidebar={
+        <>
         <div className="h-16 flex items-center justify-between px-4 border-b shrink-0">
-          <div className="flex items-center min-w-0">
+          <div className="flex items-center min-w-0 gap-2">
             <img
-              src={resolveAssetUrl(isWhitelabeled ? (currentOrg?.logoUrl || brandLogo) : brandLogo)}
+              src={resolveAssetUrl((currentOrg?.logoUrl && String(currentOrg.logoUrl).trim()) || brandLogo)}
               alt={brandName}
-              className="h-10 w-10 rounded-lg object-contain mr-2 shrink-0"
+              className="h-9 w-auto max-w-[200px] rounded-md object-contain object-left shrink-0"
               loading="lazy"
             />
-            <span className="font-display font-bold text-lg tracking-tight text-foreground truncate">{isWhitelabeled ? (currentOrg?.name || brandName) : brandName}</span>
+            {isWhitelabeled ? (
+              <span className="font-display font-bold text-lg tracking-tight text-foreground truncate">{currentOrg?.name || brandName}</span>
+            ) : null}
           </div>
           <Button
             variant="ghost"
@@ -513,10 +511,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             Sign out
           </Button>
         </div>
-      </aside>
-
-      <main className="flex-1 flex flex-col min-h-screen lg:min-h-screen overflow-hidden bg-background min-w-0">
-        <header className="h-14 md:h-16 border-b bg-card/50 backdrop-blur-sm flex items-center px-4 md:px-8 justify-between shrink-0 z-10 sticky top-0">
+        </>
+      }
+      topbar={
+        <header className="h-14 md:h-16 border-b border-border/60 bg-card/80 backdrop-blur-md flex items-center px-4 md:px-8 justify-between shrink-0 z-10 sticky top-0">
           <div className="flex items-center gap-2 md:gap-6 min-w-0">
             <Button
               variant="ghost"
@@ -597,15 +595,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <ThemeSwitcher />
           </div>
         </header>
-
-        <div className="flex-1 overflow-auto p-4 sm:p-6 md:p-8 relative">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent pointer-events-none -z-10" />
-          <div className="max-w-6xl mx-auto relative z-0 min-w-0">
-            {children}
-          </div>
-        </div>
-        <AppFooter />
-      </main>
-    </div>
+      }
+      footer={<AppFooter />}
+    >
+      {children}
+    </AppShell>
   );
 }

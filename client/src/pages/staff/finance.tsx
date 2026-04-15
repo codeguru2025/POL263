@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, KpiStatCard } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -753,21 +754,16 @@ export default function StaffFinance() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold" data-testid="text-finance-title">
-              {commissionOnly ? "My Commissions" : "Finance"}
-            </h1>
-            <p className="text-muted-foreground">
-              {commissionOnly ? "View your commission earnings and history" : "Payments, receipts, cashups, and commissions"}
-            </p>
-          </div>
-          {canWriteFinance && (
-          <Button onClick={handleOpenPaymentDialog} data-testid="button-new-payment">
-            <Plus className="h-4 w-4 mr-2" />Receipt a Policy
-          </Button>
-          )}
-        </div>
+        <PageHeader
+          title={commissionOnly ? "My Commissions" : "Finance"}
+          description={commissionOnly ? "View your commission earnings and history" : "Payments, receipts, cashups, and commissions"}
+          titleDataTestId="text-finance-title"
+          actions={canWriteFinance ? (
+            <Button onClick={handleOpenPaymentDialog} data-testid="button-new-payment">
+              <Plus className="h-4 w-4 mr-2" />Receipt a Policy
+            </Button>
+          ) : undefined}
+        />
 
         {!commissionOnly && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -831,29 +827,24 @@ export default function StaffFinance() {
           </TabsList>
 
           <TabsContent value="payments">
-            <Card>
-              <CardHeader>
-                <CardTitle>Payment Transactions</CardTitle>
-              </CardHeader>
-              <CardContent>
+            <CardSection title="Payment transactions" description="Receipted movements linked to policies and clients." icon={Receipt} flush>
                 {loadingPayments ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : payments.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Receipt className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-                    <p className="text-muted-foreground mb-1">No payments recorded yet</p>
-                    <p className="text-sm text-muted-foreground/70 mb-4">Click "Receipt a Policy" to record the first payment</p>
-                    <Button variant="outline" size="sm" onClick={handleOpenPaymentDialog}>
-                      <Plus className="h-4 w-4 mr-2" />Record First Payment
-                    </Button>
-                  </div>
+                  <EmptyState
+                    icon={Receipt}
+                    title="No payments recorded yet"
+                    description='Click "Receipt a Policy" above to record the first payment.'
+                    className="border-0 rounded-none bg-transparent py-10"
+                    action={<Button variant="outline" size="sm" onClick={handleOpenPaymentDialog}><Plus className="h-4 w-4 mr-2" />Record first payment</Button>}
+                  />
                 ) : (
-                  <Table>
-                    <TableHeader>
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead>Policy</TableHead>
                         <TableHead>Client</TableHead>
-                        <TableHead>Amount</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
                         <TableHead>Method</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Reference</TableHead>
@@ -864,53 +855,51 @@ export default function StaffFinance() {
                       {payments.map((p: any) => {
                         const client = p.clientId ? getClient(p.clientId) : null;
                         return (
-                          <TableRow key={p.id} data-testid={`row-payment-${p.id}`}>
-                            <TableCell className="font-mono text-sm">{p.policyId ? getPolicyNumber(p.policyId) : "—"}</TableCell>
+                          <TableRow key={p.id} className="hover:bg-muted/40" data-testid={`row-payment-${p.id}`}>
+                            <TableCell className="font-mono text-sm tabular-nums">{p.policyId ? getPolicyNumber(p.policyId) : "—"}</TableCell>
                             <TableCell>{client ? `${client.firstName} ${client.lastName}` : "—"}</TableCell>
-                            <TableCell className="font-semibold">{p.currency} {parseFloat(p.amount || "0").toFixed(2)}</TableCell>
+                            <TableCell className="font-semibold text-right tabular-nums">{p.currency} {parseFloat(p.amount || "0").toFixed(2)}</TableCell>
                             <TableCell><Badge variant="outline">{p.paymentMethod}</Badge></TableCell>
                             <TableCell>
-                              <Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>
-                                {p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}
-                              </Badge>
+                              <StatusBadge
+                                variant="payment"
+                                status={p.status}
+                                label={p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : undefined}
+                              />
                             </TableCell>
                             <TableCell className="font-mono text-xs text-muted-foreground">{p.reference || "—"}</TableCell>
-                            <TableCell className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground tabular-nums">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</TableCell>
                           </TableRow>
                         );
                       })}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="paynow">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Payment intents (Paynow)</CardTitle>
-                  {!isAgent && (
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => { setShowCashReceiptDialog(true); setCashReceiptPolicySearch(""); setCashReceiptSelectedPolicy(null); setCashReceiptAmount(""); setCashReceiptCurrency("USD"); setCashReceiptNotes(""); }}>
-                      Record cash receipt
-                    </Button>
-                  </div>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
+            <CardSection
+              title="Payment intents (Paynow)"
+              description="Online collection attempts and manual cash receipt logging."
+              icon={Landmark}
+              headerRight={!isAgent ? (
+                  <Button variant="outline" size="sm" onClick={() => { setShowCashReceiptDialog(true); setCashReceiptPolicySearch(""); setCashReceiptSelectedPolicy(null); setCashReceiptAmount(""); setCashReceiptCurrency("USD"); setCashReceiptNotes(""); }}>
+                    Record cash receipt
+                  </Button>
+              ) : undefined}
+              contentClassName="space-y-4"
+            >
                 {loadingIntents ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : paymentIntents.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No payment intents yet.</p>
+                  <EmptyState title="No payment intents yet" className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
-                  <Table>
-                    <TableHeader>
+                  <DataTable>
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead>Policy</TableHead>
-                        <TableHead>Amount</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Reference</TableHead>
                         <TableHead>Created</TableHead>
@@ -919,14 +908,14 @@ export default function StaffFinance() {
                     </TableHeader>
                     <TableBody>
                       {paymentIntents.map((pi: any) => (
-                        <TableRow key={pi.id}>
-                          <TableCell className="font-mono text-sm">{getPolicyNumber(pi.policyId)}</TableCell>
-                          <TableCell>{pi.currency} {parseFloat(pi.amount || "0").toFixed(2)}</TableCell>
+                        <TableRow key={pi.id} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm tabular-nums">{getPolicyNumber(pi.policyId)}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">{pi.currency} {parseFloat(pi.amount || "0").toFixed(2)}</TableCell>
                           <TableCell>
                             <Badge variant={pi.status === "paid" ? "default" : pi.status === "failed" ? "destructive" : "secondary"}>{pi.status}</Badge>
                           </TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">{pi.merchantReference || "—"}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(pi.createdAt).toLocaleString()}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground tabular-nums">{new Date(pi.createdAt).toLocaleString()}</TableCell>
                           <TableCell>
                             {pi.status === "pending_paynow" && (
                               <Button variant="ghost" size="sm" disabled={pollIntentMutation.isPending && pollingIntentId === pi.id} onClick={() => pollIntentMutation.mutate(pi.id)}>
@@ -937,7 +926,7 @@ export default function StaffFinance() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
                 <Separator />
                 <div className="flex flex-wrap items-center gap-4">
@@ -948,15 +937,15 @@ export default function StaffFinance() {
                     Log reprint
                   </Button>
                 </div>
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="cashups">
-            <Card>
-              <CardHeader>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <CardTitle>Daily Cashups</CardTitle>
+            <CardSection
+              title="Daily cashups"
+              description="Submit your receipted totals by payment method for finance to count and confirm. Cashups include cash and mobile/card payments you have receipted."
+              icon={CalendarDays}
+              headerRight={(
                   <div className="flex flex-wrap items-center gap-2">
                     <Select value={cashupStatusFilter || "all"} onValueChange={(v) => setCashupStatusFilter(v === "all" ? "" : v)}>
                       <SelectTrigger className="w-[140px]" data-testid="select-cashup-status">
@@ -974,15 +963,14 @@ export default function StaffFinance() {
                       <Plus className="h-4 w-4 mr-1" /> New cashup
                     </Button>
                   </div>
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">Submit your receipted totals by payment method for finance to count and confirm. Cashups include cash and mobile/card payments you have receipted.</p>
-              </CardHeader>
-              <CardContent>
+              )}
+              flush
+            >
                 {cashups.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No cashups recorded yet. Create a draft, enter amounts by method (or load from your receipts), then submit to finance.</p>
+                  <EmptyState title="No cashups yet" description="Create a draft, enter amounts by method (or load from your receipts), then submit to finance." className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
-                  <Table>
-                    <TableHeader>
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead>Date</TableHead>
                         <TableHead>Ccy</TableHead>
@@ -1029,10 +1017,9 @@ export default function StaffFinance() {
                         );
                       })}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
 
             <Dialog open={showCreateCashupDialog} onOpenChange={setShowCreateCashupDialog}>
               <DialogContent className="sm:max-w-md">
@@ -1196,17 +1183,17 @@ export default function StaffFinance() {
                 );
               })()}
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Commission Rates (from Product Versions)</CardTitle>
-                  <p className="text-sm text-muted-foreground">Commission rates are configured when creating product versions in the Products section.</p>
-                </CardHeader>
-                <CardContent>
+              <CardSection
+                title="Commission rates (from product versions)"
+                description="Commission rates are configured when creating product versions in the Products section."
+                icon={FileText}
+                flush
+              >
                   {commissionConfigs.length === 0 ? (
-                    <p className="text-center text-muted-foreground py-8">No commission rates configured on any product version yet. Go to Products to set commission rates on a product version.</p>
+                    <EmptyState title="No commission rates yet" description="Go to Products to set commission rates on a product version." className="border-0 rounded-none bg-transparent py-8" />
                   ) : (
-                    <Table>
-                      <TableHeader>
+                    <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                      <TableHeader className={dataTableStickyHeaderClass}>
                         <TableRow>
                           <TableHead>Product</TableHead>
                           <TableHead>Version</TableHead>
@@ -1218,7 +1205,7 @@ export default function StaffFinance() {
                       </TableHeader>
                       <TableBody>
                         {commissionConfigs.map((v: any) => (
-                          <TableRow key={v.id}>
+                          <TableRow key={v.id} className="hover:bg-muted/40">
                             <TableCell className="font-medium">{v.productName}</TableCell>
                             <TableCell>v{v.version}</TableCell>
                             <TableCell>{v.commissionFirstMonthsRate}% for {v.commissionFirstMonthsCount ?? "—"} months</TableCell>
@@ -1228,24 +1215,16 @@ export default function StaffFinance() {
                           </TableRow>
                         ))}
                       </TableBody>
-                    </Table>
+                    </DataTable>
                   )}
-                </CardContent>
-              </Card>
+              </CardSection>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <TrendingUp className="h-5 w-5" />
-                    Commission Ledger
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
+              <CardSection title="Commission ledger" description="Auto-calculated when payments are receipted for policies with agents." icon={TrendingUp} flush>
                   {commissionLedger.length === 0 ? (
-                    <p className="text-center text-muted-foreground py-8">No commission entries yet. Commissions are auto-calculated when payments are receipted for policies with agents.</p>
+                    <EmptyState title="No commission entries yet" description="Commissions appear here after receipted payments on agent-linked policies." className="border-0 rounded-none bg-transparent py-8" />
                   ) : (
-                    <Table>
-                      <TableHeader>
+                    <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                      <TableHeader className={dataTableStickyHeaderClass}>
                         <TableRow>
                           <TableHead>Date</TableHead>
                           <TableHead>Client</TableHead>
@@ -1253,7 +1232,7 @@ export default function StaffFinance() {
                           <TableHead>Agent</TableHead>
                           <TableHead>Payment Date</TableHead>
                           <TableHead>Type</TableHead>
-                          <TableHead>Amount</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
                           <TableHead>Description</TableHead>
                           <TableHead>Status</TableHead>
                         </TableRow>
@@ -1273,7 +1252,7 @@ export default function StaffFinance() {
                           const amountVal = parseFloat(entry.amount || "0");
                           const isNegative = amountVal < 0;
                           return (
-                            <TableRow key={entry.id}>
+                            <TableRow key={entry.id} className="hover:bg-muted/40">
                               <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(entry.createdAt).toLocaleDateString()}</TableCell>
                               <TableCell>
                                 {entry.clientFirstName ? (
@@ -1291,7 +1270,7 @@ export default function StaffFinance() {
                               <TableCell>
                                 <Badge variant={typeBadgeVariant}>{typeLabel}</Badge>
                               </TableCell>
-                              <TableCell className={`font-semibold ${isNegative ? "text-red-600" : ""}`}>
+                              <TableCell className={`font-semibold tabular-nums text-right ${isNegative ? "text-red-600" : ""}`}>
                                 {isNegative ? "−" : ""}{entry.currency} {Math.abs(amountVal).toFixed(2)}
                               </TableCell>
                               <TableCell className="text-sm max-w-[200px] truncate">{entry.description || "—"}</TableCell>
@@ -1304,252 +1283,217 @@ export default function StaffFinance() {
                           );
                         })}
                       </TableBody>
-                    </Table>
+                    </DataTable>
                   )}
-                </CardContent>
-              </Card>
+              </CardSection>
             </div>
           </TabsContent>
 
           <TabsContent value="expenditures">
-            <Card>
-              <CardHeader><CardTitle>Expenditures</CardTitle></CardHeader>
-              <CardContent>
+            <CardSection title="Expenditures" description="Operational spend recorded against the organization." icon={Wallet} flush>
                 {expenditures.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No expenditures recorded yet</p>
+                  <EmptyState title="No expenditures yet" className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
-                  <Table>
-                    <TableHeader>
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead>Category</TableHead>
                         <TableHead>Description</TableHead>
-                        <TableHead>Amount</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
                         <TableHead>Date</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {expenditures.map((e: any) => (
-                        <TableRow key={e.id}>
+                        <TableRow key={e.id} className="hover:bg-muted/40">
                           <TableCell><Badge variant="outline">{e.category}</Badge></TableCell>
                           <TableCell>{e.description}</TableCell>
-                          <TableCell className="font-semibold">{e.currency} {e.amount}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{e.spentAt || "—"}</TableCell>
+                          <TableCell className="font-semibold text-right tabular-nums">{e.currency} {e.amount}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground tabular-nums">{e.spentAt || "—"}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="platform">
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <Landmark className="h-5 w-5" />
-                    POL263 Revenue Share (2.5%)
-                  </h2>
-                  <p className="text-sm text-muted-foreground">Auto-calculated on every cleared payment</p>
+              <CardSection
+                title="POL263 Revenue Share (2.5%)"
+                description="Auto-calculated on every cleared payment"
+                icon={Landmark}
+                headerRight={(
+                  <Button onClick={() => setShowSettlementDialog(true)} data-testid="button-new-settlement">
+                    <Plus className="h-4 w-4 mr-2" />Record Settlement
+                  </Button>
+                )}
+              >
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <KpiStatCard
+                    label="Daily Due"
+                    value={<span data-testid="text-platform-daily">{platformDailyDue.toFixed(2)}</span>}
+                    icon={CalendarDays}
+                  />
+                  <KpiStatCard
+                    label="MTD Accrued"
+                    value={<span data-testid="text-platform-mtd">{platformMTD.toFixed(2)}</span>}
+                    icon={TrendingUp}
+                  />
+                  <KpiStatCard
+                    label="Outstanding"
+                    value={
+                      <span data-testid="text-platform-outstanding">
+                        {platformSummary ? parseFloat(platformSummary.outstanding).toFixed(2) : "0.00"}
+                      </span>
+                    }
+                    icon={ArrowUpRight}
+                  />
+                  <KpiStatCard
+                    label="Total Settled"
+                    value={
+                      <span data-testid="text-platform-settled">
+                        {platformSummary ? parseFloat(platformSummary.totalSettled).toFixed(2) : "0.00"}
+                      </span>
+                    }
+                    icon={CheckCircle2}
+                  />
                 </div>
-                <Button onClick={() => setShowSettlementDialog(true)} data-testid="button-new-settlement">
-                  <Plus className="h-4 w-4 mr-2" />Record Settlement
-                </Button>
-              </div>
+              </CardSection>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="flex items-center gap-3">
-                      <CalendarDays className="h-8 w-8 text-blue-600" />
-                      <div>
-                        <p className="text-sm text-muted-foreground">Daily Due</p>
-                        <p className="text-2xl font-bold" data-testid="text-platform-daily">{platformDailyDue.toFixed(2)}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="flex items-center gap-3">
-                      <TrendingUp className="h-8 w-8 text-green-600" />
-                      <div>
-                        <p className="text-sm text-muted-foreground">MTD Accrued</p>
-                        <p className="text-2xl font-bold" data-testid="text-platform-mtd">{platformMTD.toFixed(2)}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="flex items-center gap-3">
-                      <ArrowUpRight className="h-8 w-8 text-orange-600" />
-                      <div>
-                        <p className="text-sm text-muted-foreground">Outstanding</p>
-                        <p className="text-2xl font-bold" data-testid="text-platform-outstanding">
-                          {platformSummary ? parseFloat(platformSummary.outstanding).toFixed(2) : "0.00"}
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="flex items-center gap-3">
-                      <CheckCircle2 className="h-8 w-8 text-primary" />
-                      <div>
-                        <p className="text-sm text-muted-foreground">Total Settled</p>
-                        <p className="text-2xl font-bold" data-testid="text-platform-settled">
-                          {platformSummary ? parseFloat(platformSummary.totalSettled).toFixed(2) : "0.00"}
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card>
-                <CardHeader><CardTitle>Aging Buckets</CardTitle></CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-4 gap-4">
-                    <div className="text-center p-4 rounded-lg bg-green-50 dark:bg-green-950/20">
-                      <p className="text-xs text-muted-foreground mb-1">0–30 Days</p>
-                      <p className="text-xl font-bold text-green-700 dark:text-green-400" data-testid="text-aging-current">{platformAging.current.toFixed(2)}</p>
-                    </div>
-                    <div className="text-center p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20">
-                      <p className="text-xs text-muted-foreground mb-1">31–60 Days</p>
-                      <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400" data-testid="text-aging-30">{platformAging.days30.toFixed(2)}</p>
-                    </div>
-                    <div className="text-center p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20">
-                      <p className="text-xs text-muted-foreground mb-1">61–90 Days</p>
-                      <p className="text-xl font-bold text-orange-700 dark:text-orange-400" data-testid="text-aging-60">{platformAging.days60.toFixed(2)}</p>
-                    </div>
-                    <div className="text-center p-4 rounded-lg bg-red-50 dark:bg-red-950/20">
-                      <p className="text-xs text-muted-foreground mb-1">90+ Days</p>
-                      <p className="text-xl font-bold text-red-700 dark:text-red-400" data-testid="text-aging-90plus">{platformAging.days90plus.toFixed(2)}</p>
-                    </div>
+              <CardSection title="Aging buckets" description="Outstanding platform fee by age." icon={Clock}>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div className="text-center p-4 rounded-lg bg-green-50 dark:bg-green-950/20">
+                    <p className="text-xs text-muted-foreground mb-1">0–30 Days</p>
+                    <p className="text-xl font-bold text-green-700 dark:text-green-400 tabular-nums" data-testid="text-aging-current">{platformAging.current.toFixed(2)}</p>
                   </div>
-                </CardContent>
-              </Card>
+                  <div className="text-center p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20">
+                    <p className="text-xs text-muted-foreground mb-1">31–60 Days</p>
+                    <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400 tabular-nums" data-testid="text-aging-30">{platformAging.days30.toFixed(2)}</p>
+                  </div>
+                  <div className="text-center p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20">
+                    <p className="text-xs text-muted-foreground mb-1">61–90 Days</p>
+                    <p className="text-xl font-bold text-orange-700 dark:text-orange-400 tabular-nums" data-testid="text-aging-60">{platformAging.days60.toFixed(2)}</p>
+                  </div>
+                  <div className="text-center p-4 rounded-lg bg-red-50 dark:bg-red-950/20">
+                    <p className="text-xs text-muted-foreground mb-1">90+ Days</p>
+                    <p className="text-xl font-bold text-red-700 dark:text-red-400 tabular-nums" data-testid="text-aging-90plus">{platformAging.days90plus.toFixed(2)}</p>
+                  </div>
+                </div>
+              </CardSection>
 
-              <Card>
-                <CardHeader><CardTitle>Settlements</CardTitle></CardHeader>
-                <CardContent>
-                  {settlements.length === 0 ? (
-                    <p className="text-center text-muted-foreground py-8">No settlements recorded yet</p>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Method</TableHead>
-                          <TableHead>Reference</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Action</TableHead>
+              <CardSection title="Settlements" description="Recorded settlements against platform revenue." icon={Receipt} flush>
+                {settlements.length === 0 ? (
+                  <EmptyState title="No settlements yet" className="border-0 rounded-none bg-transparent py-8" />
+                ) : (
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Method</TableHead>
+                        <TableHead>Reference</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {settlements.map((s: any) => (
+                        <TableRow key={s.id} className="hover:bg-muted/40" data-testid={`row-settlement-${s.id}`}>
+                          <TableCell className="text-sm">{new Date(s.createdAt).toLocaleDateString()}</TableCell>
+                          <TableCell className="font-semibold text-right tabular-nums">{s.currency} {parseFloat(s.amount).toFixed(2)}</TableCell>
+                          <TableCell><Badge variant="outline">{s.method}</Badge></TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{s.reference || "—"}</TableCell>
+                          <TableCell>
+                            <Badge variant={s.status === "approved" ? "default" : s.status === "rejected" ? "destructive" : "secondary"}>
+                              {s.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {s.status === "pending" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => approveSettlementMutation.mutate(s.id)}
+                                disabled={approveSettlementMutation.isPending}
+                                data-testid={`button-approve-settlement-${s.id}`}
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
+                              </Button>
+                            )}
+                          </TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {settlements.map((s: any) => (
-                          <TableRow key={s.id} data-testid={`row-settlement-${s.id}`}>
-                            <TableCell className="text-sm">{new Date(s.createdAt).toLocaleDateString()}</TableCell>
-                            <TableCell className="font-semibold">{s.currency} {parseFloat(s.amount).toFixed(2)}</TableCell>
-                            <TableCell><Badge variant="outline">{s.method}</Badge></TableCell>
-                            <TableCell className="font-mono text-xs text-muted-foreground">{s.reference || "—"}</TableCell>
-                            <TableCell>
-                              <Badge variant={s.status === "approved" ? "default" : s.status === "rejected" ? "destructive" : "secondary"}>
-                                {s.status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              {s.status === "pending" && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => approveSettlementMutation.mutate(s.id)}
-                                  disabled={approveSettlementMutation.isPending}
-                                  data-testid={`button-approve-settlement-${s.id}`}
-                                >
-                                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
-                                </Button>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                )}
+              </CardSection>
 
-              <Card>
-                <CardHeader><CardTitle>Receivables</CardTitle></CardHeader>
-                <CardContent>
-                  {platformReceivables.length === 0 ? (
-                    <p className="text-center text-muted-foreground py-8">No receivables yet — they are auto-created when payments are cleared</p>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Description</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Currency</TableHead>
-                          <TableHead>Status</TableHead>
+              <CardSection title="Receivables" description="Auto-created when payments are cleared." icon={FileText} flush>
+                {platformReceivables.length === 0 ? (
+                  <EmptyState
+                    title="No receivables yet"
+                    description="They are created automatically when payments are cleared."
+                    className="border-0 rounded-none bg-transparent py-8"
+                  />
+                ) : (
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Currency</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {platformReceivables.map((r: any) => (
+                        <TableRow key={r.id} className="hover:bg-muted/40" data-testid={`row-receivable-${r.id}`}>
+                          <TableCell className="text-sm">{new Date(r.createdAt).toLocaleDateString()}</TableCell>
+                          <TableCell className="text-sm">{r.description || "—"}</TableCell>
+                          <TableCell className="font-semibold text-right tabular-nums">{parseFloat(r.amount).toFixed(2)}</TableCell>
+                          <TableCell>{r.currency}</TableCell>
+                          <TableCell>
+                            <Badge variant={r.isSettled ? "default" : "secondary"}>
+                              {r.isSettled ? "Settled" : "Outstanding"}
+                            </Badge>
+                          </TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {platformReceivables.map((r: any) => (
-                          <TableRow key={r.id} data-testid={`row-receivable-${r.id}`}>
-                            <TableCell className="text-sm">{new Date(r.createdAt).toLocaleDateString()}</TableCell>
-                            <TableCell className="text-sm">{r.description || "—"}</TableCell>
-                            <TableCell className="font-semibold">{parseFloat(r.amount).toFixed(2)}</TableCell>
-                            <TableCell>{r.currency}</TableCell>
-                            <TableCell>
-                              <Badge variant={r.isSettled ? "default" : "secondary"}>
-                                {r.isSettled ? "Settled" : "Outstanding"}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                )}
+              </CardSection>
             </div>
           </TabsContent>
 
           <TabsContent value="month-end">
-            <Card>
-              <CardHeader>
-                <CardTitle>Month-end run</CardTitle>
-                <p className="text-sm text-muted-foreground">Upload a CSV with policy_number, amount, currency. Policies with sufficient amount are receipted; underpayments go to policy credit balance and a credit note is issued.</p>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <Button variant="outline" asChild>
-                    <a href={getApiBase() + "/api/month-end-run/template"} download="month-end-run-template.csv" data-testid="button-download-month-end-template">
-                      Download template
-                    </a>
-                  </Button>
-                </div>
-                <MonthEndRunUpload onSuccess={() => { toast({ title: "Month-end run completed" }); queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); }} />
-              </CardContent>
-            </Card>
+            <CardSection
+              title="Month-end run"
+              description="Upload a CSV with policy_number, amount, currency. Policies with sufficient amount are receipted; underpayments go to policy credit balance and a credit note is issued."
+              icon={FileText}
+            >
+              <div className="flex items-center gap-4">
+                <Button variant="outline" asChild>
+                  <a href={getApiBase() + "/api/month-end-run/template"} download="month-end-run-template.csv" data-testid="button-download-month-end-template">
+                    Download template
+                  </a>
+                </Button>
+              </div>
+              <MonthEndRunUpload onSuccess={() => { toast({ title: "Month-end run completed" }); queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); }} />
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="group-receipt">
-            <Card>
-              <CardHeader>
-                <CardTitle>Group receipt</CardTitle>
-                <p className="text-sm text-muted-foreground">Select a group and policies to receipt at once. Total amount is split by premium proportion.</p>
-              </CardHeader>
-              <CardContent>
-                <GroupReceiptForm onSuccess={() => { toast({ title: "Group receipted" }); queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); }} />
-              </CardContent>
-            </Card>
+            <CardSection
+              title="Group receipt"
+              description="Select a group and policies to receipt at once. Total amount is split by premium proportion."
+              icon={Receipt}
+            >
+              <GroupReceiptForm onSuccess={() => { toast({ title: "Group receipted" }); queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); }} />
+            </CardSection>
           </TabsContent>
         </Tabs>
       </div>

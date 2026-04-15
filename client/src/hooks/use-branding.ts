@@ -16,9 +16,15 @@ export interface PlatformBranding {
 const FALLBACK: PlatformBranding = {
   name: "POL263",
   logoUrl: getDefaultLogoUrl(),
-  primaryColor: "#D4AF37",
+  primaryColor: "#0d9488",
   isWhitelabeled: false,
 };
+
+function isStockOrEmptyLogoUrl(url: string | null | undefined): boolean {
+  if (!url?.trim()) return true;
+  const path = url.trim().split("?")[0].toLowerCase();
+  return path.endsWith("/assets/logo.png");
+}
 
 /**
  * Fetches the platform/tenant branding from the public endpoint.
@@ -43,7 +49,8 @@ export function useBranding(orgId?: string | null) {
 
   const branding = data ?? FALLBACK;
   const displayName = branding.isWhitelabeled ? branding.name : "POL263";
-  const displayLogo = branding.isWhitelabeled ? branding.logoUrl : getDefaultLogoUrl();
+  /** Use tenant logo whenever the API returns a real URL (e.g. Spaces CDN), not only when isWhitelabeled is true. */
+  const displayLogo = !isStockOrEmptyLogoUrl(branding.logoUrl) ? branding.logoUrl!.trim() : getDefaultLogoUrl();
 
   return {
     branding,

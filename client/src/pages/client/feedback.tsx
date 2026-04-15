@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
+import { PageHeader } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -75,23 +76,30 @@ export default function ClientFeedback() {
   return (
     <ClientLayout clientName="">
       <div className="max-w-2xl mx-auto space-y-6">
-        <Button variant="ghost" className="gap-2" onClick={() => setLocation("/client")}>
+        <Button variant="ghost" className="gap-2 touch-target sm:min-h-0 sm:min-w-0 sm:h-9 w-fit" onClick={() => setLocation("/client")}>
           <ArrowLeft className="h-4 w-4" />
           Back to dashboard
         </Button>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5" />
+        <PageHeader
+          className="mb-6"
+          title={(
+            <span className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 shrink-0" />
               Complaints & feedback
-            </CardTitle>
-            <Button size="sm" className="gap-2" onClick={() => setShowForm(true)}>
+            </span>
+          )}
+          description="Submit a complaint or general feedback. We review every submission."
+          actions={(
+            <Button size="sm" className="gap-2 touch-target sm:min-h-9 w-full sm:w-auto" onClick={() => setShowForm(true)}>
               <Plus className="h-4 w-4" />
               New
             </Button>
-          </CardHeader>
-          <CardContent>
+          )}
+        />
+
+        <Card>
+          <CardContent className="pt-6">
             {isLoading ? (
               <p className="text-muted-foreground text-sm py-6 text-center">Loading…</p>
             ) : items.length === 0 ? (

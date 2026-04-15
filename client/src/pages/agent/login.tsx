@@ -17,7 +17,7 @@ export default function AgentLogin() {
   const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
   const orgIdFromUrl = params.get("orgId") || undefined;
   const { isAuthenticated, isLoading } = useAuth();
-  const { displayName, displayLogo } = useBranding(orgIdFromUrl);
+  const { displayName, displayLogo, isWhitelabeled } = useBranding(orgIdFromUrl);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -74,14 +74,16 @@ export default function AgentLogin() {
   }
 
   return (
-    <div className="min-h-screen bg-muted/30 flex flex-col">
-      <div className="flex-1 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md border-border/50 shadow-lg">
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-muted/40 via-background to-muted/25">
+      <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+        <Card className="w-full max-w-md rounded-xl border-border/70 shadow-lg shadow-primary/5">
         <CardHeader className="text-center pb-6">
-          <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
-            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="w-10 h-10 rounded-lg object-contain" fetchPriority="high" />
+          <div className="mx-auto px-4 py-3 bg-primary/15 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/25 max-w-full">
+            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-10 w-auto max-w-[min(280px,85vw)] object-contain object-center" fetchPriority="high" />
           </div>
-          <CardTitle className="text-2xl font-display">{displayName} — Agent Login</CardTitle>
+          <CardTitle className="text-2xl font-display">
+            {isWhitelabeled ? `${displayName} — Agent Login` : "Agent Login"}
+          </CardTitle>
           <CardDescription className="text-base mt-2">
             Sign in with the email and password set by your administrator. Agents cannot use Google sign-in.
           </CardDescription>
@@ -100,6 +102,7 @@ export default function AgentLogin() {
                 type="email"
                 autoComplete="email"
                 placeholder="you@example.com"
+                className="h-11"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={submitting}
@@ -113,13 +116,14 @@ export default function AgentLogin() {
                 type="password"
                 autoComplete="current-password"
                 placeholder="••••••••"
+                className="h-11"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={submitting}
                 data-testid="input-agent-password"
               />
             </div>
-            <Button type="submit" className="w-full" disabled={submitting} data-testid="button-agent-login">
+            <Button type="submit" className="w-full h-11 touch-target sm:h-10" disabled={submitting} data-testid="button-agent-login">
               {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Sign in
             </Button>

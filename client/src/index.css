@@ -3,7 +3,56 @@
 @tailwind utilities;
 
 /* ═══════════════════════════════════════════════════════════
-   THEME: Obsidian Gold (default) — dark bg, gold accents
+   THEME: Insurance Teal — cool gray neutrals, deep teal primary
+   (Stripe / Linear inspired density; tuned for policy admin UI)
+   ═══════════════════════════════════════════════════════════ */
+[data-theme="insurance-teal"] {
+  --background: 210 18% 97%;
+  --foreground: 222 22% 11%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 222 22% 11%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 22% 11%;
+
+  /* Deep teal primary — strong enough for WCAG AA on large text & UI chrome */
+  --primary: 172 66% 28%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 214 18% 93%;
+  --secondary-foreground: 222 22% 14%;
+
+  --muted: 210 16% 96%;
+  --muted-foreground: 215 14% 42%;
+
+  --accent: 174 22% 94%;
+  --accent-foreground: 174 58% 22%;
+
+  --destructive: 0 72% 46%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 214 16% 88%;
+  --input: 214 16% 88%;
+  --ring: 172 66% 28%;
+
+  --radius: 0.625rem;
+  --focus-ring: hsl(172 66% 28%);
+
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.05), 0 4px 20px rgb(15 23 42 / 0.04);
+
+  --status-active: 160 72% 30%;
+  --status-grace: 32 94% 38%;
+  --status-lapsed: 0 72% 46%;
+  --status-cancelled: 215 14% 45%;
+  --status-inactive: 210 70% 40%;
+  --status-paid: 160 72% 30%;
+  --status-pending: 32 94% 38%;
+  --status-error: 0 72% 46%;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   THEME: Obsidian Gold — dark bg, gold accents
    ═══════════════════════════════════════════════════════════ */
 :root,
 [data-theme="obsidian-gold"] {
@@ -158,9 +207,23 @@
     @apply font-sans antialiased bg-background text-foreground;
     overflow-x: clip;
     max-width: 100vw;
+    font-feature-settings: "kern" 1, "liga" 1;
   }
   h1, h2, h3, h4, h5, h6 {
     @apply font-display tracking-tight;
+  }
+}
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+  /** Policy numbers, money, ISO dates — tabular + slightly tighter for dense tables */
+  .text-financial {
+    @apply tabular-nums tracking-tight;
+  }
+  .touch-target {
+    @apply min-h-11 min-w-11 sm:min-h-9 sm:min-w-9;
   }
 }
 

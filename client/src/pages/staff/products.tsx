@@ -3,8 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
@@ -276,34 +276,18 @@ export default function ProductBuilder() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-page-title">Product Builder</h1>
-            <p className="text-muted-foreground mt-1">Configure products, benefits, add-ons, and pricing.</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Product Builder"
+          description="Configure products, benefits, add-ons, and pricing."
+          titleDataTestId="text-page-title"
+        />
 
-        <div className="grid md:grid-cols-5 gap-4">
-          <Card className="bg-primary/5 border-primary/20 shadow-sm">
-            <CardHeader className="pb-2"><Package className="h-6 w-6 text-primary mb-1" /><CardDescription>Active Products</CardDescription></CardHeader>
-            <CardContent><p className="text-2xl font-display font-bold" data-testid="text-active-products-count">{loadingProducts ? "—" : activeProductCount}</p></CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardHeader className="pb-2"><Layers className="h-6 w-6 text-muted-foreground mb-1" /><CardDescription>Benefit Items</CardDescription></CardHeader>
-            <CardContent><p className="text-2xl font-display font-bold" data-testid="text-benefit-count">{loadingBenefits ? "—" : benefitCatalog.length}</p></CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardHeader className="pb-2"><Puzzle className="h-6 w-6 text-muted-foreground mb-1" /><CardDescription>Add-Ons</CardDescription></CardHeader>
-            <CardContent><p className="text-2xl font-display font-bold" data-testid="text-addon-count">{loadingAddOns ? "—" : addOns.length}</p></CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardHeader className="pb-2"><BarChart3 className="h-6 w-6 text-muted-foreground mb-1" /><CardDescription>Age Bands</CardDescription></CardHeader>
-            <CardContent><p className="text-2xl font-display font-bold" data-testid="text-ageband-count">{loadingAgeBands ? "—" : ageBands.length}</p></CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardHeader className="pb-2"><FileText className="h-6 w-6 text-muted-foreground mb-1" /><CardDescription>T&C Clauses</CardDescription></CardHeader>
-            <CardContent><p className="text-2xl font-display font-bold" data-testid="text-terms-count">{loadingTerms ? "—" : termsList.length}</p></CardContent>
-          </Card>
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+          <KpiStatCard className="bg-primary/5 border-primary/20" label="Active products" value={<span data-testid="text-active-products-count">{loadingProducts ? "—" : activeProductCount}</span>} icon={Package} />
+          <KpiStatCard label="Benefit items" value={<span data-testid="text-benefit-count">{loadingBenefits ? "—" : benefitCatalog.length}</span>} icon={Layers} />
+          <KpiStatCard label="Add-ons" value={<span data-testid="text-addon-count">{loadingAddOns ? "—" : addOns.length}</span>} icon={Puzzle} />
+          <KpiStatCard label="Age bands" value={<span data-testid="text-ageband-count">{loadingAgeBands ? "—" : ageBands.length}</span>} icon={BarChart3} />
+          <KpiStatCard label="T&C clauses" value={<span data-testid="text-terms-count">{loadingTerms ? "—" : termsList.length}</span>} icon={FileText} />
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -317,29 +301,29 @@ export default function ProductBuilder() {
           </TabsList>
 
           <TabsContent value="products">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <CardTitle>Configured Products</CardTitle>
-                  <div className="flex items-center gap-2">
-                    <div className="relative w-64">
-                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input placeholder="Search products..." className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-products" />
-                    </div>
-                    <Button className="gap-2" onClick={() => setShowCreateProduct(true)} data-testid="button-create-product">
-                      <Plus className="h-4 w-4" /> New Product
-                    </Button>
+            <CardSection
+              title="Configured Products"
+              icon={Package}
+              headerRight={(
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center w-full sm:w-auto">
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search products..." className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-products" />
                   </div>
+                  <Button className="gap-2 shrink-0" onClick={() => setShowCreateProduct(true)} data-testid="button-create-product">
+                    <Plus className="h-4 w-4" /> New Product
+                  </Button>
                 </div>
-              </CardHeader>
-              <CardContent className="p-0">
+              )}
+              flush
+            >
                 {loadingProducts ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
                 ) : filteredProducts.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground"><Box className="h-10 w-10 mx-auto mb-3 opacity-40" /><p>No products found</p></div>
+                  <EmptyState icon={Box} title="No products found" description="Create a product or adjust your search." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead className="pl-6 w-8"></TableHead>
                         <TableHead>Product</TableHead>
@@ -365,28 +349,26 @@ export default function ProductBuilder() {
                         />
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="benefits">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <div><CardTitle>Benefit Catalog</CardTitle><CardDescription>Individual benefit items that can be grouped into bundles.</CardDescription></div>
-                  <Button className="gap-2" onClick={() => setShowCreateBenefit(true)} data-testid="button-create-benefit"><Plus className="h-4 w-4" /> New Benefit</Button>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
+            <CardSection
+              title="Benefit Catalog"
+              description="Individual benefit items that can be grouped into bundles."
+              icon={Layers}
+              headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateBenefit(true)} data-testid="button-create-benefit"><Plus className="h-4 w-4" /> New Benefit</Button>}
+              flush
+            >
                 {loadingBenefits ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : benefitCatalog.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground"><Layers className="h-10 w-10 mx-auto mb-3 opacity-40" /><p>No benefit items yet</p></div>
+                  <EmptyState icon={Layers} title="No benefit items yet" description="Create benefits to attach to bundles and products." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead className="pl-6">Name</TableHead>
                         <TableHead>Description</TableHead>
@@ -397,7 +379,7 @@ export default function ProductBuilder() {
                     </TableHeader>
                     <TableBody>
                       {benefitCatalog.map((item) => (
-                        <TableRow key={item.id} data-testid={`row-benefit-${item.id}`}>
+                        <TableRow key={item.id} className="hover:bg-muted/40" data-testid={`row-benefit-${item.id}`}>
                           <TableCell className="font-medium pl-6">{item.name}</TableCell>
                           <TableCell className="text-muted-foreground">{item.description || "—"}</TableCell>
                           <TableCell>{item.internalCostDefault ? formatAmount(item.internalCostDefault, "USD") : "—"}</TableCell>
@@ -406,28 +388,26 @@ export default function ProductBuilder() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="bundles">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <div><CardTitle>Benefit Bundles</CardTitle><CardDescription>Groups of benefits linked to product versions.</CardDescription></div>
-                  <Button className="gap-2" onClick={() => setShowCreateBundle(true)} data-testid="button-create-bundle"><Plus className="h-4 w-4" /> New Bundle</Button>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
+            <CardSection
+              title="Benefit Bundles"
+              description="Groups of benefits linked to product versions."
+              icon={Package}
+              headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateBundle(true)} data-testid="button-create-bundle"><Plus className="h-4 w-4" /> New Bundle</Button>}
+              flush
+            >
                 {loadingBundles ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : benefitBundles.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground"><Package className="h-10 w-10 mx-auto mb-3 opacity-40" /><p>No bundles yet</p></div>
+                  <EmptyState icon={Package} title="No bundles yet" description="Create a bundle to group benefits for product versions." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead className="pl-6">Name</TableHead>
                         <TableHead>Description</TableHead>
@@ -437,7 +417,7 @@ export default function ProductBuilder() {
                     </TableHeader>
                     <TableBody>
                       {benefitBundles.map((bundle) => (
-                        <TableRow key={bundle.id} data-testid={`row-bundle-${bundle.id}`}>
+                        <TableRow key={bundle.id} className="hover:bg-muted/40" data-testid={`row-bundle-${bundle.id}`}>
                           <TableCell className="font-medium pl-6">{bundle.name}</TableCell>
                           <TableCell className="text-muted-foreground">{bundle.description || "—"}</TableCell>
                           <TableCell><Badge variant={bundle.isActive ? "default" : "secondary"} className={bundle.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{bundle.isActive ? "Active" : "Inactive"}</Badge></TableCell>
@@ -445,28 +425,26 @@ export default function ProductBuilder() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="addons">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <div><CardTitle>Add-Ons</CardTitle><CardDescription>Optional extras with their own premiums that can be added to policies.</CardDescription></div>
-                  <Button className="gap-2" onClick={() => setShowCreateAddOn(true)} data-testid="button-create-addon"><Plus className="h-4 w-4" /> New Add-On</Button>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
+            <CardSection
+              title="Add-Ons"
+              description="Optional extras with their own premiums that can be added to policies."
+              icon={Puzzle}
+              headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateAddOn(true)} data-testid="button-create-addon"><Plus className="h-4 w-4" /> New Add-On</Button>}
+              flush
+            >
                 {loadingAddOns ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : addOns.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground"><Puzzle className="h-10 w-10 mx-auto mb-3 opacity-40" /><p>No add-ons yet</p></div>
+                  <EmptyState icon={Puzzle} title="No add-ons yet" description="Create add-ons for optional policy extras." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead className="pl-6">Name</TableHead>
                         <TableHead>Mode</TableHead>
@@ -479,7 +457,7 @@ export default function ProductBuilder() {
                     </TableHeader>
                     <TableBody>
                       {addOns.map((addon) => (
-                        <TableRow key={addon.id} data-testid={`row-addon-${addon.id}`}>
+                        <TableRow key={addon.id} className="hover:bg-muted/40" data-testid={`row-addon-${addon.id}`}>
                           <TableCell className="pl-6">
                             <p className="font-medium">{addon.name}</p>
                             {addon.description && <p className="text-xs text-muted-foreground">{addon.description}</p>}
@@ -493,28 +471,26 @@ export default function ProductBuilder() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="agebands">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <div><CardTitle>Age Band Configuration</CardTitle><CardDescription>Age-based pricing modifiers for products.</CardDescription></div>
-                  <Button className="gap-2" onClick={() => setShowCreateAgeBand(true)} data-testid="button-create-ageband"><Plus className="h-4 w-4" /> New Age Band</Button>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
+            <CardSection
+              title="Age Band Configuration"
+              description="Age-based pricing modifiers for products."
+              icon={BarChart3}
+              headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateAgeBand(true)} data-testid="button-create-ageband"><Plus className="h-4 w-4" /> New Age Band</Button>}
+              flush
+            >
                 {loadingAgeBands ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : ageBands.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground"><BarChart3 className="h-10 w-10 mx-auto mb-3 opacity-40" /><p>No age bands configured</p></div>
+                  <EmptyState icon={BarChart3} title="No age bands configured" description="Define age bands to adjust premiums by age." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead className="pl-6">Name</TableHead>
                         <TableHead>Min Age</TableHead>
@@ -527,7 +503,7 @@ export default function ProductBuilder() {
                     </TableHeader>
                     <TableBody>
                       {ageBands.map((band) => (
-                        <TableRow key={band.id} data-testid={`row-ageband-${band.id}`}>
+                        <TableRow key={band.id} className="hover:bg-muted/40" data-testid={`row-ageband-${band.id}`}>
                           <TableCell className="font-medium pl-6">{band.name}</TableCell>
                           <TableCell>{band.minAge}</TableCell>
                           <TableCell>{band.maxAge}</TableCell>
@@ -538,33 +514,30 @@ export default function ProductBuilder() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="terms">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Terms & Conditions</CardTitle>
-                    <CardDescription>Manage T&Cs per product version. These appear on policy documents and can be translated into multiple languages when downloaded.</CardDescription>
-                  </div>
-                  <Button className="gap-2" onClick={() => { setShowCreateTerm(true); setTermProductVersionId(""); }} data-testid="button-create-term">
-                    <Plus className="h-4 w-4" /> New Term
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
+            <CardSection
+              title="Terms & Conditions"
+              description="Manage T&Cs per product version. These appear on policy documents and can be translated into multiple languages when downloaded."
+              icon={FileText}
+              headerRight={(
+                <Button className="gap-2 shrink-0" onClick={() => { setShowCreateTerm(true); setTermProductVersionId(""); }} data-testid="button-create-term">
+                  <Plus className="h-4 w-4" /> New Term
+                </Button>
+              )}
+              flush
+            >
                 {loadingTerms ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : termsList.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground"><FileText className="h-10 w-10 mx-auto mb-3 opacity-40" /><p>No terms configured yet.</p></div>
+                  <EmptyState icon={FileText} title="No terms configured yet" description="Add clauses for product versions or general use." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead className="pl-6">Title</TableHead>
                         <TableHead>Product Version</TableHead>
@@ -578,7 +551,7 @@ export default function ProductBuilder() {
                       {termsList.map((term: any) => {
                         const pv = allProductVersions.find((v) => v.id === term.productVersionId);
                         return (
-                          <TableRow key={term.id}>
+                          <TableRow key={term.id} className="hover:bg-muted/40">
                             <TableCell className="pl-6">
                               <p className="font-medium">{term.title}</p>
                               <p className="text-xs text-muted-foreground line-clamp-1 max-w-[300px]">{term.content}</p>
@@ -607,10 +580,9 @@ export default function ProductBuilder() {
                         );
                       })}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
         </Tabs>
       </div>

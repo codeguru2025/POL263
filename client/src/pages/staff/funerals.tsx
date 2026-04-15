@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, KpiStatCard } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -148,55 +149,37 @@ export default function StaffFunerals() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-page-title">
-              Funeral Operations
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Manage funeral cases, logistics, fleet dispatch, and resource allocation.
-            </p>
-          </div>
-          <Button className="gap-2 shadow-sm" data-testid="button-new-case" onClick={() => setShowCreateCase(true)}>
-            <Plus className="h-4 w-4" /> New Case
-          </Button>
-        </div>
+        <PageHeader
+          title="Funeral Operations"
+          description="Manage funeral cases, logistics, fleet dispatch, and resource allocation."
+          titleDataTestId="text-page-title"
+          actions={(
+            <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" data-testid="button-new-case" onClick={() => setShowCreateCase(true)}>
+              <Plus className="h-4 w-4" /> New Case
+            </Button>
+          )}
+        />
 
-        <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <Card className="bg-primary/5 border-primary/20 shadow-sm">
-            <CardHeader className="pb-3">
-              <Box className="h-8 w-8 text-primary mb-2" />
-              <CardTitle className="text-lg">Active Cases</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-display font-bold" data-testid="text-active-cases">{activeCases}</p>
-              <p className="text-xs text-muted-foreground mt-1">Requiring immediate attention</p>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardHeader className="pb-3">
-              <Car className="h-8 w-8 text-muted-foreground mb-2" />
-              <CardTitle className="text-lg">Fleet Utilization</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-display font-bold" data-testid="text-fleet-utilization">
-                {dispatchedVehicles}/{fleetVehicles.length}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">Vehicles currently dispatched</p>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardHeader className="pb-3">
-              <CheckCircle2 className="h-8 w-8 text-emerald-600 mb-2" />
-              <CardTitle className="text-lg">Total Cases</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-display font-bold" data-testid="text-total-cases">{funeralCases.length}</p>
-              <p className="text-xs text-muted-foreground mt-1">All time</p>
-            </CardContent>
-          </Card>
+        <div className="grid md:grid-cols-3 gap-4 mb-8">
+          <KpiStatCard
+            className="bg-primary/5 border-primary/20"
+            label="Active cases"
+            value={<span data-testid="text-active-cases">{activeCases}</span>}
+            hint="Requiring immediate attention"
+            icon={Box}
+          />
+          <KpiStatCard
+            label="Fleet utilization"
+            value={<span data-testid="text-fleet-utilization">{dispatchedVehicles}/{fleetVehicles.length}</span>}
+            hint="Vehicles currently dispatched"
+            icon={Car}
+          />
+          <KpiStatCard
+            label="Total cases"
+            value={<span data-testid="text-total-cases">{funeralCases.length}</span>}
+            hint="All time"
+            icon={CheckCircle2}
+          />
         </div>
 
         <Tabs defaultValue="cases">

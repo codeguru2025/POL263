@@ -1,6 +1,7 @@
 import { useState, useEffect, type ChangeEvent } from "react";
 import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +40,7 @@ import {
   Globe,
   Settings as SettingsIcon,
   Users,
+  FileText,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken } from "@/lib/queryClient";
@@ -491,10 +493,10 @@ export default function StaffSettings() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-display font-bold">Settings</h1>
-          <p className="text-muted-foreground mt-1">Manage organization settings and Role-Based Access Control.</p>
-        </div>
+        <PageHeader
+          title="Settings"
+          description="Manage organization settings and Role-Based Access Control."
+        />
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList
@@ -536,41 +538,35 @@ export default function StaffSettings() {
                     <p className="text-sm text-muted-foreground">Loading tenants…</p>
                   </div>
                 ) : isOrgsError ? (
-                  <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
-                      <p className="text-muted-foreground font-medium">Could not load tenants</p>
-                      <p className="text-sm text-muted-foreground text-center max-w-md">
-                        {orgsError instanceof Error ? orgsError.message : "Something went wrong."}
-                      </p>
-                      <Button variant="outline" onClick={() => refetchOrgsList()}>
-                        Try again
-                      </Button>
-                    </CardContent>
-                  </Card>
+                  <EmptyState
+                    icon={Building2}
+                    title="Could not load tenants"
+                    description={orgsError instanceof Error ? orgsError.message : "Something went wrong."}
+                    action={<Button variant="outline" onClick={() => refetchOrgsList()}>Try again</Button>}
+                    className="py-16"
+                  />
                 ) : orgsForbidden ? (
-                  <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
-                      <Shield className="h-12 w-12 text-muted-foreground/40" />
-                      <p className="text-muted-foreground font-medium">Access restricted</p>
-                      <p className="text-sm text-muted-foreground text-center max-w-md">
-                        You don’t have permission to view or manage tenants.
-                      </p>
-                    </CardContent>
-                  </Card>
+                  <EmptyState
+                    icon={Shield}
+                    title="Access restricted"
+                    description="You don't have permission to view or manage tenants."
+                    className="py-16"
+                  />
                 ) : orgsList.length === 0 ? (
-                  <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-16">
-                      <Building2 className="h-12 w-12 text-muted-foreground/40 mb-4" />
-                      <p className="text-muted-foreground font-medium">No tenants yet</p>
-                      <p className="text-sm text-muted-foreground mt-1">Create your first tenant to get started.</p>
-                      {canCreateTenant && (
-                        <Button className="mt-4" onClick={() => setTenantAddOpen(true)}>
+                  <EmptyState
+                    icon={Building2}
+                    title="No tenants yet"
+                    description="Create your first tenant to get started."
+                    action={
+                      canCreateTenant ? (
+                        <Button onClick={() => setTenantAddOpen(true)}>
                           <Plus className="h-4 w-4 mr-2" />
                           Create tenant
                         </Button>
-                      )}
-                    </CardContent>
-                  </Card>
+                      ) : undefined
+                    }
+                    className="py-16"
+                  />
                 ) : (
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {orgsList.map((org: any) => {
@@ -900,12 +896,12 @@ export default function StaffSettings() {
 
           {/* Branding */}
           <TabsContent value="branding" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle>Organization Branding</CardTitle>
-                <CardDescription>Customize the look and feel for this specific tenant.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
+            <CardSection
+              title="Organization branding"
+              description="Customize the look and feel for this specific tenant."
+              icon={SettingsIcon}
+            >
+              <div className="space-y-6">
                 <div className="space-y-4">
                   <Label>Organization Logo</Label>
                   <div className="flex items-center gap-6">
@@ -984,20 +980,20 @@ export default function StaffSettings() {
                       <input
                         type="color"
                         id="primaryColor"
-                        value={primaryColor || currentOrg?.primaryColor || "#D4AF37"}
+                        value={primaryColor || currentOrg?.primaryColor || "#0d9488"}
                         onChange={(e) => setPrimaryColor(e.target.value)}
                         className="h-10 w-10 rounded border cursor-pointer p-0.5"
                       />
                       <Input
-                        value={primaryColor || currentOrg?.primaryColor || "#D4AF37"}
+                        value={primaryColor || currentOrg?.primaryColor || "#0d9488"}
                         className="font-mono w-32"
                         onChange={(e) => setPrimaryColor(e.target.value)}
                         maxLength={7}
-                        placeholder="#D4AF37"
+                        placeholder="#0d9488"
                       />
                     </div>
                     <div className="flex flex-wrap gap-1.5 mt-1">
-                      {["#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"].map((c) => (
+                      {["#0d9488","#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"].map((c) => (
                         <button
                           key={c}
                           type="button"
@@ -1055,20 +1051,20 @@ export default function StaffSettings() {
                     <Check className="h-4 w-4" /> Saved successfully. Audit log entry created.
                   </p>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </CardSection>
           </TabsContent>
 
           {/* Account */}
           <TabsContent value="account" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <KeyRound className="h-5 w-5" /> Change password
-                </CardTitle>
-                <CardDescription>Change your sign-in password. If you sign in with Google, this section does not apply.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 max-w-md">
+            <CardSection
+              title="Change password"
+              description="Change your sign-in password. If you sign in with Google, this section does not apply."
+              icon={KeyRound}
+              className="max-w-2xl"
+              contentClassName="max-w-md"
+            >
+              <div className="space-y-4">
                 <div className="grid gap-2">
                   <Label htmlFor="currentPassword">Current password</Label>
                   <Input
@@ -1141,35 +1137,36 @@ export default function StaffSettings() {
                   {changePasswordMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Change password
                 </Button>
-              </CardContent>
-            </Card>
+              </div>
+            </CardSection>
           </TabsContent>
 
           {/* Terms */}
           <TabsContent value="terms" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle>Terms and Conditions</CardTitle>
-                <CardDescription>
-                  Terms and conditions appear on policy documents and e-statements. Add and reorder them below; only active terms are included on PDFs.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex justify-end mb-4">
-                  <Button onClick={openNewTermDialog}>
-                    <Plus className="h-4 w-4 mr-2" /> Add term
-                  </Button>
-                </div>
-
+            <CardSection
+              title="Terms and Conditions"
+              description="Terms appear on policy documents and e-statements. Only active terms are included on PDFs."
+              icon={FileText}
+              headerRight={(
+                <Button onClick={openNewTermDialog}>
+                  <Plus className="h-4 w-4 mr-2" /> Add term
+                </Button>
+              )}
+              flush
+            >
                 {termsList === undefined ? (
                   <div className="flex justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin text-primary" />
                   </div>
                 ) : (termsList ?? []).length === 0 ? (
-                  <p className="text-muted-foreground text-sm py-6">No terms yet. Add one to show on policy documents.</p>
+                  <EmptyState
+                    title="No terms yet"
+                    description="Add one to show on policy documents."
+                    className="border-0 rounded-none bg-transparent py-10"
+                  />
                 ) : (
-                  <Table>
-                    <TableHeader>
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead>Title</TableHead>
                         <TableHead>Category</TableHead>
@@ -1180,7 +1177,7 @@ export default function StaffSettings() {
                     </TableHeader>
                     <TableBody>
                       {(termsList ?? []).map((term: any) => (
-                        <TableRow key={term.id}>
+                        <TableRow key={term.id} className="hover:bg-muted/40">
                           <TableCell className="font-medium">{term.title}</TableCell>
                           <TableCell className="text-muted-foreground">{term.category || "general"}</TableCell>
                           <TableCell>{term.sortOrder}</TableCell>
@@ -1198,10 +1195,9 @@ export default function StaffSettings() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
 
             <Dialog open={termDialogOpen} onOpenChange={setTermDialogOpen}>
               <DialogContent className="max-w-lg">
@@ -1287,35 +1283,33 @@ export default function StaffSettings() {
 
           {/* RBAC */}
           <TabsContent value="rbac" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Role Permissions Mapping</CardTitle>
-                    <CardDescription className="mt-1.5">
-                      {canEditRbac
-                        ? "Click a cell to toggle permissions for each role. Superuser always has all permissions."
-                        : "Live DB-driven RBAC configuration. Roles and permissions are fetched from the database."}
-                    </CardDescription>
-                  </div>
-                  {canManagePermissions && (
-                    <Button
-                      variant="outline"
-                      onClick={() => syncPermissionsMutation.mutate()}
-                      disabled={syncPermissionsMutation.isPending}
-                      data-testid="btn-sync-permissions"
-                    >
-                      {syncPermissionsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Shield className="h-4 w-4 mr-2" />}
-                      Sync Permissions
-                    </Button>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
+            <CardSection
+              title="Role permissions mapping"
+              description={
+                canEditRbac
+                  ? "Click a cell to toggle permissions for each role. Superuser always has all permissions."
+                  : "Live DB-driven RBAC configuration. Roles and permissions are fetched from the database."
+              }
+              icon={Shield}
+              headerRight={
+                canManagePermissions ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => syncPermissionsMutation.mutate()}
+                    disabled={syncPermissionsMutation.isPending}
+                    data-testid="btn-sync-permissions"
+                  >
+                    {syncPermissionsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Shield className="h-4 w-4 mr-2" />}
+                    Sync Permissions
+                  </Button>
+                ) : undefined
+              }
+              flush
+            >
                 {rolesList && permsList ? (
-                  <div className="border rounded-md overflow-hidden overflow-x-auto">
+                  <div className="border border-border/70 rounded-md overflow-hidden overflow-x-auto">
                     <Table>
-                      <TableHeader className="bg-muted/50">
+                      <TableHeader className={dataTableStickyHeaderClass}>
                         <TableRow>
                           <TableHead className="w-[200px] sticky left-0 bg-muted/50 z-10">Permission</TableHead>
                           {(rolesList ?? []).map((role: any) => (
@@ -1343,8 +1337,7 @@ export default function StaffSettings() {
                     <Loader2 className="h-6 w-6 animate-spin text-primary" />
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
         </Tabs>
       </div>

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, KpiStatCard } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -133,66 +134,27 @@ export default function StaffPayroll() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold" data-testid="text-payroll-title">Payroll</h1>
-            <p className="text-muted-foreground">Manage employees, payroll runs, and payslips</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => { resetEmployeeForm(); setShowEmployeeDialog(true); }} data-testid="button-add-employee">
-              <Plus className="h-4 w-4 mr-2" />Add Employee
-            </Button>
-            <Button onClick={() => setShowRunDialog(true)} data-testid="button-create-run">
-              <Play className="h-4 w-4 mr-2" />New Payroll Run
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="Payroll"
+          description="Manage employees, payroll runs, and payslips"
+          titleDataTestId="text-payroll-title"
+          actions={(
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => { resetEmployeeForm(); setShowEmployeeDialog(true); }} data-testid="button-add-employee">
+                <Plus className="h-4 w-4 mr-2" />Add Employee
+              </Button>
+              <Button onClick={() => setShowRunDialog(true)} data-testid="button-create-run">
+                <Play className="h-4 w-4 mr-2" />New Payroll Run
+              </Button>
+            </div>
+          )}
+        />
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <Users className="h-8 w-8 text-primary" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Employees</p>
-                  <p className="text-2xl font-bold" data-testid="text-employee-count">{employees.length}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <Users className="h-8 w-8 text-green-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Active Employees</p>
-                  <p className="text-2xl font-bold" data-testid="text-active-count">{activeEmployees.length}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <Banknote className="h-8 w-8 text-blue-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Monthly Salary Bill</p>
-                  <p className="text-2xl font-bold" data-testid="text-salary-bill">{totalSalaryBill.toFixed(2)}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <Calendar className="h-8 w-8 text-orange-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Payroll Runs</p>
-                  <p className="text-2xl font-bold" data-testid="text-run-count">{runs.length}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiStatCard label="Total employees" value={<span data-testid="text-employee-count">{employees.length}</span>} icon={Users} />
+          <KpiStatCard label="Active employees" value={<span className="text-emerald-600" data-testid="text-active-count">{activeEmployees.length}</span>} icon={Users} />
+          <KpiStatCard label="Monthly salary bill" value={<span className="tabular-nums" data-testid="text-salary-bill">{totalSalaryBill.toFixed(2)}</span>} icon={Banknote} />
+          <KpiStatCard label="Payroll runs" value={<span data-testid="text-run-count">{runs.length}</span>} icon={Calendar} />
         </div>
 
         <Tabs defaultValue="employees">

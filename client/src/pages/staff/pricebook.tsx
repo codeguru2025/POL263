@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
@@ -167,62 +167,17 @@ export default function StaffPriceBook() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-page-title">
-              Price Book & Cost Sheets
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Manage pricing catalog and generate itemized cost sheets for funeral cases.
-            </p>
-          </div>
-        </div>
+        <PageHeader
+          title="Price Book & Cost Sheets"
+          description="Manage pricing catalog and generate itemized cost sheets for funeral cases."
+          titleDataTestId="text-page-title"
+        />
 
-        <div className="grid md:grid-cols-4 gap-4">
-          <Card className="bg-primary/5 border-primary/20 shadow-sm">
-            <CardHeader className="pb-2">
-              <BookOpen className="h-6 w-6 text-primary mb-1" />
-              <CardDescription>Price Book Items</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-display font-bold" data-testid="text-pricebook-count">
-                {loadingItems ? "—" : activeItemCount}
-              </p>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardHeader className="pb-2">
-              <FileSpreadsheet className="h-6 w-6 text-muted-foreground mb-1" />
-              <CardDescription>Cost Sheets</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-display font-bold" data-testid="text-costsheet-count">
-                {loadingSheets ? "—" : costSheets.length}
-              </p>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardHeader className="pb-2">
-              <Calculator className="h-6 w-6 text-muted-foreground mb-1" />
-              <CardDescription>Draft Sheets</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-display font-bold" data-testid="text-draft-count">
-                {loadingSheets ? "—" : draftSheetCount}
-              </p>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardHeader className="pb-2">
-              <DollarSign className="h-6 w-6 text-muted-foreground mb-1" />
-              <CardDescription>Categories</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-display font-bold" data-testid="text-category-count">
-                {loadingItems ? "—" : categories.length}
-              </p>
-            </CardContent>
-          </Card>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiStatCard className="bg-primary/5 border-primary/20" label="Price book items" value={<span data-testid="text-pricebook-count">{loadingItems ? "—" : activeItemCount}</span>} icon={BookOpen} />
+          <KpiStatCard label="Cost sheets" value={<span data-testid="text-costsheet-count">{loadingSheets ? "—" : costSheets.length}</span>} icon={FileSpreadsheet} />
+          <KpiStatCard label="Draft sheets" value={<span data-testid="text-draft-count">{loadingSheets ? "—" : draftSheetCount}</span>} icon={Calculator} />
+          <KpiStatCard label="Categories" value={<span data-testid="text-category-count">{loadingItems ? "—" : categories.length}</span>} icon={DollarSign} />
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -232,51 +187,53 @@ export default function StaffPriceBook() {
           </TabsList>
 
           <TabsContent value="pricebook">
-            <Card className="shadow-sm">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <CardTitle>Price Book Catalog</CardTitle>
-                  <div className="flex items-center gap-2">
-                    <div className="relative w-64">
-                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search items..."
-                        className="pl-9"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        data-testid="input-search-pricebook"
-                      />
-                    </div>
-                    <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                      <SelectTrigger className="w-44" data-testid="select-category-filter">
-                        <SelectValue placeholder="All Categories" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Categories</SelectItem>
-                        {CATEGORIES.map((cat) => (
-                          <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button className="gap-2" onClick={() => setShowCreateItem(true)} data-testid="button-create-pricebook-item">
-                      <Plus className="h-4 w-4" /> New Item
-                    </Button>
+            <CardSection
+              title="Price Book Catalog"
+              icon={BookOpen}
+              headerRight={(
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap sm:justify-end">
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search items..."
+                      className="pl-9"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      data-testid="input-search-pricebook"
+                    />
                   </div>
+                  <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                    <SelectTrigger className="w-full sm:w-44" data-testid="select-category-filter">
+                      <SelectValue placeholder="All Categories" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Categories</SelectItem>
+                      {CATEGORIES.map((cat) => (
+                        <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button className="gap-2 shrink-0" onClick={() => setShowCreateItem(true)} data-testid="button-create-pricebook-item">
+                    <Plus className="h-4 w-4" /> New Item
+                  </Button>
                 </div>
-              </CardHeader>
-              <CardContent className="p-0">
+              )}
+              flush
+            >
                 {loadingItems ? (
                   <div className="flex items-center justify-center py-12">
                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                   </div>
                 ) : filteredItems.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-40" />
-                    <p>No price book items found</p>
-                  </div>
+                  <EmptyState
+                    icon={BookOpen}
+                    title="No price book items"
+                    description="Create an item or adjust search and category filters."
+                    className="border-0 rounded-none bg-transparent py-12"
+                  />
                 ) : (
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead className="pl-6">Item Name</TableHead>
                         <TableHead>Category</TableHead>
@@ -289,7 +246,7 @@ export default function StaffPriceBook() {
                     </TableHeader>
                     <TableBody>
                       {filteredItems.map((item) => (
-                        <TableRow key={item.id} data-testid={`row-pricebook-${item.id}`}>
+                        <TableRow key={item.id} className="hover:bg-muted/40" data-testid={`row-pricebook-${item.id}`}>
                           <TableCell className="font-medium pl-6">{item.name}</TableCell>
                           <TableCell>
                             {item.category ? (
@@ -299,7 +256,7 @@ export default function StaffPriceBook() {
                             )}
                           </TableCell>
                           <TableCell className="text-muted-foreground">{item.unit}</TableCell>
-                          <TableCell className="text-right font-semibold">
+                          <TableCell className="text-right font-semibold tabular-nums">
                             {item.currency} {parseFloat(item.priceAmount).toFixed(2)}
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">
@@ -319,34 +276,35 @@ export default function StaffPriceBook() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="costsheets">
             <div className="grid md:grid-cols-3 gap-6">
               <div className="md:col-span-1">
-                <Card className="shadow-sm">
-                  <CardHeader className="pb-4">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-base">Cost Sheets</CardTitle>
-                      <Button size="sm" className="gap-1" onClick={() => setShowCreateCostSheet(true)} data-testid="button-create-costsheet">
-                        <Plus className="h-3 w-3" /> New
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-0">
+                <CardSection
+                  title="Cost Sheets"
+                  icon={FileSpreadsheet}
+                  headerRight={(
+                    <Button size="sm" className="gap-1" onClick={() => setShowCreateCostSheet(true)} data-testid="button-create-costsheet">
+                      <Plus className="h-3 w-3" /> New
+                    </Button>
+                  )}
+                  flush
+                >
                     {loadingSheets ? (
                       <div className="flex items-center justify-center py-8">
                         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                       </div>
                     ) : costSheets.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground text-sm">
-                        <FileSpreadsheet className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                        <p>No cost sheets yet</p>
-                      </div>
+                      <EmptyState
+                        icon={FileSpreadsheet}
+                        title="No cost sheets yet"
+                        description="Create a sheet to start adding line items from the catalog."
+                        className="border-0 rounded-none bg-transparent py-8"
+                      />
                     ) : (
                       <div className="divide-y max-h-[500px] overflow-auto">
                         {costSheets.map((sheet) => {
@@ -386,51 +344,51 @@ export default function StaffPriceBook() {
                         })}
                       </div>
                     )}
-                  </CardContent>
-                </Card>
+                </CardSection>
               </div>
 
               <div className="md:col-span-2">
                 {selectedSheetId && selectedSheet ? (
-                  <Card className="shadow-sm">
-                    <CardHeader className="pb-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <CardTitle>
-                            {selectedCase ? `Cost Sheet — ${selectedCase.deceasedName}` : `Cost Sheet #${selectedSheet.id.slice(0, 8)}`}
-                          </CardTitle>
-                          <CardDescription className="mt-1">
-                            Status: <Badge variant="outline" className="ml-1 text-[10px]">{selectedSheet.status}</Badge>
-                            {selectedCase && (
-                              <span className="ml-3">Case: {selectedCase.caseNumber}</span>
-                            )}
-                          </CardDescription>
-                        </div>
-                        <Button
-                          size="sm"
-                          className="gap-1"
-                          onClick={() => setShowAddLineItem(true)}
-                          disabled={selectedSheet.status === "approved"}
-                          data-testid="button-add-line-item"
-                        >
-                          <Plus className="h-3 w-3" /> Add Item
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-0">
+                  <CardSection
+                    title={selectedCase ? `Cost Sheet — ${selectedCase.deceasedName}` : `Cost Sheet #${selectedSheet.id.slice(0, 8)}`}
+                    icon={Calculator}
+                    description={(
+                      <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span>
+                          Status:{" "}
+                          <Badge variant="outline" className="text-[10px] align-middle">{selectedSheet.status}</Badge>
+                        </span>
+                        {selectedCase ? <span>Case: {selectedCase.caseNumber}</span> : null}
+                      </span>
+                    )}
+                    headerRight={(
+                      <Button
+                        size="sm"
+                        className="gap-1"
+                        onClick={() => setShowAddLineItem(true)}
+                        disabled={selectedSheet.status === "approved"}
+                        data-testid="button-add-line-item"
+                      >
+                        <Plus className="h-3 w-3" /> Add Item
+                      </Button>
+                    )}
+                    flush
+                  >
                       {loadingLineItems ? (
                         <div className="flex items-center justify-center py-8">
                           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                         </div>
                       ) : lineItems.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground text-sm">
-                          <Calculator className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                          <p>No line items yet. Add items from the price book.</p>
-                        </div>
+                        <EmptyState
+                          icon={Calculator}
+                          title="No line items yet"
+                          description="Add items from the price book catalog."
+                          className="border-0 rounded-none bg-transparent py-8"
+                        />
                       ) : (
                         <>
-                          <Table>
-                            <TableHeader className="bg-muted/50">
+                          <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                            <TableHeader className={dataTableStickyHeaderClass}>
                               <TableRow>
                                 <TableHead className="pl-6">Description</TableHead>
                                 <TableHead className="text-right">Qty</TableHead>
@@ -440,38 +398,37 @@ export default function StaffPriceBook() {
                             </TableHeader>
                             <TableBody>
                               {lineItems.map((li) => (
-                                <TableRow key={li.id} data-testid={`row-lineitem-${li.id}`}>
+                                <TableRow key={li.id} className="hover:bg-muted/40" data-testid={`row-lineitem-${li.id}`}>
                                   <TableCell className="font-medium pl-6">{li.description}</TableCell>
-                                  <TableCell className="text-right">{parseFloat(li.quantity).toFixed(0)}</TableCell>
-                                  <TableCell className="text-right">
+                                  <TableCell className="text-right tabular-nums">{parseFloat(li.quantity).toFixed(0)}</TableCell>
+                                  <TableCell className="text-right tabular-nums">
                                     {selectedSheet.currency} {parseFloat(li.unitPrice).toFixed(2)}
                                   </TableCell>
-                                  <TableCell className="text-right font-semibold pr-6">
+                                  <TableCell className="text-right font-semibold pr-6 tabular-nums">
                                     {selectedSheet.currency} {parseFloat(li.totalPrice).toFixed(2)}
                                   </TableCell>
                                 </TableRow>
                               ))}
                             </TableBody>
-                          </Table>
+                          </DataTable>
                           <div className="border-t bg-muted/30 px-6 py-4 flex items-center justify-between">
                             <span className="text-sm font-medium text-muted-foreground">Grand Total</span>
-                            <span className="text-xl font-display font-bold" data-testid="text-costsheet-total">
+                            <span className="text-xl font-display font-bold tabular-nums" data-testid="text-costsheet-total">
                               {selectedSheet.currency} {lineItemsTotal.toFixed(2)}
                             </span>
                           </div>
                         </>
                       )}
-                    </CardContent>
-                  </Card>
+                  </CardSection>
                 ) : (
-                  <Card className="shadow-sm">
-                    <CardContent className="flex items-center justify-center py-20 text-muted-foreground">
-                      <div className="text-center">
-                        <FileSpreadsheet className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                        <p className="text-sm">Select a cost sheet to view its line items</p>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <CardSection title="Line items" icon={FileSpreadsheet} description="Select a cost sheet on the left to view its line items.">
+                    <EmptyState
+                      icon={FileSpreadsheet}
+                      title="No sheet selected"
+                      description="Choose a cost sheet from the list to edit line items."
+                      className="border-0 rounded-none bg-transparent py-12"
+                    />
+                  </CardSection>
                 )}
               </div>
             </div>

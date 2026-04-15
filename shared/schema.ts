@@ -23,7 +23,7 @@ export const organizations = pgTable("organizations", {
   name: text("name").notNull(),
   logoUrl: text("logo_url").default("/assets/logo.png"),
   signatureUrl: text("signature_url"),
-  primaryColor: text("primary_color").default("#D4AF37"),
+  primaryColor: text("primary_color").default("#0d9488"),
   footerText: text("footer_text"),
   address: text("address"),
   phone: text("phone"),

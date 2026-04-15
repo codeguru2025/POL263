@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -216,12 +217,12 @@ export default function StaffNotifications() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold" data-testid="text-notifications-title">Notifications</h1>
-            <p className="text-muted-foreground">Configure message templates with dynamic content for all policy events</p>
-          </div>
-          <div className="flex gap-2">
+        <PageHeader
+          title="Notifications"
+          description="Configure message templates with dynamic content for all policy events"
+          titleDataTestId="text-notifications-title"
+          actions={(
+          <div className="flex flex-wrap gap-2">
             <Dialog open={showBroadcast} onOpenChange={setShowBroadcast}>
               <DialogTrigger asChild>
                 <Button variant="outline" className="gap-2"><Send className="h-4 w-4" />Broadcast</Button>
@@ -330,7 +331,8 @@ export default function StaffNotifications() {
               </DialogContent>
             </Dialog>
           </div>
-        </div>
+          )}
+        />
 
         <Card>
           <CardHeader>

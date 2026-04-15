@@ -2,7 +2,13 @@ import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import argon2 from "argon2";
 import { storage, findPaymentReceiptById, type ReportFilters } from "./storage";
-import { withOrgTransaction, getDbForOrg } from "./tenant-db";
+import {
+  withOrgTransaction,
+  getDbForOrg,
+  resolveUserIdForOrgDatabase,
+  ensureRegistryUserMirroredToOrgDataDbInTx,
+  ensureRegistryUserMirroredToOrgDataDb,
+} from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope } from "./route-helpers";
@@ -1486,13 +1492,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (isAgent && (policy as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
     const today = new Date().toISOString().split("T")[0];
     const statusOk = policy.status === "active" || policy.status === "grace";
-    const waitingOver = !policy.waitingPeriodEndDate || policy.waitingPeriodEndDate <= today;
-    const claimable = !!(statusOk && waitingOver);
-    const claimableReason = !statusOk
-      ? `Policy status is ${policy.status}; must be active or in grace to lodge a claim.`
-      : !waitingOver
-        ? `Waiting period ends ${policy.waitingPeriodEndDate}. Claims allowed after that date.`
-        : "Policy and covered members are eligible for claims.";
 
     let productName = "";
     let productVersionLabel = "";
@@ -1506,6 +1505,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (prod) productName = prod.name;
       }
     }
+
+    const wpd = waitingPeriodDays ?? 90;
+    const inceptionForPolicyWaiting = policy.inceptionDate || policy.effectiveDate;
+    let resolvedWaitingEnd: string | null = policy.waitingPeriodEndDate ? String(policy.waitingPeriodEndDate) : null;
+    if (!resolvedWaitingEnd && inceptionForPolicyWaiting) {
+      const d = new Date(inceptionForPolicyWaiting);
+      if (!isNaN(d.getTime())) {
+        d.setDate(d.getDate() + wpd);
+        resolvedWaitingEnd = d.toISOString().split("T")[0];
+      }
+    }
+
+    const waitingOver = !resolvedWaitingEnd || resolvedWaitingEnd <= today;
+    const claimable = !!(statusOk && waitingOver);
+    const claimableReason = !statusOk
+      ? `Policy status is ${policy.status}; must be active or in grace to lodge a claim.`
+      : !waitingOver
+        ? `Waiting period ends ${resolvedWaitingEnd}. Claims allowed after that date.`
+        : "Policy and covered members are eligible for claims.";
 
     let clientActivationCode: string | null = null;
     if (policy.clientId) {
@@ -1539,6 +1557,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     return res.json({
       ...policy,
+      waitingPeriodEndDate: resolvedWaitingEnd ?? policy.waitingPeriodEndDate ?? null,
       claimable,
       claimableReason,
       productName,
@@ -1993,11 +2012,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const memberCreatedAt = m.createdAt ? new Date(m.createdAt).toISOString().split("T")[0] : null;
-      const inceptionDate = policy.inceptionDate || policy.effectiveDate || memberCreatedAt;
+      /** Same inception basis for all covered lives (aligned with policy contract / first cover date). */
+      const inceptionForWaiting = policy.inceptionDate || policy.effectiveDate || memberCreatedAt;
+      const inceptionDate = inceptionForWaiting;
 
       let coverDate: string | null = null;
-      if (inceptionDate) {
-        const inception = new Date(inceptionDate);
+      if (inceptionForWaiting) {
+        const inception = new Date(inceptionForWaiting);
         inception.setDate(inception.getDate() + waitingPeriodDays);
         coverDate = inception.toISOString().split("T")[0];
       }
@@ -2032,6 +2053,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         captureDate: memberCreatedAt,
         inceptionDate: inceptionDate || null,
         coverDate,
+        waitingPeriodEndDate: coverDate,
         waitingPeriodDays,
         claimable: memberClaimable,
         claimableReason,
@@ -2151,24 +2173,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(403).json({ message: `Missing permission: ${requiredPerm}` });
       }
     }
-    const today = new Date().toISOString().split("T")[0];
-    const parsed = insertPaymentTransactionSchema.parse({
-      ...req.body,
-      organizationId: user.organizationId,
-      recordedBy: user.id,
-      postedDate: req.body.postedDate || today,
-      valueDate: req.body.valueDate || today,
-    });
-
-    const policyId = parsed.policyId;
-    const isClearedWithPolicy = parsed.status === "cleared" && !!policyId;
-
+    const statusPreview = (req.body.status ?? "pending") as string;
+    const policyIdPreview = req.body.policyId as string | undefined;
+    const isClearedWithPolicy = statusPreview === "cleared" && !!policyIdPreview;
     let policy: Awaited<ReturnType<typeof storage.getPolicy>> | null = null;
-    if (isClearedWithPolicy) {
-      policy = await storage.getPolicy(policyId!, user.organizationId) ?? null;
+    if (isClearedWithPolicy && policyIdPreview) {
+      policy = await storage.getPolicy(policyIdPreview, user.organizationId) ?? null;
     }
 
     const result = await withOrgTransaction(user.organizationId, async (txDb) => {
+      await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
+      const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
+      const recordedByForLedger = actorRow?.id ?? null;
+      const today = new Date().toISOString().split("T")[0];
+      const parsed = insertPaymentTransactionSchema.parse({
+        ...req.body,
+        organizationId: user.organizationId,
+        recordedBy: recordedByForLedger ?? undefined,
+        postedDate: req.body.postedDate || today,
+        valueDate: req.body.valueDate || today,
+      });
+      const policyId = parsed.policyId;
+
       if (isClearedWithPolicy && policyId) {
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
       }
@@ -2187,7 +2213,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           amount: tx.amount,
           currency: tx.currency,
           paymentChannel: tx.paymentMethod || "cash",
-          issuedByUserId: user.id,
+          issuedByUserId: recordedByForLedger ?? undefined,
           status: "issued",
           printFormat: "thermal_80mm",
           metadataJson: { transactionId: tx.id, notes: tx.notes },
@@ -2202,7 +2228,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } | null = null;
       if (tx.status === "cleared" && tx.policyId && policy) {
         const todayDate = new Date().toISOString().split("T")[0];
-        const updated = await applyPolicyStatusForClearedPayment(txDb, tx.policyId, policy, todayDate, " (recorded)", user.id);
+        const updated = await applyPolicyStatusForClearedPayment(txDb, tx.policyId, policy, todayDate, " (recorded)", recordedByForLedger ?? undefined);
         policyStatusChange = updated
           ? { from: policy.status, to: "active" as const, reason: policy.status === "inactive" ? "First premium paid — conversion" : policy.status === "grace" ? "Payment received" : "Reinstatement — payment received" }
           : null;
@@ -2393,6 +2419,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     // Use a database transaction so payment + receipt + status change are atomic
     const result = await withOrgTransaction(user.organizationId, async (txDb) => {
+      await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
+      const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
+      const recordedByForLedger = actorRow?.id ?? null;
       // Lock the policy row to prevent concurrent modifications
       await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
 
@@ -2411,7 +2440,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         postedDate: today,
         valueDate: today,
         notes: notes || null,
-        recordedBy: user.id,
+        recordedBy: recordedByForLedger ?? undefined,
       }).returning();
 
       const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
@@ -2425,14 +2454,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         amount: String(amount),
         currency: currency || policy.currency,
         paymentChannel: "cash",
-        issuedByUserId: user.id,
+        issuedByUserId: recordedByForLedger ?? undefined,
         status: "issued",
         printFormat: "thermal_80mm",
         metadataJson: { transactionId: tx.id, notes },
       }).returning();
 
       // Transition policy status atomically within the same transaction
-      await applyPolicyStatusForClearedPayment(txDb, policyId, policy, today, " (cash)", user.id);
+      await applyPolicyStatusForClearedPayment(txDb, policyId, policy, today, " (cash)", recordedByForLedger ?? undefined);
 
       await insertOutboxMessageInTx(txDb, {
         organizationId: user.organizationId,
@@ -2490,6 +2519,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/month-end-run", requireAuth, requireTenantScope, requirePermission("write:finance"), memoryUpload.single("file"), async (req, res) => {
     const user = req.user as any;
     if (!req.file?.buffer) return res.status(400).json({ message: "No file uploaded" });
+    const recordedByForLedger = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const runNumber = await storage.getNextMonthEndRunNumber(user.organizationId);
     const run = await storage.createMonthEndRun({
       organizationId: user.organizationId,
@@ -2499,7 +2529,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       receiptedCount: 0,
       creditNoteCount: 0,
       status: "processing",
-      runBy: user.id,
+      runBy: recordedByForLedger ?? undefined,
     });
     const text = req.file.buffer.toString("utf-8");
     const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -2539,7 +2569,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             receivedAt: new Date(),
             postedDate: today,
             valueDate: today,
-            recordedBy: user.id,
+            recordedBy: recordedByForLedger ?? undefined,
           }).returning();
           await txDb.insert(paymentReceipts).values({
             organizationId: user.organizationId,
@@ -2550,11 +2580,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             amount: String(premium),
             currency: policy.currency || "USD",
             paymentChannel: "bank",
-            issuedByUserId: user.id,
+            issuedByUserId: recordedByForLedger ?? undefined,
             status: "issued",
             metadataJson: { monthEndRunId: run.id, transactionId: tx.id },
           });
-          await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (month-end)", user.id);
+          await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (month-end)", recordedByForLedger ?? undefined);
         });
         receipted++;
         // Post-transaction best-effort side effects
@@ -2636,6 +2666,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Stable lock order avoids deadlocks when multiple group receipts overlap.
     const sortedPolicies = [...valid].sort((a, b) => a.id.localeCompare(b.id));
     await withOrgTransaction(user.organizationId, async (txDb) => {
+      await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
+      const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
+      const recordedByForLedger = actorRow?.id ?? null;
       for (const policy of sortedPolicies) {
         const premium = parseFloat(String(policy.premiumAmount || 0));
         const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
@@ -2655,7 +2688,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           postedDate: today,
           valueDate: today,
           notes: "Group batch receipt",
-          recordedBy: user.id,
+          recordedBy: recordedByForLedger ?? undefined,
         }).returning();
         await txDb.insert(paymentReceipts).values({
           organizationId: user.organizationId,
@@ -2666,11 +2699,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           amount,
           currency: polyCurrency,
           paymentChannel: "cash",
-          issuedByUserId: user.id,
+          issuedByUserId: recordedByForLedger ?? undefined,
           status: "issued",
           metadataJson: { groupId, transactionId: tx.id },
         });
-        await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", user.id);
+        await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", recordedByForLedger ?? undefined);
         results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum });
       }
     });
@@ -2705,6 +2738,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const merchantReference = generateGroupMerchantReference(orgCode, groupId);
     const existing = await storage.getGroupPaymentIntentByOrgAndIdempotencyKey(user.organizationId, idempotencyKey);
     if (existing) return res.json(existing);
+    const initiatedByResolved = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const intent = await storage.createGroupPaymentIntent({
       organizationId: user.organizationId,
       groupId,
@@ -2713,7 +2747,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: "created",
       idempotencyKey,
       merchantReference,
-      initiatedByUserId: user.id,
+      initiatedByUserId: initiatedByResolved ?? undefined,
     });
     const allocations = valid.map((p) => {
       const premium = parseFloat(String(p.premiumAmount || 0));
@@ -3347,7 +3381,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Public branding (no auth required, for login/splash screens) ──
   app.get("/api/public/branding", async (req, res) => {
-    const NEUTRAL = { name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#D4AF37" };
+    const NEUTRAL = { name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#0d9488" };
     const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
     // Fall back to subdomain-resolved tenant when no explicit orgId provided
     const orgId = orgIdParam || ((req as any).tenantId as string | undefined) || "";
@@ -3359,7 +3393,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({
       name: org.name,
       logoUrl: org.logoUrl || "/assets/logo.png",
-      primaryColor: org.primaryColor || "#D4AF37",
+      primaryColor: org.primaryColor || "#0d9488",
       address: org.address,
       phone: org.phone,
       email: org.email,
