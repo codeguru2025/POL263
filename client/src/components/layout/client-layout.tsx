@@ -11,12 +11,17 @@ import {
   Clock,
   Bell,
   Check,
+  Menu,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { resolveAssetUrl, getDefaultLogoUrl } from "@/lib/assetUrl";
 import { getApiBase, apiRequest } from "@/lib/queryClient";
 import AppFooter from "@/components/app-footer";
+import { APP_SHELL_MAX } from "@/components/layout/app-chrome";
+import { ThemeSwitcher } from "@/components/theme-switcher";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
 
 interface ClientLayoutProps {
   children: React.ReactNode;
@@ -152,13 +157,23 @@ function NotificationBell() {
   );
 }
 
+function clientNavActive(href: string, loc: string) {
+  if (href === "/client") return loc === "/client" || loc === "/client/";
+  return loc === href || loc.startsWith(`${href}/`);
+}
+
 export default function ClientLayout({ children, clientName = "Client", onLogout }: ClientLayoutProps) {
   const [location] = useLocation();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location]);
+
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   const { data: tenant } = useQuery<TenantInfo>({
     queryKey: ["/api/client-auth/tenant"],
@@ -170,83 +185,126 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
     { href: "/client/payments", label: "Pay", icon: CreditCard },
     { href: "/client/documents", label: "Documents", icon: FileText },
     { href: "/client/claims", label: "Claims", icon: ClipboardList },
-    { href: "/client/feedback", label: "Complaints & feedback", icon: MessageSquare },
+    { href: "/client/feedback", label: "Feedback", icon: MessageSquare },
   ];
 
   const handleLogout = () => {
-    if (onLogout) {
-      onLogout();
-    }
+    if (onLogout) onLogout();
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col overflow-x-hidden max-w-[100vw]">
-      <header className="h-14 sm:h-16 border-b bg-card flex items-center justify-between px-4 sm:px-6 shrink-0 sticky top-0 z-10">
-        <div className="flex items-center gap-2 min-w-0">
-          <img
-            src={resolveAssetUrl(tenant?.logoUrl?.trim() ? tenant.logoUrl : getDefaultLogoUrl())}
-            alt={tenant?.name || "Logo"}
-            className="h-8 w-auto max-w-[180px] sm:h-9 sm:max-w-[220px] rounded-md object-contain object-left shrink-0"
-            loading="lazy"
-          />
-          {tenant?.name && (
-            <span className="font-semibold text-sm truncate hidden sm:inline max-w-[140px] md:max-w-none">{tenant.name}</span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-          <span className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground" title="Current date and time">
-            <Clock className="h-3.5 w-3.5" />
-            {dateTimeStr}
-          </span>
-          <div className="h-4 w-px bg-border hidden sm:block" />
-          <NotificationBell />
-          <div className="h-4 w-px bg-border hidden sm:block" />
-          <div className="flex items-center gap-1 sm:gap-2 min-w-0">
-            <UserCircle className="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground shrink-0" />
-            <span className="text-xs sm:text-sm font-medium truncate max-w-[80px] sm:max-w-[180px]" data-testid="text-client-name">{clientName}</span>
+    <div className="min-h-screen flex flex-col bg-background text-foreground overflow-x-hidden max-w-[100vw]">
+      <header className="border-b bg-card shrink-0 z-30">
+        <div className={cn(APP_SHELL_MAX, "px-3 sm:px-4 py-2.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between")}>
+          <div className="flex items-center gap-2 min-w-0">
+            <img
+              src={resolveAssetUrl(tenant?.logoUrl?.trim() ? tenant.logoUrl : getDefaultLogoUrl())}
+              alt={tenant?.name || "Logo"}
+              className="h-8 w-auto max-w-[160px] sm:max-w-[220px] rounded-md object-contain object-left shrink-0"
+              loading="lazy"
+            />
+            {tenant?.name && (
+              <span className="font-semibold text-sm truncate hidden sm:inline max-w-[200px]">{tenant.name}</span>
+            )}
           </div>
-          <div className="h-4 w-px bg-border hidden sm:block" />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground shrink-0 text-xs sm:text-sm px-2 sm:px-3"
-            onClick={handleLogout}
-            data-testid="btn-client-logout"
-          >
-            <LogOut className="h-4 w-4 sm:mr-2" />
-            <span className="hidden sm:inline">Logout</span>
-          </Button>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:text-sm text-muted-foreground justify-start sm:justify-end">
+            <span className="hidden sm:inline-flex items-center gap-1.5 tabular-nums" title="Current date and time">
+              <Clock className="h-3.5 w-3.5 shrink-0" />
+              {dateTimeStr}
+            </span>
+            <NotificationBell />
+            <div className="flex items-center gap-1.5 min-w-0">
+              <UserCircle className="h-4 w-4 text-muted-foreground shrink-0" />
+              <span className="font-medium text-foreground truncate max-w-[120px] sm:max-w-[200px]" data-testid="text-client-name">
+                {clientName}
+              </span>
+            </div>
+            <ThemeSwitcher />
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 h-8"
+              onClick={handleLogout}
+              data-testid="btn-client-logout"
+            >
+              <LogOut className="h-4 w-4 sm:mr-1.5" />
+              <span className="hidden sm:inline">Log out</span>
+            </Button>
+          </div>
         </div>
       </header>
 
-      <div className="border-b bg-muted/20 overflow-x-auto">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 flex gap-4 sm:gap-6 min-w-max sm:min-w-0">
-          {navItems.map((item) => {
-            const isActive = location === item.href;
-            return (
+      <nav className="border-b bg-primary text-primary-foreground shrink-0 z-20" aria-label="Client navigation">
+        <div className={cn(APP_SHELL_MAX, "px-1 sm:px-2 flex items-center justify-between gap-1 min-h-11")}>
+          <div className="hidden md:flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto py-0.5">
+            {navItems.map((item) => (
               <Link key={item.href} href={item.href}>
-                <div className={`min-h-11 py-3 sm:py-4 px-3 border-b-2 transition-colors cursor-pointer text-xs sm:text-sm font-medium flex items-center gap-2 sm:gap-2 whitespace-nowrap ${isActive ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
-                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 shrink-0" />
-                  {item.label}
-                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground gap-1.5 shrink-0",
+                    clientNavActive(item.href, location) && "bg-primary-foreground/15 font-medium",
+                  )}
+                >
+                  <item.icon className="h-4 w-4 shrink-0" />
+                  <span className="max-w-[120px] truncate">{item.label}</span>
+                </Button>
               </Link>
-            );
-          })}
-        </div>
-      </div>
+            ))}
+          </div>
 
-      <main className="flex-1 overflow-auto px-4 py-6 sm:px-8 sm:py-10 bg-gradient-to-b from-primary/[0.03] to-background">
-        <div className="max-w-5xl mx-auto min-w-0 space-y-6">
-          {children}
+          <div className="md:hidden flex items-center justify-between w-full gap-2 px-1 py-1">
+            <span className="text-sm font-medium text-primary-foreground/95 truncate">Portal</span>
+            <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="text-primary-foreground hover:bg-primary-foreground/15 shrink-0"
+                  aria-label="Open menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-[min(100vw-1rem,20rem)] p-0 flex flex-col gap-0">
+                <SheetHeader className="p-4 border-b text-left">
+                  <SheetTitle>Menu</SheetTitle>
+                  <p className="text-xs font-normal text-muted-foreground truncate">{tenant?.name || "Client portal"}</p>
+                </SheetHeader>
+                <div className="flex-1 overflow-y-auto p-3 space-y-1">
+                  {navItems.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-md px-2 py-2.5 text-sm hover:bg-muted transition-colors",
+                        clientNavActive(item.href, location) && "bg-muted font-medium",
+                      )}
+                    >
+                      <item.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              </SheetContent>
+            </Sheet>
+          </div>
         </div>
+      </nav>
+
+      <main className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
+        <div className={cn(APP_SHELL_MAX, "px-3 py-4 sm:px-6 sm:py-8 min-h-0 space-y-6")}>{children}</div>
       </main>
 
       <AppFooter />
 
       {(tenant?.address || tenant?.phone || tenant?.email || tenant?.website) && (
         <footer className="border-t bg-muted/30 py-4 px-4 sm:px-6 shrink-0">
-          <div className="max-w-5xl mx-auto text-center text-sm text-muted-foreground space-y-1">
+          <div className={cn(APP_SHELL_MAX, "text-center text-sm text-muted-foreground space-y-1")}>
             {tenant?.address && <p>{tenant.address}</p>}
             <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
               {tenant?.phone && <span>Tel: {tenant.phone}</span>}

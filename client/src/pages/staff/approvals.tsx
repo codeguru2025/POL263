@@ -1,6 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, KpiStatCard } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard } from "@/components/ds";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -72,7 +72,7 @@ export default function StaffApprovals() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Approvals"
           description="Review and manage maker-checker approval requests."
@@ -208,7 +208,7 @@ export default function StaffApprovals() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
 
       <Dialog open={!!selectedApproval && !resolveAction} onOpenChange={(open) => { if (!open) setSelectedApproval(null); }}>
         <DialogContent className="max-w-lg">

@@ -1,7 +1,7 @@
 import { useState, useEffect, type ChangeEvent } from "react";
 import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -492,7 +492,7 @@ export default function StaffSettings() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Settings"
           description="Manage organization settings and Role-Based Access Control."
@@ -1340,7 +1340,7 @@ export default function StaffSettings() {
             </CardSection>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }

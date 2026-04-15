@@ -1,6 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -394,7 +394,7 @@ export default function StaffClients() {
   if (viewMode === "detail" && selectedClientId) {
     return (
       <StaffLayout>
-        <div className="space-y-6">
+        <PageShell>
           <div className="rounded-2xl border border-border/60 bg-gradient-to-br from-primary/[0.06] via-card to-muted/25 p-4 sm:p-5 shadow-sm">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-start gap-3 min-w-0">
@@ -692,7 +692,7 @@ export default function StaffClients() {
               </CardSection>
             </div>
           ) : null}
-        </div>
+        </PageShell>
 
         <EditClientDialog
           open={showEditDialog}
@@ -744,7 +744,7 @@ export default function StaffClients() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Leads & Clients"
           description="Track prospects and conversions. Clients are your leads — policies are your source of truth."
@@ -959,7 +959,7 @@ export default function StaffClients() {
               </DataTable>
             )}
         </CardSection>
-      </div>
+      </PageShell>
 
       <CreateClientDialog
         open={showCreateDialog}

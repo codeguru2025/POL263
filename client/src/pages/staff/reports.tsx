@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -376,7 +376,7 @@ export default function StaffReports() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Reports"
           description="Date-filtered reports and analytics"
@@ -1844,7 +1844,7 @@ export default function StaffReports() {
             </Tabs>
           </div>
         </div>
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }

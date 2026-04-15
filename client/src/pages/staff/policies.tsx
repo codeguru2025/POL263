@@ -15,11 +15,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
-import { useSearch } from "wouter";
+import { useSearch, useLocation } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -30,7 +30,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { PageHeader, CardSection, FilterBar, EmptyState, StatusBadge } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge } from "@/components/ds";
 
 function readEstatementDateRange() {
   const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement | null)?.value;
@@ -87,6 +87,7 @@ function useDebounce<T>(value: T, delay: number): T {
 }
 
 export default function StaffPolicies() {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user, roles, permissions, isPlatformOwner } = useAuth();
@@ -184,6 +185,7 @@ export default function StaffPolicies() {
   const [clientMode, setClientMode] = useState<"search" | "new">("search");
 
   const searchString = useSearch();
+  const openPolicyConsumed = useRef<string | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(searchString);
     if (params.get("create") === "1") {
@@ -213,6 +215,46 @@ export default function StaffPolicies() {
       return Array.isArray(data) ? data : [];
     },
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    const pid = params.get("openPolicy");
+    if (!pid) return;
+    if (openPolicyConsumed.current === pid) return;
+    if (policiesLoading) return;
+
+    const pol = (policies as any[] | undefined)?.find((p: any) => p.id === pid);
+    if (pol) {
+      openPolicyConsumed.current = pid;
+      setSelectedPolicy(pol);
+      setShowDetailView(true);
+      setLocation("/staff/policies", { replace: true });
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(getApiBase() + `/api/policies/${pid}`, { credentials: "include" });
+        if (cancelled) return;
+        if (!res.ok) {
+          openPolicyConsumed.current = pid;
+          return;
+        }
+        const one = await res.json();
+        if (!one?.id || cancelled) return;
+        openPolicyConsumed.current = pid;
+        setSelectedPolicy(one);
+        setShowDetailView(true);
+        setLocation("/staff/policies", { replace: true });
+      } catch {
+        if (!cancelled) openPolicyConsumed.current = pid;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchString, policies, policiesLoading, setLocation]);
 
   const { data: rawClients } = useQuery<any[]>({
     queryKey: ["/api/clients"],
@@ -1019,7 +1061,7 @@ export default function StaffPolicies() {
     const allowedTransitions = VALID_POLICY_TRANSITIONS[displayPolicy.status] || [];
     return (
       <StaffLayout>
-        <div className="space-y-6 min-w-0">
+        <PageShell>
           <section
             className="rounded-2xl border border-border/60 bg-card/90 shadow-[var(--shadow-card,0_1px_2px_rgb(0_0_0/0.05))] px-4 py-5 sm:px-6 sm:py-6 space-y-5"
             aria-label="Policy summary"
@@ -1913,7 +1955,7 @@ export default function StaffPolicies() {
               })()}
             </DialogContent>
           </Dialog>
-        </div>
+        </PageShell>
 
         <Dialog open={showTransitionDialog} onOpenChange={setShowTransitionDialog}>
           <DialogContent>
@@ -2576,9 +2618,8 @@ export default function StaffPolicies() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
-          className="mb-0"
           title={<span className="font-display font-bold">Policies</span>}
           description="Manage policy lifecycles, billing cycles, and status transitions."
           actions={
@@ -2745,7 +2786,7 @@ export default function StaffPolicies() {
               </Table>
             )}
         </CardSection>
-      </div>
+      </PageShell>
 
       <Dialog open={showCreateDialog} onOpenChange={(open) => { setShowCreateDialog(open); if (!open) setCreateStep(1); }}>
         <DialogContent className="sm:max-w-lg">

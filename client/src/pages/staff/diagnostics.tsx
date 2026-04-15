@@ -1,6 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader } from "@/components/ds";
+import { PageHeader, PageShell } from "@/components/ds";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -93,7 +93,7 @@ export default function StaffDiagnostics() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Admin Diagnostics"
           description="System health, errors, and operational diagnostics."
@@ -412,7 +412,7 @@ export default function StaffDiagnostics() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }

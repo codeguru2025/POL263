@@ -1,5 +1,5 @@
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, FilterBar, DataTable, dataTableStickyHeaderClass } from "@/components/ds";
+import { PageHeader, PageShell, FilterBar, DataTable, dataTableStickyHeaderClass } from "@/components/ds";
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -88,7 +88,7 @@ export default function AuditLogs() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Audit Logs"
           description="Track all system events within the current tenant scope."
@@ -250,7 +250,7 @@ export default function AuditLogs() {
             </>
           )}
         </div>
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }

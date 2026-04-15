@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, KpiStatCard } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, KpiStatCard } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -753,7 +753,7 @@ export default function StaffFinance() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title={commissionOnly ? "My Commissions" : "Finance"}
           description={commissionOnly ? "View your commission earnings and history" : "Payments, receipts, cashups, and commissions"}
@@ -1496,7 +1496,7 @@ export default function StaffFinance() {
             </CardSection>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
 
       <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
         <DialogContent className="sm:max-w-lg">

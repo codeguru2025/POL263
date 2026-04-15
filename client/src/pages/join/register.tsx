@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { AppChrome } from "@/components/layout/app-chrome";
 
 interface ProductWithVersions {
   id: string;
@@ -183,7 +184,7 @@ export default function JoinRegisterPage() {
 
   if (!refCode) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <AppChrome center>
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Invalid link</CardTitle>
@@ -193,24 +194,24 @@ export default function JoinRegisterPage() {
             <Button variant="outline" onClick={() => setLocation("/join")}>Back to Join</Button>
           </CardFooter>
         </Card>
-      </div>
+      </AppChrome>
     );
   }
 
   if (loading || (!options && !loadError)) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <AppChrome center>
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           <p className="text-muted-foreground">Loading...</p>
         </div>
-      </div>
+      </AppChrome>
     );
   }
 
   if (loadError) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <AppChrome center>
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Unable to load registration</CardTitle>
@@ -221,13 +222,13 @@ export default function JoinRegisterPage() {
             <Button onClick={() => { setLoadError(null); setLoading(true); window.location.reload(); }}>Try again</Button>
           </CardFooter>
         </Card>
-      </div>
+      </AppChrome>
     );
   }
 
   if (result) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <AppChrome center>
         <Card className="w-full max-w-lg shadow-lg">
           <CardHeader className="text-center">
             <div className="mx-auto h-14 w-14 bg-green-100 text-green-600 rounded-xl flex items-center justify-center mb-4">
@@ -259,14 +260,14 @@ export default function JoinRegisterPage() {
             </Button>
           </CardFooter>
         </Card>
-      </div>
+      </AppChrome>
     );
   }
 
   if (!options) return null;
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <AppChrome center={false} mainClassName="py-6 sm:py-8 flex justify-center">
       <Card className="w-full max-w-lg shadow-lg">
         <CardHeader className="text-center">
           <div className="mx-auto h-14 w-14 bg-primary/10 text-primary rounded-xl flex items-center justify-center mb-4">
@@ -578,6 +579,6 @@ export default function JoinRegisterPage() {
           </CardFooter>
         </form>
       </Card>
-    </div>
+    </AppChrome>
   );
 }

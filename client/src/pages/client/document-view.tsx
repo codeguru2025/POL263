@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, useRoute } from "wouter";
 import { getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
+import { PageShell } from "@/components/ds";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FileText, ArrowLeft, Printer } from "lucide-react";
@@ -42,7 +43,7 @@ export default function ClientDocumentView() {
   if (!policyId || !me?.client) {
     return (
       <ClientLayout clientName="">
-        <div className="max-w-2xl mx-auto space-y-6">
+        <PageShell className="max-w-2xl mx-auto">
           <Button variant="ghost" className="gap-2" onClick={() => setLocation("/client/documents")}>
             <ArrowLeft className="h-4 w-4" />
             Back to documents
@@ -52,14 +53,14 @@ export default function ClientDocumentView() {
               <p className="text-muted-foreground text-center py-8">Invalid or missing policy. Go back to documents.</p>
             </CardContent>
           </Card>
-        </div>
+        </PageShell>
       </ClientLayout>
     );
   }
 
   return (
     <ClientLayout clientName="">
-      <div className="max-w-4xl mx-auto space-y-4">
+      <PageShell className="max-w-4xl mx-auto gap-4">
         <div className="flex items-center justify-between gap-4">
           <Button variant="ghost" className="gap-2 shrink-0" onClick={() => setLocation("/client/documents")}>
             <ArrowLeft className="h-4 w-4" />
@@ -92,7 +93,7 @@ export default function ClientDocumentView() {
             />
           </CardContent>
         </Card>
-      </div>
+      </PageShell>
     </ClientLayout>
   );
 }

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -275,7 +275,7 @@ export default function ProductBuilder() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Product Builder"
           description="Configure products, benefits, add-ons, and pricing."
@@ -585,7 +585,7 @@ export default function ProductBuilder() {
             </CardSection>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
 
       <CreateTermDialog
         open={showCreateTerm}

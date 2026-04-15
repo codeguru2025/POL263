@@ -1,5 +1,5 @@
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, CardSection, KpiStatCard, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, KpiStatCard, EmptyState } from "@/components/ds";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
@@ -21,9 +21,22 @@ import {
   Filter,
   Plus,
   BarChart3,
+  MessageSquare,
+  HelpCircle,
+  ThumbsUp,
+  ThumbsDown,
+  LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Link } from "wouter";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -140,6 +153,7 @@ export default function StaffDashboard() {
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
+  const [rateOpen, setRateOpen] = useState(false);
 
   const { data: controlPlaneData, isLoading: cpLoading } = useQuery<ControlPlaneDashboard>({
     queryKey: ["/api/platform/dashboard"],
@@ -379,7 +393,7 @@ export default function StaffDashboard() {
     const tenants = controlPlaneData?.tenants ?? [];
     return (
       <StaffLayout>
-        <div className="space-y-6">
+        <PageShell>
           <PageHeader
             title="Control Plane Dashboard"
             description="Platform-wide overview across all active tenants."
@@ -439,19 +453,81 @@ export default function StaffDashboard() {
                 </div>
               )}
           </CardSection>
-        </div>
+        </PageShell>
       </StaffLayout>
     );
   }
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Dashboard"
           description={`Welcome back, ${user?.displayName || user?.email}. Here is your overview.`}
           titleDataTestId="text-dashboard-title"
         />
+
+        {!isAgent && (
+        <CardSection title="Quick access" description="Hub links inspired by classic admin home screens — uses your current theme." icon={LayoutDashboard}>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Link href="/staff/notifications" className="rounded-xl border bg-card p-4 shadow-sm hover:shadow-md transition-shadow flex gap-3 items-start">
+                <span className="rounded-lg bg-primary/10 p-2 text-primary shrink-0">
+                  <MessageSquare className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="font-semibold text-sm">Messaging & templates</p>
+                  <p className="text-xs text-muted-foreground mt-1">Broadcasts, notification rules, and delivery settings.</p>
+                </div>
+              </Link>
+              <Link href="/staff/help" className="rounded-xl border bg-card p-4 shadow-sm hover:shadow-md transition-shadow flex gap-3 items-start">
+                <span className="rounded-lg bg-primary/10 p-2 text-primary shrink-0">
+                  <HelpCircle className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="font-semibold text-sm">Help centre</p>
+                  <p className="text-xs text-muted-foreground mt-1">Staff guidance and links to configuration areas.</p>
+                </div>
+              </Link>
+              <button
+                type="button"
+                className="rounded-xl border bg-card p-4 shadow-sm hover:shadow-md transition-shadow flex gap-3 items-start text-left w-full"
+                onClick={() => setRateOpen(true)}
+              >
+                <span className="rounded-lg bg-primary/10 p-2 text-primary shrink-0">
+                  <ThumbsUp className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="font-semibold text-sm">Rate this workspace</p>
+                  <p className="text-xs text-muted-foreground mt-1">Quick feedback (stored locally for now).</p>
+                </div>
+              </button>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+              <Link href="/staff/order-services" className="text-primary hover:underline font-medium">Order services</Link>
+              <Link href="/staff/reminders" className="text-primary hover:underline font-medium">Reminders</Link>
+              <Link href="/staff/finance" className="text-primary hover:underline font-medium">Finance</Link>
+            </div>
+        </CardSection>
+        )}
+
+        <Dialog open={rateOpen} onOpenChange={setRateOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Thanks for the feedback</DialogTitle>
+              <DialogDescription>
+                POL263 does not send this anywhere yet — tell your team what would make the dashboard more useful.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex gap-2 justify-center py-2">
+              <Button type="button" variant="outline" className="gap-2" onClick={() => { toast({ title: "Thanks!", description: "Glad it is working for you." }); setRateOpen(false); }}>
+                <ThumbsUp className="h-4 w-4" /> Good
+              </Button>
+              <Button type="button" variant="outline" className="gap-2" onClick={() => { toast({ title: "Noted", description: "We will keep improving the layout." }); setRateOpen(false); }}>
+                <ThumbsDown className="h-4 w-4" /> Could improve
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {!isAgent && (
         <CardSection title="Filters" icon={Filter}>
@@ -731,7 +807,7 @@ export default function StaffDashboard() {
             )}
         </CardSection>
         )}
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }

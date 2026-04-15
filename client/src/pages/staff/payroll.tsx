@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, KpiStatCard } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -133,7 +133,7 @@ export default function StaffPayroll() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Payroll"
           description="Manage employees, payroll runs, and payslips"
@@ -330,7 +330,7 @@ export default function StaffPayroll() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
 
       <Dialog open={showEmployeeDialog} onOpenChange={setShowEmployeeDialog}>
         <DialogContent className="sm:max-w-lg">

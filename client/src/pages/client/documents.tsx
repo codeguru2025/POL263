@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
-import { PageHeader } from "@/components/ds";
+import { PageHeader, PageShell } from "@/components/ds";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FileText, ArrowLeft, Download, Eye, Printer } from "lucide-react";
@@ -45,14 +45,13 @@ export default function ClientDocuments() {
 
   return (
     <ClientLayout clientName="">
-      <div className="max-w-2xl mx-auto space-y-6">
+      <PageShell className="max-w-2xl mx-auto">
         <Button variant="ghost" className="gap-2 touch-target sm:min-h-0 sm:min-w-0 sm:h-9 w-fit" onClick={() => setLocation("/client")}>
           <ArrowLeft className="h-4 w-4" />
           Back to dashboard
         </Button>
 
         <PageHeader
-          className="mb-6"
           title={(
             <span className="flex items-center gap-2">
               <FileText className="h-5 w-5 shrink-0" />
@@ -108,7 +107,7 @@ export default function ClientDocuments() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </PageShell>
     </ClientLayout>
   );
 }

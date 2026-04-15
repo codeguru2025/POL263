@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, KpiStatCard } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -148,7 +148,7 @@ export default function StaffFunerals() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Funeral Operations"
           description="Manage funeral cases, logistics, fleet dispatch, and resource allocation."
@@ -365,7 +365,7 @@ export default function StaffFunerals() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
 
       <CreateCaseDialog
         open={showCreateCase}

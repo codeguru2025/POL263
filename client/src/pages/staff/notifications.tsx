@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader } from "@/components/ds";
+import { PageHeader, PageShell } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -216,7 +216,7 @@ export default function StaffNotifications() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Notifications"
           description="Configure message templates with dynamic content for all policy events"
@@ -473,7 +473,7 @@ export default function StaffNotifications() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }

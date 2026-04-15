@@ -11,7 +11,7 @@ import { ShieldCheck, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useBranding } from "@/hooks/use-branding";
 import { resolveAssetUrl } from "@/lib/assetUrl";
-import AppFooter from "@/components/app-footer";
+import { AppChrome } from "@/components/layout/app-chrome";
 
 export default function ClientLogin() {
   const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -48,8 +48,7 @@ export default function ClientLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-muted/30 flex flex-col">
-      <div className="flex-1 flex items-center justify-center p-4">
+    <AppChrome center>
         <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto px-4 py-3 bg-primary/15 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/25 max-w-full">
@@ -132,8 +131,6 @@ export default function ClientLogin() {
           </Link>
         </CardFooter>
       </Card>
-      </div>
-      <AppFooter />
-    </div>
+    </AppChrome>
   );
 }

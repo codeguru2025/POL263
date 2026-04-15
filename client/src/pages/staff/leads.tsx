@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { PageHeader } from "@/components/ds";
+import { PageHeader, PageShell } from "@/components/ds";
 import { Plus, Loader2, ArrowRight, FileText } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
@@ -118,9 +118,8 @@ export default function StaffLeads() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6 min-w-0">
+      <PageShell>
         <PageHeader
-          className="mb-0"
           title="Lead Pipeline"
           description="Track leads from capture to activation. Scroll horizontally to see all stages."
           actions={
@@ -301,7 +300,7 @@ export default function StaffLeads() {
             </div>
           </div>
         )}
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }

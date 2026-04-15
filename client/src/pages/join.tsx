@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { getApiBase } from "@/lib/queryClient";
 import { getDefaultLogoUrl } from "@/lib/assetUrl";
 import { UserPlus, Shield, CheckCircle2, ArrowRight } from "lucide-react";
-import AppFooter from "@/components/app-footer";
+import { AppChrome, APP_SHELL_MAX } from "@/components/layout/app-chrome";
+import { cn } from "@/lib/utils";
 
 export default function JoinPage() {
   const search = useSearch();
@@ -28,8 +29,8 @@ export default function JoinPage() {
   }, [refCode]);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <div className="flex-1 flex flex-col items-center justify-center p-4">
+    <AppChrome center={false} mainClassName="flex flex-col flex-1">
+      <div className={cn(APP_SHELL_MAX, "flex-1 flex flex-col items-center px-4 py-10")}>
       <div className="mb-8 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
         <img src={getDefaultLogoUrl()} alt="POL263" className="h-12 sm:h-14 w-auto max-w-[min(320px,90vw)] mb-4 object-contain object-center" />
         <h1 className="text-3xl font-display font-bold text-foreground tracking-tight">Join</h1>
@@ -95,7 +96,6 @@ export default function JoinPage() {
         </CardContent>
       </Card>
       </div>
-      <AppFooter />
-    </div>
+    </AppChrome>
   );
 }

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
-import { PageHeader } from "@/components/ds";
+import { PageHeader, PageShell } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -421,14 +421,14 @@ export default function ClientDashboard() {
   if (meLoading) {
     return (
       <ClientLayout clientName="Loading...">
-        <div className="space-y-6">
+        <PageShell>
           <Skeleton className="h-10 w-64" />
           <Skeleton className="h-6 w-96" />
           <div className="grid md:grid-cols-2 gap-6">
             <Skeleton className="h-48" />
             <Skeleton className="h-48" />
           </div>
-        </div>
+        </PageShell>
       </ClientLayout>
     );
   }
@@ -457,12 +457,11 @@ export default function ClientDashboard() {
 
   return (
     <ClientLayout clientName={`${client.firstName} ${client.lastName}`} onLogout={() => logoutMutation.mutate()}>
-      <div className="space-y-8">
+      <PageShell className="gap-8">
         <PageHeader
           title={`Welcome back, ${client.firstName}!`}
           description="Manage your policies, view payments, and stay up to date."
           titleDataTestId="text-welcome"
-          className="mb-6"
         />
 
         {gracePolicy && (
@@ -745,7 +744,7 @@ export default function ClientDashboard() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
 
     </ClientLayout>
   );

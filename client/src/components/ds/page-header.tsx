@@ -12,7 +12,7 @@ export interface PageHeaderProps {
 
 export function PageHeader({ title, description, breadcrumbs, actions, className, titleDataTestId }: PageHeaderProps) {
   return (
-    <header className={cn("flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-8 min-w-0", className)}>
+    <header className={cn("flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-0 min-w-0", className)}>
       <div className="min-w-0 space-y-1">
         {breadcrumbs ? (
           <nav className="text-xs text-muted-foreground mb-0.5" aria-label="Breadcrumb">

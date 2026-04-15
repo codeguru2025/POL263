@@ -31,19 +31,19 @@ import {
   Link2,
   Building2,
   Menu,
-  X,
   Clock,
   Check,
   Globe,
+  HelpCircle,
+  Archive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeSwitcher } from "@/components/theme-switcher";
-import AppFooter from "@/components/app-footer";
-import { AppShell } from "@/components/ds";
 import { useBranding } from "@/hooks/use-branding";
+import { PolicySearchInput } from "@/components/policy-search-input";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 import {
   DropdownMenu,
@@ -52,6 +52,63 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import AppFooter from "@/components/app-footer";
+import { APP_SHELL_MAX } from "@/components/layout/app-chrome";
+import { cn } from "@/lib/utils";
+
+type StaffNavItem = {
+  href: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  permission?: string;
+  permissions?: string[];
+  badge?: number;
+};
+
+function StaffNavDropdown({
+  label,
+  items,
+  prefetchForHref,
+}: {
+  label: string;
+  items: StaffNavItem[];
+  prefetchForHref: (href: string) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground gap-1 shrink-0"
+        >
+          <span className="max-w-[140px] truncate">{label}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-80" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[min(100vw-2rem,18rem)] max-h-[min(24rem,70vh)] overflow-y-auto">
+        {items.map((item) => (
+          <DropdownMenuItem key={`${item.href}-${item.label}`} asChild>
+            <Link
+              href={item.href}
+              className="flex items-center gap-2 cursor-pointer"
+              onMouseEnter={() => prefetchForHref(item.href)}
+            >
+              <item.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">{item.label}</span>
+              {item.badge != null && item.badge > 0 && (
+                <Badge variant="destructive" className="ml-auto text-[10px] px-1.5 py-0 shrink-0">
+                  {item.badge}
+                </Badge>
+              )}
+            </Link>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function ReferralLinkBox({ referralCode }: { referralCode: string }) {
   const [copied, setCopied] = useState(false);
@@ -86,85 +143,10 @@ function ReferralLinkBox({ referralCode }: { referralCode: string }) {
   );
 }
 
-function TenantPickerSplash({
-  orgs,
-  onSelect,
-  isLoading,
-}: {
-  orgs: any[] | null | undefined;
-  onSelect: (id: string) => void;
-  isLoading: boolean;
-}) {
-  const safeOrgs = Array.isArray(orgs) ? orgs : [];
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] max-w-lg mx-auto">
-      <div className="rounded-full bg-primary/10 p-4 mb-6">
-        <Globe className="h-10 w-10 text-primary" />
-      </div>
-      <h1 className="text-2xl font-bold tracking-tight mb-2">
-        {safeOrgs.length === 0 ? "Add your first tenant" : "Select a tenant"}
-      </h1>
-      <p className="text-muted-foreground text-center mb-8">
-        {safeOrgs.length === 0
-          ? "Create a tenant organization to get started. You can add, edit, or remove tenants anytime from Settings."
-          : "As the platform owner, choose which tenant to manage. You can switch tenants at any time from the header."}
-      </p>
-      {safeOrgs.length === 0 ? (
-        <div className="text-center text-muted-foreground space-y-4">
-          <p>No tenants yet.</p>
-          <Link href="/staff/settings?tab=tenants">
-            <Button variant="default" className="mt-4" size="lg">
-              <Building2 className="h-4 w-4 mr-2" />
-              Add tenant
-            </Button>
-          </Link>
-          <p className="text-sm">
-            Or open <Link href="/staff/settings?tab=tenants" className="text-primary hover:underline">Settings → Tenants</Link> to manage tenants.
-          </p>
-        </div>
-      ) : (
-        <div className="w-full space-y-2">
-          {safeOrgs.map((org: any) => (
-            <button
-              key={org.id}
-              disabled={isLoading}
-              onClick={() => onSelect(org.id)}
-              className="w-full flex items-center gap-4 p-4 rounded-xl border bg-card hover:bg-accent/50 transition-colors text-left group"
-            >
-              {org.logoUrl ? (
-                <span className="relative h-10 w-10 shrink-0 block">
-                  <img
-                    src={resolveAssetUrl(org.logoUrl)}
-                    alt=""
-                    className="h-10 w-10 rounded-lg object-contain border bg-background absolute inset-0"
-                    loading="lazy"
-                    onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = ""; e.currentTarget.classList.add("opacity-0"); e.currentTarget.nextElementSibling?.classList.remove("hidden"); }}
-                  />
-                  <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center hidden border border-transparent pointer-events-none" aria-hidden>
-                    <Building2 className="h-5 w-5 text-primary" />
-                  </div>
-                </span>
-              ) : (
-                <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                  <Building2 className="h-5 w-5 text-primary" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold truncate group-hover:text-primary transition-colors">{org.name}</p>
-                {org.email && <p className="text-xs text-muted-foreground truncate">{org.email}</p>}
-              </div>
-              <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90 group-hover:text-primary transition-colors shrink-0" />
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [policyJumpId, setPolicyJumpId] = useState("");
   const { user, roles, permissions, isAuthenticated, isPlatformOwner, isLoading, isError: authError, logout } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -198,24 +180,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     }
   }
 
-  // Close mobile sidebar when route changes
   useEffect(() => {
-    setSidebarOpen(false);
+    setMobileMenuOpen(false);
   }, [location]);
 
-  // Lock body scroll when mobile menu is open
-  useEffect(() => {
-    if (sidebarOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [sidebarOpen]);
-
-  const canManageTenants = (permissions ?? []).includes("create:tenant") || (permissions ?? []).includes("delete:tenant");
   const safeRoles = Array.isArray(roles) ? roles : [];
   const isAgent = safeRoles.some((r: any) => r.name === "agent");
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
@@ -277,71 +245,104 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     },
   });
 
-  const navGroupsRaw: { title: string; items: { href: string; label: string; icon: any; permission?: string; permissions?: string[]; badge?: number; hidden?: boolean }[] }[] = [
-    {
-      title: "Overview",
-      items: [{ href: "/staff", label: "Dashboard", icon: LayoutDashboard }],
-    },
-    {
-      title: "Core Operations",
-      items: [
-        { href: "/staff/policies", label: "Policies", icon: FileStack, permission: "read:policy" },
-        { href: "/staff/clients", label: isAgent ? "My Clients" : "Leads & Clients", icon: Users, permission: "read:client" },
-        { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim" },
-        { href: "/staff/funerals", label: "Funeral Ops", icon: Truck, permission: "read:funeral_ops" },
-        { href: "/staff/leads", label: "Lead Pipeline", icon: Target, permission: "read:lead" },
-        { href: "/staff/groups", label: "Groups", icon: Layers, permissions: ["write:policy"] },
-      ],
-    },
-    {
-      title: "Finance",
-      items: [
-        { href: "/staff/finance", label: isAgent ? "My Commissions" : "Finance", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
-        { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
-        { href: "/staff/reports", label: "Reports", icon: BarChart3, permission: "read:report" },
-      ],
-    },
-    {
-      title: "Configuration",
-      items: [
-        { href: "/staff/products", label: "Product Builder", icon: Box, permission: "write:product" },
-        { href: "/staff/notifications", label: "Notifications", icon: Bell, permission: "read:notification" },
-      ],
-    },
-    {
-      title: "System & Audit",
-      items: [
-        { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
-        { href: "/staff/users", label: "User Management", icon: UserCog, permission: "read:user" },
-        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals", badge: pendingApprovalsCount },
-        { href: "/staff/audit", label: "Audit Logs", icon: History, permission: "read:audit_log" },
-        { href: "/staff/diagnostics", label: "Diagnostics", icon: Stethoscope, permission: "read:audit_log" },
-        { href: "/staff/settings", label: "Settings", icon: Settings },
-      ],
-    },
-  ];
+  const filterNav = (items: StaffNavItem[]) =>
+    items.filter((item) => {
+      const perms = item.permissions ?? (item.permission ? [item.permission] : []);
+      return hasAny(perms);
+    });
 
-  const navGroups = isControlPlaneMode
+  const administrationMenu: StaffNavItem[] = isControlPlaneMode
+    ? []
+    : filterNav([
+        { href: "/staff/policies", label: "Policy administration", icon: FileStack, permission: "read:policy" },
+        { href: "/staff/clients", label: isAgent ? "My clients" : "Leads & clients", icon: Users, permission: "read:client" },
+        { href: "/staff/claims", label: "Claims administration", icon: FileText, permission: "read:claim" },
+        { href: "/staff/funerals", label: "Funeral files", icon: Truck, permission: "read:funeral_ops" },
+        { href: "/staff/leads", label: "Lead pipeline", icon: Target, permission: "read:lead" },
+        { href: "/staff/groups", label: "Groups / employers", icon: Layers, permissions: ["write:policy"] },
+        { href: "/staff/products", label: "Product administration", icon: Box, permission: "write:product" },
+        { href: "/staff/pricebook", label: "Price book", icon: BookOpen, permission: "write:product" },
+        { href: "/staff/users", label: "User administration", icon: UserCog, permission: "read:user" },
+        { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
+        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals", badge: pendingApprovalsCount },
+      ]);
+
+  const transactionsMenu: StaffNavItem[] = isControlPlaneMode
+    ? []
+    : filterNav([
+        { href: "/staff/policies", label: "Policy transactions", icon: FileStack, permission: "read:policy" },
+        { href: "/staff/funerals", label: "Funeral file transactions", icon: Truck, permission: "read:funeral_ops" },
+        { href: "/staff/finance", label: "Receipts & finance", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/leads", label: "Quotations & leads", icon: Target, permission: "read:lead" },
+        { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
+      ]);
+
+  const reportsMenu: StaffNavItem[] = isControlPlaneMode
+    ? []
+    : filterNav([{ href: "/staff/reports", label: "Report centre", icon: BarChart3, permission: "read:report" }]);
+
+  const toolsMenu: StaffNavItem[] = isControlPlaneMode
+    ? []
+    : filterNav([
+        { href: "/staff/tools/assets", label: "Asset register", icon: Archive, permission: "read:audit_log" },
+        { href: "/staff/audit", label: "Audit trail", icon: History, permission: "read:audit_log" },
+        { href: "/staff/finance", label: "Billing & receipts", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/clients", label: "CRM (clients)", icon: Users, permission: "read:client" },
+        { href: "/staff/notifications", label: "SMS & notifications", icon: Bell, permission: "read:notification" },
+        { href: "/staff/diagnostics", label: "System diagnostics", icon: Stethoscope, permission: "read:audit_log" },
+        { href: "/staff/settings", label: "System setup", icon: Settings },
+        { href: "/staff/help", label: "Help centre", icon: HelpCircle },
+        { href: "/staff/reminders", label: "Reminders", icon: Clock },
+        { href: "/staff/order-services", label: "Order SMS & prepaid", icon: DollarSign },
+      ]);
+
+  const controlPlaneNavExtras: StaffNavItem[] = isControlPlaneMode
+    ? filterNav([
+        { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
+        { href: "/staff/settings", label: "Settings", icon: Settings },
+      ])
+    : [];
+
+  const mobileNavSections = isControlPlaneMode
     ? [
         {
-          title: "Control Plane",
-          items: [
-            { href: "/staff", label: "Dashboard", icon: Globe },
-            { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2 },
-            { href: "/staff/settings", label: "Settings", icon: Settings },
-          ],
+          title: "Menu",
+          items: [{ href: "/staff", label: "Home", icon: LayoutDashboard }, ...controlPlaneNavExtras],
         },
       ]
-    : navGroupsRaw
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => {
-            const perms = item.permissions ?? (item.permission ? [item.permission] : []);
-            return hasAny(perms);
-          }),
-        }))
-        .filter((group) => group.items.length > 0);
+    : [
+        { title: "Overview", items: [{ href: "/staff", label: "Home", icon: LayoutDashboard }] as StaffNavItem[] },
+        { title: "Administration", items: administrationMenu },
+        { title: "Transactions", items: transactionsMenu },
+        { title: "Reports", items: reportsMenu },
+        { title: "Tools & services", items: toolsMenu },
+      ].filter((s) => s.items.length > 0);
+
+  const prefetchForHref = (href: string) => {
+    const hrefBase = href.split("?")[0];
+    const prefetchKey: string | null = {
+      "/staff": "/api/dashboard/stats",
+      "/staff/policies": "/api/policies",
+      "/staff/clients": "/api/clients",
+      "/staff/claims": "/api/claims",
+      "/staff/funerals": "/api/funerals",
+      "/staff/leads": "/api/leads",
+      "/staff/finance": "/api/finance/summary",
+      "/staff/users": "/api/users",
+      "/staff/audit": "/api/audit-logs",
+      "/staff/groups": "/api/groups",
+      "/staff/products": "/api/products",
+    }[hrefBase] ?? null;
+    if (prefetchKey) {
+      queryClient.prefetchQuery({ queryKey: [prefetchKey], staleTime: 30_000 });
+    }
+  };
+
+  const navIsActive = (href: string) => {
+    const path = href.split("?")[0];
+    if (path === "/staff") return location === "/staff" || location === "/staff/";
+    return location === href || location.startsWith(`${path}/`);
+  };
 
   const currentOrg = isPlatformOwner
     ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) || orgs[0] : undefined)
@@ -386,219 +387,276 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   return (
-    <AppShell
-      overlay={
-        <button
-          type="button"
-          aria-label="Close menu"
-          className={`fixed inset-0 z-40 bg-black/60 transition-opacity lg:hidden ${sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-          onClick={() => setSidebarOpen(false)}
-        />
-      }
-      sidebarClassName={sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
-      sidebar={
-        <>
-        <div className="h-16 flex items-center justify-between px-4 border-b shrink-0">
-          <div className="flex items-center min-w-0 gap-2">
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <header className="border-b bg-card shrink-0 z-30">
+        <div className={cn(APP_SHELL_MAX, "px-3 sm:px-4 py-2.5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between")}>
+          <div className="flex items-center gap-2 min-w-0">
             <img
               src={resolveAssetUrl((currentOrg?.logoUrl && String(currentOrg.logoUrl).trim()) || brandLogo)}
               alt={brandName}
-              className="h-9 w-auto max-w-[200px] rounded-md object-contain object-left shrink-0"
+              className="h-8 w-auto max-w-[160px] sm:max-w-[200px] rounded-md object-contain object-left shrink-0"
               loading="lazy"
             />
-            {isWhitelabeled ? (
-              <span className="font-display font-bold text-lg tracking-tight text-foreground truncate">{currentOrg?.name || brandName}</span>
-            ) : null}
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="lg:hidden shrink-0"
-            aria-label="Close menu"
-            onClick={() => setSidebarOpen(false)}
-          >
-            <X className="h-5 w-5" />
-          </Button>
-        </div>
-
-        <ScrollArea className="flex-1 px-4 py-6">
-          <div className="space-y-6">
-            {navGroups.map((group, i) => (
-              <div key={i} className="space-y-1">
-                <h4 className="px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                  {group.title}
-                </h4>
-                {group.items.map((item) => {
-                  const isActive = location === item.href || (item.href !== "/staff" && location.startsWith(`${item.href}/`));
-                  // Map nav hrefs to the primary query key used by that page so we can prefetch on hover.
-                  const hrefBase = item.href.split("?")[0];
-                  const prefetchKey: string | null = {
-                    "/staff": "/api/dashboard/stats",
-                    "/staff/policies": "/api/policies",
-                    "/staff/clients": "/api/clients",
-                    "/staff/claims": "/api/claims",
-                    "/staff/funerals": "/api/funerals",
-                    "/staff/leads": "/api/leads",
-                    "/staff/finance": "/api/finance/summary",
-                    "/staff/users": "/api/users",
-                    "/staff/audit": "/api/audit-logs",
-                    "/staff/groups": "/api/groups",
-                    "/staff/products": "/api/products",
-                  }[hrefBase] ?? null;
-                  return (
-                    <Link key={item.href} href={item.href}>
-                      <Button
-                        variant={isActive ? "secondary" : "ghost"}
-                        className={`w-full justify-start h-10 ${isActive ? "font-medium bg-secondary/80 text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
-                        data-testid={`nav-link-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
-                        onMouseEnter={() => {
-                          if (prefetchKey && !isActive) {
-                            queryClient.prefetchQuery({ queryKey: [prefetchKey], staleTime: 30_000 });
-                          }
-                        }}
-                      >
-                        <item.icon className={`mr-3 h-5 w-5 shrink-0 ${isActive ? "text-primary" : ""}`} />
-                        <span className="truncate">{item.label}</span>
-                        {"badge" in item && (item as any).badge > 0 && (
-                          <Badge variant="destructive" className="ml-auto h-5 min-w-[20px] px-1.5 text-[10px] shrink-0" data-testid={`badge-nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}>
-                            {(item as any).badge}
-                          </Badge>
-                        )}
-                      </Button>
-                    </Link>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </ScrollArea>
-
-        <div className="p-4 border-t bg-muted/10 shrink-0">
-          {user?.referralCode && (
-            <ReferralLinkBox referralCode={user.referralCode} />
-          )}
-          <div className="flex items-center gap-3 px-2 py-2 mb-2 bg-card rounded-lg border shadow-sm">
-            <button
-              type="button"
-              title="Click to change avatar"
-              disabled={avatarUploading}
-              onClick={() => avatarInputRef.current?.click()}
-              className="relative shrink-0 group rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            >
-              <Avatar className="h-9 w-9 border">
-                <AvatarImage src={user?.avatarUrl || undefined} />
-                <AvatarFallback className="bg-primary/10 text-primary font-medium">{initials}</AvatarFallback>
-              </Avatar>
-              <span className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                <span className="text-white text-[9px] font-semibold leading-tight text-center">{avatarUploading ? "…" : "Edit"}</span>
-              </span>
-            </button>
-            <input ref={avatarInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleAvatarUpload} />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{user?.email}</p>
-              <p className="text-[10px] uppercase tracking-wider font-semibold text-primary mt-0.5">
-                {isPlatformOwner ? "Platform Owner" : primaryRole}
-              </p>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            className="w-full justify-start text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-            data-testid="btn-logout"
-            onClick={handleLogout}
-          >
-            <LogOut className="mr-3 h-4 w-4 shrink-0" />
-            Sign out
-          </Button>
-        </div>
-        </>
-      }
-      topbar={
-        <header className="h-14 md:h-16 border-b border-border/60 bg-card/80 backdrop-blur-md flex items-center px-4 md:px-8 justify-between shrink-0 z-10 sticky top-0">
-          <div className="flex items-center gap-2 md:gap-6 min-w-0">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="lg:hidden shrink-0"
-              aria-label="Open menu"
-              onClick={() => setSidebarOpen(true)}
-            >
-              <Menu className="h-5 w-5" />
-            </Button>
-            <div className="hidden sm:flex items-center gap-2 text-sm">
-              <Building className="h-4 w-4 text-muted-foreground shrink-0" />
-              <span className="text-muted-foreground font-medium shrink-0">Tenant:</span>
-              {isPlatformOwner && Array.isArray(orgs) && orgs.length > 0 ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
-                      {isPlatformOwner && <Globe className="h-3 w-3 text-primary shrink-0" />}
-                      <span className="truncate max-w-[120px]">{currentOrg?.name || "Select tenant"}</span>
-                      <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-y-auto">
-                    {(orgs ?? []).map((org: any) => (
-                      <DropdownMenuItem
-                        key={org.id}
-                        className="flex items-center gap-2 cursor-pointer"
-                        onClick={() => switchTenantMutation.mutate(org.id)}
-                      >
-                        {org.id === currentOrg?.id && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
-                        {org.id !== currentOrg?.id && <span className="w-3.5 shrink-0" />}
-                        <span className="truncate">{org.name}</span>
-                      </DropdownMenuItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="flex items-center gap-2 cursor-pointer text-muted-foreground"
-                      onClick={() => setLocation("/staff/settings?tab=tenants")}
-                    >
-                      <Building2 className="h-3.5 w-3.5 shrink-0" />
-                      <span>Manage tenants</span>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : isPlatformOwner && (orgs == null || !Array.isArray(orgs) || orgs.length === 0) ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50"
-                  onClick={() => setLocation("/staff/settings?tab=tenants")}
-                >
-                  <Globe className="h-3 w-3 text-primary shrink-0" />
-                  <span>Add tenant</span>
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm border-primary/20 hover:border-primary/50 min-w-0">
-                  <span className="truncate max-w-[120px]">{currentOrg?.name || "Loading..."}</span>
-                  <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
-                </Button>
+            <div className="min-w-0 leading-tight">
+              <p className="text-xs text-muted-foreground truncate">{currentOrg?.name || brandName}</p>
+              {!isWhitelabeled && (
+                <p className="font-display font-semibold text-sm text-foreground truncate">POL263</p>
               )}
             </div>
-            <div className="hidden lg:flex items-center gap-2 text-sm">
-              <div className="h-5 w-px bg-border" />
-              <span className="text-muted-foreground font-medium shrink-0">Branch:</span>
-              <Button variant="outline" size="sm" className="h-8 gap-2 bg-background shadow-sm min-w-0">
-                <span className="truncate max-w-[100px]">{currentBranch?.name || "Loading..."}</span>
-                <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
-              </Button>
-            </div>
           </div>
-          <div className="flex items-center gap-3 text-sm text-muted-foreground shrink-0">
-            <span className="hidden md:inline truncate max-w-[140px]" title={user?.email}>{displayName}</span>
-            <span className="hidden sm:inline font-medium text-foreground">{primaryRole}</span>
-            <span className="flex items-center gap-1.5" title="Current date and time">
-              <Clock className="h-4 w-4 hidden sm:block" />
+
+          {hasTenant && !isControlPlaneMode && (
+            <div className="w-full lg:flex-1 lg:max-w-md lg:mx-4 order-last lg:order-none">
+              <PolicySearchInput
+                value={policyJumpId}
+                onChange={(id) => {
+                  if (id) {
+                    setLocation(`/staff/policies?openPolicy=${encodeURIComponent(id)}`);
+                  }
+                  setPolicyJumpId("");
+                }}
+                placeholder="Search policies…"
+                data-testid="input-global-policy-search"
+              />
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:text-sm text-muted-foreground justify-start lg:justify-end">
+            {isPlatformOwner && Array.isArray(orgs) && orgs.length > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 min-w-0 shrink">
+                    <Globe className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <span className="truncate max-w-[100px] sm:max-w-[140px]">{currentOrg?.name || "Tenant"}</span>
+                    <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64 max-h-80 overflow-y-auto">
+                  {(orgs ?? []).map((org: any) => (
+                    <DropdownMenuItem
+                      key={org.id}
+                      className="flex items-center gap-2 cursor-pointer"
+                      onClick={() => switchTenantMutation.mutate(org.id)}
+                    >
+                      {org.id === currentOrg?.id && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
+                      {org.id !== currentOrg?.id && <span className="w-3.5 shrink-0" />}
+                      <span className="truncate">{org.name}</span>
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="flex items-center gap-2 cursor-pointer text-muted-foreground"
+                    onClick={() => setLocation("/staff/settings?tab=tenants")}
+                  >
+                    <Building2 className="h-3.5 w-3.5 shrink-0" />
+                    <span>Manage tenants</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : isPlatformOwner && (orgs == null || !Array.isArray(orgs) || orgs.length === 0) ? (
+              <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setLocation("/staff/settings?tab=tenants")}>
+                <Globe className="h-3.5 w-3.5 text-primary shrink-0" />
+                <span>Add tenant</span>
+              </Button>
+            ) : !isPlatformOwner ? (
+              <span className="hidden sm:inline-flex items-center gap-1.5 min-w-0">
+                <Building className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate max-w-[120px] font-medium text-foreground">{currentOrg?.name || "—"}</span>
+              </span>
+            ) : null}
+
+            {hasTenant && currentBranch?.name && (
+              <span className="hidden md:inline text-muted-foreground">
+                Branch: <span className="font-medium text-foreground">{currentBranch.name}</span>
+              </span>
+            )}
+
+            <span className="hidden sm:inline truncate max-w-[120px] font-medium text-foreground" title={user?.email || ""}>
+              {displayName}
+            </span>
+            <span className="capitalize text-[11px] sm:text-xs font-semibold text-primary">{isPlatformOwner ? "owner" : primaryRole}</span>
+            <span className="hidden sm:inline-flex items-center gap-1 tabular-nums" title="Current date and time">
+              <Clock className="h-3.5 w-3.5" />
               {dateTimeStr}
             </span>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  title="Account"
+                  className="relative shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Avatar className="h-8 w-8 border">
+                    <AvatarImage src={user?.avatarUrl || undefined} />
+                    <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">{initials}</AvatarFallback>
+                  </Avatar>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <div className="px-2 py-1.5 text-xs text-muted-foreground border-b mb-1 truncate">{user?.email}</div>
+                <DropdownMenuItem asChild>
+                  <Link href="/staff/settings" className="cursor-pointer">Settings</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={avatarUploading}
+                >
+                  Change avatar…
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="cursor-pointer text-destructive focus:text-destructive" onClick={handleLogout} data-testid="btn-logout">
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Log out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <input ref={avatarInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleAvatarUpload} />
+
             <ThemeSwitcher />
           </div>
-        </header>
-      }
-      footer={<AppFooter />}
-    >
-      {children}
-    </AppShell>
+        </div>
+      </header>
+
+      <nav className="border-b bg-primary text-primary-foreground shrink-0 z-20" aria-label="Primary navigation">
+        <div className={cn(APP_SHELL_MAX, "px-1 sm:px-2 flex items-center justify-between gap-1 min-h-11")}>
+          <div className="hidden md:flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto py-0.5">
+            <Link href="/staff">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground shrink-0",
+                  navIsActive("/staff") && "bg-primary-foreground/15 font-medium",
+                )}
+              >
+                Home
+              </Button>
+            </Link>
+            {!isControlPlaneMode && (
+              <>
+                <StaffNavDropdown label="Administration" items={administrationMenu} prefetchForHref={prefetchForHref} />
+                <StaffNavDropdown label="Transactions" items={transactionsMenu} prefetchForHref={prefetchForHref} />
+                {reportsMenu.length > 0 && (
+                  <Link href="/staff/reports">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground shrink-0",
+                        navIsActive("/staff/reports") && "bg-primary-foreground/15 font-medium",
+                      )}
+                    >
+                      Reports
+                    </Button>
+                  </Link>
+                )}
+                <StaffNavDropdown label="Tools" items={toolsMenu} prefetchForHref={prefetchForHref} />
+              </>
+            )}
+            {isControlPlaneMode && (
+              <>
+                {controlPlaneNavExtras.map((item) => (
+                  <Link key={item.href} href={item.href}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground shrink-0",
+                        navIsActive(item.href) && "bg-primary-foreground/15 font-medium",
+                      )}
+                    >
+                      {item.label}
+                    </Button>
+                  </Link>
+                ))}
+              </>
+            )}
+          </div>
+
+          <div className="md:hidden flex items-center justify-between w-full gap-2 px-1 py-1">
+            <Link href="/staff" className="text-sm font-medium text-primary-foreground/95 truncate">
+              {isControlPlaneMode ? "Control plane" : "Staff"}
+            </Link>
+            <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="text-primary-foreground hover:bg-primary-foreground/15 shrink-0"
+                  aria-label="Open navigation menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-[min(100vw-1rem,20rem)] flex flex-col p-0 gap-0">
+                <SheetHeader className="p-4 border-b text-left space-y-1">
+                  <SheetTitle>Menu</SheetTitle>
+                  <p className="text-xs font-normal text-muted-foreground truncate">{currentOrg?.name || brandName}</p>
+                </SheetHeader>
+                <div className="flex-1 overflow-y-auto p-3 space-y-5">
+                  {mobileNavSections.map((section) => (
+                    <div key={section.title}>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{section.title}</p>
+                      <div className="space-y-0.5">
+                        {section.items.map((item) => (
+                          <Link
+                            key={`${item.href}-${item.label}`}
+                            href={item.href}
+                            onMouseEnter={() => prefetchForHref(item.href)}
+                            onClick={() => setMobileMenuOpen(false)}
+                            className={cn(
+                              "flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted transition-colors",
+                              navIsActive(item.href) && "bg-muted font-medium",
+                            )}
+                          >
+                            <item.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <span className="truncate flex-1">{item.label}</span>
+                            {item.badge != null && item.badge > 0 && (
+                              <Badge variant="destructive" className="text-[10px] px-1.5 py-0 shrink-0">{item.badge}</Badge>
+                            )}
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="border-t p-3 space-y-2 bg-muted/30">
+                  {user?.referralCode && <ReferralLinkBox referralCode={user.referralCode} />}
+                  <Button variant="outline" className="w-full" data-testid="btn-logout-mobile" onClick={handleLogout}>
+                    <LogOut className="h-4 w-4 mr-2" />
+                    Log out
+                  </Button>
+                </div>
+              </SheetContent>
+            </Sheet>
+          </div>
+
+          <div className="hidden md:flex items-center shrink-0 py-0.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="border-primary-foreground/35 text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground"
+              onClick={handleLogout}
+              data-testid="btn-logout-nav"
+            >
+              Log out
+            </Button>
+          </div>
+        </div>
+      </nav>
+
+      <main className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
+        <div className={cn(APP_SHELL_MAX, "px-3 py-4 sm:px-6 sm:py-8 min-h-0")}>{children}</div>
+      </main>
+
+      <AppFooter />
+    </div>
   );
 }

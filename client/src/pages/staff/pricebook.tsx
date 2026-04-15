@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -166,7 +166,7 @@ export default function StaffPriceBook() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="Price Book & Cost Sheets"
           description="Manage pricing catalog and generate itemized cost sheets for funeral cases."
@@ -434,7 +434,7 @@ export default function StaffPriceBook() {
             </div>
           </TabsContent>
         </Tabs>
-      </div>
+      </PageShell>
 
       <CreatePriceBookItemDialog
         open={showCreateItem}

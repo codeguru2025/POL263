@@ -1,5 +1,6 @@
 export { AppShell, type AppShellProps } from "./app-shell";
 export { PageHeader, type PageHeaderProps } from "./page-header";
+export { PageShell, type PageShellProps } from "./page-shell";
 export { CardSection, type CardSectionProps } from "./card-section";
 export { DataTable, dataTableStickyHeaderClass, type DataTableProps } from "./data-table";
 export { FilterBar, type FilterBarProps } from "./filter-bar";

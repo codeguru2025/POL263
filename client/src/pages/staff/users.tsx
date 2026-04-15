@@ -12,7 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { UserPlus, Shield, Copy, Search, UserX, Pencil, Check, X, Trash2, Users } from "lucide-react";
-import { PageHeader, CardSection, DataTable, dataTableStickyHeaderClass, KpiStatCard, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, KpiStatCard, EmptyState } from "@/components/ds";
 
 export default function StaffUsers() {
   const { toast } = useToast();
@@ -109,7 +109,7 @@ export default function StaffUsers() {
 
   return (
     <StaffLayout>
-      <div className="space-y-6">
+      <PageShell>
         <PageHeader
           title="User & Team Management"
           description="Manage staff accounts, roles, and agent access"
@@ -478,7 +478,7 @@ export default function StaffUsers() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
+      </PageShell>
     </StaffLayout>
   );
 }
