@@ -125,7 +125,7 @@ async function main() {
           tenantId: org.id,
           logoUrl: org.logoUrl ?? "/assets/logo.png",
           signatureUrl: org.signatureUrl ?? null,
-          primaryColor: org.primaryColor ?? "#D4AF37",
+          primaryColor: org.primaryColor ?? "#0d9488",
           footerText: org.footerText ?? null,
           address: org.address ?? null,
           phone: org.phone ?? null,

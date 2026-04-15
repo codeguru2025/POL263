@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -376,19 +377,18 @@ export default function StaffReports() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold" data-testid="text-reports-title">Reports</h1>
-          <p className="text-muted-foreground">Date-filtered reports and analytics</p>
-        </div>
+        <PageHeader
+          title="Reports"
+          description="Date-filtered reports and analytics"
+          titleDataTestId="text-reports-title"
+        />
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Filters</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Dates use inclusive UTC windows (start of from date through end of to date). Each report applies them to the relevant timestamp (policy capture, receipt issue, status change, etc.).
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <CardSection
+          title="Filters"
+          description="Dates use inclusive UTC windows (start of from date through end of to date). Each report applies them to the relevant timestamp (policy capture, receipt issue, status change, etc.)."
+          icon={Calendar}
+        >
+          <div className="space-y-4">
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2">Reporting period</p>
               <div className="flex flex-wrap items-end gap-4">
@@ -455,37 +455,33 @@ export default function StaffReports() {
                 </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardSection>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-6 text-center">
-              <p className="text-3xl font-bold" data-testid="text-total-policies">{stats?.totalPolicies || 0}</p>
-              <p className="text-sm text-muted-foreground">Total Policies</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6 text-center">
-              <p className="text-3xl font-bold text-green-600">{stats?.activePolicies || 0}</p>
-              <p className="text-sm text-muted-foreground">Active Policies</p>
-            </CardContent>
-          </Card>
+          <KpiStatCard
+            label="Total policies"
+            value={<span data-testid="text-total-policies">{stats?.totalPolicies || 0}</span>}
+            icon={FolderOpen}
+          />
+          <KpiStatCard
+            label="Active policies"
+            value={<span className="text-green-600">{stats?.activePolicies || 0}</span>}
+            icon={FolderOpen}
+          />
           {canReadClaim && (
-          <Card>
-            <CardContent className="pt-6 text-center">
-              <p className="text-3xl font-bold text-blue-600">{stats?.totalClaims || 0}</p>
-              <p className="text-sm text-muted-foreground">Total Claims</p>
-            </CardContent>
-          </Card>
+            <KpiStatCard
+              label="Total claims"
+              value={<span className="text-blue-600">{stats?.totalClaims || 0}</span>}
+              icon={Shield}
+            />
           )}
           {canReadFinance && (
-          <Card>
-            <CardContent className="pt-6 text-center">
-              <p className="text-3xl font-bold text-orange-600">{stats?.totalTransactions || 0}</p>
-              <p className="text-sm text-muted-foreground">Transactions</p>
-            </CardContent>
-          </Card>
+            <KpiStatCard
+              label="Transactions"
+              value={<span className="text-orange-600">{stats?.totalTransactions || 0}</span>}
+              icon={Wallet}
+            />
           )}
         </div>
 
@@ -528,21 +524,16 @@ export default function StaffReports() {
               </TabsList>
 
           <TabsContent value="policies">
-            <Card>
-              <CardHeader className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><BarChart3 className="h-5 w-5" />Policy overview</CardTitle>
-                  <ExportButton reportType="policies" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground pr-8">
-                  Quick counts and a short policy list. From/to limit policies by capture date, same as CSV exports.
-                </p>
-              </CardHeader>
-              <CardContent>
+            <CardSection
+              title="Policy overview"
+              description="Quick counts and a short policy list. From/to limit policies by capture date, same as CSV exports."
+              icon={BarChart3}
+              headerRight={<ExportButton reportType="policies" filters={filters} />}
+            >
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
                   {Object.entries(policySummary).map(([status, count]) => (
                     <div key={status} className="text-center p-3 rounded-lg bg-muted">
-                      <p className="text-xl font-bold">{count}</p>
+                      <p className="text-xl font-bold tabular-nums">{count}</p>
                       <p className="text-xs text-muted-foreground capitalize">{status.replace(/_/g, " ")}</p>
                     </div>
                   ))}
@@ -550,8 +541,8 @@ export default function StaffReports() {
                 {loadingPolicies ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : (
-                  <Table>
-                    <TableHeader>
+                  <DataTable>
+                    <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
                         <TableHead>Policy #</TableHead>
                         <TableHead>Status</TableHead>
@@ -562,39 +553,40 @@ export default function StaffReports() {
                     </TableHeader>
                     <TableBody>
                       {policies.slice(0, 20).map((p: any) => (
-                        <TableRow key={p.id}>
+                        <TableRow key={p.id} className="hover:bg-muted/40">
                           <TableCell className="font-mono text-sm">{p.policyNumber}</TableCell>
-                          <TableCell><Badge variant={p.status === "active" ? "default" : "secondary"}>{p.status}</Badge></TableCell>
-                          <TableCell>{p.currency} {p.premiumAmount}</TableCell>
+                          <TableCell><StatusBadge status={p.status} variant="policy" /></TableCell>
+                          <TableCell className="tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
                           <TableCell>{p.paymentSchedule}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
+                  </DataTable>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="policy-details">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />Policy report (full details)</CardTitle>
-                  <ExportButton reportType="policy-details" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground">Comprehensive policy report with client, product, beneficiary and dependent details. Use filters above to narrow results.</p>
-              </CardHeader>
-              <CardContent>
+            <CardSection
+              title="Policy report (full details)"
+              description="Comprehensive policy report with client, product, beneficiary and dependent details. Use filters above to narrow results."
+              icon={FileText}
+              headerRight={<ExportButton reportType="policy-details" filters={filters} />}
+              flush
+            >
                 {loadingPolicyDetails ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : policyDetails.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-policy-details">No policies match the filters</p>
+                  <EmptyState
+                    title="No policies match the filters"
+                    className="border-0 rounded-none bg-transparent py-8"
+                    dataTestId="text-no-policy-details"
+                  />
                 ) : (
                   <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
+                    <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1200px]">
+                      <TableHeader className={dataTableStickyHeaderClass}>
                         <TableRow>
                           <TableHead>Branch</TableHead>
                           <TableHead>Member No</TableHead>
@@ -638,7 +630,7 @@ export default function StaffReports() {
                             <TableCell className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</TableCell>
                             <TableCell className="whitespace-nowrap">{r.currency} {r.premiumAmount}</TableCell>
                             <TableCell className="whitespace-nowrap">{r.coverAmount ? `${r.coverCurrency || r.currency} ${r.coverAmount}` : "—"}</TableCell>
-                            <TableCell><Badge variant={r.status === "active" ? "default" : r.status === "lapsed" ? "destructive" : "secondary"}>{r.status}</Badge></TableCell>
+                            <TableCell><StatusBadge status={r.status} variant="policy" /></TableCell>
                             <TableCell className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
                             <TableCell>{r.groupName || "—"}</TableCell>
                             <TableCell className="text-sm">{r.agentDisplayName || r.agentEmail || "—"}</TableCell>
@@ -656,33 +648,32 @@ export default function StaffReports() {
                           </TableRow>
                         ))}
                       </TableBody>
-                    </Table>
+                    </DataTable>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="finance">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5" />Finance report</CardTitle>
-                  <ExportButton reportType="finance" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Policies are narrowed by capture date when you set from/to. Receipt count, months paid, and totals use issued receipts in that same window when dates are set; otherwise receipts are lifetime-to-date.
-                </p>
-              </CardHeader>
-              <CardContent>
+            <CardSection
+              title="Finance report"
+              description="Policies are narrowed by capture date when you set from/to. Receipt count, months paid, and totals use issued receipts in that same window when dates are set; otherwise receipts are lifetime-to-date."
+              icon={DollarSign}
+              headerRight={<ExportButton reportType="finance" filters={filters} />}
+              flush
+            >
                 {loadingFinance ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : financeReport.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-finance-report">No policies match the filters</p>
+                  <EmptyState
+                    title="No policies match the filters"
+                    className="border-0 rounded-none bg-transparent py-8"
+                    dataTestId="text-no-finance-report"
+                  />
                 ) : (
                   <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
+                    <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
+                      <TableHeader className={dataTableStickyHeaderClass}>
                         <TableRow>
                           <TableHead>Policy #</TableHead>
                           <TableHead>Status</TableHead>
@@ -710,19 +701,19 @@ export default function StaffReports() {
                         {financeReport.map((r: any) => (
                           <TableRow key={r.policyId} data-testid={`row-finance-${r.policyId}`}>
                             <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
-                            <TableCell><Badge variant={r.status === "active" ? "default" : "secondary"}>{r.status}</Badge></TableCell>
-                            <TableCell className="whitespace-nowrap">{r.currency} {r.premiumAmount}</TableCell>
+                            <TableCell><StatusBadge status={r.status} variant="policy" /></TableCell>
+                            <TableCell className="whitespace-nowrap tabular-nums">{r.currency} {r.premiumAmount}</TableCell>
                             <TableCell className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
                             <TableCell className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</TableCell>
                             <TableCell className="text-sm whitespace-nowrap">{r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate).toLocaleDateString() : "—"}</TableCell>
                             <TableCell className="text-sm whitespace-nowrap">{r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "—"}</TableCell>
                             <TableCell className="text-sm whitespace-nowrap">{r.datePaid ? new Date(r.datePaid).toLocaleDateString() : "—"}</TableCell>
-                            <TableCell>{r.receiptCount}</TableCell>
-                            <TableCell>{r.monthsPaid}</TableCell>
-                            <TableCell>{r.graceDaysUsed}</TableCell>
-                            <TableCell>{r.graceDaysRemaining != null ? r.graceDaysRemaining : "—"}</TableCell>
-                            <TableCell className="font-medium">{r.currency} {r.outstandingPremium}</TableCell>
-                            <TableCell className="text-green-700">{r.currency} {r.advancePremium}</TableCell>
+                            <TableCell className="tabular-nums">{r.receiptCount}</TableCell>
+                            <TableCell className="tabular-nums">{r.monthsPaid}</TableCell>
+                            <TableCell className="tabular-nums">{r.graceDaysUsed}</TableCell>
+                            <TableCell className="tabular-nums">{r.graceDaysRemaining != null ? r.graceDaysRemaining : "—"}</TableCell>
+                            <TableCell className="font-medium tabular-nums">{r.currency} {r.outstandingPremium}</TableCell>
+                            <TableCell className="text-green-700 tabular-nums">{r.currency} {r.advancePremium}</TableCell>
                             <TableCell className="whitespace-nowrap">{[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</TableCell>
                             <TableCell className="text-sm">{r.productName || "—"}</TableCell>
                             <TableCell className="font-mono text-sm">{r.productCode || "—"}</TableCell>
@@ -732,52 +723,58 @@ export default function StaffReports() {
                           </TableRow>
                         ))}
                       </TableBody>
-                    </Table>
+                    </DataTable>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="underwriter-payable">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Truck className="h-5 w-5" />Underwriter payable</CardTitle>
-                  <ExportButton reportType="underwriter-payable" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground">Monthly amount the tenant pays to the underwriter per policy (per adult/child). Includes advance months where applicable. Use filters to narrow by branch, product or status.</p>
-              </CardHeader>
-              <CardContent>
+            <CardSection
+              title="Underwriter payable"
+              description="Monthly amount the tenant pays to the underwriter per policy (per adult/child). Includes advance months where applicable. Use filters to narrow by branch, product or status."
+              icon={Truck}
+              headerRight={<ExportButton reportType="underwriter-payable" filters={filters} />}
+            >
                 {loadingUnderwriterPayable ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : !underwriterPayableResult?.rows?.length ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-underwriter-report">No policies with underwriter configuration match the filters</p>
+                  <EmptyState
+                    title="No matching policies"
+                    description="No policies with underwriter configuration match the filters."
+                    className="border-0 rounded-none bg-transparent py-8"
+                    dataTestId="text-no-underwriter-report"
+                  />
                 ) : (
                   <>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                      <Card>
-                        <CardContent className="pt-6">
-                          <p className="text-2xl font-bold" data-testid="text-underwriter-policy-count">{underwriterPayableResult.summary.policyCount}</p>
-                          <p className="text-sm text-muted-foreground">Policies</p>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardContent className="pt-6">
-                          <p className="text-2xl font-bold" data-testid="text-underwriter-monthly">{underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalMonthlyPayable.toFixed(2)}</p>
-                          <p className="text-sm text-muted-foreground">Total monthly payable</p>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardContent className="pt-6">
-                          <p className="text-2xl font-bold" data-testid="text-underwriter-total">{underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalPayableIncludingAdvance.toFixed(2)}</p>
-                          <p className="text-sm text-muted-foreground">Total (incl. advance months)</p>
-                        </CardContent>
-                      </Card>
+                      <KpiStatCard
+                        label="Policies"
+                        value={<span data-testid="text-underwriter-policy-count">{underwriterPayableResult.summary.policyCount}</span>}
+                        icon={FolderOpen}
+                      />
+                      <KpiStatCard
+                        label="Total monthly payable"
+                        value={
+                          <span className="tabular-nums" data-testid="text-underwriter-monthly">
+                            {underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalMonthlyPayable.toFixed(2)}
+                          </span>
+                        }
+                        icon={DollarSign}
+                      />
+                      <KpiStatCard
+                        label="Total (incl. advance months)"
+                        value={
+                          <span className="tabular-nums" data-testid="text-underwriter-total">
+                            {underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalPayableIncludingAdvance.toFixed(2)}
+                          </span>
+                        }
+                        icon={TrendingUp}
+                      />
                     </div>
                     <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
+                      <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[900px]">
+                        <TableHeader className={dataTableStickyHeaderClass}>
                           <TableRow>
                             <TableHead>Policy #</TableHead>
                             <TableHead>Status</TableHead>
@@ -795,9 +792,9 @@ export default function StaffReports() {
                         </TableHeader>
                         <TableBody>
                           {underwriterPayableResult.rows.map((r: any) => (
-                            <TableRow key={r.policyId} data-testid={`row-underwriter-${r.policyId}`}>
+                            <TableRow key={r.policyId} className="hover:bg-muted/40" data-testid={`row-underwriter-${r.policyId}`}>
                               <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
-                              <TableCell><Badge variant={r.status === "active" ? "default" : "secondary"}>{r.status}</Badge></TableCell>
+                              <TableCell><StatusBadge status={r.status} variant="policy" /></TableCell>
                               <TableCell className="whitespace-nowrap">{[r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</TableCell>
                               <TableCell className="text-sm whitespace-nowrap">{r.clientPhone || "—"}</TableCell>
                               <TableCell className="text-sm">{r.productName || "—"}</TableCell>
@@ -806,17 +803,16 @@ export default function StaffReports() {
                               <TableCell>{r.children}</TableCell>
                               <TableCell className="text-sm whitespace-nowrap">{r.underwriterAmountAdult ?? "—"} / {r.underwriterAmountChild ?? "—"}</TableCell>
                               <TableCell>{r.underwriterAdvanceMonths}</TableCell>
-                              <TableCell className="font-medium">{r.currency} {r.monthlyPayable.toFixed(2)}</TableCell>
-                              <TableCell className="font-medium">{r.currency} {r.totalPayable.toFixed(2)}</TableCell>
+                              <TableCell className="font-medium tabular-nums">{r.currency} {r.monthlyPayable.toFixed(2)}</TableCell>
+                              <TableCell className="font-medium tabular-nums">{r.currency} {r.totalPayable.toFixed(2)}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
-                      </Table>
+                      </DataTable>
                     </div>
                   </>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="active-policies">

@@ -133,9 +133,9 @@ export default function Home() {
           <ThemeSwitcher />
         </div>
         <div className="mb-10 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <img src={resolveAssetUrl(getDefaultLogoUrl())} alt="POL263" className="h-20 w-20 mb-5 rounded-2xl object-contain" fetchPriority="high" />
-          <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">POL263</h1>
-          <p className="text-muted-foreground text-lg font-medium mt-2">Insurance Management Platform</p>
+          <img src={resolveAssetUrl(getDefaultLogoUrl())} alt="POL263" className="h-14 sm:h-16 w-auto max-w-[min(360px,90vw)] mb-5 object-contain object-center" fetchPriority="high" />
+          <h1 className="sr-only">POL263</h1>
+          <p className="text-muted-foreground text-lg font-medium">Insurance Management Platform</p>
         </div>
 
         <div className="w-full max-w-sm space-y-4">
@@ -175,9 +175,9 @@ export default function Home() {
         <ThemeSwitcher />
       </div>
       <div className="mb-14 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-20 w-20 mb-5 rounded-2xl object-contain" fetchPriority="high" />
-        <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">{displayName}</h1>
-        <p className="text-muted-foreground text-lg font-medium mt-2">Insurance Management Platform</p>
+        <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-14 sm:h-16 w-auto max-w-[min(360px,90vw)] mb-5 object-contain object-center" fetchPriority="high" />
+        <h1 className="sr-only">{displayName}</h1>
+        <p className="text-muted-foreground text-lg font-medium">Insurance Management Platform</p>
       </div>
 
       <div className="grid md:grid-cols-3 gap-6 w-full max-w-5xl">

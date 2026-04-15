@@ -1,7 +1,7 @@
 import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, exists, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
-import { getDbForOrg, withOrgTransaction } from "./tenant-db";
+import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
 import {
@@ -538,10 +538,24 @@ export class DatabaseStorage implements IStorage {
   }
   async createUser(user: InsertUser): Promise<User> {
     const [created] = await db.insert(users).values({ ...user, email: user.email.toLowerCase() }).returning();
+    if (created.organizationId) {
+      try {
+        await ensureRegistryUserMirroredToOrgDataDb(created.organizationId, created.id);
+      } catch (err: any) {
+        structuredLog("warn", "mirror user after createUser failed", { orgId: created.organizationId, userId: created.id, error: err?.message || String(err) });
+      }
+    }
     return created;
   }
   async updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined> {
     const [updated] = await db.update(users).set(data).where(eq(users.id, id)).returning();
+    if (updated?.organizationId) {
+      try {
+        await ensureRegistryUserMirroredToOrgDataDb(updated.organizationId, id);
+      } catch (err: any) {
+        structuredLog("warn", "mirror user after updateUser failed", { orgId: updated.organizationId, userId: id, error: err?.message || String(err) });
+      }
+    }
     return updated;
   }
   async getRole(id: string, organizationId: string): Promise<Role | undefined> {
@@ -1994,7 +2008,12 @@ export class DatabaseStorage implements IStorage {
   // ─── Payments ──────────────────────────────────────────────
   async createPaymentTransaction(tx: InsertPaymentTransaction): Promise<PaymentTransaction> {
     const tdb = await getDbForOrg(tx.organizationId);
-    const [created] = await tdb.insert(paymentTransactions).values(tx).returning();
+    let recordedBy = tx.recordedBy ?? undefined;
+    if (recordedBy) {
+      const inOrgDb = await resolveUserIdForOrgDatabase(recordedBy, tx.organizationId);
+      recordedBy = inOrgDb ?? undefined;
+    }
+    const [created] = await tdb.insert(paymentTransactions).values({ ...tx, recordedBy }).returning();
     return created;
   }
   async getPaymentsByPolicy(policyId: string, orgId: string): Promise<PaymentTransaction[]> {

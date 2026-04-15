@@ -1,7 +1,8 @@
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, FilterBar, DataTable, dataTableStickyHeaderClass } from "@/components/ds";
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,12 +89,12 @@ export default function AuditLogs() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-display font-bold">Audit Logs</h1>
-          <p className="text-muted-foreground mt-1">Track all system events within the current tenant scope.</p>
-        </div>
+        <PageHeader
+          title="Audit Logs"
+          description="Track all system events within the current tenant scope."
+        />
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:flex-wrap">
+        <FilterBar className="rounded-xl border border-border/70 bg-card/80 px-4 py-3 shadow-sm">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -133,28 +134,27 @@ export default function AuditLogs() {
               placeholder="To"
             />
           </div>
-        </div>
+        </FilterBar>
 
-        <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
+        <div className="rounded-xl border border-border/70 bg-card shadow-sm overflow-hidden">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader className="bg-muted/50">
-                    <TableRow>
-                      <TableHead>Timestamp</TableHead>
-                      <TableHead>Action</TableHead>
-                      <TableHead>Actor</TableHead>
-                      <TableHead>Target Entity</TableHead>
-                      <TableHead>Request ID</TableHead>
-                      <TableHead>Before/After Diff</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                <TableHeader className={dataTableStickyHeaderClass}>
+                  <TableRow>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Actor</TableHead>
+                    <TableHead>Target Entity</TableHead>
+                    <TableHead>Request ID</TableHead>
+                    <TableHead>Before/After Diff</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                     {logs.length > 0 ? (
                       logs.map((log: any) => (
                         <TableRow key={log.id}>
@@ -214,9 +214,8 @@ export default function AuditLogs() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </TableBody>
-                </Table>
-              </div>
+                </TableBody>
+              </DataTable>
 
               <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/30">
                 <p className="text-sm text-muted-foreground">

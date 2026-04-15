@@ -4,13 +4,13 @@
  */
 
 import { storage, findPaymentIntentById } from "./storage";
-import { withOrgTransaction } from "./tenant-db";
+import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from "./tenant-db";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { getPaynowConfig, getPaynowIntegrationId } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaymentReceipt } from "@shared/schema";
 import type { Policy } from "@shared/schema";
-import { paymentTransactions, paymentReceipts, paymentIntents } from "@shared/schema";
+import { paymentTransactions, paymentReceipts, paymentIntents, users } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import { structuredLog } from "./logger";
 import { insertOutboxMessageInTx, requestOutboxDrain, OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP } from "./outbox";
@@ -626,6 +626,12 @@ export async function applyPaymentToPolicy(
 
   try {
     const result = await withOrgTransaction(orgId, async (txDb) => {
+      let recordedByForLedger: string | null = null;
+      if (effectiveUserId) {
+        await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, orgId, effectiveUserId);
+        const [urow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, effectiveUserId)).limit(1);
+        recordedByForLedger = urow?.id ?? null;
+      }
       const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
       const [tx] = await txDb.insert(paymentTransactions).values({
         organizationId: intent.organizationId,
@@ -641,7 +647,7 @@ export async function applyPaymentToPolicy(
         receivedAt: new Date(),
         postedDate: today,
         valueDate: today,
-        recordedBy: effectiveUserId ?? undefined,
+        recordedBy: recordedByForLedger ?? undefined,
       }).returning();
       transaction = tx;
 
@@ -655,7 +661,7 @@ export async function applyPaymentToPolicy(
         amount: String(intent.amount),
         currency: intent.currency,
         paymentChannel,
-        issuedByUserId: effectiveUserId ?? undefined,
+        issuedByUserId: recordedByForLedger ?? undefined,
         status: "issued",
         printFormat: "thermal_80mm",
         metadataJson: { transactionId: tx.id, paynowReference: intent.paynowReference },
@@ -663,7 +669,7 @@ export async function applyPaymentToPolicy(
       receipt = rec;
 
       await txDb.update(paymentIntents).set({ status: "paid" }).where(eq(paymentIntents.id, intent.id));
-      await applyPolicyStatusForClearedPayment(txDb, intent.policyId, policy, today, "", effectiveUserId);
+      await applyPolicyStatusForClearedPayment(txDb, intent.policyId, policy, today, "", recordedByForLedger ?? undefined);
 
       await insertOutboxMessageInTx(txDb, {
         organizationId: orgId,
@@ -733,6 +739,12 @@ export async function applyGroupPaymentToPolicies(
 
       // Wrap each allocation in its own transaction for atomicity
       const { newTx, receiptNumber } = await withOrgTransaction(orgId, async (txDb) => {
+        let recordedByForLedger: string | null = null;
+        if (actorId) {
+          await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, orgId, actorId);
+          const [urow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, actorId)).limit(1);
+          recordedByForLedger = urow?.id ?? null;
+        }
         const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
         // Lock policy row to prevent concurrent status changes
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${alloc.policyId} FOR UPDATE`);
@@ -752,7 +764,7 @@ export async function applyGroupPaymentToPolicies(
           postedDate: today,
           valueDate: today,
           notes: "Group PayNow",
-          recordedBy: actorId ?? undefined,
+          recordedBy: recordedByForLedger ?? undefined,
         }).returning();
 
         await txDb.insert(paymentReceipts).values({
@@ -764,12 +776,12 @@ export async function applyGroupPaymentToPolicies(
           amount,
           currency,
           paymentChannel: "paynow_ecocash",
-          issuedByUserId: actorId ?? undefined,
+          issuedByUserId: recordedByForLedger ?? undefined,
           status: "issued",
           metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference, transactionId: newTx.id },
         });
 
-        await applyPolicyStatusForClearedPayment(txDb, alloc.policyId, policy, today, " (group PayNow)", actorId);
+        await applyPolicyStatusForClearedPayment(txDb, alloc.policyId, policy, today, " (group PayNow)", recordedByForLedger ?? undefined);
         return { newTx, receiptNumber };
       });
 

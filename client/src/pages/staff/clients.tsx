@@ -1,7 +1,7 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -32,6 +32,7 @@ import {
   Heart,
   TrendingUp,
   ArrowRight,
+  KeyRound,
 } from "lucide-react";
 
 interface Client {
@@ -394,62 +395,69 @@ export default function StaffClients() {
     return (
       <StaffLayout>
         <div className="space-y-6">
-          <div className="flex items-center gap-4">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => { setViewMode("list"); setSelectedClientId(null); }}
-              data-testid="btn-back-to-list"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </Button>
-            <div>
-              <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-client-name">
-                {isLoadingDetail ? "Loading..." : `${selectedClient?.firstName} ${selectedClient?.lastName}`}
-              </h1>
-              <p className="text-muted-foreground mt-1">{linkedPolicies.length > 0 ? "Converted Client" : "Lead — No policy issued yet"}</p>
-            </div>
-            {selectedClient && (
-              <div className="ml-auto flex items-center gap-2">
-                <Badge variant={selectedClient.isActive ? "default" : "secondary"} data-testid="badge-client-status">
-                  {selectedClient.isActive ? "Active" : "Inactive"}
-                </Badge>
-                {linkedPolicies.length > 0 ? (
-                  <Badge variant="default" className="bg-emerald-600" data-testid="badge-client-converted">
-                    Converted
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200" data-testid="badge-client-lead">
-                    Lead
-                  </Badge>
-                )}
-                {linkedPolicies.length === 0 ? (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      onClick={() => openEdit(selectedClient)}
-                      data-testid="btn-edit-client"
-                    >
-                      <Pencil className="h-3.5 w-3.5" /> Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="gap-2"
-                      onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${selectedClient.id}`; }}
-                      data-testid="btn-issue-policy-detail"
-                    >
-                      <ArrowRight className="h-3.5 w-3.5" /> Issue Policy
-                    </Button>
-                  </div>
-                ) : (
-                  <Badge variant="outline" className="text-xs text-muted-foreground">
-                    Locked — edit via policy
-                  </Badge>
-                )}
+          <div className="rounded-2xl border border-border/60 bg-gradient-to-br from-primary/[0.06] via-card to-muted/25 p-4 sm:p-5 shadow-sm">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-start gap-3 min-w-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
+                  onClick={() => { setViewMode("list"); setSelectedClientId(null); }}
+                  data-testid="btn-back-to-list"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <div className="min-w-0">
+                  <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight" data-testid="text-client-name">
+                    {isLoadingDetail ? "Loading..." : `${selectedClient?.firstName} ${selectedClient?.lastName}`}
+                  </h1>
+                  <p className="text-muted-foreground mt-1 text-sm sm:text-base">
+                    {linkedPolicies.length > 0 ? "Converted client" : "Lead — no policy issued yet"}
+                  </p>
+                </div>
               </div>
-            )}
+              {selectedClient && (
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <Badge variant={selectedClient.isActive ? "default" : "secondary"} data-testid="badge-client-status">
+                    {selectedClient.isActive ? "Active" : "Inactive"}
+                  </Badge>
+                  {linkedPolicies.length > 0 ? (
+                    <Badge variant="default" className="bg-emerald-600" data-testid="badge-client-converted">
+                      Converted
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200" data-testid="badge-client-lead">
+                      Lead
+                    </Badge>
+                  )}
+                  {linkedPolicies.length === 0 ? (
+                    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2 touch-target sm:h-9 sm:min-h-0"
+                        onClick={() => openEdit(selectedClient)}
+                        data-testid="btn-edit-client"
+                      >
+                        <Pencil className="h-3.5 w-3.5" /> Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="gap-2 touch-target sm:h-9 sm:min-h-0"
+                        onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${selectedClient.id}`; }}
+                        data-testid="btn-issue-policy-detail"
+                      >
+                        <ArrowRight className="h-3.5 w-3.5" /> Issue Policy
+                      </Button>
+                    </div>
+                  ) : (
+                    <Badge variant="outline" className="text-xs text-muted-foreground">
+                      Locked — edit via policy
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {isLoadingDetail ? (
@@ -459,11 +467,7 @@ export default function StaffClients() {
             </div>
           ) : selectedClient ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card className="shadow-sm">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><Users className="h-4 w-4" /> Personal Information</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
+              <CardSection title="Personal Information" icon={Users}>
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-muted-foreground">Full Name</p>
@@ -536,22 +540,22 @@ export default function StaffClients() {
                       </div>
                     )}
                   </div>
-                </CardContent>
-              </Card>
+              </CardSection>
 
-              <Card className="shadow-sm">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><FileStack className="h-4 w-4" /> Linked Policies</CardTitle>
-                </CardHeader>
-                <CardContent>
+              <CardSection title="Linked Policies" icon={FileStack}>
                   {linkedPolicies.length === 0 ? (
-                    <p className="text-sm text-muted-foreground" data-testid="text-no-policies">No policies linked to this client.</p>
+                    <EmptyState
+                      title="No policies linked"
+                      description="Issue a policy from this lead to link coverage here."
+                      className="border-0 rounded-none bg-transparent py-8"
+                      dataTestId="text-no-policies"
+                    />
                   ) : (
                     <div className="space-y-3">
                       {linkedPolicies.map((policy: any) => (
                         <div
                           key={policy.id}
-                          className="flex items-center justify-between p-3 rounded-lg border"
+                          className="flex items-center justify-between p-3 rounded-lg border bg-muted/5"
                           data-testid={`card-policy-${policy.id}`}
                         >
                           <div>
@@ -560,30 +564,23 @@ export default function StaffClients() {
                               Effective: {policy.effectiveDate || "—"}
                             </p>
                           </div>
-                          <div className="text-right">
-                            <p className="font-medium text-sm">
+                          <div className="text-right space-y-1">
+                            <p className="font-medium text-sm tabular-nums">
                               {policy.currency} {parseFloat(policy.premiumAmount).toFixed(2)}
                             </p>
-                            <Badge
-                              variant={policy.status === "active" ? "default" : "secondary"}
-                              className="mt-1"
-                            >
-                              {policy.status}
-                            </Badge>
+                            <StatusBadge status={policy.status} variant="policy" />
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
-                </CardContent>
-              </Card>
+              </CardSection>
 
-              <Card className="shadow-sm md:col-span-2">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="flex items-center gap-2">
-                      <Heart className="h-4 w-4" /> Dependents & Beneficiaries
-                    </CardTitle>
+              <CardSection
+                className="md:col-span-2"
+                title="Dependents & Beneficiaries"
+                icon={Heart}
+                headerRight={(
                     <Button
                       size="sm"
                       className="gap-2"
@@ -592,20 +589,23 @@ export default function StaffClients() {
                     >
                       <UserPlus className="h-3.5 w-3.5" /> Add Dependent
                     </Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
+                )}
+                flush
+              >
                   {isLoadingDeps ? (
                     <div className="flex items-center justify-center py-6">
                       <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                     </div>
                   ) : !clientDependents || clientDependents.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-4 text-center" data-testid="text-no-dependents">
-                      No dependents or beneficiaries recorded yet.
-                    </p>
+                    <EmptyState
+                      title="No dependents yet"
+                      description="Add beneficiaries or dependents tied to this client record."
+                      className="border-0 rounded-none bg-transparent py-8"
+                      dataTestId="text-no-dependents"
+                    />
                   ) : (
-                    <Table>
-                      <TableHeader className="bg-muted/50">
+                    <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                      <TableHeader className={dataTableStickyHeaderClass}>
                         <TableRow>
                           <TableHead>Name</TableHead>
                           <TableHead>Relationship</TableHead>
@@ -618,7 +618,7 @@ export default function StaffClients() {
                       </TableHeader>
                       <TableBody>
                         {(clientDependents ?? []).map((dep) => (
-                          <TableRow key={dep.id} data-testid={`row-dependent-${dep.id}`}>
+                          <TableRow key={dep.id} className="hover:bg-muted/40" data-testid={`row-dependent-${dep.id}`}>
                             <TableCell className="font-medium">
                               {dep.firstName} {dep.lastName}
                             </TableCell>
@@ -629,9 +629,7 @@ export default function StaffClients() {
                             <TableCell>{dep.dateOfBirth || "—"}</TableCell>
                             <TableCell className="capitalize">{dep.gender || "—"}</TableCell>
                             <TableCell>
-                              <Badge variant={dep.isActive ? "default" : "secondary"}>
-                                {dep.isActive ? "Active" : "Inactive"}
-                              </Badge>
+                              <StatusBadge status={dep.isActive ? "active" : "inactive"} variant="policy" />
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex items-center justify-end gap-1">
@@ -672,17 +670,12 @@ export default function StaffClients() {
                           </TableRow>
                         ))}
                       </TableBody>
-                    </Table>
+                    </DataTable>
                   )}
-                </CardContent>
-              </Card>
+              </CardSection>
 
-              <Card className="shadow-sm">
-                <CardHeader>
-                  <CardTitle>Enrollment & Access</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <div className="grid grid-cols-2 gap-4">
+              <CardSection title="Enrollment & Access" icon={KeyRound}>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-muted-foreground">Activation Code</p>
                       <p className="font-mono font-medium" data-testid="text-detail-activation-code">
@@ -696,8 +689,7 @@ export default function StaffClients() {
                       </p>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+              </CardSection>
             </div>
           ) : null}
         </div>
@@ -753,73 +745,30 @@ export default function StaffClients() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold tracking-tight">Leads &amp; Clients</h1>
-            <p className="text-muted-foreground mt-1">Track prospects and conversions. Clients are your leads — policies are your source of truth.</p>
-          </div>
-          <Button
-            className="gap-2 shadow-sm"
-            onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }}
-            data-testid="btn-add-client"
-          >
-            <Plus className="h-4 w-4" /> Capture Lead
-          </Button>
-        </div>
+        <PageHeader
+          title="Leads & Clients"
+          description="Track prospects and conversions. Clients are your leads — policies are your source of truth."
+          actions={(
+            <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }} data-testid="btn-add-client">
+              <Plus className="h-4 w-4" /> Capture Lead
+            </Button>
+          )}
+        />
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="shadow-sm">
-            <CardContent className="pt-4 pb-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-blue-50"><Users className="h-4 w-4 text-blue-600" /></div>
-                <div>
-                  <p className="text-2xl font-bold">{totalClients}</p>
-                  <p className="text-xs text-muted-foreground">Total Records</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardContent className="pt-4 pb-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-amber-50"><Users className="h-4 w-4 text-amber-600" /></div>
-                <div>
-                  <p className="text-2xl font-bold">{leadCount}</p>
-                  <p className="text-xs text-muted-foreground">Leads (no policy)</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardContent className="pt-4 pb-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-emerald-50"><FileStack className="h-4 w-4 text-emerald-600" /></div>
-                <div>
-                  <p className="text-2xl font-bold">{convertedCount}</p>
-                  <p className="text-xs text-muted-foreground">Converted (has policy)</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm">
-            <CardContent className="pt-4 pb-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-indigo-50"><TrendingUp className="h-4 w-4 text-indigo-600" /></div>
-                <div>
-                  <p className="text-2xl font-bold">{conversionRate}%</p>
-                  <p className="text-xs text-muted-foreground">Conversion Rate</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <KpiStatCard label="Total records" value={totalClients} icon={Users} />
+          <KpiStatCard label="Leads (no policy)" value={<span className="text-amber-700">{leadCount}</span>} icon={Users} />
+          <KpiStatCard label="Converted" value={<span className="text-emerald-700">{convertedCount}</span>} icon={FileStack} />
+          <KpiStatCard label="Conversion rate" value={<span className="tabular-nums">{conversionRate}%</span>} icon={TrendingUp} />
         </div>
 
-        <Card className="shadow-sm border-border/60">
-          <CardHeader className="pb-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <CardTitle>Lead &amp; Client Registry</CardTitle>
-              <div className="flex items-center gap-2">
-                <div className="relative w-64">
+        <CardSection
+          title="Lead & client registry"
+          description="Search, filter, and open a record to view full detail."
+          icon={Users}
+          headerRight={(
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-64">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search leads & clients..."
@@ -830,8 +779,8 @@ export default function StaffClients() {
                   />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-40" data-testid="select-status-filter">
-                    <Filter className="h-4 w-4 mr-2" />
+                  <SelectTrigger className="w-full sm:w-40" data-testid="select-status-filter">
+                    <Filter className="h-4 w-4 mr-2 shrink-0" />
                     <SelectValue placeholder="Filter" />
                   </SelectTrigger>
                   <SelectContent>
@@ -843,12 +792,12 @@ export default function StaffClients() {
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
+          )}
+          flush
+        >
             {isLoading ? (
-              <Table>
-                <TableHeader className="bg-muted/50">
+              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                <TableHeader className={dataTableStickyHeaderClass}>
                   <TableRow>
                     <TableHead className="pl-6">Client</TableHead>
                     <TableHead>Contact Info</TableHead>
@@ -870,16 +819,18 @@ export default function StaffClients() {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </DataTable>
             ) : filteredClients.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground" data-testid="text-no-clients">
-                {searchQuery || statusFilter !== "all"
-                  ? "No clients match your search criteria."
-                  : "No clients found. Add your first client to get started."}
-              </div>
+              <EmptyState
+                dataTestId="text-no-clients"
+                icon={Users}
+                title={searchQuery || statusFilter !== "all" ? "No matching records" : "No clients yet"}
+                description={searchQuery || statusFilter !== "all" ? "No clients match your search criteria." : "No clients found. Add your first client to get started."}
+                className="border-0 rounded-none bg-transparent py-10"
+              />
             ) : (
-              <Table>
-                <TableHeader className="bg-muted/50">
+              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                <TableHeader className={dataTableStickyHeaderClass}>
                   <TableRow>
                     <TableHead className="pl-6">Client</TableHead>
                     <TableHead>Contact Info</TableHead>
@@ -1005,10 +956,9 @@ export default function StaffClients() {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </DataTable>
             )}
-          </CardContent>
-        </Card>
+        </CardSection>
       </div>
 
       <CreateClientDialog

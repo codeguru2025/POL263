@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
+import { PageHeader } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -307,25 +308,31 @@ export default function ClientPayments() {
   return (
     <ClientLayout clientName="">
       <div className="max-w-2xl mx-auto space-y-6">
-        <Button variant="ghost" className="gap-2" onClick={() => setLocation("/client")}>
+        <Button variant="ghost" className="gap-2 touch-target sm:min-h-0 sm:min-w-0 sm:h-9 w-fit" onClick={() => setLocation("/client")}>
           <ArrowLeft className="h-4 w-4" />
           Back to dashboard
         </Button>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CreditCard className="h-5 w-5" />
+        <PageHeader
+          className="mb-6"
+          title={(
+            <span className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5 shrink-0" />
               Pay premium
-            </CardTitle>
-            <p className="text-sm text-muted-foreground">
+            </span>
+          )}
+          description={
+            <>
               Choose your policy, amount, and payment method. You will be redirected to Paynow or receive a USSD prompt.
               {isNativeMobile() && (
                 <span className="block mt-2 text-primary font-medium">On this device you’ll complete payment in your browser, then return to the app.</span>
               )}
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-4">
+            </>
+          }
+        />
+
+        <Card>
+          <CardContent className="space-y-4 pt-6">
             {!paynowConfig?.enabled && (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-center gap-2 text-amber-800 text-sm">
                 <AlertCircle className="h-4 w-4 shrink-0" />

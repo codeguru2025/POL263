@@ -20,7 +20,7 @@ export default function StaffLogin() {
   const authError = params.get("error");
   const orgIdFromUrl = params.get("orgId") || undefined;
   const sessionError = authError === "session";
-  const { displayName, displayLogo } = useBranding(orgIdFromUrl);
+  const { displayName, displayLogo, isWhitelabeled } = useBranding(orgIdFromUrl);
 
   const [demoEmail, setDemoEmail] = useState("");
   const [demoLoading, setDemoLoading] = useState(false);
@@ -102,10 +102,12 @@ export default function StaffLogin() {
       <div className="flex-1 flex items-center justify-center p-4">
         <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-8">
-          <div className="mx-auto bg-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/30">
-            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="w-10 h-10 rounded-lg object-contain" fetchPriority="high" />
+          <div className="mx-auto px-4 py-3 bg-primary/15 rounded-2xl flex items-center justify-center mb-6 ring-1 ring-primary/25 max-w-full">
+            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-10 w-auto max-w-[min(280px,85vw)] object-contain object-center" fetchPriority="high" />
           </div>
-          <CardTitle className="text-3xl font-display">{displayName} — Staff Portal</CardTitle>
+          <CardTitle className="text-3xl font-display">
+            {isWhitelabeled ? `${displayName} — Staff Portal` : "Staff Portal"}
+          </CardTitle>
           <CardDescription className="text-base mt-2">
             {showGoogle
               ? "Sign in with your corporate Google account. Your email must be added by an administrator first."

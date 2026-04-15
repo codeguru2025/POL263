@@ -1,5 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
+import { PageHeader } from "@/components/ds";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -93,18 +94,17 @@ export default function StaffDiagnostics() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-display font-bold" data-testid="text-diagnostics-title">
-              Admin Diagnostics
-            </h1>
-            <p className="text-muted-foreground mt-1">System health, errors, and operational diagnostics.</p>
-          </div>
-          <Button variant="outline" onClick={handleRefresh} data-testid="button-refresh-diagnostics">
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh
-          </Button>
-        </div>
+        <PageHeader
+          title="Admin Diagnostics"
+          description="System health, errors, and operational diagnostics."
+          titleDataTestId="text-diagnostics-title"
+          actions={(
+            <Button variant="outline" onClick={handleRefresh} data-testid="button-refresh-diagnostics">
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Refresh
+            </Button>
+          )}
+        />
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card className="shadow-sm">

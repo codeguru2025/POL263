@@ -151,7 +151,7 @@ export async function seedDatabase() {
     defaultOrg = await storage.createOrganization({
       name: "POL263",
       logoUrl: "/assets/logo.png",
-      primaryColor: "#D4AF37",
+      primaryColor: "#0d9488",
       footerText: "For a service beyond Ubuntu",
     });
     structuredLog("info", `Created default organization: ${defaultOrg.name}`);

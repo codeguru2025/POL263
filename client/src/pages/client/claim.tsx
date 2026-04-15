@@ -94,8 +94,8 @@ export default function ClientClaim() {
     <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
       <Card className="w-full max-w-lg border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
-          <div className="mx-auto bg-primary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6">
-            <img src={getDefaultLogoUrl()} alt="POL263 Logo" className="w-10 h-10 rounded-lg" />
+          <div className="mx-auto px-4 py-3 bg-primary/10 rounded-2xl flex items-center justify-center mb-6 max-w-full">
+            <img src={getDefaultLogoUrl()} alt="POL263" className="h-10 w-auto max-w-[min(280px,85vw)] object-contain object-center" />
           </div>
           <CardTitle className="text-3xl font-display">Claim Your Policy</CardTitle>
           <CardDescription className="text-base mt-2">

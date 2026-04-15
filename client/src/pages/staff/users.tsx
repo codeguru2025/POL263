@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import { UserPlus, Shield, Copy, Search, UserX, Pencil, Check, X, Trash2 } from "lucide-react";
+import { UserPlus, Shield, Copy, Search, UserX, Pencil, Check, X, Trash2, Users } from "lucide-react";
+import { PageHeader, CardSection, DataTable, dataTableStickyHeaderClass, KpiStatCard, EmptyState } from "@/components/ds";
 
 export default function StaffUsers() {
   const { toast } = useToast();
@@ -110,11 +110,11 @@ export default function StaffUsers() {
   return (
     <StaffLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight" data-testid="text-page-title">User & Team Management</h1>
-            <p className="text-muted-foreground">Manage staff accounts, roles, and agent access</p>
-          </div>
+        <PageHeader
+          title="User & Team Management"
+          description="Manage staff accounts, roles, and agent access"
+          titleDataTestId="text-page-title"
+          actions={(
           <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
             <DialogTrigger asChild>
               <Button data-testid="button-create-user"><UserPlus className="mr-2 h-4 w-4" />Add User</Button>
@@ -231,44 +231,33 @@ export default function StaffUsers() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-        </div>
+          )}
+        />
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total Users</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold" data-testid="text-total-users">{users.length}</div></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Active</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold text-green-600" data-testid="text-active-users">{activeCount}</div></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Agents</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold text-blue-600" data-testid="text-agent-count">{agentCount}</div></CardContent>
-          </Card>
+          <KpiStatCard label="Total users" value={<span data-testid="text-total-users">{users.length}</span>} icon={Users} />
+          <KpiStatCard label="Active" value={<span className="text-emerald-600" data-testid="text-active-users">{activeCount}</span>} icon={Users} />
+          <KpiStatCard label="Agents" value={<span className="text-primary" data-testid="text-agent-count">{agentCount}</span>} icon={Shield} />
         </div>
 
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>Team Members</CardTitle>
-                <CardDescription>All staff and agent accounts in your organization</CardDescription>
-              </div>
-              <div className="relative w-64">
+        <CardSection
+          title="Team members"
+          description="All staff and agent accounts in your organization"
+          headerRight={(
+              <div className="relative w-full sm:w-64">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input placeholder="Search by name or email..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-users" />
               </div>
-            </div>
-          </CardHeader>
-          <CardContent>
+          )}
+          flush
+        >
             {isLoading ? (
               <div className="text-center py-8 text-muted-foreground">Loading users...</div>
             ) : filtered.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">No users found.</div>
+              <EmptyState title="No users found" description="Try a different search term." className="border-0 rounded-none bg-transparent py-10" />
             ) : (
-              <Table>
-                <TableHeader>
+              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                <TableHeader className={dataTableStickyHeaderClass}>
                   <TableRow>
                     <TableHead>Name</TableHead>
                     <TableHead>Email</TableHead>
@@ -325,10 +314,9 @@ export default function StaffUsers() {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </DataTable>
             )}
-          </CardContent>
-        </Card>
+        </CardSection>
 
         <Dialog open={!!editingUser} onOpenChange={(open) => !open && setEditingUser(null)}>
           <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col p-0">
