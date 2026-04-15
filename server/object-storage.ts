@@ -1,9 +1,16 @@
 /**
  * S3-compatible object storage (DigitalOcean Spaces / Cloudflare R2).
  *
- * When R2_ENDPOINT + R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY + R2_BUCKET are
- * set the module uploads to the remote bucket and returns public URLs.
- * Otherwise it falls back to local disk (uploads/ directory).
+ * Reads DO_SPACES_* env vars (canonical). Falls back to R2_* for legacy compatibility.
+ * When neither is configured, falls back to local disk (uploads/ directory).
+ *
+ * DO Spaces env vars:
+ *   DO_SPACES_ENDPOINT  — e.g. https://nyc3.digitaloceanspaces.com
+ *   DO_SPACES_REGION    — e.g. nyc3  (used to build public URL when CDN_URL not set)
+ *   DO_SPACES_BUCKET    — your bucket name
+ *   DO_SPACES_KEY       — Spaces access key
+ *   DO_SPACES_SECRET    — Spaces secret key
+ *   DO_SPACES_CDN_URL   — optional CDN endpoint (e.g. https://mybucket.nyc3.cdn.digitaloceanspaces.com)
  */
 
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
@@ -12,34 +19,74 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 
-const R2_ENDPOINT = process.env.R2_ENDPOINT?.replace(/\/$/, "");
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-const R2_BUCKET = process.env.R2_BUCKET;
-const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL?.replace(/\/$/, "");
+// Resolve config — DO_SPACES_* first, then R2_* legacy
+const ENDPOINT =
+  process.env.DO_SPACES_ENDPOINT?.replace(/\/$/, "") ||
+  process.env.R2_ENDPOINT?.replace(/\/$/, "");
+
+const ACCESS_KEY =
+  process.env.DO_SPACES_KEY ||
+  process.env.R2_ACCESS_KEY_ID ||
+  process.env.AWS_ACCESS_KEY_ID;
+
+const SECRET_KEY =
+  process.env.DO_SPACES_SECRET ||
+  process.env.R2_SECRET_ACCESS_KEY ||
+  process.env.AWS_SECRET_ACCESS_KEY;
+
+const BUCKET =
+  process.env.DO_SPACES_BUCKET ||
+  process.env.R2_BUCKET ||
+  process.env.AWS_S3_BUCKET;
+
+const REGION =
+  process.env.DO_SPACES_REGION ||
+  process.env.AWS_REGION ||
+  "us-east-1";
+
+// Public URL for generated file links.
+// Prefer explicit CDN URL, then explicit public URL, then derive from bucket + endpoint.
+function buildPublicUrl(): string {
+  if (process.env.DO_SPACES_CDN_URL) return process.env.DO_SPACES_CDN_URL.replace(/\/$/, "");
+  if (process.env.DO_SPACES_PUBLIC_URL) return process.env.DO_SPACES_PUBLIC_URL.replace(/\/$/, "");
+  if (process.env.R2_PUBLIC_URL) return process.env.R2_PUBLIC_URL.replace(/\/$/, "");
+  if (BUCKET && ENDPOINT) {
+    // DO Spaces virtual-hosted style: https://{bucket}.{region}.digitaloceanspaces.com
+    // Build from endpoint: https://nyc3.digitaloceanspaces.com → https://{bucket}.nyc3.digitaloceanspaces.com
+    try {
+      const u = new URL(ENDPOINT);
+      return `${u.protocol}//${BUCKET}.${u.host}`;
+    } catch {
+      return `${ENDPOINT}/${BUCKET}`;
+    }
+  }
+  return "";
+}
 
 export const isObjectStorageEnabled =
-  !!R2_ENDPOINT && !!R2_ACCESS_KEY_ID && !!R2_SECRET_ACCESS_KEY && !!R2_BUCKET;
+  !!ENDPOINT && !!ACCESS_KEY && !!SECRET_KEY && !!BUCKET;
+
+const PUBLIC_URL = buildPublicUrl();
 
 let s3: S3Client | null = null;
 
 function getClient(): S3Client {
   if (!s3) {
     s3 = new S3Client({
-      endpoint: R2_ENDPOINT!,
-      region: "us-east-1",
+      endpoint: ENDPOINT!,
+      region: REGION,
       credentials: {
-        accessKeyId: R2_ACCESS_KEY_ID!,
-        secretAccessKey: R2_SECRET_ACCESS_KEY!,
+        accessKeyId: ACCESS_KEY!,
+        secretAccessKey: SECRET_KEY!,
       },
-      forcePathStyle: false,
+      forcePathStyle: false, // DO Spaces uses virtual-hosted style
     });
   }
   return s3;
 }
 
 if (isObjectStorageEnabled) {
-  structuredLog("info", "Object storage enabled", { endpoint: R2_ENDPOINT, bucket: R2_BUCKET });
+  structuredLog("info", "Object storage enabled", { endpoint: ENDPOINT, bucket: BUCKET, publicUrl: PUBLIC_URL });
 } else {
   structuredLog("warn", "Object storage not configured — using local disk (uploads/)");
 }
@@ -71,7 +118,7 @@ export async function uploadFile(
 
   await client.send(
     new PutObjectCommand({
-      Bucket: R2_BUCKET!,
+      Bucket: BUCKET!,
       Key: key,
       Body: buffer,
       ContentType: contentType,
@@ -79,7 +126,7 @@ export async function uploadFile(
     }),
   );
 
-  const url = R2_PUBLIC_URL ? `${R2_PUBLIC_URL}/${key}` : `${R2_ENDPOINT}/${R2_BUCKET}/${key}`;
+  const url = PUBLIC_URL ? `${PUBLIC_URL}/${key}` : `${ENDPOINT}/${BUCKET}/${key}`;
 
   structuredLog("info", "Uploaded file to object storage", { key, contentType, size: buffer.length });
   return { url, key };
@@ -92,7 +139,7 @@ export async function deleteFile(key: string): Promise<void> {
   if (!isObjectStorageEnabled) return;
   try {
     const client = getClient();
-    await client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET!, Key: key }));
+    await client.send(new DeleteObjectCommand({ Bucket: BUCKET!, Key: key }));
     structuredLog("info", "Deleted file from object storage", { key });
   } catch (err: any) {
     structuredLog("error", "Failed to delete from object storage", { key, error: err.message });
@@ -106,7 +153,7 @@ export async function fetchFile(key: string): Promise<Buffer | null> {
   if (!isObjectStorageEnabled) return null;
   try {
     const client = getClient();
-    const res = await client.send(new GetObjectCommand({ Bucket: R2_BUCKET!, Key: key }));
+    const res = await client.send(new GetObjectCommand({ Bucket: BUCKET!, Key: key }));
     if (!res.Body) return null;
     const chunks: Uint8Array[] = [];
     for await (const chunk of res.Body as any) {

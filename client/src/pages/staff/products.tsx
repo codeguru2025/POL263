@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
+import { resolveAssetUrl } from "@/lib/assetUrl";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -692,7 +693,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
         <TableCell>
           <div className="flex items-center gap-3">
             {product.casketImageUrl ? (
-              <img src={product.casketImageUrl} alt={product.casketType || ""} className="h-10 w-10 rounded object-cover border" loading="lazy" />
+              <img src={resolveAssetUrl(product.casketImageUrl)} alt={product.casketType || ""} className="h-10 w-10 rounded object-cover border" loading="lazy" />
             ) : (
               <div className="h-10 w-10 rounded bg-muted flex items-center justify-center"><Box className="h-5 w-5 text-muted-foreground/50" /></div>
             )}

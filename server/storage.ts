@@ -1,4 +1,5 @@
-import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, type SQL } from "drizzle-orm";
+import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, exists, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
@@ -73,6 +74,9 @@ import {
   type TermsAndConditions, type InsertTerms,
   type ClientFeedback, type InsertClientFeedback,
 } from "@shared/schema";
+
+/** Drizzle handle for this org's data database (shared `DATABASE_URL` pool or isolated tenant Postgres). */
+export type OrgDrizzleDb = Awaited<ReturnType<typeof getDbForOrg>>;
 
 export interface ReinstatementEntry {
   policyId: string;
@@ -291,6 +295,13 @@ export interface IStorage {
   getPoliciesByOrg(organizationId: string, limit?: number, offset?: number, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]>;
   /** Policy report rows with client, product, branch, agent details for reports/export. */
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
+  /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
+  getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
+  /**
+   * Policies registered (created) in the period that also have at least one issued receipt in the same period.
+   * Requires fromDate and toDate on filters; otherwise returns an empty list.
+   */
+  getAgentProductivityReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<FinanceReportRow[]>;
   getUnderwriterPayableReport(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<UnderwriterPayableReportResult>;
   getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]>;
@@ -299,6 +310,18 @@ export interface IStorage {
   getPoliciesByIds(ids: string[], orgId: string): Promise<Policy[]>;
   getPolicyByNumber(policyNumber: string, orgId: string): Promise<Policy | undefined>;
   updatePolicy(id: string, data: Partial<InsertPolicy>, orgId: string): Promise<Policy | undefined>;
+  /**
+   * Single transaction: policy row, status history, members (with org member numbers), and add-ons.
+   */
+  createPolicyWithInitialSetup(
+    orgId: string,
+    data: {
+      policy: InsertPolicy;
+      statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
+      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
+      addOnIds: string[];
+    },
+  ): Promise<{ policy: Policy; members: PolicyMember[] }>;
   createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, organizationId?: string): Promise<void>;
   getReinstatementHistory(organizationId: string, filters?: ReportFilters): Promise<ReinstatementEntry[]>;
   getConversionHistory(organizationId: string, filters?: ReportFilters): Promise<ConversionEntry[]>;
@@ -313,6 +336,10 @@ export interface IStorage {
   getPaymentsByPolicy(policyId: string, orgId: string): Promise<PaymentTransaction[]>;
   getPaymentsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PaymentTransaction[]>;
   getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined>;
+  /** True if a platform receivable already exists for this payment transaction (idempotent outbox retries). */
+  hasPlatformReceivableForTransaction(orgId: string, transactionId: string): Promise<boolean>;
+  /** True if any commission ledger row references this payment transaction. */
+  hasCommissionLedgerForTransaction(orgId: string, transactionId: string): Promise<boolean>;
   getPaymentTransactionByIdempotencyKey(key: string, orgId: string): Promise<PaymentTransaction | undefined>;
   createReceipt(receipt: InsertReceipt): Promise<Receipt>;
   getReceiptsByPolicy(policyId: string, orgId: string): Promise<Receipt[]>;
@@ -332,7 +359,10 @@ export interface IStorage {
   getPaymentReceiptById(id: string, orgId: string): Promise<PaymentReceipt | undefined>;
   getPaymentReceiptsByPolicy(policyId: string, orgId: string): Promise<PaymentReceipt[]>;
   getPaymentReceiptsByClient(clientId: string, orgId: string): Promise<PaymentReceipt[]>;
+  /** Next receipt # in its own short transaction (use `allocatePaymentReceiptNumberInTx` when already inside `withOrgTransaction`). */
   getNextPaymentReceiptNumber(orgId: string): Promise<string>;
+  /** Bump `org_policy_sequences.payment_receipt_next` on the same connection as `tx` (participates in outer BEGIN/COMMIT). */
+  allocatePaymentReceiptNumberInTx(tx: OrgDrizzleDb, orgId: string): Promise<string>;
   updatePaymentReceipt(id: string, data: Partial<InsertPaymentReceipt>, orgId: string): Promise<PaymentReceipt | undefined>;
   updatePaymentTransaction(id: string, data: Partial<InsertPaymentTransaction>, orgId: string): Promise<PaymentTransaction | undefined>;
   deletePolicy(id: string, orgId: string): Promise<void>;
@@ -367,6 +397,8 @@ export interface IStorage {
   getCommissionLedgerByAgent(agentId: string, orgId: string): Promise<CommissionLedgerEntry[]>;
   getCommissionLedgerByOrg(orgId: string): Promise<CommissionLedgerEntry[]>;
   getCommissionLedgerDetailedByOrg(orgId: string, agentId?: string): Promise<any[]>;
+  /** Per-agent commission totals for payroll-style report (uses ledger entry types + policy group / payment method). */
+  getCommissionReportByOrg(orgId: string, filters?: ReportFilters): Promise<any[]>;
   getCommissionEntriesByPolicy(policyId: string, orgId: string): Promise<CommissionLedgerEntry[]>;
   createCommissionLedgerEntry(entry: InsertCommissionLedgerEntry): Promise<CommissionLedgerEntry>;
   getNotificationTemplates(orgId: string): Promise<NotificationTemplate[]>;
@@ -1173,15 +1205,291 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const conditions = [eq(policies.organizationId, organizationId)];
+    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else conditions.push(sql`1 = 0`);
+    }
+    const rows = await tdb
+      .select({
+        policyId: policies.id,
+        policyBranchId: policies.branchId,
+        policyNumber: policies.policyNumber,
+        status: policies.status,
+        currency: policies.currency,
+        premiumAmount: policies.premiumAmount,
+        paymentSchedule: policies.paymentSchedule,
+        effectiveDate: policies.effectiveDate,
+        inceptionDate: policies.inceptionDate,
+        waitingPeriodEndDate: policies.waitingPeriodEndDate,
+        currentCycleStart: policies.currentCycleStart,
+        currentCycleEnd: policies.currentCycleEnd,
+        graceEndDate: policies.graceEndDate,
+        policyCreatedAt: policies.createdAt,
+        clientId: clients.id,
+        clientTitle: clients.title,
+        clientFirstName: clients.firstName,
+        clientLastName: clients.lastName,
+        clientNationalId: clients.nationalId,
+        clientPhone: clients.phone,
+        clientAddress: clients.address,
+        clientLocation: clients.location,
+        clientActivationCode: clients.activationCode,
+        productName: products.name,
+        productCode: products.code,
+        branchName: branches.name,
+        groupName: groups.name,
+        agentEmail: users.email,
+        agentDisplayName: users.displayName,
+        gracePeriodDays: productVersions.gracePeriodDays,
+        waitingPeriodDays: productVersions.waitingPeriodDays,
+      })
+      .from(policies)
+      .innerJoin(clients, eq(policies.clientId, clients.id))
+      .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+      .innerJoin(products, eq(productVersions.productId, products.id))
+      .leftJoin(branches, eq(policies.branchId, branches.id))
+      .leftJoin(groups, eq(policies.groupId, groups.id))
+      .leftJoin(users, eq(policies.agentId, users.id))
+      .where(and(...conditions))
+      .orderBy(desc(policies.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const policyIds = rows.map((r) => r.policyId);
+    const memberMap: Record<string, string> = {};
+    if (policyIds.length > 0) {
+      const members = await tdb.select({ policyId: policyMembers.policyId, memberNumber: policyMembers.memberNumber })
+        .from(policyMembers)
+        .where(and(inArray(policyMembers.role, ["principal", "policy_holder"]), inArray(policyMembers.policyId, policyIds)));
+      for (const m of members) {
+        if (m.memberNumber && !memberMap[m.policyId]) memberMap[m.policyId] = m.memberNumber;
+      }
+    }
+
+    const idate = filters?.fromDate ?? "";
+    const tdate = filters?.toDate ?? "";
+
+    const initialsFrom = (first: string, last: string) => {
+      const a = (first || "").trim();
+      const b = (last || "").trim();
+      const i1 = a.charAt(0).toUpperCase();
+      const i2 = b.charAt(0).toUpperCase();
+      return `${i1}${i2}`.trim() || "";
+    };
+
+    const scheduleLabel = (s: string | null | undefined) => {
+      if (!s) return "";
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    };
+
+    return rows.map((r) => {
+      const memberNumber = memberMap[r.policyId] ?? null;
+      const prem = String(r.premiumAmount ?? "");
+      const usualPrem = prem ? `${r.currency || "USD"} ${prem}` : "";
+      const policyHolder = [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim();
+      const wpDays = r.waitingPeriodDays != null ? Number(r.waitingPeriodDays) : null;
+      const Waiting_Pe = wpDays != null && !Number.isNaN(wpDays) ? `${wpDays} days` : "";
+      const maturityParts: string[] = [];
+      if (r.currentCycleEnd) maturityParts.push(`Cycle end ${r.currentCycleEnd}`);
+      if (r.waitingPeriodEndDate) maturityParts.push(`Waiting end ${r.waitingPeriodEndDate}`);
+      if (r.graceEndDate) maturityParts.push(`Grace end ${r.graceEndDate}`);
+      const MaturityTe = maturityParts.join(" · ") || "";
+      const InternalRe = [r.productCode, r.policyNumber].filter(Boolean).join(" · ") || String(r.policyId);
+
+      return {
+        _policyId: r.policyId,
+        Franchise_Branch_ID: r.policyBranchId ?? "",
+        Franchise_BranchName: r.branchName ?? "",
+        Marketing_Member_ID: memberNumber ?? "",
+        Policy_num: r.policyNumber ?? "",
+        Inception_Date: r.inceptionDate ? String(r.inceptionDate) : "",
+        ID_Number: r.clientNationalId ?? "",
+        First_Name: r.clientFirstName ?? "",
+        Surname: r.clientLastName ?? "",
+        PolicyHolder: policyHolder,
+        Title: r.clientTitle ?? "",
+        Initials: initialsFrom(r.clientFirstName ?? "", r.clientLastName ?? ""),
+        UsualPrem: usualPrem,
+        Cell_Num: r.clientPhone ?? "",
+        PhysicalAdd: r.clientAddress ?? "",
+        PostalAdd: r.clientLocation ?? "",
+        EasyPayNo: r.clientActivationCode ?? "",
+        Payment_M: scheduleLabel(r.paymentSchedule),
+        StopOrder: "",
+        Product_N: r.productName ?? "",
+        Waiting_Pe,
+        InternalRe,
+        AgentNam: r.agentDisplayName || r.agentEmail || "",
+        MaturityTe,
+        GroupName: r.groupName ?? "",
+        Idate: idate,
+        tdate,
+        _status: r.status,
+        _policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
+      };
+    });
+  }
+
+  async getAgentProductivityReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
+    if (!filters?.fromDate || !filters?.toDate) return [];
+    const tdb = await getDbForOrg(organizationId);
+    const fromStart = new Date(filters.fromDate + "T00:00:00.000Z");
+    const toEnd = new Date(filters.toDate + "T23:59:59.999Z");
+    const fdate = filters.fromDate;
+    const tdate = filters.toDate;
+
+    const branchPolicy = alias(branches, "policy_branch");
+    const branchAgent = alias(branches, "agent_branch");
+
+    const conditions: SQL[] = [
+      eq(policies.organizationId, organizationId),
+      gte(policies.createdAt, fromStart),
+      lte(policies.createdAt, toEnd),
+      exists(
+        tdb
+          .select({ id: paymentReceipts.id })
+          .from(paymentReceipts)
+          .where(
+            and(
+              eq(paymentReceipts.policyId, policies.id),
+              eq(paymentReceipts.organizationId, organizationId),
+              eq(paymentReceipts.status, "issued"),
+              gte(paymentReceipts.issuedAt, fromStart),
+              lte(paymentReceipts.issuedAt, toEnd),
+            ),
+          ),
+      ),
+    ];
+    if (filters.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else return [];
+    }
+
+    const rows = await tdb
+      .select({
+        policyId: policies.id,
+        agentId: policies.agentId,
+        policyNumber: policies.policyNumber,
+        status: policies.status,
+        currency: policies.currency,
+        premiumAmount: policies.premiumAmount,
+        inceptionDate: policies.inceptionDate,
+        clientTitle: clients.title,
+        clientFirstName: clients.firstName,
+        clientLastName: clients.lastName,
+        productName: products.name,
+        agentDisplayName: users.displayName,
+        agentEmail: users.email,
+        memberBranchName: branchPolicy.name,
+        agentBranchName: branchAgent.name,
+      })
+      .from(policies)
+      .innerJoin(clients, eq(policies.clientId, clients.id))
+      .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+      .innerJoin(products, eq(productVersions.productId, products.id))
+      .leftJoin(branchPolicy, eq(policies.branchId, branchPolicy.id))
+      .leftJoin(users, eq(policies.agentId, users.id))
+      .leftJoin(branchAgent, eq(users.branchId, branchAgent.id))
+      .where(and(...conditions))
+      .orderBy(desc(policies.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const policyIds = rows.map((r) => r.policyId);
+    const countMap = new Map<string, number>();
+    if (policyIds.length > 0) {
+      const cntRows = await tdb
+        .select({ policyId: paymentReceipts.policyId, n: count() })
+        .from(paymentReceipts)
+        .where(
+          and(
+            inArray(paymentReceipts.policyId, policyIds),
+            eq(paymentReceipts.organizationId, organizationId),
+            eq(paymentReceipts.status, "issued"),
+            gte(paymentReceipts.issuedAt, fromStart),
+            lte(paymentReceipts.issuedAt, toEnd),
+          ),
+        )
+        .groupBy(paymentReceipts.policyId);
+      for (const c of cntRows) countMap.set(c.policyId, Number(c.n) || 0);
+    }
+
+    const statusDes = (s: string) => {
+      const m: Record<string, string> = {
+        inactive: "Inactive",
+        active: "Active",
+        grace: "Grace period",
+        lapsed: "Lapsed",
+        cancelled: "Cancelled",
+      };
+      return m[s] || s;
+    };
+    const statusColour = (s: string) => {
+      const m: Record<string, string> = {
+        inactive: "Gray",
+        active: "Green",
+        grace: "Amber",
+        lapsed: "Red",
+        cancelled: "DarkRed",
+      };
+      return m[s] || "";
+    };
+
+    return rows.map((r) => {
+      const prem = String(r.premiumAmount ?? "");
+      const usualPrem = prem ? `${r.currency || "USD"} ${prem}` : "";
+      const fullName = [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim();
+      const receiptsC = countMap.get(r.policyId) ?? 0;
+      return {
+        policyId: r.policyId,
+        agent_id: r.agentId ?? "",
+        AgentsNar: (r.agentDisplayName || r.agentEmail || "").trim(),
+        Inception_: r.inceptionDate ? String(r.inceptionDate) : "",
+        Policy_Nur: r.policyNumber ?? "",
+        FullName: fullName,
+        Product_N: r.productName ?? "",
+        UsualPrem: usualPrem,
+        StatusDes: statusDes(r.status || ""),
+        ReceiptsC: receiptsC,
+        Colour: statusColour(r.status || ""),
+        MembersB: r.memberBranchName ?? "",
+        AgentsBra: r.agentBranchName ?? "",
+        Active: r.status === "active" ? "Yes" : "No",
+        fdate,
+        tdate,
+      };
+    });
+  }
+
   /** Receipt aggregates by policy for finance report. */
-  async getReceiptAggregatesByPolicyIds(orgId: string, policyIds: string[]): Promise<Map<string, { lastPaymentAt: string; receiptCount: number; totalAmount: string }>> {
+  async getReceiptAggregatesByPolicyIds(
+    orgId: string,
+    policyIds: string[],
+    opts?: { issuedFrom?: Date; issuedTo?: Date },
+  ): Promise<Map<string, { lastPaymentAt: string; receiptCount: number; totalAmount: string }>> {
     if (policyIds.length === 0) return new Map();
     const tdb = await getDbForOrg(orgId);
+    const conditions: SQL[] = [inArray(paymentReceipts.policyId, policyIds), eq(paymentReceipts.status, "issued")];
+    if (opts?.issuedFrom) conditions.push(gte(paymentReceipts.issuedAt, opts.issuedFrom));
+    if (opts?.issuedTo) conditions.push(lte(paymentReceipts.issuedAt, opts.issuedTo));
     const receipts = await tdb.select({
       policyId: paymentReceipts.policyId,
       issuedAt: paymentReceipts.issuedAt,
       amount: paymentReceipts.amount,
-    }).from(paymentReceipts).where(and(inArray(paymentReceipts.policyId, policyIds), eq(paymentReceipts.status, "issued")));
+    }).from(paymentReceipts).where(and(...conditions));
     const map = new Map<string, { lastPaymentAt: string; receiptCount: number; totalAmount: string }>();
     for (const p of policyIds) map.set(p, { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" });
     for (const r of receipts) {
@@ -1197,7 +1505,14 @@ export class DatabaseStorage implements IStorage {
   async getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<FinanceReportRow[]> {
     const rows = await this.getPolicyReportByOrg(organizationId, limit, offset, filters);
     const policyIds = rows.map((r) => r.policyId);
-    const aggregates = await this.getReceiptAggregatesByPolicyIds(organizationId, policyIds);
+    const receiptOpts =
+      filters?.fromDate || filters?.toDate
+        ? {
+            ...(filters.fromDate ? { issuedFrom: new Date(filters.fromDate + "T00:00:00.000Z") } : {}),
+            ...(filters.toDate ? { issuedTo: new Date(filters.toDate + "T23:59:59.999Z") } : {}),
+          }
+        : undefined;
+    const aggregates = await this.getReceiptAggregatesByPolicyIds(organizationId, policyIds, receiptOpts);
     const today = new Date().toISOString().split("T")[0];
     return rows.map((r) => {
       const agg = aggregates.get(r.policyId) ?? { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" };
@@ -1405,6 +1720,54 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(policies).values(policy).returning();
     return created;
   }
+
+  async createPolicyWithInitialSetup(
+    orgId: string,
+    data: {
+      policy: InsertPolicy;
+      statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
+      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
+      addOnIds: string[];
+    },
+  ): Promise<{ policy: Policy; members: PolicyMember[] }> {
+    return withOrgTransaction(orgId, async (tx) => {
+      const [policy] = await tx.insert(policies).values(data.policy).returning();
+      await tx.insert(policyStatusHistory).values({
+        policyId: policy.id,
+        fromStatus: data.statusHistory.fromStatus,
+        toStatus: data.statusHistory.toStatus,
+        reason: data.statusHistory.reason,
+        changedBy: data.statusHistory.changedBy ?? undefined,
+      });
+      const membersOut: PolicyMember[] = [];
+      for (const m of data.members) {
+        const seqResult = await tx.execute(sql`
+          INSERT INTO org_member_sequences (organization_id, member_next) VALUES (${orgId}, 1)
+          ON CONFLICT (organization_id) DO UPDATE SET member_next = org_member_sequences.member_next + 1
+          RETURNING member_next
+        `);
+        const nextVal = (seqResult as unknown as { rows?: { member_next: number }[] }).rows?.[0]?.member_next ?? 1;
+        const memberNumber = `MEM-${String(nextVal).padStart(6, "0")}`;
+        const [createdMember] = await tx
+          .insert(policyMembers)
+          .values({
+            organizationId: orgId,
+            policyId: policy.id,
+            clientId: m.clientId ?? null,
+            dependentId: m.dependentId ?? null,
+            role: m.role,
+            memberNumber,
+          })
+          .returning();
+        membersOut.push(createdMember);
+      }
+      if (data.addOnIds.length > 0) {
+        await tx.insert(policyAddOns).values(data.addOnIds.map((addOnId) => ({ policyId: policy.id, addOnId })));
+      }
+      return { policy, members: membersOut };
+    });
+  }
+
   async updatePolicy(id: string, data: Partial<InsertPolicy>, orgId: string): Promise<Policy | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(policies).set(data).where(eq(policies.id, id)).returning();
@@ -1438,6 +1801,13 @@ export class DatabaseStorage implements IStorage {
     if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
     if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else conditions.push(sql`1 = 0`);
+    }
     const rows = await tdb
       .select({
         policyId: policyStatusHistory.policyId,
@@ -1478,6 +1848,13 @@ export class DatabaseStorage implements IStorage {
     if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
     if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else conditions.push(sql`1 = 0`);
+    }
     const rows = await tdb
       .select({
         policyId: policyStatusHistory.policyId,
@@ -1513,6 +1890,13 @@ export class DatabaseStorage implements IStorage {
     if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
     if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else conditions.push(sql`1 = 0`);
+    }
     const rows = await tdb
       .select({
         policyId: policyStatusHistory.policyId,
@@ -1632,6 +2016,28 @@ export class DatabaseStorage implements IStorage {
     const [tx] = await tdb.select().from(paymentTransactions).where(eq(paymentTransactions.id, id));
     return tx;
   }
+  async hasPlatformReceivableForTransaction(orgId: string, transactionId: string): Promise<boolean> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb
+      .select({ id: platformReceivables.id })
+      .from(platformReceivables)
+      .where(
+        and(eq(platformReceivables.organizationId, orgId), eq(platformReceivables.sourceTransactionId, transactionId)),
+      )
+      .limit(1);
+    return !!row;
+  }
+  async hasCommissionLedgerForTransaction(orgId: string, transactionId: string): Promise<boolean> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb
+      .select({ id: commissionLedgerEntries.id })
+      .from(commissionLedgerEntries)
+      .where(
+        and(eq(commissionLedgerEntries.organizationId, orgId), eq(commissionLedgerEntries.transactionId, transactionId)),
+      )
+      .limit(1);
+    return !!row;
+  }
   async getPaymentTransactionByIdempotencyKey(key: string, orgId: string): Promise<PaymentTransaction | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [tx] = await tdb.select().from(paymentTransactions)
@@ -1670,6 +2076,8 @@ export class DatabaseStorage implements IStorage {
         receiptId: paymentReceipts.id,
         receiptNumber: paymentReceipts.receiptNumber,
         receiptBranchId: paymentReceipts.branchId,
+        issuedByUserId: paymentReceipts.issuedByUserId,
+        metadataJson: paymentReceipts.metadataJson,
         amount: paymentReceipts.amount,
         currency: paymentReceipts.currency,
         paymentChannel: paymentReceipts.paymentChannel,
@@ -1694,16 +2102,23 @@ export class DatabaseStorage implements IStorage {
         agentId: policies.agentId,
         agentDisplayName: users.displayName,
         agentEmail: users.email,
+        groupName: groups.name,
+        transactionId: paymentTransactions.id,
+        txRecordedBy: paymentTransactions.recordedBy,
         txBranchId: paymentTransactions.branchId,
         txReceivedAt: paymentTransactions.receivedAt,
         txPaymentMethod: paymentTransactions.paymentMethod,
         txReference: paymentTransactions.reference,
+        txPaynowReference: paymentTransactions.paynowReference,
         txNotes: paymentTransactions.notes,
+        merchantReference: paymentIntents.merchantReference,
       })
       .from(paymentReceipts)
       .innerJoin(policies, eq(paymentReceipts.policyId, policies.id))
       .leftJoin(clients, eq(paymentReceipts.clientId, clients.id))
       .leftJoin(users, eq(policies.agentId, users.id))
+      .leftJoin(groups, eq(policies.groupId, groups.id))
+      .leftJoin(paymentIntents, eq(paymentReceipts.paymentIntentId, paymentIntents.id))
       .leftJoin(paymentTransactions, sql`${paymentTransactions.id} = (${paymentReceipts.metadataJson}->>'transactionId')::uuid`)
       .where(and(...conditions))
       .orderBy(desc(paymentReceipts.issuedAt))
@@ -1735,16 +2150,177 @@ export class DatabaseStorage implements IStorage {
       pvRows.forEach((r) => { productMap[r.pvId] = r.productName; });
     }
 
+    const policyIdsInPage = Array.from(new Set(rows.map((r: any) => r.policyId).filter(Boolean)));
+    const receiptCountConditions: SQL[] = [
+      eq(paymentReceipts.organizationId, orgId),
+      eq(paymentReceipts.status, "issued"),
+      inArray(paymentReceipts.policyId, policyIdsInPage),
+    ];
+    if (filters?.branchId) receiptCountConditions.push(eq(paymentReceipts.branchId, filters.branchId));
+    if (filters?.fromDate) receiptCountConditions.push(gte(paymentReceipts.issuedAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) receiptCountConditions.push(lte(paymentReceipts.issuedAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    const receiptCountRows = policyIdsInPage.length
+      ? await tdb
+        .select({ policyId: paymentReceipts.policyId, cnt: count() })
+        .from(paymentReceipts)
+        .where(and(...receiptCountConditions))
+        .groupBy(paymentReceipts.policyId)
+      : [];
+    const receiptCountByPolicy = new Map<string, number>();
+    for (const rc of receiptCountRows) receiptCountByPolicy.set(rc.policyId, Number(rc.cnt));
+
+    const clientIdsInPage = Array.from(new Set(rows.map((r: any) => r.clientId).filter(Boolean)));
+
+    const defaultPayByClient = new Map<string, { methodType: string; provider: string | null }>();
+    if (clientIdsInPage.length > 0) {
+      const cpmRows = await tdb
+        .select({
+          clientId: clientPaymentMethods.clientId,
+          methodType: clientPaymentMethods.methodType,
+          provider: clientPaymentMethods.provider,
+        })
+        .from(clientPaymentMethods)
+        .where(
+          and(
+            inArray(clientPaymentMethods.clientId, clientIdsInPage),
+            eq(clientPaymentMethods.isDefault, true),
+            eq(clientPaymentMethods.isActive, true),
+          ),
+        );
+      for (const c of cpmRows) {
+        if (!defaultPayByClient.has(c.clientId)) {
+          defaultPayByClient.set(c.clientId, { methodType: c.methodType, provider: c.provider });
+        }
+      }
+    }
+
+    const userIds = new Set<string>();
+    for (const r of rows as any[]) {
+      if (r.issuedByUserId) userIds.add(r.issuedByUserId);
+      if (r.txRecordedBy) userIds.add(r.txRecordedBy);
+    }
+    const userLabelById = new Map<string, string>();
+    if (userIds.size > 0) {
+      const urows = await tdb
+        .select({ id: users.id, displayName: users.displayName, email: users.email })
+        .from(users)
+        .where(inArray(users.id, Array.from(userIds)));
+      for (const u of urows) {
+        userLabelById.set(u.id, (u.displayName || u.email || "").trim());
+      }
+    }
+
+    const memberNumberByPolicy: Record<string, string> = {};
+    if (policyIdsInPage.length > 0) {
+      const members = await tdb
+        .select({ policyId: policyMembers.policyId, memberNumber: policyMembers.memberNumber })
+        .from(policyMembers)
+        .where(and(inArray(policyMembers.role, ["principal", "policy_holder"]), inArray(policyMembers.policyId, policyIdsInPage)));
+      for (const m of members) {
+        if (m.memberNumber && !memberNumberByPolicy[m.policyId]) memberNumberByPolicy[m.policyId] = m.memberNumber;
+      }
+    }
+
+    const fdate = filters?.fromDate ?? "";
+    const tdate = filters?.toDate ?? "";
+
+    const toICalDTSTAMP = (d: Date) => {
+      const y = d.getUTCFullYear();
+      const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      const h = String(d.getUTCHours()).padStart(2, "0");
+      const mi = String(d.getUTCMinutes()).padStart(2, "0");
+      const s = String(d.getUTCSeconds()).padStart(2, "0");
+      return `${y}${mo}${day}T${h}${mi}${s}Z`;
+    };
+
     return rows.map((r: any) => {
       const issuedDate = r.issuedAt ? new Date(r.issuedAt) : null;
+      const productName = r.productVersionId ? productMap[r.productVersionId] || null : null;
+      const periodPremium = parseFloat(String(r.premiumAmount ?? "0"));
+      const amountNum = parseFloat(String(r.amount ?? "0"));
+      const MonthsPaid =
+        periodPremium > 0 && Number.isFinite(amountNum) ? Math.max(1, Math.floor(amountNum / periodPremium)) : (amountNum > 0 ? 1 : 0);
+      const MonthsPaidInAdvance =
+        periodPremium > 0 && Number.isFinite(amountNum) ? Math.max(0, Math.floor(amountNum / periodPremium) - 1) : 0;
+      const meta = r.metadataJson as { internalReference?: string } | null;
+      const internalRef =
+        (meta?.internalReference && String(meta.internalReference)) ||
+        (r.txReference && String(r.txReference)) ||
+        (r.txPaynowReference && String(r.txPaynowReference)) ||
+        (r.merchantReference && String(r.merchantReference)) ||
+        (r.receiptNumber && String(r.receiptNumber)) ||
+        "";
+      const InternalRe = internalRef;
+      const InternalReferenceNumber = internalRef;
+      const policyBranchName = r.policyBranchId ? branchMap[r.policyBranchId] || "" : "";
+      const dp = r.clientId ? defaultPayByClient.get(r.clientId) : undefined;
+      const DefaultPay = dp?.methodType ?? "";
+      const DebitMethod = dp?.provider ?? "";
+      const PaymentMethod = String(r.paymentChannel || r.txPaymentMethod || "");
+      const DatePaid = issuedDate ? issuedDate.toISOString().split("T")[0] : "";
+      const Transaction = [r.transactionId, r.txReceivedAt ? new Date(r.txReceivedAt).toISOString() : ""].filter(Boolean).join(" ");
+      const PremiumDue = `${r.policyCurrency || r.currency || "USD"} ${r.premiumAmount ?? ""}`.trim();
+      const PaymentBy = [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim();
+      const ManualUser = r.issuedByUserId ? (userLabelById.get(r.issuedByUserId) || "") : "";
+      const CollectedBy = r.txRecordedBy ? (userLabelById.get(r.txRecordedBy) || "") : "";
+      const CapturedBy = CollectedBy || ManualUser;
+      const inceptionStr = r.inceptionDate ? String(r.inceptionDate) : "";
+      const ActualPen =
+        periodPremium > 0 && Number.isFinite(amountNum) ? (amountNum - periodPremium).toFixed(2) : "";
+      const agentsName = r.agentDisplayName || r.agentEmail || "";
+      const ReceiptCount = receiptCountByPolicy.get(r.policyId) ?? 0;
+      const DTSTAMP = issuedDate ? toICalDTSTAMP(issuedDate) : "";
       return {
         ...r,
         receiptBranchName: r.receiptBranchId ? branchMap[r.receiptBranchId] || null : null,
-        policyBranchName: r.policyBranchId ? branchMap[r.policyBranchId] || null : null,
         paymentBranchName: r.txBranchId ? branchMap[r.txBranchId] || null : null,
-        productName: r.productVersionId ? productMap[r.productVersionId] || null : null,
-        monthNumber: issuedDate ? issuedDate.getMonth() + 1 : null,
-        yearNumber: issuedDate ? issuedDate.getFullYear() : null,
+        productName,
+        /** Daily receipts (UTC DTSTAMP) + banking-style columns */
+        DTSTAMP,
+        agentsName,
+        MonthsPaidInAdvance,
+        policy_number: r.policyNumber ?? "",
+        surname: r.clientLastName ?? "",
+        InternalReferenceNumber,
+        Product_Name: productName ?? "",
+        Inception_Date: inceptionStr,
+        MonthNumber: issuedDate ? issuedDate.getMonth() + 1 : "",
+        YearNumber: issuedDate ? issuedDate.getFullYear() : "",
+        ReceiptCount,
+        fdate,
+        tdate,
+        /** Policy receipts report (spreadsheet columns) */
+        PaymentBy,
+        ReceiptNumber: r.receiptNumber ?? "",
+        ManualUser,
+        DatePaid,
+        Transaction,
+        PremiumDue,
+        Currency: r.currency ?? "",
+        AmountCollected: r.amount ?? "",
+        MonthsPaid,
+        Remarks: r.txNotes ?? "",
+        PaymentMethod,
+        DefaultPay,
+        DebitMethod,
+        ReceiptMonth: issuedDate ? issuedDate.getMonth() + 1 : "",
+        ReceiptYear: issuedDate ? issuedDate.getFullYear() : "",
+        policy_num: r.policyNumber ?? "",
+        PolicyBranch: policyBranchName,
+        Inception_: inceptionStr,
+        Sstatus: r.policyStatus ?? "",
+        InternalRe,
+        Product_N: productName ?? "",
+        CollectedBy,
+        fromDate: fdate,
+        toDate: tdate,
+        GroupName: r.groupName ?? "",
+        InceptionD: inceptionStr,
+        MemberID: memberNumberByPolicy[r.policyId] ?? "",
+        ActualPen,
+        ReceiptID: r.receiptId ?? "",
+        CapturedBy,
       };
     });
   }
@@ -1839,9 +2415,8 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(paymentReceipts).where(eq(paymentReceipts.clientId, clientId))
       .orderBy(desc(paymentReceipts.issuedAt));
   }
-  async getNextPaymentReceiptNumber(orgId: string): Promise<string> {
-    // org_policy_sequences lives in the registry (main) DB so receipt numbers work when org has a dedicated tenant DB.
-    const result = await db.execute(sql`
+  async allocatePaymentReceiptNumberInTx(tx: OrgDrizzleDb, orgId: string): Promise<string> {
+    const result = await tx.execute(sql`
       INSERT INTO org_policy_sequences (organization_id, payment_receipt_next) VALUES (${orgId}, 1)
       ON CONFLICT (organization_id) DO UPDATE SET payment_receipt_next = org_policy_sequences.payment_receipt_next + 1
       RETURNING payment_receipt_next
@@ -1849,6 +2424,18 @@ export class DatabaseStorage implements IStorage {
     const rows = (result as unknown as { rows?: { payment_receipt_next: number }[] }).rows;
     const nextVal = rows?.[0]?.payment_receipt_next ?? 1;
     return String(nextVal);
+  }
+
+  /**
+   * Allocates the next payment receipt number on this org's data database.
+   * When you already hold a transaction (e.g. payment + receipt), call `allocatePaymentReceiptNumberInTx` instead
+   * so the sequence bump rolls back with the rest of the work.
+   *
+   * **Tenant migration:** If an org moved from shared DB to an isolated tenant DB, copy or reconcile
+   * `org_policy_sequences.payment_receipt_next` onto the tenant before go-live so numbers stay monotonic.
+   */
+  async getNextPaymentReceiptNumber(orgId: string): Promise<string> {
+    return withOrgTransaction(orgId, async (tx) => this.allocatePaymentReceiptNumberInTx(tx, orgId));
   }
   async updatePaymentReceipt(id: string, data: Partial<InsertPaymentReceipt>, orgId: string): Promise<PaymentReceipt | undefined> {
     const tdb = await getDbForOrg(orgId);
@@ -2137,6 +2724,138 @@ export class DatabaseStorage implements IStorage {
       .limit(1000);
     return rows;
   }
+
+  async getCommissionReportByOrg(orgId: string, filters?: ReportFilters): Promise<any[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: SQL[] = [eq(commissionLedgerEntries.organizationId, orgId)];
+    if (filters?.fromDate) {
+      conditions.push(gte(commissionLedgerEntries.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    }
+    if (filters?.toDate) {
+      conditions.push(lte(commissionLedgerEntries.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    }
+    if (filters?.agentId) conditions.push(eq(commissionLedgerEntries.agentId, filters.agentId));
+    if (filters?.branchId) {
+      const branchId = filters.branchId;
+      conditions.push(
+        sql`(${commissionLedgerEntries.policyId} is null or ${policies.branchId} = ${branchId})`,
+      );
+    }
+    const rows = await tdb
+      .select({
+        entryType: commissionLedgerEntries.entryType,
+        amount: commissionLedgerEntries.amount,
+        policyId: commissionLedgerEntries.policyId,
+        policyGroupId: policies.groupId,
+        paymentMethod: paymentTransactions.paymentMethod,
+        agentId: commissionLedgerEntries.agentId,
+        agentDisplayName: users.displayName,
+        agentEmail: users.email,
+      })
+      .from(commissionLedgerEntries)
+      .leftJoin(policies, eq(commissionLedgerEntries.policyId, policies.id))
+      .leftJoin(users, eq(commissionLedgerEntries.agentId, users.id))
+      .leftJoin(paymentTransactions, eq(commissionLedgerEntries.transactionId, paymentTransactions.id))
+      .where(and(...conditions))
+      .orderBy(desc(commissionLedgerEntries.createdAt))
+      .limit(50_000);
+
+    type Agg = {
+      agentName: string;
+      policies: Set<string>;
+      groupPolicies: Set<string>;
+      individPolicies: Set<string>;
+      sumGroupsCommission: number;
+      sumIndividualsCommission: number;
+      sumBasic: number;
+      sumClawb: number;
+      sumOvertim: number;
+      sumCash: number;
+      sumAll: number;
+    };
+    const byAgent = new Map<string, Agg>();
+    const getAgg = (agentId: string, name: string): Agg => {
+      let a = byAgent.get(agentId);
+      if (!a) {
+        a = {
+          agentName: name,
+          policies: new Set(),
+          groupPolicies: new Set(),
+          individPolicies: new Set(),
+          sumGroupsCommission: 0,
+          sumIndividualsCommission: 0,
+          sumBasic: 0,
+          sumClawb: 0,
+          sumOvertim: 0,
+          sumCash: 0,
+          sumAll: 0,
+        };
+        byAgent.set(agentId, a);
+      }
+      return a;
+    };
+
+    for (const r of rows as any[]) {
+      const agentId = r.agentId as string;
+      if (!agentId) continue;
+      const name = (r.agentDisplayName || r.agentEmail || "").trim() || agentId;
+      const a = getAgg(agentId, name);
+      const amt = parseFloat(String(r.amount ?? 0)) || 0;
+      a.sumAll += amt;
+      const et = String(r.entryType || "");
+      if (et === "first_months" || et === "recurring") a.sumBasic += amt;
+      if (et === "clawback" || et === "rollback") a.sumClawb += amt;
+      if (et === "clawback_reversal") a.sumOvertim += amt;
+      const pm = String(r.paymentMethod || "").toLowerCase();
+      if (pm === "cash") a.sumCash += amt;
+      const pid = r.policyId as string | null;
+      if (pid) {
+        a.policies.add(pid);
+        if (r.policyGroupId) {
+          a.groupPolicies.add(pid);
+          a.sumGroupsCommission += amt;
+        } else {
+          a.individPolicies.add(pid);
+          a.sumIndividualsCommission += amt;
+        }
+      }
+    }
+
+    const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "0.00");
+
+    const out = Array.from(byAgent.entries()).map(([agentId, a]) => {
+      const total = a.sumAll;
+      const net = total;
+      return {
+        agentId,
+        agentName: a.agentName,
+        numberOfPolicies: a.policies.size,
+        groupsCount: a.groupPolicies.size,
+        groupsCommission: fmt(a.sumGroupsCommission),
+        individualsCount: a.individPolicies.size,
+        individualsCommission: fmt(a.sumIndividualsCommission),
+        investment: fmt(0),
+        clawback: fmt(a.sumClawb),
+        callCenter: fmt(0),
+        trips: fmt(0),
+        cashSettlement: fmt(a.sumCash),
+        basic: fmt(a.sumBasic),
+        overtime: fmt(a.sumOvertim),
+        total: fmt(total),
+        paye: "",
+        taxLevy: "",
+        credit: "",
+        advance: "",
+        policyDeduction: "",
+        medicalAidDeduction: "",
+        unpaidMonths: "",
+        netPay: fmt(net),
+      };
+    });
+    out.sort((a, b) => a.agentName.localeCompare(b.agentName));
+    return out;
+  }
+
   async getCommissionEntriesByPolicy(policyId: string, orgId: string): Promise<CommissionLedgerEntry[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(commissionLedgerEntries)

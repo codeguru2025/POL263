@@ -59,7 +59,7 @@ async function main() {
       })
       .returning();
 
-    const receiptNumber = await storage.getNextPaymentReceiptNumber(orgId);
+    const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
     const [receipt] = await txDb
       .insert(paymentReceipts)
       .values({

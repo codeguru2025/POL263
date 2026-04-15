@@ -5,7 +5,10 @@
  *
  * Use getDbForOrg(orgId) in storage for tenant-scoped tables when you want
  * that tenant's data to live in their own database. Registry data (organizations,
- * users) stays on the default connection.
+ * users) stays on the default connection. Per-org sequences that must commit with
+ * tenant rows (e.g. payment receipt numbers) live in `org_policy_sequences` on the
+ * same database as the org's data — use `storage.allocatePaymentReceiptNumberInTx`
+ * inside `withOrgTransaction` so they roll back with the payment.
  */
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -45,11 +48,13 @@ async function evictLeastRecentPool() {
   }
 }
 
-function buildPoolConfig(connectionString: string): pg.PoolConfig {
+function buildPoolConfig(connectionString: string, { forTenant = false } = {}): pg.PoolConfig {
   const acceptSelfSigned =
+    forTenant ||                                         // tenant isolated DBs: always tolerate self-signed certs
     process.env.DB_ACCEPT_SELF_SIGNED === "true" ||
     process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
-    connectionString.includes("supabase");
+    connectionString.includes("supabase") ||
+    connectionString.includes("neon.tech");
   const sslConfig = acceptSelfSigned ? { rejectUnauthorized: false } : undefined;
   let url = connectionString;
   if (sslConfig) {
@@ -102,7 +107,7 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
   }
 
   await evictLeastRecentPool();
-  const tenantPool = new pg.Pool(buildPoolConfig(url));
+  const tenantPool = new pg.Pool(buildPoolConfig(url, { forTenant: true }));
   tenantPool.on("error", (err) => {
     structuredLog("warn", "Tenant pool error", { orgId, error: err.message });
   });

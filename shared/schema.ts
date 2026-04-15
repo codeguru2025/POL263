@@ -812,6 +812,32 @@ export const paymentReceipts = pgTable(
   ]
 );
 
+/**
+ * Transactional outbox: rows are INSERTed in the same DB transaction as payments,
+ * then processed asynchronously so PDF / commission / notifications survive process crashes.
+ */
+export const outboxMessages = pgTable(
+  "outbox_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    payloadJson: jsonb("payload_json").notNull().default({}),
+    dedupeKey: text("dedupe_key").notNull(),
+    status: text("status").default("pending").notNull(), // pending | done | failed
+    attempts: integer("attempts").default(0).notNull(),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+  },
+  (t) => [
+    uniqueIndex("outbox_org_dedupe_idx").on(t.organizationId, t.dedupeKey),
+    index("outbox_org_status_created_idx").on(t.organizationId, t.status, t.createdAt),
+  ]
+);
+
 // ─── MONTH-END RUN (batch receipt from bank file) ───
 export const monthEndRuns = pgTable(
   "month_end_runs",
@@ -1605,6 +1631,13 @@ export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true 
 export const insertPaymentIntentSchema = createInsertSchema(paymentIntents).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPaymentEventSchema = createInsertSchema(paymentEvents).omit({ id: true, createdAt: true });
 export const insertPaymentReceiptSchema = createInsertSchema(paymentReceipts).omit({ id: true, createdAt: true });
+export const insertOutboxMessageSchema = createInsertSchema(outboxMessages).omit({
+  id: true,
+  createdAt: true,
+  processedAt: true,
+  attempts: true,
+  lastError: true,
+});
 export const insertPolicyCreditBalanceSchema = createInsertSchema(policyCreditBalances).omit({ id: true });
 export const insertCreditNoteSchema = createInsertSchema(creditNotes).omit({ id: true, createdAt: true });
 export const insertMonthEndRunSchema = createInsertSchema(monthEndRuns).omit({ id: true, createdAt: true });
@@ -1678,6 +1711,8 @@ export type PaymentEvent = typeof paymentEvents.$inferSelect;
 export type InsertPaymentEvent = z.infer<typeof insertPaymentEventSchema>;
 export type PaymentReceipt = typeof paymentReceipts.$inferSelect;
 export type InsertPaymentReceipt = z.infer<typeof insertPaymentReceiptSchema>;
+export type OutboxMessage = typeof outboxMessages.$inferSelect;
+export type InsertOutboxMessage = z.infer<typeof insertOutboxMessageSchema>;
 export type PolicyCreditBalance = typeof policyCreditBalances.$inferSelect;
 export type InsertPolicyCreditBalance = z.infer<typeof insertPolicyCreditBalanceSchema>;
 export type CreditNote = typeof creditNotes.$inferSelect;

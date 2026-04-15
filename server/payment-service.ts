@@ -13,6 +13,7 @@ import type { Policy } from "@shared/schema";
 import { paymentTransactions, paymentReceipts, paymentIntents } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import { structuredLog } from "./logger";
+import { insertOutboxMessageInTx, requestOutboxDrain, OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP } from "./outbox";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
 const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
@@ -621,13 +622,11 @@ export async function applyPaymentToPolicy(
   const paymentChannel = channelMap[intent.methodSelected ?? ""] ?? "paynow_ecocash";
 
   let transaction: { id: string };
-  let receipt: { id: string };
-  let receiptNumber: string;
+  let receipt: { id: string; receiptNumber: string };
 
   try {
-    receiptNumber = await storage.getNextPaymentReceiptNumber(intent.organizationId);
-
     const result = await withOrgTransaction(orgId, async (txDb) => {
+      const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
       const [tx] = await txDb.insert(paymentTransactions).values({
         organizationId: intent.organizationId,
         policyId: intent.policyId,
@@ -666,6 +665,19 @@ export async function applyPaymentToPolicy(
       await txDb.update(paymentIntents).set({ status: "paid" }).where(eq(paymentIntents.id, intent.id));
       await applyPolicyStatusForClearedPayment(txDb, intent.policyId, policy, today, "", effectiveUserId);
 
+      await insertOutboxMessageInTx(txDb, {
+        organizationId: orgId,
+        type: OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP,
+        dedupeKey: `paynow_apply:${intent.id}`,
+        payload: {
+          intentId: intent.id,
+          transactionId: tx.id,
+          receiptId: rec.id,
+          actorType,
+          actorId: eventActorId(actorType, actorId),
+        },
+      });
+
       return { transaction: tx, receipt: rec };
     });
 
@@ -676,77 +688,11 @@ export async function applyPaymentToPolicy(
     return { ok: false, error: err?.message || "Failed to apply payment" };
   }
 
-  await storage.createPaymentEvent({
-    paymentIntentId: intent.id,
-    organizationId: orgId,
-    type: "marked_paid",
-    payloadJson: { transactionId: transaction.id, receiptId: receipt.id },
-    actorType,
-    actorId: eventActorId(actorType, actorId),
-  });
-
   if (policy.status === "lapsed") {
     await rollbackClawbacksForPolicy(orgId, policy);
   }
 
-  const { generateReceiptPdf } = await import("./receipt-pdf");
-  const pdfPath = await generateReceiptPdf(receipt.id);
-  if (pdfPath) {
-    await storage.updatePaymentReceipt(receipt.id, { pdfStorageKey: pdfPath }, orgId);
-  }
-
-  await storage.createPaymentEvent({
-    paymentIntentId: intent.id,
-    organizationId: intent.organizationId,
-    type: "receipt_issued",
-    payloadJson: { receiptId: receipt.id },
-    actorType,
-    actorId: eventActorId(actorType, actorId),
-  });
-
-  await storage.createNotificationLog(intent.organizationId, {
-    recipientType: "client",
-    recipientId: intent.clientId,
-    channel: "in_app",
-    subject: "Payment received",
-    body: `Payment of ${intent.currency} ${intent.amount} received for policy ${policy.policyNumber}. Receipt #${receiptNumber}.`,
-    status: "sent",
-  });
-
-  if (policy.agentId) {
-    try {
-      const plans = await storage.getCommissionPlans(orgId);
-      const activePlan = plans.find((p) => p.isActive);
-      if (activePlan) {
-        const existingPayments = await storage.getPaymentsByPolicy(policy.id!, orgId);
-        const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
-        const firstMonths = Number(activePlan.firstMonthsCount) || 2;
-        const firstRate = Number(activePlan.firstMonthsRate) || 50;
-        const recurringStart = Number(activePlan.recurringStartMonth) || 5;
-        const recurringRate = Number(activePlan.recurringRate) || 10;
-        let rate = 0;
-        let entryType = "recurring";
-        if (clearedCount <= firstMonths) { rate = firstRate; entryType = "first_months"; }
-        else { rate = recurringRate; entryType = "recurring"; }
-        if (rate > 0) {
-          const commAmount = (parseFloat(String(intent.amount)) * rate / 100).toFixed(2);
-          await storage.createCommissionLedgerEntry({
-            organizationId: orgId,
-            agentId: policy.agentId,
-            policyId: policy.id!,
-            transactionId: transaction.id,
-            entryType,
-            amount: commAmount,
-            currency: intent.currency || "USD",
-            description: `${rate}% commission on Paynow payment (${entryType === "first_months" ? "initial" : "recurring"})`,
-            status: "earned",
-          });
-        }
-      }
-    } catch (err) {
-      structuredLog("error", "Commission calculation failed (Paynow)", { error: (err as Error).message });
-    }
-  }
+  requestOutboxDrain(orgId);
 
   return { ok: true, transactionId: transaction.id, receiptId: receipt.id };
 }
@@ -784,11 +730,10 @@ export async function applyGroupPaymentToPolicies(
 
       const amount = String(alloc.amount);
       const currency = alloc.currency || groupIntent.currency || "USD";
-      // Fetch receipt number outside transaction (sequence is atomic via ON CONFLICT DO UPDATE)
-      const receiptNumber = await storage.getNextPaymentReceiptNumber(orgId);
 
       // Wrap each allocation in its own transaction for atomicity
-      const txResult = await withOrgTransaction(orgId, async (txDb) => {
+      const { newTx, receiptNumber } = await withOrgTransaction(orgId, async (txDb) => {
+        const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
         // Lock policy row to prevent concurrent status changes
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${alloc.policyId} FOR UPDATE`);
 
@@ -825,7 +770,7 @@ export async function applyGroupPaymentToPolicies(
         });
 
         await applyPolicyStatusForClearedPayment(txDb, alloc.policyId, policy, today, " (group PayNow)", actorId);
-        return newTx;
+        return { newTx, receiptNumber };
       });
 
       successCount++;

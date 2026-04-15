@@ -24,7 +24,7 @@ export default function ClientDocumentView() {
 
   const policy = policies?.find((p) => p.id === policyId);
   const base = getApiBase();
-  const documentUrl = policyId ? `${base}/api/client-auth/policies/${policyId}/document?inline=1` : "";
+  const documentUrl = policyId ? `${base}/api/client-auth/policies/${policyId}/document` : "";
 
   if (meFetched && (meError || !me?.client)) {
     return (

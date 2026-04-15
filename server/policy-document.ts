@@ -47,7 +47,7 @@ function ageFromDob(dob: string | null | undefined): number | null {
   return age;
 }
 
-export async function streamPolicyDocumentToResponse(policyId: string, orgId: string, res: Response, options?: { inline?: boolean; lang?: string }): Promise<void> {
+export async function streamPolicyDocumentToResponse(policyId: string, orgId: string, res: Response, options?: { attachment?: boolean; lang?: string }): Promise<void> {
   const policy = await storage.getPolicy(policyId, orgId);
   if (!policy || policy.organizationId !== orgId) {
     res.status(404).json({ message: "Policy not found" });
@@ -105,7 +105,8 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   }
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", options?.inline ? `inline; filename="Policy-${policy.policyNumber}.pdf"` : `attachment; filename="Policy-${policy.policyNumber}.pdf"`);
+  const attachment = options?.attachment === true;
+  res.setHeader("Content-Disposition", attachment ? `attachment; filename="Policy-${policy.policyNumber}.pdf"` : `inline; filename="Policy-${policy.policyNumber}.pdf"`);
   doc.pipe(res);
   const docBlack = "#000000";
   const logoBuffer = await resolveImageForPdf(org?.logoUrl);
@@ -479,7 +480,12 @@ export function registerPolicyDocumentRoute(app: Express) {
     }
 
     const lang = (req.query.lang as string || "en").toLowerCase();
-    await streamPolicyDocumentToResponse(policy.id, policy.organizationId, res, { lang });
+    const attachment =
+      req.query.download === "1" ||
+      req.query.download === "true" ||
+      req.query.attachment === "1" ||
+      req.query.attachment === "true";
+    await streamPolicyDocumentToResponse(policy.id, policy.organizationId, res, { lang, attachment });
   });
 
   // E-Statement PDF: premium summary + payment history (optionally date-filtered)
@@ -527,8 +533,17 @@ export function registerPolicyDocumentRoute(app: Express) {
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     res.setHeader("Content-Type", "application/pdf");
     const statementDate = new Date().toISOString().slice(0, 10);
-    const inline = req.query.inline === "1" || req.query.inline === "true";
-    res.setHeader("Content-Disposition", inline ? `inline; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"` : `attachment; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"`);
+    const attachment =
+      req.query.download === "1" ||
+      req.query.download === "true" ||
+      req.query.attachment === "1" ||
+      req.query.attachment === "true";
+    res.setHeader(
+      "Content-Disposition",
+      attachment
+        ? `attachment; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"`
+        : `inline; filename="Statement-${policy.policyNumber}-${statementDate}.pdf"`,
+    );
     doc.pipe(res);
 
     const headerHeight = 110;

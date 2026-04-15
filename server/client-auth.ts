@@ -406,8 +406,12 @@ export function setupClientAuth(app: Express) {
     if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
-    const inline = req.query.inline === "1" || req.query.inline === "true";
-    await streamPolicyDocumentToResponse(policy.id, clientOrgId, res, { inline });
+    const attachment =
+      req.query.download === "1" ||
+      req.query.download === "true" ||
+      req.query.attachment === "1" ||
+      req.query.attachment === "true";
+    await streamPolicyDocumentToResponse(policy.id, clientOrgId, res, { attachment });
   });
 
   app.get("/api/client-auth/claims", async (req: Request, res: Response) => {

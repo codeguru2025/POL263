@@ -847,9 +847,30 @@ export default function StaffClients() {
           </CardHeader>
           <CardContent className="p-0">
             {isLoading ? (
-              <div className="p-8 flex items-center justify-center">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
+              <Table>
+                <TableHeader className="bg-muted/50">
+                  <TableRow>
+                    <TableHead className="pl-6">Client</TableHead>
+                    <TableHead>Contact Info</TableHead>
+                    <TableHead>National ID</TableHead>
+                    <TableHead>Conversion</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right pr-6">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="pl-6"><div className="flex items-center gap-3"><Skeleton className="h-8 w-8 rounded-full" /><div className="space-y-1"><Skeleton className="h-3.5 w-28" /><Skeleton className="h-3 w-20" /></div></div></TableCell>
+                      <TableCell><div className="space-y-1"><Skeleton className="h-3.5 w-32" /><Skeleton className="h-3 w-24" /></div></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-5 w-20 rounded-full" /></TableCell>
+                      <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+                      <TableCell className="text-right pr-6"><Skeleton className="h-8 w-8 rounded ml-auto" /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             ) : filteredClients.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground" data-testid="text-no-clients">
                 {searchQuery || statusFilter !== "all"

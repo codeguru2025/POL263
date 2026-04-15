@@ -12,6 +12,8 @@ import { getDbForOrg } from "./tenant-db";
 import { users } from "@shared/schema";
 import { structuredLog } from "./logger";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
+import { cpDb } from "./control-plane-db";
+import { tenants as cpTenants } from "@shared/control-plane-schema";
 
 const PgSession = connectPgSimple(session);
 
@@ -61,6 +63,23 @@ export function setupAuth(app: Express) {
         httpOnly: true,
         sameSite: "lax",
         maxAge: 24 * 60 * 60 * 1000,
+        // Share the session cookie across all subdomains (e.g. falakhe.pol263.com)
+        // so the Google OAuth callback on the main domain can read authTenantId
+        // that was written during login on a tenant subdomain.
+        // Only set domain in production — localhost domain cookies are unreliable
+        // across browsers and break the dev session entirely.
+        domain: (() => {
+          const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+          if (!base) return undefined;
+          try {
+            const host = new URL(base).hostname;
+            if (host === "localhost" || host.match(/^[\d.]+$/) || host.endsWith(".localhost")) return undefined;
+            // "pol263.com" → ".pol263.com"  (covers all subdomains)
+            return host.startsWith("www.") ? `.${host.slice(4)}` : `.${host}`;
+          } catch {
+            return undefined;
+          }
+        })(),
       },
     })
   );
@@ -287,7 +306,7 @@ export function setupAuth(app: Express) {
           return res.redirect(redirectUrl);
         }
 
-        req.login(user, (loginErr) => {
+        req.login(user, async (loginErr) => {
           if (loginErr) return next(loginErr);
 
           const sessionAny = req.session as any;
@@ -315,15 +334,50 @@ export function setupAuth(app: Express) {
           const baseUrl = baseUrlFromEnv();
           const staffPath = "/staff";
 
-          // ✅ If platform owner logged in but has no tenant selected/created yet, send them to tenant setup/selection.
-          // If you don't have this route in your frontend yet, change it to "/staff" and rely on NO_TENANT_SELECTED.
           const loggedInUser = req.user as any;
+
+          // If the login was initiated from a tenant subdomain (authTenantId saved
+          // by /api/auth/google), activate that tenant so the platform owner lands
+          // on that tenant's dashboard rather than the control plane.
+          const authTenantId = sessionAny?.authTenantId as string | undefined;
+          if (authTenantId) {
+            delete sessionAny.authTenantId;
+            sessionAny.activeTenantId = authTenantId;
+            const homeWithReturn = baseUrl
+              ? `${baseUrl}/?returnTo=${encodeURIComponent(staffPath)}`
+              : `/?returnTo=${encodeURIComponent(staffPath)}`;
+            return res.redirect(homeWithReturn);
+          }
+
+          // ✅ If platform owner logged in but has no tenant selected/created yet, send them to tenant setup/selection.
           if (loggedInUser?.isPlatformOwner && !loggedInUser?.organizationId) {
             const tenantSetupPath = "/staff/tenants";
             const homeWithReturn = baseUrl
               ? `${baseUrl}/?returnTo=${encodeURIComponent(tenantSetupPath)}`
               : `/?returnTo=${encodeURIComponent(tenantSetupPath)}`;
             return res.redirect(homeWithReturn);
+          }
+
+          // If a regular staff member logged in from the main domain (no authTenantId
+          // means they didn't come via a tenant subdomain), redirect them to their
+          // tenant's subdomain. This prevents pol263.com from serving tenant dashboards
+          // and ensures staff always land on their branded subdomain.
+          if (!loggedInUser?.isPlatformOwner && loggedInUser?.organizationId && baseUrl) {
+            try {
+              const mainHost = new URL(baseUrl).hostname; // e.g. "pol263.com"
+              const [tenantRow] = await cpDb
+                .select({ slug: cpTenants.slug })
+                .from(cpTenants)
+                .where(eq(cpTenants.id, loggedInUser.organizationId))
+                .limit(1);
+              if (tenantRow?.slug) {
+                const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || "https";
+                const tenantOrigin = `${proto}://${tenantRow.slug}.${mainHost}`;
+                return res.redirect(`${tenantOrigin}/?returnTo=${encodeURIComponent(staffPath)}`);
+              }
+            } catch {
+              // Control plane unreachable — fall through to default redirect below.
+            }
           }
 
           const homeWithReturn = baseUrl
@@ -497,8 +551,12 @@ export function setupAuth(app: Express) {
 
     const user = req.user as any;
     try {
-      // If user has an org that no longer exists or is soft-deleted, clear it so they can add/select a tenant
-      if (user.organizationId) {
+      // If a non-platform-owner user's org no longer exists or is soft-deleted, clear it so
+      // they can be re-assigned to a tenant. Skip this check for platform owners: their
+      // organizationId was overridden by the session middleware (activeTenantId) and is a
+      // control-plane UUID — looking it up in the shared organizations table would always
+      // return null and wrongly erase the activeTenantId they just selected.
+      if (!user.isPlatformOwner && user.organizationId) {
         const org = await storage.getOrganization(user.organizationId);
         if (!org || org.name?.endsWith(" (deleted)")) {
           await storage.updateUser(user.id, { organizationId: null });

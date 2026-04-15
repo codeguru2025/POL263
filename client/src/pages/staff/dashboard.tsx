@@ -151,7 +151,7 @@ export default function StaffDashboard() {
       return res.json();
     },
     onSuccess: () => {
-      window.location.href = "/staff/dashboard";
+      window.location.href = "/staff";
     },
     onError: (err: any) => {
       toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });

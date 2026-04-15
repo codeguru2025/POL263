@@ -8,5 +8,6 @@ vite.config.ts.*
 .env.local
 .env.*.local
 .env.production
+.claude/
 uploads
 testsprite_tests/tmp/

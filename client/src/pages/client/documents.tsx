@@ -81,7 +81,7 @@ export default function ClientDocuments() {
                         </Button>
                       </Link>
                       <a
-                        href={`${base}/api/client-auth/policies/${p.id}/document`}
+                        href={`${base}/api/client-auth/policies/${p.id}/document?download=1`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 text-sm text-primary hover:underline"

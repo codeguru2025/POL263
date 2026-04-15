@@ -180,7 +180,7 @@ export default function StaffNotifications() {
     onSuccess: (data: any) => {
       toast({
         title: "Automation run complete",
-        description: `Scanned ${data.scanned}, reminded ${data.reminded}, Paynow started ${data.attempted}, skipped ${data.skipped ?? 0}`,
+        description: `Scanned ${data.scanned}, reminded ${data.reminded}, mobile payment prompts started ${data.attempted}, skipped ${data.skipped ?? 0}`,
       });
     },
     onError: (err: any) => toast({ title: "Run failed", description: err.message, variant: "destructive" }),
@@ -336,7 +336,7 @@ export default function StaffNotifications() {
           <CardHeader>
             <CardTitle>Payment Automation Triggers</CardTitle>
             <CardDescription>
-              After the thresholds below, clients get reminders and (if enabled) a Paynow collection is started on their saved mobile wallet — they confirm with their PIN on the phone. Card is not used for automation.
+              After the thresholds below, clients get reminders and (if enabled) a mobile wallet payment prompt is sent to their saved number so they can approve with their PIN on the phone. Card is not used for automation.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -366,8 +366,8 @@ export default function StaffNotifications() {
             </div>
             <div className="flex items-center justify-between gap-4">
               <div>
-                <Label>Start Paynow on saved mobile</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">Initiates Paynow; client authorises on their phone (PIN). Not unattended card billing.</p>
+                <Label>Prompt payment on saved mobile number</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">Opens the wallet payment flow; the client authorises on their phone (PIN). This is not unattended card billing.</p>
               </div>
               <Switch checked={autoSettings.autoRunPayments} onCheckedChange={(v) => setAutoSettings((s) => ({ ...s, autoRunPayments: v }))} />
             </div>
@@ -389,7 +389,7 @@ export default function StaffNotifications() {
         <Card>
           <CardHeader>
             <CardTitle>Automation Activity</CardTitle>
-            <CardDescription>Recent Paynow mobile initiations, skips, and reminder dispatches.</CardDescription>
+            <CardDescription>Recent automation runs: mobile payment prompts, skips, and reminder dispatches.</CardDescription>
           </CardHeader>
           <CardContent>
             {automationRuns.length === 0 ? (

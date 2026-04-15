@@ -180,7 +180,7 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="min-h-screen bg-background flex flex-col overflow-x-hidden max-w-[100vw]">
       <header className="h-14 sm:h-16 border-b bg-card flex items-center justify-between px-4 sm:px-6 shrink-0 sticky top-0 z-10">
         <div className="flex items-center gap-2 min-w-0">
           <img

@@ -11,6 +11,7 @@ import rateLimit from "express-rate-limit";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import { pool } from "./db";
+import { startOutboxBackgroundDrain } from "./outbox";
 import csurf from "csurf";
 import { createRedisStore } from "./rate-limit-redis-store";
 
@@ -244,6 +245,7 @@ if (enableCsrf) {
     { port, host },
     () => {
       structuredLog("info", `POL263 serving on ${host}:${port}`);
+      startOutboxBackgroundDrain();
     }
   );
 })().catch((err) => {

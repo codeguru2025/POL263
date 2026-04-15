@@ -24,6 +24,7 @@ const mockTxDb = {
     }),
   })),
   update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
+  execute: vi.fn(),
 };
 
 vi.mock("../../server/tenant-db", () => ({
@@ -35,6 +36,12 @@ vi.mock("../../server/tenant-db", () => ({
 
 vi.mock("../../server/policy-status-on-payment", () => ({
   applyPolicyStatusForClearedPayment: vi.fn(),
+}));
+
+vi.mock("../../server/outbox", () => ({
+  insertOutboxMessageInTx: vi.fn().mockResolvedValue(undefined),
+  requestOutboxDrain: vi.fn(),
+  OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP: "paynow_apply_followup",
 }));
 
 import { createPaymentIntent, handlePaynowResult, applyPaymentToPolicy } from "../../server/payment-service";
@@ -72,6 +79,7 @@ vi.mock("../../server/storage", () => ({
     getPaymentReceiptsByPolicy: vi.fn(),
     createPaymentTransaction: vi.fn(),
     getNextPaymentReceiptNumber: vi.fn(),
+    allocatePaymentReceiptNumberInTx: vi.fn().mockResolvedValue("2"),
     createPaymentReceipt: vi.fn(),
     updatePaymentReceipt: vi.fn(),
     updatePolicy: vi.fn(),
@@ -181,7 +189,7 @@ describe("PaymentService", () => {
         currency: "USD",
         premiumAmount: "10",
       } as any);
-      vi.mocked(storage.getNextPaymentReceiptNumber).mockResolvedValue("2");
+      vi.mocked(storage.allocatePaymentReceiptNumberInTx).mockResolvedValue("2");
       vi.mocked(storage.createPaymentEvent).mockResolvedValue(undefined as any);
       vi.mocked(storage.updatePaymentReceipt).mockResolvedValue(undefined as any);
       vi.mocked(storage.getCommissionEntriesByPolicy).mockResolvedValue([]);
@@ -193,7 +201,7 @@ describe("PaymentService", () => {
       expect(result.transactionId).toBe("tx-1");
       expect(result.receiptId).toBe("receipt-1");
       expect(mockTxDb.insert).toHaveBeenCalledTimes(2);
-      expect(storage.getNextPaymentReceiptNumber).toHaveBeenCalledWith("org-1");
+      expect(storage.allocatePaymentReceiptNumberInTx).toHaveBeenCalledWith(mockTxDb, "org-1");
     });
 
     it("returns existing receipt when intent already paid (idempotent)", async () => {

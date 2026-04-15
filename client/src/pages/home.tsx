@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Building2, Users, UserCircle } from "lucide-react";
+import { Building2, Users, UserCircle, ShieldCheck } from "lucide-react";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import AppFooter from "@/components/app-footer";
 import { getDefaultLogoUrl, resolveAssetUrl } from "@/lib/assetUrl";
@@ -109,10 +109,62 @@ export default function Home() {
     (!returnTo && !staffAuthLoading && isAuthenticated) ||
     (!returnTo && clientMeFetched && !!clientMe?.client);
 
-  if (isRedirecting) {
+  // Show spinner immediately while auth is resolving after an OAuth redirect.
+  // Only applies when returnTo is present (i.e. we just came back from Google).
+  // Without returnTo it's a plain page visit — let the portals render normally.
+  const isAuthPending =
+    (returnTo?.startsWith("/staff") && staffAuthLoading) ||
+    (returnTo?.startsWith("/client") && !clientMeFetched);
+
+  if (isRedirecting || isAuthPending) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden />
+      </div>
+    );
+  }
+
+  // On the main platform domain (no tenant subdomain), only show the platform
+  // owner login. Staff, agents, and clients must use their organisation's subdomain.
+  if (!tenantId) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 relative">
+        <div className="absolute top-4 right-4">
+          <ThemeSwitcher />
+        </div>
+        <div className="mb-10 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <img src={resolveAssetUrl(getDefaultLogoUrl())} alt="POL263" className="h-20 w-20 mb-5 rounded-2xl object-contain" fetchPriority="high" />
+          <h1 className="text-4xl font-display font-bold text-foreground tracking-tight">POL263</h1>
+          <p className="text-muted-foreground text-lg font-medium mt-2">Insurance Management Platform</p>
+        </div>
+
+        <div className="w-full max-w-sm space-y-4">
+          <Link href="/staff/login">
+            <Card className="hover:border-primary/50 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 cursor-pointer group border-border/60">
+              <CardHeader>
+                <div className="h-12 w-12 bg-primary/10 text-primary rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-300">
+                  <ShieldCheck size={24} />
+                </div>
+                <CardTitle className="text-lg font-display">Platform Administration</CardTitle>
+                <CardDescription className="text-sm">
+                  Platform owner access only. Staff, agents and clients should log in via their organisation's URL.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <Button className="w-full h-10 font-medium" size="default" data-testid="link-staff-portal">
+                  Platform Owner Login
+                </Button>
+              </CardContent>
+            </Card>
+          </Link>
+          <p className="text-center text-xs text-muted-foreground">
+            Not a platform owner?{" "}
+            <span className="font-medium">Use your organisation's URL</span> — e.g.{" "}
+            <span className="font-mono">yourorg.pol263.com</span>
+          </p>
+        </div>
+
+        <AppFooter />
       </div>
     );
   }

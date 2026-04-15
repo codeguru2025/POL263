@@ -55,11 +55,10 @@ export async function applyCreditBalanceToPolicy(
   const amount = premium.toFixed(2);
   const today = new Date().toISOString().split("T")[0];
 
-  // Fetch receipt number atomically outside transaction (uses main-db sequence with ON CONFLICT DO UPDATE)
-  const receiptNumber = await storage.getNextPaymentReceiptNumber(orgId);
+  let receiptNumberForNotify: string | undefined;
 
   try {
-    await withOrgTransaction(orgId, async (txDb) => {
+    receiptNumberForNotify = await withOrgTransaction(orgId, async (txDb) => {
       // Atomically deduct credit balance; fails if balance is insufficient
       const deductResult = await txDb.execute(sql`
         UPDATE policy_credit_balances
@@ -73,6 +72,8 @@ export async function applyCreditBalanceToPolicy(
       if (!deductedRows || deductedRows.length === 0) {
         throw new Error("Insufficient credit balance");
       }
+
+      const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
 
       // Create payment transaction
       const [tx] = await txDb.insert(paymentTransactions).values({
@@ -107,6 +108,7 @@ export async function applyCreditBalanceToPolicy(
 
       // Update policy status within the same transaction
       await applyPolicyStatusForClearedPayment(txDb, policyId, policy, today, " (credit balance)", undefined);
+      return receiptNumber;
     });
   } catch (err: any) {
     if (err?.message === "Insufficient credit balance") {
@@ -147,7 +149,7 @@ export async function applyCreditBalanceToPolicy(
     recipientId: policy.clientId!,
     channel: "in_app",
     subject: "Premium paid from credit balance",
-    body: `Premium of ${currency} ${amount} for policy ${policy.policyNumber} was applied from your credit balance. Receipt #${receiptNumber}.`,
+    body: `Premium of ${currency} ${amount} for policy ${policy.policyNumber} was applied from your credit balance. Receipt #${receiptNumberForNotify ?? "—"}.`,
     status: "sent",
   });
 

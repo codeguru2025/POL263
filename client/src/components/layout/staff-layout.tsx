@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
   LayoutDashboard,
@@ -167,6 +167,35 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const { user, roles, permissions, isAuthenticated, isPlatformOwner, isLoading, isError: authError, logout } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+
+  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAvatarUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const headers: Record<string, string> = {};
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
+      const res = await fetch(getApiBase() + "/api/upload/avatar", {
+        method: "POST",
+        headers,
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error((await res.json()).message || "Upload failed");
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Avatar updated" });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setAvatarUploading(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+    }
+  }
 
   // Close mobile sidebar when route changes
   useEffect(() => {
@@ -240,7 +269,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       return res.json();
     },
     onSuccess: () => {
-      window.location.href = "/staff/dashboard";
+      window.location.href = "/staff";
     },
     onError: (err: any) => {
       toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });
@@ -356,7 +385,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   return (
-    <div className="min-h-screen flex bg-background">
+    <div className="min-h-screen flex bg-background overflow-x-hidden max-w-[100vw]">
       {/* Mobile/tablet overlay - tap to close sidebar; only when sidebar is open below lg */}
       <button
         type="button"
@@ -403,12 +432,32 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                 </h4>
                 {group.items.map((item) => {
                   const isActive = location === item.href || (item.href !== "/staff" && location.startsWith(`${item.href}/`));
+                  // Map nav hrefs to the primary query key used by that page so we can prefetch on hover.
+                  const hrefBase = item.href.split("?")[0];
+                  const prefetchKey: string | null = {
+                    "/staff": "/api/dashboard/stats",
+                    "/staff/policies": "/api/policies",
+                    "/staff/clients": "/api/clients",
+                    "/staff/claims": "/api/claims",
+                    "/staff/funerals": "/api/funerals",
+                    "/staff/leads": "/api/leads",
+                    "/staff/finance": "/api/finance/summary",
+                    "/staff/users": "/api/users",
+                    "/staff/audit": "/api/audit-logs",
+                    "/staff/groups": "/api/groups",
+                    "/staff/products": "/api/products",
+                  }[hrefBase] ?? null;
                   return (
                     <Link key={item.href} href={item.href}>
                       <Button
                         variant={isActive ? "secondary" : "ghost"}
                         className={`w-full justify-start h-10 ${isActive ? "font-medium bg-secondary/80 text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
                         data-testid={`nav-link-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
+                        onMouseEnter={() => {
+                          if (prefetchKey && !isActive) {
+                            queryClient.prefetchQuery({ queryKey: [prefetchKey], staleTime: 30_000 });
+                          }
+                        }}
                       >
                         <item.icon className={`mr-3 h-5 w-5 shrink-0 ${isActive ? "text-primary" : ""}`} />
                         <span className="truncate">{item.label}</span>
@@ -431,10 +480,22 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <ReferralLinkBox referralCode={user.referralCode} />
           )}
           <div className="flex items-center gap-3 px-2 py-2 mb-2 bg-card rounded-lg border shadow-sm">
-            <Avatar className="h-9 w-9 border shrink-0">
-              <AvatarImage src={user?.avatarUrl || undefined} />
-              <AvatarFallback className="bg-primary/10 text-primary font-medium">{initials}</AvatarFallback>
-            </Avatar>
+            <button
+              type="button"
+              title="Click to change avatar"
+              disabled={avatarUploading}
+              onClick={() => avatarInputRef.current?.click()}
+              className="relative shrink-0 group rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              <Avatar className="h-9 w-9 border">
+                <AvatarImage src={user?.avatarUrl || undefined} />
+                <AvatarFallback className="bg-primary/10 text-primary font-medium">{initials}</AvatarFallback>
+              </Avatar>
+              <span className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <span className="text-white text-[9px] font-semibold leading-tight text-center">{avatarUploading ? "…" : "Edit"}</span>
+              </span>
+            </button>
+            <input ref={avatarInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleAvatarUpload} />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{user?.email}</p>
               <p className="text-[10px] uppercase tracking-wider font-semibold text-primary mt-0.5">

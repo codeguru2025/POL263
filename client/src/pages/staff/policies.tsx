@@ -30,6 +30,12 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 
+function readEstatementDateRange() {
+  const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement | null)?.value;
+  const to = (document.getElementById("estatement-dateTo") as HTMLInputElement | null)?.value;
+  return { from, to };
+}
+
 const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
   inactive: ["cancelled"],
   active: ["grace", "cancelled"],
@@ -122,6 +128,8 @@ export default function StaffPolicies() {
   const [pnPhase, setPnPhase] = useState<"select" | "waiting">("select");
   const [showEstatementViewer, setShowEstatementViewer] = useState(false);
   const [estatementViewerUrl, setEstatementViewerUrl] = useState<string>("");
+  const [showPolicyDocViewer, setShowPolicyDocViewer] = useState(false);
+  const [policyDocViewerUrl, setPolicyDocViewerUrl] = useState<string>("");
   const [showReceiptSuccess, setShowReceiptSuccess] = useState(false);
   const [receiptSuccessData, setReceiptSuccessData] = useState<any>(null);
 
@@ -969,125 +977,151 @@ export default function StaffPolicies() {
     setShowPaymentMethodDialog(true);
   };
 
+  const staffPolicyDocumentUrl = (policyId: string, lang: string, download?: boolean) => {
+    const p = new URLSearchParams();
+    p.set("lang", lang);
+    if (download) p.set("download", "1");
+    return `${getApiBase()}/api/policies/${policyId}/document?${p.toString()}`;
+  };
+
+  const staffEstatementUrl = (policyId: string, download?: boolean, dateFrom?: string, dateTo?: string) => {
+    const p = new URLSearchParams();
+    if (dateFrom) p.set("dateFrom", dateFrom);
+    if (dateTo) p.set("dateTo", dateTo);
+    if (download) p.set("download", "1");
+    const qs = p.toString();
+    return `${getApiBase()}/api/policies/${policyId}/estatement${qs ? `?${qs}` : ""}`;
+  };
+
   if (showDetailView && selectedPolicy) {
     const allowedTransitions = VALID_POLICY_TRANSITIONS[displayPolicy.status] || [];
     return (
       <StaffLayout>
-        <div className="space-y-6">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => { setShowDetailView(false); setSelectedPolicy(null); }} data-testid="btn-back-policies">
-              <ChevronLeft className="h-5 w-5" />
-            </Button>
-            <div className="flex-1">
-              <h1 className="text-3xl font-display font-bold tracking-tight" data-testid="text-policy-number">{displayPolicy.policyNumber}</h1>
-              <p className="text-muted-foreground mt-1">Policy details, members, and payment history</p>
+        <div className="space-y-6 min-w-0">
+          <div className="space-y-4 min-w-0">
+            <div className="flex items-start gap-3 min-w-0">
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => { setShowDetailView(false); setSelectedPolicy(null); }} data-testid="btn-back-policies">
+                <ChevronLeft className="h-5 w-5" />
+              </Button>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight break-words" data-testid="text-policy-number">{displayPolicy.policyNumber}</h1>
+                <p className="text-muted-foreground mt-1 text-sm sm:text-base">Policy details, members, and payment history</p>
+              </div>
+              <Badge variant="outline" className={`font-medium text-sm px-3 py-1 shrink-0 ${getStatusColor(displayPolicy.status)}`} data-testid="badge-policy-status">
+                {STATUS_LABELS[displayPolicy.status] || displayPolicy.status}
+              </Badge>
             </div>
-            <Badge variant="outline" className={`font-medium text-sm px-3 py-1 ${getStatusColor(displayPolicy.status)}`} data-testid="badge-policy-status">
-              {STATUS_LABELS[displayPolicy.status] || displayPolicy.status}
-            </Badge>
-            {!isAgent && allowedTransitions.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="gap-2" data-testid="btn-transition-policy">
-                    <ArrowRightLeft className="h-4 w-4" /> Transition
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  {allowedTransitions.map((t) => (
-                    <DropdownMenuItem key={t} onClick={() => { setTransitionTarget(t); setTransitionReason(""); setShowTransitionDialog(true); }} data-testid={`menu-transition-${t}`}>
-                      → {STATUS_LABELS[t] || t}
-                    </DropdownMenuItem>
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              {!isAgent && allowedTransitions.length > 0 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="gap-2" data-testid="btn-transition-policy">
+                      <ArrowRightLeft className="h-4 w-4" /> Transition
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent>
+                    {allowedTransitions.map((t) => (
+                      <DropdownMenuItem key={t} onClick={() => { setTransitionTarget(t); setTransitionReason(""); setShowTransitionDialog(true); }} data-testid={`menu-transition-${t}`}>
+                        → {STATUS_LABELS[t] || t}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+              {canWritePolicy && (
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => openUpgradeDialog(displayPolicy)}
+                  data-testid="btn-upgrade-policy"
+                >
+                  <ArrowRightLeft className="h-4 w-4" /> Upgrade Product
+                </Button>
+              )}
+              <Select value={docLang} onValueChange={setDocLang}>
+                <SelectTrigger className="w-[140px] h-9">
+                  <SelectValue placeholder="Language" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(languages || [{ code: "en", name: "English" }]).map((l) => (
+                    <SelectItem key={l.code} value={l.code}>{l.name}</SelectItem>
                   ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            {canWritePolicy && (
+                </SelectContent>
+              </Select>
               <Button
                 variant="outline"
                 className="gap-2"
-                onClick={() => openUpgradeDialog(displayPolicy)}
-                data-testid="btn-upgrade-policy"
+                onClick={() => {
+                  setPolicyDocViewerUrl(staffPolicyDocumentUrl(selectedPolicy.id, docLang));
+                  setShowPolicyDocViewer(true);
+                }}
+                data-testid="btn-view-policy-doc"
               >
-                <ArrowRightLeft className="h-4 w-4" /> Upgrade Product
+                <Eye className="h-4 w-4" /> Policy document
               </Button>
-            )}
-            <Select value={docLang} onValueChange={setDocLang}>
-              <SelectTrigger className="w-[140px] h-9">
-                <SelectValue placeholder="Language" />
-              </SelectTrigger>
-              <SelectContent>
-                {(languages || [{ code: "en", name: "English" }]).map((l) => (
-                  <SelectItem key={l.code} value={l.code}>{l.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/document?lang=${docLang}`, "_blank", "noopener")}
-              data-testid="btn-download-policy-doc"
-            >
-              <Download className="h-4 w-4" /> Policy document
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              title="Print policy document"
-              onClick={() => printDocument(getApiBase() + `/api/policies/${selectedPolicy.id}/document?lang=${docLang}`)}
-              data-testid="btn-print-policy-doc"
-            >
-              <Printer className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              title="Share policy document"
-              onClick={() => shareDocument(getApiBase() + `/api/policies/${selectedPolicy.id}/document?lang=${docLang}`, `Policy-${displayPolicy.policyNumber}`)}
-            >
-              <Share2 className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => window.open(getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`, "_blank", "noopener")}
-              data-testid="btn-download-estatement"
-            >
-              <FileText className="h-4 w-4" /> E-Statement
-            </Button>
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => openEditDialog(displayPolicy)}
-              data-testid="btn-edit-policy"
-            >
-              <Pencil className="h-4 w-4" /> Edit
-            </Button>
-            {canDeletePolicy && (
               <Button
-                variant="destructive"
-                className="gap-2"
-                onClick={() => setConfirmDeletePolicy(true)}
-                data-testid="btn-delete-policy"
+                variant="outline"
+                size="icon"
+                title="Print policy document"
+                onClick={() => printDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang))}
+                data-testid="btn-print-policy-doc"
               >
-                <Trash2 className="h-4 w-4" /> Delete
+                <Printer className="h-4 w-4" />
               </Button>
-            )}
-            {(canWriteFinance || isAgent) && (
               <Button
+                variant="outline"
+                size="icon"
+                title="Share policy document"
+                onClick={() => shareDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang), `Policy-${displayPolicy.policyNumber}`)}
+              >
+                <Share2 className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
                 className="gap-2"
                 onClick={() => {
-                  setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
-                  setInPolicyReceiptCurrency(displayPolicy.currency || "USD");
-                  const clientPhone = displayPolicy.clientId ? (clientMap[displayPolicy.clientId]?.phone || "").trim() : "";
-                  setInPolicyReceiptRef(clientPhone);
-                  setInPolicyReceiptNotes("");
-                  setShowInPolicyReceiptDialog(true);
+                  setEstatementViewerUrl(staffEstatementUrl(selectedPolicy.id));
+                  setShowEstatementViewer(true);
                 }}
-                data-testid="btn-receipt-policy"
+                data-testid="btn-view-estatement-toolbar"
               >
-                <Receipt className="h-4 w-4" /> Receipt Payment
+                <FileText className="h-4 w-4" /> E-Statement
               </Button>
-            )}
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={() => openEditDialog(displayPolicy)}
+                data-testid="btn-edit-policy"
+              >
+                <Pencil className="h-4 w-4" /> Edit
+              </Button>
+              {canDeletePolicy && (
+                <Button
+                  variant="destructive"
+                  className="gap-2"
+                  onClick={() => setConfirmDeletePolicy(true)}
+                  data-testid="btn-delete-policy"
+                >
+                  <Trash2 className="h-4 w-4" /> Delete
+                </Button>
+              )}
+              {(canWriteFinance || isAgent) && (
+                <Button
+                  className="gap-2"
+                  onClick={() => {
+                    setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
+                    setInPolicyReceiptCurrency(displayPolicy.currency || "USD");
+                    const clientPhone = displayPolicy.clientId ? (clientMap[displayPolicy.clientId]?.phone || "").trim() : "";
+                    setInPolicyReceiptRef(clientPhone);
+                    setInPolicyReceiptNotes("");
+                    setShowInPolicyReceiptDialog(true);
+                  }}
+                  data-testid="btn-receipt-policy"
+                >
+                  <Receipt className="h-4 w-4" /> Receipt Payment
+                </Button>
+              )}
+            </div>
           </div>
 
           <Card className="shadow-sm border-border/60">
@@ -1212,7 +1246,7 @@ export default function StaffPolicies() {
           <Card className="shadow-sm border-border/60">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-base flex items-center gap-2"><CreditCard className="h-4 w-4 text-primary" /> Paynow mobile (automation)</CardTitle>
+                <CardTitle className="text-base flex items-center gap-2"><CreditCard className="h-4 w-4 text-primary" /> Automatic mobile payments</CardTitle>
                 <Button variant="outline" size="sm" onClick={openPaymentMethodDialog} data-testid="btn-edit-payment-method">
                   <Pencil className="h-4 w-4 mr-2" /> Edit
                 </Button>
@@ -1221,7 +1255,7 @@ export default function StaffPolicies() {
             <CardContent>
               {(() => {
                 const current = (clientPaymentMethods || []).find((m: any) => m.isDefault && m.isActive) || (clientPaymentMethods || [])[0];
-                if (!current) return <p className="text-sm text-muted-foreground">No saved mobile wallet. Add one to enable Paynow automation (PIN on the client&apos;s phone).</p>;
+                if (!current) return <p className="text-sm text-muted-foreground">No saved mobile wallet. Add one to enable automatic collection reminders (the client confirms with their PIN on their phone).</p>;
                 if (current.methodType === "card") {
                   return (
                     <div className="text-sm space-y-1">
@@ -1531,7 +1565,7 @@ export default function StaffPolicies() {
           <Card className="shadow-sm border-border/60">
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5 text-primary" /> E-Statement</CardTitle>
-              <CardDescription>View or download a statement PDF with policy summary and payment history (optionally filter by date range).</CardDescription>
+              <CardDescription>Open the preview to review your statement, then download from there if you need a file. Optionally filter by date range first.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap items-end gap-3">
@@ -1557,49 +1591,20 @@ export default function StaffPolicies() {
                   variant="outline"
                   className="gap-2"
                   onClick={() => {
-                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
-                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
-                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
-                    const params = new URLSearchParams();
-                    params.set("inline", "1");
-                    if (from) params.set("dateFrom", from);
-                    if (to) params.set("dateTo", to);
+                    const { from, to } = readEstatementDateRange();
                     setShowEstatementViewer(true);
-                    setEstatementViewerUrl(url + "?" + params.toString());
+                    setEstatementViewerUrl(staffEstatementUrl(selectedPolicy.id, false, from, to));
                   }}
                   data-testid="btn-view-estatement"
                 >
                   <Eye className="h-4 w-4" /> View
                 </Button>
                 <Button
-                  variant="default"
-                  className="gap-2"
-                  onClick={() => {
-                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
-                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
-                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
-                    const params = new URLSearchParams();
-                    if (from) params.set("dateFrom", from);
-                    if (to) params.set("dateTo", to);
-                    if (params.toString()) url += "?" + params.toString();
-                    window.open(url, "_blank", "noopener");
-                  }}
-                  data-testid="btn-download-estatement-card"
-                >
-                  <Download className="h-4 w-4" /> Download
-                </Button>
-                <Button
                   variant="outline"
                   className="gap-2"
                   onClick={() => {
-                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
-                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
-                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
-                    const params = new URLSearchParams();
-                    if (from) params.set("dateFrom", from);
-                    if (to) params.set("dateTo", to);
-                    if (params.toString()) url += "?" + params.toString();
-                    printDocument(url);
+                    const { from, to } = readEstatementDateRange();
+                    printDocument(staffEstatementUrl(selectedPolicy.id, false, from, to));
                   }}
                   data-testid="btn-print-estatement"
                 >
@@ -1609,14 +1614,8 @@ export default function StaffPolicies() {
                   variant="outline"
                   className="gap-2"
                   onClick={() => {
-                    const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement)?.value;
-                    const to = (document.getElementById("estatement-dateTo") as HTMLInputElement)?.value;
-                    let url = getApiBase() + `/api/policies/${selectedPolicy.id}/estatement`;
-                    const params = new URLSearchParams();
-                    if (from) params.set("dateFrom", from);
-                    if (to) params.set("dateTo", to);
-                    if (params.toString()) url += "?" + params.toString();
-                    shareDocument(url, `E-Statement-${displayPolicy.policyNumber}`);
+                    const { from, to } = readEstatementDateRange();
+                    shareDocument(staffEstatementUrl(selectedPolicy.id, false, from, to), `E-Statement-${displayPolicy.policyNumber}`);
                   }}
                 >
                   <Share2 className="h-4 w-4" /> Share
@@ -1626,27 +1625,27 @@ export default function StaffPolicies() {
             </CardContent>
           </Card>
 
-          <Dialog open={showEstatementViewer} onOpenChange={setShowEstatementViewer}>
-            <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col">
+          <Dialog open={showEstatementViewer} onOpenChange={(open) => { setShowEstatementViewer(open); if (!open) setEstatementViewerUrl(""); }}>
+            <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col w-[min(100vw-2rem,56rem)] overflow-x-hidden">
               <DialogHeader>
                 <DialogTitle>E-Statement</DialogTitle>
-                <DialogDescription>View your statement below. Use Download to save a copy.</DialogDescription>
+                <DialogDescription>Review the statement below, then download or share if needed.</DialogDescription>
               </DialogHeader>
-              <div className="flex-1 min-h-0 flex flex-col gap-3">
+              <div className="flex-1 min-h-0 flex flex-col gap-3 min-w-0">
                 {estatementViewerUrl && (
                   <iframe
                     title="E-Statement"
                     src={estatementViewerUrl}
-                    className="w-full flex-1 min-h-[60vh] border rounded-md"
+                    className="w-full flex-1 min-h-[60vh] min-w-0 border rounded-md"
                   />
                 )}
-                <div className="flex justify-end gap-2">
+                <div className="flex flex-wrap justify-end gap-2">
                   <Button
                     variant="outline"
                     className="gap-2"
                     onClick={() => {
-                      const u = new URL(estatementViewerUrl);
-                      u.searchParams.delete("inline");
+                      const u = new URL(estatementViewerUrl, window.location.origin);
+                      u.searchParams.set("download", "1");
                       window.open(u.toString(), "_blank", "noopener");
                     }}
                   >
@@ -1656,8 +1655,8 @@ export default function StaffPolicies() {
                     variant="outline"
                     className="gap-2"
                     onClick={() => {
-                      const u = new URL(estatementViewerUrl);
-                      u.searchParams.delete("inline");
+                      const u = new URL(estatementViewerUrl, window.location.origin);
+                      u.searchParams.delete("download");
                       printDocument(u.toString());
                     }}
                   >
@@ -1667,14 +1666,68 @@ export default function StaffPolicies() {
                     variant="outline"
                     className="gap-2"
                     onClick={() => {
-                      const u = new URL(estatementViewerUrl);
-                      u.searchParams.delete("inline");
+                      const u = new URL(estatementViewerUrl, window.location.origin);
+                      u.searchParams.delete("download");
                       shareDocument(u.toString(), `E-Statement-${displayPolicy.policyNumber}`);
                     }}
                   >
                     <Share2 className="h-4 w-4" /> Share
                   </Button>
-                  <Button variant="outline" onClick={() => setShowEstatementViewer(false)}>Close</Button>
+                  <Button variant="outline" onClick={() => { setShowEstatementViewer(false); setEstatementViewerUrl(""); }}>Close</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={showPolicyDocViewer} onOpenChange={(open) => { setShowPolicyDocViewer(open); if (!open) setPolicyDocViewerUrl(""); }}>
+            <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col w-[min(100vw-2rem,56rem)] overflow-x-hidden">
+              <DialogHeader>
+                <DialogTitle>Policy document</DialogTitle>
+                <DialogDescription>Review the certificate below, then download or print if needed.</DialogDescription>
+              </DialogHeader>
+              <div className="flex-1 min-h-0 flex flex-col gap-3 min-w-0">
+                {policyDocViewerUrl && (
+                  <iframe
+                    title="Policy document"
+                    src={policyDocViewerUrl}
+                    className="w-full flex-1 min-h-[60vh] min-w-0 border rounded-md"
+                  />
+                )}
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const u = new URL(policyDocViewerUrl, window.location.origin);
+                      u.searchParams.set("download", "1");
+                      window.open(u.toString(), "_blank", "noopener");
+                    }}
+                  >
+                    <Download className="h-4 w-4" /> Download
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const u = new URL(policyDocViewerUrl, window.location.origin);
+                      u.searchParams.delete("download");
+                      printDocument(u.toString());
+                    }}
+                  >
+                    <Printer className="h-4 w-4" /> Print
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const u = new URL(policyDocViewerUrl, window.location.origin);
+                      u.searchParams.delete("download");
+                      shareDocument(u.toString(), `Policy-${displayPolicy.policyNumber}`);
+                    }}
+                  >
+                    <Share2 className="h-4 w-4" /> Share
+                  </Button>
+                  <Button variant="outline" onClick={() => { setShowPolicyDocViewer(false); setPolicyDocViewerUrl(""); }}>Close</Button>
                 </div>
               </div>
             </DialogContent>
@@ -1952,9 +2005,9 @@ export default function StaffPolicies() {
         <Dialog open={showPaymentMethodDialog} onOpenChange={setShowPaymentMethodDialog}>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle>Paynow mobile wallet</DialogTitle>
+              <DialogTitle>Saved mobile wallet</DialogTitle>
               <DialogDescription>
-                Saved for overdue automation: the app starts Paynow on this number; the client enters their PIN on their phone. One-off card payments still use Paynow from Finance or the client portal.
+                Used when automation runs for overdue balances: we open the payment flow on this number and the client authorises on their phone (PIN). One-off card payments are still taken from Finance or the client portal.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
@@ -2443,11 +2496,32 @@ export default function StaffPolicies() {
           </CardHeader>
           <CardContent className="p-0">
             {policiesLoading ? (
-              <div className="p-6 space-y-3">
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
-              </div>
+              <Table>
+                <TableHeader className="bg-muted/50">
+                  <TableRow>
+                    <TableHead className="pl-6">Policy Number</TableHead>
+                    <TableHead>Client</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Premium</TableHead>
+                    <TableHead>Schedule</TableHead>
+                    <TableHead>Effective Date</TableHead>
+                    <TableHead className="text-right pr-6">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="pl-6"><div className="flex items-center gap-2"><Skeleton className="h-4 w-4 rounded" /><Skeleton className="h-3.5 w-28" /></div></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-32" /></TableCell>
+                      <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-20" /></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-16" /></TableCell>
+                      <TableCell><Skeleton className="h-3.5 w-20" /></TableCell>
+                      <TableCell className="text-right pr-6"><Skeleton className="h-8 w-8 rounded ml-auto" /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             ) : filteredPolicies.length === 0 ? (
               <div className="p-12 text-center text-muted-foreground" data-testid="text-no-policies">
                 {policies?.length === 0 ? "No policies found. Create your first policy to get started." : "No policies match your search criteria."}
@@ -3039,8 +3113,8 @@ export default function StaffPolicies() {
                   </div>
                 </div>
                 <div className="space-y-3 border rounded-md p-3">
-                  <p className="text-sm font-medium">Paynow mobile wallet (saved for automation)</p>
-                  <p className="text-xs text-muted-foreground">Overdue automation starts Paynow on this number; the client confirms with their PIN. Recurring collection is not done via stored card.</p>
+                  <p className="text-sm font-medium">Saved mobile wallet (automation)</p>
+                  <p className="text-xs text-muted-foreground">When automation runs for overdue balances, we use this number so the client can approve on their phone. Stored cards are not used for recurring collection.</p>
                   <div>
                     <Label>Mobile Provider</Label>
                     <Select

@@ -31,6 +31,7 @@
     "db:seed": "tsx script/run-seed.ts",
     "db:setup": "npm run db:push && npm run db:seed",
     "db:migrate": "tsx script/run-migrations.ts",
+    "db:migrate:status": "tsx script/migration-status.ts",
     "db:migrate:do": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 tsx script/run-migrations.ts",
     "db:export-tenant": "tsx script/export-tenant-users.ts",
     "db:seed-tenant": "tsx script/seed-tenant-from-backup.ts",
