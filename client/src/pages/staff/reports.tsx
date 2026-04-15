@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,10 +12,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { getApiBase } from "@/lib/queryClient";
-import { cn } from "@/lib/utils";
 import { formatReceiptNumber } from "@/lib/assetUrl";
-import type { LucideIcon } from "lucide-react";
-import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt, Eye, TrendingUp, FolderOpen, Wallet, UserCircle, Shield, Wrench } from "lucide-react";
+import {
+  buildStaffReportHref,
+  parseReportSearchParams,
+  reportContextLabel,
+  tabUsesDataset,
+  tabsForSection,
+  visibleReportSections,
+  type ReportDatasetId,
+  type ReportSectionId,
+} from "@/lib/staff-reports-nav";
+import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt, Eye, TrendingUp, FolderOpen, UserCircle, Wrench } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
 export type ReportFiltersState = {
@@ -38,69 +47,6 @@ function buildQuery(f: ReportFiltersState) {
   if (f.status) p.set("status", f.status);
   const q = p.toString();
   return q ? "?" + q : "";
-}
-
-type ReportSectionId = "policies" | "finance" | "agents" | "claims" | "operations" | "payroll";
-
-const SECTION_META: Record<ReportSectionId, { label: string; description: string; icon: LucideIcon }> = {
-  policies: { label: "Policies", description: "Lists, exports, and lifecycle", icon: FolderOpen },
-  finance: { label: "Finance", description: "Premiums, receipts, and cash", icon: Wallet },
-  agents: { label: "Agents", description: "Productivity and commissions", icon: UserCircle },
-  claims: { label: "Claims", description: "Claim pipeline", icon: Shield },
-  operations: { label: "Operations", description: "Funerals and fleet", icon: Wrench },
-  payroll: { label: "Payroll", description: "Staff payroll", icon: Users },
-};
-
-const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: string; testId?: string }[]> = {
-  policies: [
-    { value: "policies", label: "Overview", testId: "tab-policies-report" },
-    { value: "policy-details", label: "Policy details", testId: "tab-policy-details" },
-    { value: "active-policies", label: "Active", testId: "tab-active-policies" },
-    { value: "awaiting-payments", label: "Awaiting payment", testId: "tab-awaiting-payments" },
-    { value: "overdue", label: "Overdue / grace", testId: "tab-overdue" },
-    { value: "pre-lapse", label: "Pre-lapse", testId: "tab-pre-lapse" },
-    { value: "lapsed", label: "Lapsed", testId: "tab-lapsed" },
-    { value: "new-joinings", label: "New joinings", testId: "tab-new-joinings" },
-    { value: "activations", label: "Activations", testId: "tab-activations" },
-    { value: "conversions", label: "Conversions", testId: "tab-conversions-report" },
-    { value: "reinstatements", label: "Reinstatements", testId: "tab-reinstatements-report" },
-  ],
-  finance: [
-    { value: "finance", label: "Finance", testId: "tab-finance-report" },
-    { value: "underwriter-payable", label: "Underwriter payable", testId: "tab-underwriter-payable" },
-    { value: "receipts", label: "Receipts", testId: "tab-receipts-report" },
-    { value: "payments", label: "Payments", testId: "tab-payments-report" },
-    { value: "expenditures", label: "Expenditure", testId: "tab-expenditures-report" },
-    { value: "cashups", label: "Cashups", testId: "tab-cashups-report" },
-    { value: "platform", label: "POL263 revenue", testId: "tab-platform-report" },
-  ],
-  agents: [
-    { value: "agent-productivity", label: "Agent productivity", testId: "tab-agent-productivity" },
-    { value: "commissions", label: "Commissions", testId: "tab-commissions-report" },
-  ],
-  claims: [{ value: "claims", label: "Claims", testId: "tab-claims-report" }],
-  operations: [
-    { value: "funerals", label: "Funerals", testId: "tab-funerals-report" },
-    { value: "fleet", label: "Fleet", testId: "tab-fleet-report" },
-  ],
-  payroll: [{ value: "payroll", label: "Payroll", testId: "tab-payroll-report" }],
-};
-
-function tabsForSection(
-  section: ReportSectionId,
-  opts: { canReadCommission: boolean; canReadFuneralOps: boolean; canReadFleet: boolean },
-) {
-  if (section === "agents" && !opts.canReadCommission) {
-    return SECTION_TAB_DEFS.agents.filter((t) => t.value !== "commissions");
-  }
-  if (section === "operations") {
-    return SECTION_TAB_DEFS.operations.filter((t) => {
-      if (t.value === "funerals") return opts.canReadFuneralOps;
-      if (t.value === "fleet") return opts.canReadFleet;
-      return true;
-    });
-  }
-  return SECTION_TAB_DEFS[section];
 }
 
 function ExportButton({ reportType, filters }: { reportType: string; filters: ReportFiltersState }) {
@@ -127,30 +73,41 @@ export default function StaffReports() {
   const canReadPayroll = permissions.includes("read:payroll");
   const canReadCommission = permissions.includes("read:commission");
 
-  const [reportSection, setReportSection] = useState<ReportSectionId>("policies");
-  const [activeReport, setActiveReport] = useState("policies");
-
-  const visibleSections = useMemo(() => {
-    const out: ReportSectionId[] = ["policies"];
-    if (canReadFinance) out.push("finance");
-    out.push("agents");
-    if (canReadClaim) out.push("claims");
-    if (canReadFuneralOps || canReadFleet) out.push("operations");
-    if (canReadPayroll) out.push("payroll");
-    return out;
-  }, [canReadFinance, canReadClaim, canReadFuneralOps, canReadFleet, canReadPayroll]);
-
-  const tabsInSection = useMemo(
-    () => tabsForSection(reportSection, { canReadCommission, canReadFuneralOps, canReadFleet }),
-    [reportSection, canReadCommission, canReadFuneralOps, canReadFleet],
+  const sectionOpts = useMemo(
+    () => ({ canReadCommission, canReadFuneralOps, canReadFleet }),
+    [canReadCommission, canReadFuneralOps, canReadFleet],
   );
 
+  const visibleSections = useMemo(
+    () =>
+      visibleReportSections({
+        canReadFinance,
+        canReadClaim,
+        canReadFuneralOps,
+        canReadFleet,
+        canReadPayroll,
+      }),
+    [canReadFinance, canReadClaim, canReadFuneralOps, canReadFleet, canReadPayroll],
+  );
+
+  const searchString = useSearch();
+  const [, setLocation] = useLocation();
+
+  const { reportSection, activeReport } = useMemo(() => {
+    const parsed = parseReportSearchParams(searchString);
+    let section: ReportSectionId = parsed.section;
+    if (!visibleSections.includes(section)) section = visibleSections[0]!;
+    const tabs = tabsForSection(section, sectionOpts);
+    let tab = parsed.tab;
+    if (!tabs.some((x) => x.value === tab)) tab = tabs[0]!.value;
+    return { reportSection: section, activeReport: tab };
+  }, [searchString, visibleSections, sectionOpts]);
+
   useEffect(() => {
-    if (!tabsInSection.some((t) => t.value === activeReport)) {
-      const first = tabsInSection[0]?.value;
-      if (first) setActiveReport(first);
-    }
-  }, [tabsInSection, activeReport]);
+    const parsed = parseReportSearchParams(searchString);
+    if (parsed.section === reportSection && parsed.tab === activeReport) return;
+    setLocation(buildStaffReportHref(reportSection, activeReport));
+  }, [searchString, reportSection, activeReport, setLocation]);
 
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -159,6 +116,12 @@ export default function StaffReports() {
   const [productId, setProductId] = useState("");
   const [agentId, setAgentId] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [runKey, setRunKey] = useState(0);
+
+  useEffect(() => {
+    setRunKey(0);
+  }, [reportSection, activeReport]);
+
   const filters = useMemo<ReportFiltersState>(() => ({
     fromDate: fromDate || undefined,
     toDate: toDate || undefined,
@@ -172,189 +135,261 @@ export default function StaffReports() {
   const qAppend = q ? q.replace("?", "&") : "";
   const fk = [fromDate, toDate, userId, branchId, productId, agentId, statusFilter];
 
-  const { data: stats } = useQuery<any>({ queryKey: ["/api/dashboard/stats"] });
+  const load = runKey > 0;
+  const need = (d: ReportDatasetId) => load && tabUsesDataset(activeReport, d);
+  const needFilters = load;
+
   const { data: policies = [], isLoading: loadingPolicies } = useQuery<any[]>({
-    queryKey: ["reports", "policies", ...fk],
+    queryKey: ["reports", "policies", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/policies?limit=200" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("policies"),
   });
   const { data: claims = [], isLoading: loadingClaims } = useQuery<any[]>({
-    queryKey: ["reports", "claims", ...fk],
+    queryKey: ["reports", "claims", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/claims?limit=200" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("claims"),
   });
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({
-    queryKey: ["reports", "payments", ...fk],
+    queryKey: ["reports", "payments", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/payments?limit=200" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("payments"),
   });
   const { data: funeralCases = [] } = useQuery<any[]>({
-    queryKey: ["reports", "funerals", ...fk],
+    queryKey: ["reports", "funerals", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/funeral-cases?limit=200" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("funeralCases"),
   });
-  const { data: fleet = [], isLoading: loadingFleet } = useQuery<any[]>({ queryKey: ["/api/fleet"] });
+  const { data: fleet = [], isLoading: loadingFleet } = useQuery<any[]>({
+    queryKey: ["reports", "fleet", runKey],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/fleet", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: need("fleet"),
+  });
   const { data: expenditures = [], isLoading: loadingExpenditures } = useQuery<any[]>({
-    queryKey: ["reports", "expenditures", ...fk],
+    queryKey: ["reports", "expenditures", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/expenditures?limit=200" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("expenditures"),
   });
-  const { data: payrollEmployees = [], isLoading: loadingPayroll } = useQuery<any[]>({ queryKey: ["/api/payroll/employees"] });
-  const { data: commissionPlans = [], isLoading: loadingCommissionPlans } = useQuery<any[]>({ queryKey: ["/api/commission-plans"] });
+  const { data: payrollEmployees = [], isLoading: loadingPayroll } = useQuery<any[]>({
+    queryKey: ["reports", "payroll-employees", runKey],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/payroll/employees", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: need("payrollEmployees"),
+  });
+  const { data: commissionPlans = [], isLoading: loadingCommissionPlans } = useQuery<any[]>({
+    queryKey: ["reports", "commission-plans", runKey],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/commission-plans", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: need("commissionPlans") && canReadCommission,
+  });
   const { data: commissionSummary = [], isLoading: loadingCommissionSummary } = useQuery<any[]>({
-    queryKey: ["reports", "commissions-summary", ...fk],
+    queryKey: ["reports", "commissions-summary", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/commissions-summary" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: canReadCommission,
+    enabled: need("commissionSummary") && canReadCommission,
   });
   const { data: platformReceivables = [], isLoading: loadingPlatform } = useQuery<any[]>({
-    queryKey: ["reports", "platform", ...fk],
+    queryKey: ["reports", "platform", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/platform/receivables?limit=200" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("platformReceivables"),
   });
   const { data: reinstatements = [], isLoading: loadingReinstatements } = useQuery<any[]>({
-    queryKey: ["reports", "reinstatements", ...fk],
+    queryKey: ["reports", "reinstatements", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/reinstatements" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("reinstatements"),
   });
   const { data: activations = [], isLoading: loadingActivations } = useQuery<any[]>({
-    queryKey: ["reports", "activations", ...fk],
+    queryKey: ["reports", "activations", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/activations" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("activations"),
   });
   const { data: conversions = [], isLoading: loadingConversions } = useQuery<any[]>({
-    queryKey: ["reports", "conversions", ...fk],
+    queryKey: ["reports", "conversions", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/conversions" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("conversions"),
   });
   const { data: activePolicies = [], isLoading: loadingActivePolicies } = useQuery<any[]>({
-    queryKey: ["reports", "active-policies", ...fk],
+    queryKey: ["reports", "active-policies", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/active-policies" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("activePolicies"),
   });
   const { data: awaitingPayments = [], isLoading: loadingAwaitingPayments } = useQuery<any[]>({
-    queryKey: ["reports", "awaiting-payments", ...fk],
+    queryKey: ["reports", "awaiting-payments", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/awaiting-payments" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("awaitingPayments"),
   });
   const { data: overduePolicies = [], isLoading: loadingOverdue } = useQuery<any[]>({
-    queryKey: ["reports", "overdue", ...fk],
+    queryKey: ["reports", "overdue", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/overdue" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("overduePolicies"),
   });
   const { data: preLapsePolicies = [], isLoading: loadingPreLapse } = useQuery<any[]>({
-    queryKey: ["reports", "pre-lapse", ...fk],
+    queryKey: ["reports", "pre-lapse", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/pre-lapse" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("preLapsePolicies"),
   });
   const { data: lapsedPolicies = [], isLoading: loadingLapsed } = useQuery<any[]>({
-    queryKey: ["reports", "lapsed", ...fk],
+    queryKey: ["reports", "lapsed", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/lapsed" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("lapsedPolicies"),
   });
   const { data: newJoinings = [], isLoading: loadingNewJoinings } = useQuery<any[]>({
-    queryKey: ["reports", "new-joinings", ...fk],
+    queryKey: ["reports", "new-joinings", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/new-joinings?limit=500" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("newJoinings"),
   });
   const { data: agentProductivity = [], isLoading: loadingAgentProductivity } = useQuery<any[]>({
-    queryKey: ["reports", "agent-productivity", ...fk],
+    queryKey: ["reports", "agent-productivity", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/agent-productivity?limit=500" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("agentProductivity"),
   });
-  const { data: users = [] } = useQuery<any[]>({ queryKey: ["/api/users"] });
-  const { data: branches = [] } = useQuery<any[]>({ queryKey: ["/api/branches"] });
-  const { data: products = [] } = useQuery<any[]>({ queryKey: ["/api/products"] });
+  const { data: users = [] } = useQuery<any[]>({
+    queryKey: ["reports", "filter-users", runKey],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/users", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: needFilters,
+  });
+  const { data: branches = [] } = useQuery<any[]>({
+    queryKey: ["reports", "filter-branches", runKey],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/branches", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: needFilters,
+  });
+  const { data: products = [] } = useQuery<any[]>({
+    queryKey: ["reports", "filter-products", runKey],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/products", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: needFilters,
+  });
   const { data: policyDetails = [], isLoading: loadingPolicyDetails } = useQuery<any[]>({
-    queryKey: ["reports", "policy-details", ...fk],
+    queryKey: ["reports", "policy-details", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/policy-details?limit=500" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("policyDetails"),
   });
   const { data: financeReport = [], isLoading: loadingFinance } = useQuery<any[]>({
-    queryKey: ["reports", "finance", ...fk],
+    queryKey: ["reports", "finance", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/finance?limit=500" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("financeReport"),
   });
   const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number } }>({
-    queryKey: ["reports", "underwriter-payable", ...fk],
+    queryKey: ["reports", "underwriter-payable", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/underwriter-payable?limit=500" + qAppend, { credentials: "include" });
       if (!res.ok) return { rows: [], summary: { totalMonthlyPayable: 0, totalPayableIncludingAdvance: 0, policyCount: 0 } };
       return res.json();
     },
+    enabled: need("underwriterPayable"),
   });
   const { data: cashups = [], isLoading: loadingCashups } = useQuery<any[]>({
-    queryKey: ["reports", "cashups", ...fk, userId],
+    queryKey: ["reports", "cashups", runKey, ...fk, userId],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/cashups" + q, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("cashups"),
   });
   const { data: receiptReport = [], isLoading: loadingReceipts } = useQuery<any[]>({
-    queryKey: ["reports", "receipts", ...fk],
+    queryKey: ["reports", "receipts", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/receipts?limit=500" + qAppend, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: need("receiptReport"),
   });
 
   const policySummary = {
@@ -379,15 +414,11 @@ export default function StaffReports() {
       <PageShell>
         <PageHeader
           title="Reports"
-          description="Date-filtered reports and analytics"
+          description={reportContextLabel(reportSection, activeReport)}
           titleDataTestId="text-reports-title"
         />
 
-        <CardSection
-          title="Filters"
-          description="Dates use inclusive UTC windows (start of from date through end of to date). Each report applies them to the relevant timestamp (policy capture, receipt issue, status change, etc.)."
-          icon={Calendar}
-        >
+        <CardSection title="Filters" icon={Calendar}>
           <div className="space-y-4">
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2">Reporting period</p>
@@ -455,69 +486,22 @@ export default function StaffReports() {
                 </div>
               </div>
             </div>
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              <Button type="button" onClick={() => setRunKey((k) => k + 1)} data-testid="button-run-report">
+                Run report
+              </Button>
+              {!load && (
+                <p className="text-sm text-muted-foreground">Choose filters, then run to load data for this report.</p>
+              )}
+            </div>
           </div>
         </CardSection>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <KpiStatCard
-            label="Total policies"
-            value={<span data-testid="text-total-policies">{stats?.totalPolicies || 0}</span>}
-            icon={FolderOpen}
-          />
-          <KpiStatCard
-            label="Active policies"
-            value={<span className="text-green-600">{stats?.activePolicies || 0}</span>}
-            icon={FolderOpen}
-          />
-          {canReadClaim && (
-            <KpiStatCard
-              label="Total claims"
-              value={<span className="text-blue-600">{stats?.totalClaims || 0}</span>}
-              icon={Shield}
-            />
-          )}
-          {canReadFinance && (
-            <KpiStatCard
-              label="Transactions"
-              value={<span className="text-orange-600">{stats?.totalTransactions || 0}</span>}
-              icon={Wallet}
-            />
-          )}
-        </div>
-
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-          <aside className="flex w-full shrink-0 flex-row gap-1 overflow-x-auto border-b pb-2 lg:max-w-[240px] lg:flex-col lg:border-b-0 lg:border-r lg:pr-4 lg:pb-0">
-            {visibleSections.map((id) => {
-              const meta = SECTION_META[id];
-              const Icon = meta.icon;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => {
-                    setReportSection(id);
-                    const first = tabsForSection(id, { canReadCommission, canReadFuneralOps, canReadFleet })[0]?.value;
-                    if (first) setActiveReport(first);
-                  }}
-                  className={cn(
-                    "flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors lg:w-full",
-                    reportSection === id ? "border-primary/40 bg-muted font-medium" : "border-transparent hover:bg-muted/70",
-                  )}
-                >
-                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <span className="min-w-0">
-                    <span className="block leading-tight">{meta.label}</span>
-                    <span className="mt-0.5 hidden text-[11px] font-normal leading-snug text-muted-foreground lg:block">{meta.description}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </aside>
-          <div className="min-w-0 flex-1 space-y-4">
-            <Tabs value={activeReport} onValueChange={setActiveReport}>
-              <TabsList className="flex h-auto min-h-10 w-full flex-wrap justify-start gap-1">
-                {tabsInSection.map((t) => (
-                  <TabsTrigger key={t.value} value={t.value} className="text-xs sm:text-sm" data-testid={t.testId}>
+        <div className="min-w-0 space-y-4">
+            <Tabs value={activeReport}>
+              <TabsList className="sr-only absolute h-px w-px overflow-hidden whitespace-nowrap p-0 -m-px border-0">
+                {tabsForSection(reportSection, sectionOpts).map((t) => (
+                  <TabsTrigger key={t.value} value={t.value} data-testid={t.testId}>
                     {t.label}
                   </TabsTrigger>
                 ))}
@@ -1842,7 +1826,6 @@ export default function StaffReports() {
             </Card>
           </TabsContent>
             </Tabs>
-          </div>
         </div>
       </PageShell>
     </StaffLayout>

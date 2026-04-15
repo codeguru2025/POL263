@@ -7,8 +7,6 @@ import { useLocation } from "wouter";
 import {
   Users,
   Building2,
-  ShieldCheck,
-  Activity,
   FileStack,
   FileText,
   Box,
@@ -23,20 +21,11 @@ import {
   BarChart3,
   MessageSquare,
   HelpCircle,
-  ThumbsUp,
-  ThumbsDown,
   LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -83,16 +72,6 @@ interface LapseRetention {
   cancelled: number;
   retentionRate: string;
   lapseRate: string;
-}
-
-interface ProductPerformance {
-  id: string;
-  name: string;
-  totalPolicies: number;
-  activePolicies: number;
-  lapsedPolicies: number;
-  revenue: number;
-  currency?: string;
 }
 
 interface ControlPlaneTenantMetrics {
@@ -146,15 +125,12 @@ export default function StaffDashboard() {
   const canReadFinance = permissions.includes("read:finance");
   const canReadClaims = permissions.includes("read:claim");
   const canReadFuneralOps = permissions.includes("read:funeral_ops");
-  const canReadAuditLog = permissions.includes("read:audit_log");
   const canReadLead = permissions.includes("read:lead");
 
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
-  const [rateOpen, setRateOpen] = useState(false);
-
   const { data: controlPlaneData, isLoading: cpLoading } = useQuery<ControlPlaneDashboard>({
     queryKey: ["/api/platform/dashboard"],
     enabled: isControlPlaneMode,
@@ -254,11 +230,6 @@ export default function StaffDashboard() {
     enabled: !isControlPlaneMode,
   });
 
-  const { data: productPerformance } = useQuery<ProductPerformance[]>({
-    queryKey: ["/api/dashboard/product-performance"],
-    enabled: !isControlPlaneMode,
-  });
-
   const { data: orgs } = useQuery<any[]>({
     queryKey: ["/api/organizations"],
     enabled: !isControlPlaneMode,
@@ -269,21 +240,9 @@ export default function StaffDashboard() {
     enabled: !isControlPlaneMode && !isAgent,
   });
 
-  const { data: products } = useQuery<any[]>({
-    queryKey: ["/api/products"],
-    enabled: !isControlPlaneMode,
-  });
-
-  const { data: auditLogs } = useQuery<any[]>({
-    queryKey: ["/api/audit-logs"],
-    enabled: !isControlPlaneMode && canReadAuditLog,
-  });
-
   const currentOrg = isPlatformOwner && effectiveOrgId
     ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) ?? orgs[0] : undefined)
     : orgs?.[0];
-  const primaryRole = roles[0]?.name || "—";
-
   const filteredRevenueTrend = revenueTrend || [];
 
   const policyStatusData = useMemo(() => {
@@ -468,66 +427,28 @@ export default function StaffDashboard() {
         />
 
         {!isAgent && (
-        <CardSection title="Quick access" description="Hub links inspired by classic admin home screens — uses your current theme." icon={LayoutDashboard}>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Link href="/staff/notifications" className="rounded-xl border bg-card p-4 shadow-sm hover:shadow-md transition-shadow flex gap-3 items-start">
+        <CardSection title="Quick access" icon={LayoutDashboard}>
+            <div className="grid gap-3 sm:grid-cols-3 sm:gap-4">
+              <Link href="/staff/notifications" className="rounded-lg border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow flex items-center gap-3">
                 <span className="rounded-lg bg-primary/10 p-2 text-primary shrink-0">
                   <MessageSquare className="h-5 w-5" />
                 </span>
-                <div className="min-w-0">
-                  <p className="font-semibold text-sm">Messaging & templates</p>
-                  <p className="text-xs text-muted-foreground mt-1">Broadcasts, notification rules, and delivery settings.</p>
-                </div>
+                <span className="font-medium text-sm">Notifications</span>
               </Link>
-              <Link href="/staff/help" className="rounded-xl border bg-card p-4 shadow-sm hover:shadow-md transition-shadow flex gap-3 items-start">
+              <Link href="/staff/help" className="rounded-lg border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow flex items-center gap-3">
                 <span className="rounded-lg bg-primary/10 p-2 text-primary shrink-0">
                   <HelpCircle className="h-5 w-5" />
                 </span>
-                <div className="min-w-0">
-                  <p className="font-semibold text-sm">Help centre</p>
-                  <p className="text-xs text-muted-foreground mt-1">Staff guidance and links to configuration areas.</p>
-                </div>
+                <span className="font-medium text-sm">Help</span>
               </Link>
-              <button
-                type="button"
-                className="rounded-xl border bg-card p-4 shadow-sm hover:shadow-md transition-shadow flex gap-3 items-start text-left w-full"
-                onClick={() => setRateOpen(true)}
-              >
-                <span className="rounded-lg bg-primary/10 p-2 text-primary shrink-0">
-                  <ThumbsUp className="h-5 w-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="font-semibold text-sm">Rate this workspace</p>
-                  <p className="text-xs text-muted-foreground mt-1">Quick feedback (stored locally for now).</p>
-                </div>
-              </button>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
-              <Link href="/staff/order-services" className="text-primary hover:underline font-medium">Order services</Link>
-              <Link href="/staff/reminders" className="text-primary hover:underline font-medium">Reminders</Link>
-              <Link href="/staff/finance" className="text-primary hover:underline font-medium">Finance</Link>
+              <div className="rounded-lg border bg-card px-4 py-3 flex flex-wrap gap-x-4 gap-y-2 items-center text-sm">
+                <Link href="/staff/order-services" className="text-primary hover:underline font-medium">Order services</Link>
+                <Link href="/staff/reminders" className="text-primary hover:underline font-medium">Reminders</Link>
+                <Link href="/staff/finance" className="text-primary hover:underline font-medium">Finance</Link>
+              </div>
             </div>
         </CardSection>
         )}
-
-        <Dialog open={rateOpen} onOpenChange={setRateOpen}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Thanks for the feedback</DialogTitle>
-              <DialogDescription>
-                POL263 does not send this anywhere yet — tell your team what would make the dashboard more useful.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex gap-2 justify-center py-2">
-              <Button type="button" variant="outline" className="gap-2" onClick={() => { toast({ title: "Thanks!", description: "Glad it is working for you." }); setRateOpen(false); }}>
-                <ThumbsUp className="h-4 w-4" /> Good
-              </Button>
-              <Button type="button" variant="outline" className="gap-2" onClick={() => { toast({ title: "Noted", description: "We will keep improving the layout." }); setRateOpen(false); }}>
-                <ThumbsDown className="h-4 w-4" /> Could improve
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
 
         {!isAgent && (
         <CardSection title="Filters" icon={Filter}>
@@ -730,83 +651,6 @@ export default function StaffDashboard() {
           </CardSection>
         </div>
 
-        {productPerformance && productPerformance.length > 0 && (
-          <CardSection title="Product performance" description="Totals for the selected filters." icon={Target}>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {productPerformance.map((prod) => (
-                <div
-                  key={prod.id}
-                  className="rounded-xl border border-border/70 bg-muted/5 p-4 shadow-sm hover:shadow-md transition-shadow"
-                  data-testid={`card-product-${prod.id}`}
-                >
-                  <p className="text-sm font-semibold mb-3">{prod.name}</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Policies</p>
-                      <p className="text-xl font-bold tabular-nums">{prod.totalPolicies}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Active</p>
-                      <p className="text-xl font-bold text-emerald-600 tabular-nums">{prod.activePolicies}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Lapsed</p>
-                      <p className="text-xl font-bold text-red-500 tabular-nums">{prod.lapsedPolicies}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Revenue</p>
-                      <p className="text-xl font-bold text-indigo-600 tabular-nums">{prod.currency || "USD"} {(prod.revenue ?? 0).toLocaleString()}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardSection>
-        )}
-
-        {!isAgent && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <KpiStatCard
-            label="Organization"
-            icon={Building2}
-            hint={`${branchesList?.length || 0} branch(es)`}
-            value={<span className="font-display text-xl sm:text-2xl" data-testid="stat-organization">{currentOrg?.name || "—"}</span>}
-          />
-          <KpiStatCard
-            label="Your role"
-            icon={ShieldCheck}
-            hint={`${permissions.length} permissions granted`}
-            value={<span className="font-display text-xl sm:text-2xl capitalize" data-testid="stat-role">{primaryRole}</span>}
-          />
-        </div>
-        )}
-
-        {canReadAuditLog && (
-        <CardSection title="Recent audit activity" icon={Activity}>
-            {auditLogs && auditLogs.length > 0 ? (
-              <div className="space-y-4">
-                {auditLogs.slice(0, 8).map((log: any) => (
-                  <div key={log.id} className="flex items-center gap-4 border-b last:border-0 pb-4 last:pb-0" data-testid={`audit-row-${log.id}`}>
-                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary shrink-0">
-                      <Activity className="h-5 w-5" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{log.action}</p>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {log.entityType} ({log.entityId?.slice(0, 8)}…) — by {log.actorEmail || "system"}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {new Date(log.timestamp).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground py-2" data-testid="text-no-audit">No audit events yet.</p>
-            )}
-        </CardSection>
-        )}
       </PageShell>
     </StaffLayout>
   );

@@ -51,10 +51,20 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import AppFooter from "@/components/app-footer";
 import { APP_SHELL_MAX } from "@/components/layout/app-chrome";
 import { cn } from "@/lib/utils";
+import {
+  buildStaffReportHref,
+  SECTION_META,
+  tabsForSection,
+  visibleReportSections,
+  type ReportSectionId,
+} from "@/lib/staff-reports-nav";
 
 type StaffNavItem = {
   href: string;
@@ -64,6 +74,64 @@ type StaffNavItem = {
   permissions?: string[];
   badge?: number;
 };
+
+function StaffReportsNestedNav({
+  sections,
+  canReadCommission,
+  canReadFuneralOps,
+  canReadFleet,
+  reportsActive,
+}: {
+  sections: ReportSectionId[];
+  canReadCommission: boolean;
+  canReadFuneralOps: boolean;
+  canReadFleet: boolean;
+  reportsActive: boolean;
+}) {
+  if (sections.length === 0) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground gap-1 shrink-0",
+            reportsActive && "bg-primary-foreground/15 font-medium",
+          )}
+        >
+          <span>Reports</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-80" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[min(100vw-2rem,18rem)] max-h-[min(28rem,75vh)] overflow-y-auto">
+        {sections.map((section) => {
+          const meta = SECTION_META[section];
+          const SectionIcon = meta.icon;
+          const tabs = tabsForSection(section, { canReadCommission, canReadFuneralOps, canReadFleet });
+          return (
+            <DropdownMenuSub key={section}>
+              <DropdownMenuSubTrigger className="flex items-center gap-2 cursor-default">
+                <SectionIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="truncate">{meta.label}</span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-[min(22rem,65vh)] overflow-y-auto">
+                {tabs.map((t) => (
+                  <DropdownMenuItem key={`${section}-${t.value}`} asChild>
+                    <Link href={buildStaffReportHref(section, t.value)} className="cursor-pointer">
+                      {t.label}
+                    </Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function StaffNavDropdown({
   label,
@@ -225,13 +293,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     enabled: isAuthenticated && hasTenant,
   });
 
-  const { data: approvals } = useQuery<any[]>({
-    queryKey: ["/api/approvals"],
-    enabled: isAuthenticated && hasTenant,
-  });
-
-  const pendingApprovalsCount = approvals?.filter((a: any) => a.status === "pending").length || 0;
-
   const switchTenantMutation = useMutation({
     mutationFn: async (tenantId: string) => {
       const res = await apiRequest("POST", "/api/platform/switch-tenant", { tenantId });
@@ -264,7 +325,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/pricebook", label: "Price book", icon: BookOpen, permission: "write:product" },
         { href: "/staff/users", label: "User administration", icon: UserCog, permission: "read:user" },
         { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
-        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals", badge: pendingApprovalsCount },
+        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
       ]);
 
   const transactionsMenu: StaffNavItem[] = isControlPlaneMode
@@ -277,9 +338,24 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
       ]);
 
-  const reportsMenu: StaffNavItem[] = isControlPlaneMode
+  const canReadReport = permissions.includes("read:report");
+  const canReadFinance = permissions.includes("read:finance");
+  const canReadClaim = permissions.includes("read:claim");
+  const canReadFuneralOps = permissions.includes("read:funeral_ops");
+  const canReadFleet = permissions.includes("read:fleet");
+  const canReadPayroll = permissions.includes("read:payroll");
+  const canReadCommission = permissions.includes("read:commission");
+  const reportSectionsNav = isControlPlaneMode
     ? []
-    : filterNav([{ href: "/staff/reports", label: "Report centre", icon: BarChart3, permission: "read:report" }]);
+    : canReadReport
+      ? visibleReportSections({
+          canReadFinance,
+          canReadClaim,
+          canReadFuneralOps,
+          canReadFleet,
+          canReadPayroll,
+        })
+      : [];
 
   const toolsMenu: StaffNavItem[] = isControlPlaneMode
     ? []
@@ -314,7 +390,21 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { title: "Overview", items: [{ href: "/staff", label: "Home", icon: LayoutDashboard }] as StaffNavItem[] },
         { title: "Administration", items: administrationMenu },
         { title: "Transactions", items: transactionsMenu },
-        { title: "Reports", items: reportsMenu },
+        {
+          title: "Reports",
+          items: reportSectionsNav.flatMap((section) => {
+            const meta = SECTION_META[section];
+            const tabs = tabsForSection(section, { canReadCommission, canReadFuneralOps, canReadFleet });
+            return tabs.map(
+              (t): StaffNavItem => ({
+                href: buildStaffReportHref(section, t.value),
+                label: `${meta.label}: ${t.label}`,
+                icon: BarChart3,
+                permission: "read:report",
+              }),
+            );
+          }),
+        },
         { title: "Tools & services", items: toolsMenu },
       ].filter((s) => s.items.length > 0);
 
@@ -539,20 +629,14 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
               <>
                 <StaffNavDropdown label="Administration" items={administrationMenu} prefetchForHref={prefetchForHref} />
                 <StaffNavDropdown label="Transactions" items={transactionsMenu} prefetchForHref={prefetchForHref} />
-                {reportsMenu.length > 0 && (
-                  <Link href="/staff/reports">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className={cn(
-                        "h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground shrink-0",
-                        navIsActive("/staff/reports") && "bg-primary-foreground/15 font-medium",
-                      )}
-                    >
-                      Reports
-                    </Button>
-                  </Link>
+                {reportSectionsNav.length > 0 && (
+                  <StaffReportsNestedNav
+                    sections={reportSectionsNav}
+                    canReadCommission={canReadCommission}
+                    canReadFuneralOps={canReadFuneralOps}
+                    canReadFleet={canReadFleet}
+                    reportsActive={navIsActive("/staff/reports")}
+                  />
                 )}
                 <StaffNavDropdown label="Tools" items={toolsMenu} prefetchForHref={prefetchForHref} />
               </>
