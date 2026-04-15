@@ -1,7 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell } from "@/components/ds";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader, PageShell, KpiStatCard, CardSection, EmptyState } from "@/components/ds";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -107,69 +106,26 @@ export default function StaffDiagnostics() {
         />
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card className="shadow-sm">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${health?.dbConnected ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"}`}>
-                  <Database className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Database</p>
-                  <p className="font-semibold" data-testid="text-db-status">
-                    {healthLoading ? "Checking..." : healthError ? "Error" : health?.dbConnected ? "Connected" : "Disconnected"}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-blue-100 text-blue-600">
-                  <Clock className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Uptime</p>
-                  <p className="font-semibold" data-testid="text-uptime">
-                    {healthLoading ? "..." : health ? formatUptime(health.uptime) : "N/A"}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-amber-100 text-amber-600">
-                  <Bell className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Notification Failures</p>
-                  <p className="font-semibold" data-testid="text-failure-count">
-                    {failuresLoading ? "..." : failures?.length ?? 0}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-purple-100 text-purple-600">
-                  <CreditCard className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Unallocated Payments</p>
-                  <p className="font-semibold" data-testid="text-unallocated-count">
-                    {unallocatedLoading ? "..." : unallocated?.length ?? 0}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <KpiStatCard
+            label="Database"
+            value={<span data-testid="text-db-status">{healthLoading ? "Checking..." : healthError ? "Error" : health?.dbConnected ? "Connected" : "Disconnected"}</span>}
+            icon={Database}
+          />
+          <KpiStatCard
+            label="Uptime"
+            value={<span data-testid="text-uptime">{healthLoading ? "..." : health ? formatUptime(health.uptime) : "N/A"}</span>}
+            icon={Clock}
+          />
+          <KpiStatCard
+            label="Notification Failures"
+            value={<span data-testid="text-failure-count">{failuresLoading ? "..." : failures?.length ?? 0}</span>}
+            icon={Bell}
+          />
+          <KpiStatCard
+            label="Unallocated Payments"
+            value={<span data-testid="text-unallocated-count">{unallocatedLoading ? "..." : unallocated?.length ?? 0}</span>}
+            icon={CreditCard}
+          />
         </div>
 
         <Tabs defaultValue="health" className="w-full">
@@ -193,223 +149,190 @@ export default function StaffDiagnostics() {
           </TabsList>
 
           <TabsContent value="health" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-primary" />
-                  System Health
-                </CardTitle>
-                <CardDescription>Database connection status and table record counts.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {healthLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  </div>
-                ) : health ? (
-                  <div className="space-y-6">
-                    <div className="flex items-center gap-3 p-4 rounded-lg border bg-muted/20">
-                      {health.dbConnected ? (
-                        <CheckCircle2 className="h-6 w-6 text-emerald-500" />
-                      ) : (
-                        <XCircle className="h-6 w-6 text-red-500" />
-                      )}
-                      <div>
-                        <p className="font-medium">
-                          Database: {health.dbConnected ? "Connected" : "Disconnected"}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          Last checked: {new Date(health.timestamp).toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-
+            <CardSection title="System Health" description="Database connection status and table record counts." icon={Activity}>
+              {healthLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : health ? (
+                <div className="space-y-6">
+                  <div className="flex items-center gap-3 p-4 rounded-lg border bg-muted/20">
+                    {health.dbConnected ? (
+                      <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                    ) : (
+                      <XCircle className="h-6 w-6 text-red-500" />
+                    )}
                     <div>
-                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                        Table Row Counts
-                      </h3>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {Object.entries(health.tableCounts).map(([table, count]) => (
-                          <div
-                            key={table}
-                            className="flex items-center justify-between p-3 rounded-lg border bg-card"
-                            data-testid={`table-count-${table}`}
-                          >
-                            <span className="text-sm font-mono truncate mr-2">{table}</span>
-                            <Badge variant="secondary" className="shrink-0">{count}</Badge>
-                          </div>
-                        ))}
-                      </div>
+                      <p className="font-medium">
+                        Database: {health.dbConnected ? "Connected" : "Disconnected"}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Last checked: {new Date(health.timestamp).toLocaleString()}
+                      </p>
                     </div>
                   </div>
-                ) : (
-                  <p className="text-muted-foreground text-center py-8">Failed to load health data.</p>
-                )}
-              </CardContent>
-            </Card>
+
+                  <div>
+                    <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                      Table Row Counts
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {Object.entries(health.tableCounts).map(([table, count]) => (
+                        <div
+                          key={table}
+                          className="flex items-center justify-between p-3 rounded-lg border bg-card"
+                          data-testid={`table-count-${table}`}
+                        >
+                          <span className="text-sm font-mono truncate mr-2">{table}</span>
+                          <Badge variant="secondary" className="shrink-0">{count}</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-center py-8">Failed to load health data.</p>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="notifications" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Bell className="h-5 w-5 text-amber-500" />
-                  Notification Failures
-                </CardTitle>
-                <CardDescription>Recent failed notification delivery attempts.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {failuresLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  </div>
-                ) : failures && failures.length > 0 ? (
-                  <div className="border rounded-md overflow-hidden">
-                    <Table>
-                      <TableHeader className="bg-muted/50">
-                        <TableRow>
-                          <TableHead>Channel</TableHead>
-                          <TableHead>Subject</TableHead>
-                          <TableHead>Recipient Type</TableHead>
-                          <TableHead>Attempts</TableHead>
-                          <TableHead>Failure Reason</TableHead>
-                          <TableHead>Date</TableHead>
+            <CardSection title="Notification Failures" description="Recent failed notification delivery attempts." icon={Bell}>
+              {failuresLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : failures && failures.length > 0 ? (
+                <div className="border rounded-md overflow-hidden">
+                  <Table>
+                    <TableHeader className="bg-muted/50">
+                      <TableRow>
+                        <TableHead>Channel</TableHead>
+                        <TableHead>Subject</TableHead>
+                        <TableHead>Recipient Type</TableHead>
+                        <TableHead>Attempts</TableHead>
+                        <TableHead>Failure Reason</TableHead>
+                        <TableHead>Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {failures.map((f) => (
+                        <TableRow key={f.id} data-testid={`row-notification-failure-${f.id}`}>
+                          <TableCell>
+                            <Badge variant="outline">{f.channel}</Badge>
+                          </TableCell>
+                          <TableCell className="max-w-[200px] truncate">{f.subject || "—"}</TableCell>
+                          <TableCell>{f.recipientType}</TableCell>
+                          <TableCell>{f.attempts}</TableCell>
+                          <TableCell className="max-w-[250px] truncate text-red-600 text-sm">
+                            {f.failureReason || "—"}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(f.createdAt).toLocaleString()}
+                          </TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {failures.map((f) => (
-                          <TableRow key={f.id} data-testid={`row-notification-failure-${f.id}`}>
-                            <TableCell>
-                              <Badge variant="outline">{f.channel}</Badge>
-                            </TableCell>
-                            <TableCell className="max-w-[200px] truncate">{f.subject || "—"}</TableCell>
-                            <TableCell>{f.recipientType}</TableCell>
-                            <TableCell>{f.attempts}</TableCell>
-                            <TableCell className="max-w-[250px] truncate text-red-600 text-sm">
-                              {f.failureReason || "—"}
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {new Date(f.createdAt).toLocaleString()}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-emerald-400" />
-                    <p>No notification failures found.</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <EmptyState
+                  title="No notification failures"
+                  description="All notifications are delivering successfully."
+                  className="border-0 rounded-none bg-transparent py-8"
+                />
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="payments" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <CreditCard className="h-5 w-5 text-purple-500" />
-                  Unallocated Payments Queue
-                </CardTitle>
-                <CardDescription>Payments received but not yet allocated to a policy.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {unallocatedLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  </div>
-                ) : unallocated && unallocated.length > 0 ? (
-                  <div className="border rounded-md overflow-hidden">
-                    <Table>
-                      <TableHeader className="bg-muted/50">
-                        <TableRow>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Method</TableHead>
-                          <TableHead>Reference</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Received</TableHead>
+            <CardSection title="Unallocated Payments Queue" description="Payments received but not yet allocated to a policy." icon={CreditCard}>
+              {unallocatedLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : unallocated && unallocated.length > 0 ? (
+                <div className="border rounded-md overflow-hidden">
+                  <Table>
+                    <TableHeader className="bg-muted/50">
+                      <TableRow>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Method</TableHead>
+                        <TableHead>Reference</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Received</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {unallocated.map((p) => (
+                        <TableRow key={p.id} data-testid={`row-unallocated-payment-${p.id}`}>
+                          <TableCell className="font-mono font-medium">
+                            {p.currency || "USD"} {parseFloat(p.amount).toFixed(2)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{p.method}</Badge>
+                          </TableCell>
+                          <TableCell className="text-sm">{p.reference || "—"}</TableCell>
+                          <TableCell>
+                            <Badge variant="secondary">{p.status}</Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {p.receivedAt ? new Date(p.receivedAt).toLocaleString() : new Date(p.createdAt).toLocaleString()}
+                          </TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {unallocated.map((p) => (
-                          <TableRow key={p.id} data-testid={`row-unallocated-payment-${p.id}`}>
-                            <TableCell className="font-mono font-medium">
-                              {p.currency || "USD"} {parseFloat(p.amount).toFixed(2)}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="outline">{p.method}</Badge>
-                            </TableCell>
-                            <TableCell className="text-sm">{p.reference || "—"}</TableCell>
-                            <TableCell>
-                              <Badge variant="secondary">{p.status}</Badge>
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {p.receivedAt ? new Date(p.receivedAt).toLocaleString() : new Date(p.createdAt).toLocaleString()}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-emerald-400" />
-                    <p>No unallocated payments in the queue.</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <EmptyState
+                  title="No unallocated payments"
+                  description="All received payments have been allocated to policies."
+                  className="border-0 rounded-none bg-transparent py-8"
+                />
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="errors" className="mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5 text-red-500" />
-                  Recent Errors
-                </CardTitle>
-                <CardDescription>Recent error-level audit log entries.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {errorsLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  </div>
-                ) : errors && errors.length > 0 ? (
-                  <div className="border rounded-md overflow-hidden">
-                    <Table>
-                      <TableHeader className="bg-muted/50">
-                        <TableRow>
-                          <TableHead>Action</TableHead>
-                          <TableHead>Entity Type</TableHead>
-                          <TableHead>Actor</TableHead>
-                          <TableHead>Timestamp</TableHead>
+            <CardSection title="Recent Errors" description="Recent error-level audit log entries." icon={AlertTriangle}>
+              {errorsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : errors && errors.length > 0 ? (
+                <div className="border rounded-md overflow-hidden">
+                  <Table>
+                    <TableHeader className="bg-muted/50">
+                      <TableRow>
+                        <TableHead>Action</TableHead>
+                        <TableHead>Entity Type</TableHead>
+                        <TableHead>Actor</TableHead>
+                        <TableHead>Timestamp</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {errors.map((e) => (
+                        <TableRow key={e.id} data-testid={`row-recent-error-${e.id}`}>
+                          <TableCell className="font-mono text-sm">{e.action}</TableCell>
+                          <TableCell>{e.entityType}</TableCell>
+                          <TableCell className="text-sm">{e.actorEmail || "System"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(e.timestamp).toLocaleString()}
+                          </TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {errors.map((e) => (
-                          <TableRow key={e.id} data-testid={`row-recent-error-${e.id}`}>
-                            <TableCell className="font-mono text-sm">{e.action}</TableCell>
-                            <TableCell>{e.entityType}</TableCell>
-                            <TableCell className="text-sm">{e.actorEmail || "System"}</TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {new Date(e.timestamp).toLocaleString()}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-emerald-400" />
-                    <p>No recent errors found.</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <EmptyState
+                  title="No recent errors"
+                  description="No error-level events in the audit log."
+                  className="border-0 rounded-none bg-transparent py-8"
+                />
+              )}
+            </CardSection>
           </TabsContent>
         </Tabs>
       </PageShell>

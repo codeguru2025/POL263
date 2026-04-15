@@ -18,6 +18,7 @@ import {
   Loader2,
   DollarSign,
   BarChart3,
+  BarChart2,
   Target,
   Bell,
   Truck,
@@ -36,6 +37,22 @@ import {
   Globe,
   HelpCircle,
   Archive,
+  Receipt,
+  Milestone,
+  FileMinus,
+  Landmark,
+  CreditCard,
+  Printer,
+  LineChart,
+  Zap,
+  ClipboardList,
+  UserCheck,
+  Briefcase,
+  MapPin,
+  GitBranch,
+  Shield,
+  HeartHandshake,
+  Monitor,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -51,20 +68,10 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import AppFooter from "@/components/app-footer";
 import { APP_SHELL_MAX } from "@/components/layout/app-chrome";
 import { cn } from "@/lib/utils";
-import {
-  buildStaffReportHref,
-  SECTION_META,
-  tabsForSection,
-  visibleReportSections,
-  type ReportSectionId,
-} from "@/lib/staff-reports-nav";
 
 type StaffNavItem = {
   href: string;
@@ -75,63 +82,6 @@ type StaffNavItem = {
   badge?: number;
 };
 
-function StaffReportsNestedNav({
-  sections,
-  canReadCommission,
-  canReadFuneralOps,
-  canReadFleet,
-  reportsActive,
-}: {
-  sections: ReportSectionId[];
-  canReadCommission: boolean;
-  canReadFuneralOps: boolean;
-  canReadFleet: boolean;
-  reportsActive: boolean;
-}) {
-  if (sections.length === 0) return null;
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-9 px-2 sm:px-3 text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground gap-1 shrink-0",
-            reportsActive && "bg-primary-foreground/15 font-medium",
-          )}
-        >
-          <span>Reports</span>
-          <ChevronDown className="h-4 w-4 shrink-0 opacity-80" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-[min(100vw-2rem,18rem)] max-h-[min(28rem,75vh)] overflow-y-auto">
-        {sections.map((section) => {
-          const meta = SECTION_META[section];
-          const SectionIcon = meta.icon;
-          const tabs = tabsForSection(section, { canReadCommission, canReadFuneralOps, canReadFleet });
-          return (
-            <DropdownMenuSub key={section}>
-              <DropdownMenuSubTrigger className="flex items-center gap-2 cursor-default">
-                <SectionIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="truncate">{meta.label}</span>
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="max-h-[min(22rem,65vh)] overflow-y-auto">
-                {tabs.map((t) => (
-                  <DropdownMenuItem key={`${section}-${t.value}`} asChild>
-                    <Link href={buildStaffReportHref(section, t.value)} className="cursor-pointer">
-                      {t.label}
-                    </Link>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 function StaffNavDropdown({
   label,
@@ -315,15 +265,25 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const administrationMenu: StaffNavItem[] = isControlPlaneMode
     ? []
     : filterNav([
-        { href: "/staff/policies", label: "Policy administration", icon: FileStack, permission: "read:policy" },
-        { href: "/staff/clients", label: isAgent ? "My clients" : "Leads & clients", icon: Users, permission: "read:client" },
-        { href: "/staff/claims", label: "Claims administration", icon: FileText, permission: "read:claim" },
-        { href: "/staff/funerals", label: "Funeral files", icon: Truck, permission: "read:funeral_ops" },
-        { href: "/staff/leads", label: "Lead pipeline", icon: Target, permission: "read:lead" },
-        { href: "/staff/groups", label: "Groups / employers", icon: Layers, permissions: ["write:policy"] },
-        { href: "/staff/products", label: "Product administration", icon: Box, permission: "write:product" },
-        { href: "/staff/pricebook", label: "Price book", icon: BookOpen, permission: "write:product" },
-        { href: "/staff/users", label: "User administration", icon: UserCog, permission: "read:user" },
+        { href: "/staff/policies", label: "Policy Admin", icon: FileStack, permission: "read:policy" },
+        { href: "/staff/admin/society", label: "Society Admin", icon: Building2 },
+        { href: "/staff/funerals", label: "Funeral Files", icon: Truck, permission: "read:funeral_ops" },
+        { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone },
+        { href: "/staff/claims", label: "Claims Admin", icon: FileText, permission: "read:claim" },
+        { href: "/staff/products", label: "Product Admin", icon: Box, permission: "write:product" },
+        { href: "/staff/admin/invoice-items", label: "Invoice Items Admin", icon: ClipboardList },
+        { href: "/staff/users", label: "User Admin", icon: UserCog, permission: "read:user" },
+        { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck },
+        { href: "/staff/admin/brokers", label: "Broker Admin", icon: Briefcase },
+        { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard },
+        { href: "/staff/admin/terminals", label: "Terminals + Cards Admin", icon: Monitor },
+        { href: "/staff/admin/branches", label: "Branch Admin", icon: MapPin },
+        { href: "/staff/groups", label: "Employer Admin", icon: Layers, permissions: ["write:policy"] },
+        { href: "/staff/admin/sub-groups", label: "Sub Group Admin", icon: GitBranch },
+        { href: "/staff/admin/underwriters", label: "Underwriter Admin", icon: Shield },
+        { href: "/staff/admin/undertakers", label: "Undertaker Admin", icon: HeartHandshake },
+        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
+        { href: "/staff/clients", label: isAgent ? "My Clients" : "Clients", icon: Users, permission: "read:client" },
         { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
         { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
       ]);
@@ -331,45 +291,52 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const transactionsMenu: StaffNavItem[] = isControlPlaneMode
     ? []
     : filterNav([
-        { href: "/staff/policies", label: "Policy transactions", icon: FileStack, permission: "read:policy" },
-        { href: "/staff/funerals", label: "Funeral file transactions", icon: Truck, permission: "read:funeral_ops" },
-        { href: "/staff/finance", label: "Receipts & finance", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/leads", label: "Quotations & leads", icon: Target, permission: "read:lead" },
+        { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy" },
+        { href: "/staff/funerals", label: "Funeral File Transactions", icon: Truck, permission: "read:funeral_ops" },
+        { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2 },
+        { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone },
+        { href: "/staff/transactions/credit-notes", label: "Credit Notes", icon: FileMinus },
+        { href: "/staff/transactions/invoices", label: "Invoices", icon: FileText },
+        { href: "/staff/finance", label: "Receipts", icon: Receipt, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/leads", label: "Quotations", icon: Target, permission: "read:lead" },
+        { href: "/staff/finance?tab=cashups", label: "Cashup", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/transactions/petty-cash", label: "Petty Cash", icon: Wallet2 },
+        { href: "/staff/transactions/bank-deposits", label: "Bank Deposits", icon: Landmark },
+        { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard },
+        { href: "/staff/transactions/fax", label: "Fax", icon: Printer },
         { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
       ]);
 
-  const canReadReport = permissions.includes("read:report");
-  const canReadFinance = permissions.includes("read:finance");
-  const canReadClaim = permissions.includes("read:claim");
-  const canReadFuneralOps = permissions.includes("read:funeral_ops");
-  const canReadFleet = permissions.includes("read:fleet");
-  const canReadPayroll = permissions.includes("read:payroll");
-  const canReadCommission = permissions.includes("read:commission");
-  const reportSectionsNav = isControlPlaneMode
+  const reportsMenu: StaffNavItem[] = isControlPlaneMode
     ? []
-    : canReadReport
-      ? visibleReportSections({
-          canReadFinance,
-          canReadClaim,
-          canReadFuneralOps,
-          canReadFleet,
-          canReadPayroll,
-        })
-      : [];
+    : filterNav([
+        { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2 },
+        { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
+        { href: "/staff/employee-reports", label: "Employee Reports", icon: Users, permission: "read:report" },
+        { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
+        { href: "/staff/reports?section=finance", label: "Transactional Reports", icon: Receipt, permission: "read:report" },
+        { href: "/staff/diagnostics", label: "System Issue Reports", icon: Stethoscope, permission: "read:audit_log" },
+      ]);
 
   const toolsMenu: StaffNavItem[] = isControlPlaneMode
     ? []
     : filterNav([
-        { href: "/staff/tools/assets", label: "Asset register", icon: Archive, permission: "read:audit_log" },
-        { href: "/staff/audit", label: "Audit trail", icon: History, permission: "read:audit_log" },
-        { href: "/staff/finance", label: "Billing & receipts", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/clients", label: "CRM (clients)", icon: Users, permission: "read:client" },
-        { href: "/staff/notifications", label: "SMS & notifications", icon: Bell, permission: "read:notification" },
-        { href: "/staff/diagnostics", label: "System diagnostics", icon: Stethoscope, permission: "read:audit_log" },
-        { href: "/staff/settings", label: "System setup", icon: Settings },
-        { href: "/staff/help", label: "Help centre", icon: HelpCircle },
+        { href: "/staff/tools/assets", label: "Asset Register", icon: Archive, permission: "read:audit_log" },
+        { href: "/staff/audit", label: "Audit Trail", icon: History, permission: "read:audit_log" },
+        { href: "/staff/tools/easypay", label: "Manage EasyPay", icon: Zap },
+        { href: "/staff/clients", label: "CRM Module", icon: Users, permission: "read:client" },
+        { href: "/staff/tools/print-policy-cards", label: "Print Policy Cards", icon: Printer },
+        { href: "/staff/notifications", label: "SMS Tools", icon: Bell, permission: "read:notification" },
+        { href: "/staff/tools/statistics", label: "Statistics", icon: BarChart2 },
+        { href: "/staff/tools/statistical-graphs", label: "Statistical Graphs", icon: LineChart },
+        { href: "/staff/settings", label: "System Setup", icon: Settings },
+        { href: "/staff/finance", label: "Billing", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/tools/claims-form", label: "Manage Online Claims Form", icon: ClipboardList },
+        { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck },
+        { href: "/staff/tools/contacts", label: "Contacts Manager", icon: BookOpen },
+        { href: "/staff/help", label: "Help Centre", icon: HelpCircle },
         { href: "/staff/reminders", label: "Reminders", icon: Clock },
-        { href: "/staff/order-services", label: "Order SMS & prepaid", icon: DollarSign },
+        { href: "/staff/order-services", label: "Order SMS & Prepaid", icon: DollarSign },
       ]);
 
   const controlPlaneNavExtras: StaffNavItem[] = isControlPlaneMode
@@ -388,24 +355,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       ]
     : [
         { title: "Overview", items: [{ href: "/staff", label: "Home", icon: LayoutDashboard }] as StaffNavItem[] },
-        { title: "Administration", items: administrationMenu },
         { title: "Transactions", items: transactionsMenu },
-        {
-          title: "Reports",
-          items: reportSectionsNav.flatMap((section) => {
-            const meta = SECTION_META[section];
-            const tabs = tabsForSection(section, { canReadCommission, canReadFuneralOps, canReadFleet });
-            return tabs.map(
-              (t): StaffNavItem => ({
-                href: buildStaffReportHref(section, t.value),
-                label: `${meta.label}: ${t.label}`,
-                icon: BarChart3,
-                permission: "read:report",
-              }),
-            );
-          }),
-        },
-        { title: "Tools & services", items: toolsMenu },
+        { title: "Reports", items: reportsMenu },
+        { title: "Tools", items: toolsMenu },
+        { title: "Administration", items: administrationMenu },
       ].filter((s) => s.items.length > 0);
 
   const prefetchForHref = (href: string) => {
@@ -627,18 +580,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             </Link>
             {!isControlPlaneMode && (
               <>
-                <StaffNavDropdown label="Administration" items={administrationMenu} prefetchForHref={prefetchForHref} />
                 <StaffNavDropdown label="Transactions" items={transactionsMenu} prefetchForHref={prefetchForHref} />
-                {reportSectionsNav.length > 0 && (
-                  <StaffReportsNestedNav
-                    sections={reportSectionsNav}
-                    canReadCommission={canReadCommission}
-                    canReadFuneralOps={canReadFuneralOps}
-                    canReadFleet={canReadFleet}
-                    reportsActive={navIsActive("/staff/reports")}
-                  />
-                )}
+                <StaffNavDropdown label="Reports" items={reportsMenu} prefetchForHref={prefetchForHref} />
                 <StaffNavDropdown label="Tools" items={toolsMenu} prefetchForHref={prefetchForHref} />
+                <StaffNavDropdown label="Administration" items={administrationMenu} prefetchForHref={prefetchForHref} />
               </>
             )}
             {isControlPlaneMode && (

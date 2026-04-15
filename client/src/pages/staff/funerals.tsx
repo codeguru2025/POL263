@@ -2,9 +2,8 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, KpiStatCard } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -217,152 +216,156 @@ export default function StaffFunerals() {
                 }}
               />
             ) : (
-              <Card className="shadow-sm border-border/60">
-                <CardHeader className="pb-4">
-                  <div className="flex items-center justify-between">
-                    <CardTitle>Logistics Board</CardTitle>
-                    <div className="flex items-center gap-2">
-                      <div className="relative w-64">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          placeholder="Search cases..."
-                          className="pl-9 bg-background"
-                          value={search}
-                          onChange={(e) => setSearch(e.target.value)}
-                          data-testid="input-search-cases"
-                        />
-                      </div>
-                      <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="w-36" data-testid="select-status-filter">
-                          <SelectValue placeholder="All statuses" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All Statuses</SelectItem>
-                          <SelectItem value="open">Open</SelectItem>
-                          <SelectItem value="in_progress">In Progress</SelectItem>
-                          <SelectItem value="completed">Completed</SelectItem>
-                          <SelectItem value="cancelled">Cancelled</SelectItem>
-                        </SelectContent>
-                      </Select>
+              <CardSection
+                title="Logistics Board"
+                icon={Box}
+                flush
+                headerRight={(
+                  <div className="flex items-center gap-2">
+                    <div className="relative w-56">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search cases..."
+                        className="pl-9 bg-background"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        data-testid="input-search-cases"
+                      />
                     </div>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger className="w-36" data-testid="select-status-filter">
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Statuses</SelectItem>
+                        <SelectItem value="open">Open</SelectItem>
+                        <SelectItem value="in_progress">In Progress</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="cancelled">Cancelled</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                </CardHeader>
-                <CardContent className="p-0">
-                  {casesLoading ? (
-                    <div className="flex items-center justify-center py-12">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : filteredCases.length === 0 ? (
-                    <div className="text-center py-12 text-muted-foreground" data-testid="text-no-cases">
-                      No funeral cases found.
-                    </div>
-                  ) : (
-                    <Table>
-                      <TableHeader className="bg-muted/50">
-                        <TableRow>
-                          <TableHead className="pl-6">Case #</TableHead>
-                          <TableHead>Deceased</TableHead>
-                          <TableHead>Funeral Date</TableHead>
-                          <TableHead>Location</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead className="text-right pr-6">Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredCases.map((fc) => (
-                          <TableRow
-                            key={fc.id}
-                            className="hover:bg-muted/30 transition-colors cursor-pointer"
-                            onClick={() => setSelectedCaseId(fc.id)}
-                            data-testid={`row-funeral-case-${fc.id}`}
-                          >
-                            <TableCell className="font-medium pl-6">{fc.caseNumber}</TableCell>
-                            <TableCell>{fc.deceasedName}</TableCell>
-                            <TableCell className="text-muted-foreground">{fc.funeralDate || "—"}</TableCell>
-                            <TableCell className="text-sm">{fc.funeralLocation || "—"}</TableCell>
-                            <TableCell>
-                              <Badge variant="outline" className={`font-medium text-[10px] ${getStatusColor(fc.status)}`}>
-                                {fc.status.replace("_", " ").toUpperCase()}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right pr-6">
-                              <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-view-case-${fc.id}`}>
-                                <ChevronRight className="h-4 w-4" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-          </TabsContent>
-
-          <TabsContent value="fleet" className="mt-4">
-            <Card className="shadow-sm border-border/60">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <CardTitle>Fleet Vehicles</CardTitle>
-                  <Button
-                    variant="outline"
-                    className="gap-2"
-                    onClick={() => setShowCreateVehicle(true)}
-                    data-testid="button-add-vehicle"
-                  >
-                    <Plus className="h-4 w-4" /> Add Vehicle
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                {fleetLoading ? (
+                )}
+              >
+                {casesLoading ? (
                   <div className="flex items-center justify-center py-12">
                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                   </div>
-                ) : fleetVehicles.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground" data-testid="text-no-vehicles">
-                    No fleet vehicles registered.
-                  </div>
+                ) : filteredCases.length === 0 ? (
+                  <EmptyState
+                    title="No funeral cases found"
+                    description="No cases match the current filter."
+                    className="border-0 rounded-none bg-transparent py-10"
+                    data-testid="text-no-cases"
+                  />
                 ) : (
                   <Table>
                     <TableHeader className="bg-muted/50">
                       <TableRow>
-                        <TableHead className="pl-6">Registration</TableHead>
-                        <TableHead>Make / Model</TableHead>
-                        <TableHead>Year</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Mileage</TableHead>
+                        <TableHead className="pl-6">Case #</TableHead>
+                        <TableHead>Deceased</TableHead>
+                        <TableHead>Funeral Date</TableHead>
+                        <TableHead>Location</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead className="text-right pr-6">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {fleetVehicles.map((v) => (
-                        <TableRow key={v.id} className="hover:bg-muted/30 transition-colors" data-testid={`row-vehicle-${v.id}`}>
-                          <TableCell className="font-medium pl-6">
-                            <div className="flex items-center gap-2">
-                              <Truck className="h-4 w-4 text-primary/70" />
-                              {v.registration}
-                            </div>
-                          </TableCell>
-                          <TableCell>{[v.make, v.model].filter(Boolean).join(" ") || "—"}</TableCell>
-                          <TableCell className="text-muted-foreground">{v.year || "—"}</TableCell>
-                          <TableCell className="text-sm">{v.vehicleType || "—"}</TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {v.currentMileage != null ? `${v.currentMileage.toLocaleString()} km` : "—"}
-                          </TableCell>
+                      {filteredCases.map((fc) => (
+                        <TableRow
+                          key={fc.id}
+                          className="hover:bg-muted/30 transition-colors cursor-pointer"
+                          onClick={() => setSelectedCaseId(fc.id)}
+                          data-testid={`row-funeral-case-${fc.id}`}
+                        >
+                          <TableCell className="font-medium pl-6">{fc.caseNumber}</TableCell>
+                          <TableCell>{fc.deceasedName}</TableCell>
+                          <TableCell className="text-muted-foreground">{fc.funeralDate || "—"}</TableCell>
+                          <TableCell className="text-sm">{fc.funeralLocation || "—"}</TableCell>
                           <TableCell>
-                            <Badge variant="outline" className={`font-medium text-[10px] ${getVehicleStatusColor(v.status)}`}>
-                              {v.status.toUpperCase()}
+                            <Badge variant="outline" className={`font-medium text-[10px] ${getStatusColor(fc.status)}`}>
+                              {fc.status.replace("_", " ").toUpperCase()}
                             </Badge>
+                          </TableCell>
+                          <TableCell className="text-right pr-6">
+                            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-view-case-${fc.id}`}>
+                              <ChevronRight className="h-4 w-4" />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 )}
-              </CardContent>
-            </Card>
+              </CardSection>
+            )}
+          </TabsContent>
+
+          <TabsContent value="fleet" className="mt-4">
+            <CardSection
+              title="Fleet Vehicles"
+              icon={Truck}
+              flush
+              headerRight={(
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => setShowCreateVehicle(true)}
+                  data-testid="button-add-vehicle"
+                >
+                  <Plus className="h-4 w-4" /> Add Vehicle
+                </Button>
+              )}
+            >
+              {fleetLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : fleetVehicles.length === 0 ? (
+                <EmptyState
+                  title="No fleet vehicles registered"
+                  description="Add vehicles to manage your fleet."
+                  className="border-0 rounded-none bg-transparent py-10"
+                  data-testid="text-no-vehicles"
+                />
+              ) : (
+                <Table>
+                  <TableHeader className="bg-muted/50">
+                    <TableRow>
+                      <TableHead className="pl-6">Registration</TableHead>
+                      <TableHead>Make / Model</TableHead>
+                      <TableHead>Year</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Mileage</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {fleetVehicles.map((v) => (
+                      <TableRow key={v.id} className="hover:bg-muted/30 transition-colors" data-testid={`row-vehicle-${v.id}`}>
+                        <TableCell className="font-medium pl-6">
+                          <div className="flex items-center gap-2">
+                            <Truck className="h-4 w-4 text-primary/70" />
+                            {v.registration}
+                          </div>
+                        </TableCell>
+                        <TableCell>{[v.make, v.model].filter(Boolean).join(" ") || "—"}</TableCell>
+                        <TableCell className="text-muted-foreground">{v.year || "—"}</TableCell>
+                        <TableCell className="text-sm">{v.vehicleType || "—"}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {v.currentMileage != null ? `${v.currentMileage.toLocaleString()} km` : "—"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={`font-medium text-[10px] ${getVehicleStatusColor(v.status)}`}>
+                            {v.status.toUpperCase()}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
         </Tabs>
       </PageShell>
@@ -434,11 +437,8 @@ function CaseDetailView({
       </div>
 
       <div className="grid md:grid-cols-2 gap-4">
-        <Card className="shadow-sm">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Case Details</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
+        <CardSection title="Case Details" icon={Box}>
+          <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Deceased</span>
               <span className="font-medium" data-testid="text-deceased-name">{funeralCase.deceasedName}</span>
@@ -457,88 +457,77 @@ function CaseDetailView({
                 <p className="mt-1">{funeralCase.notes}</p>
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </CardSection>
 
-        <Card className="shadow-sm">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Status Management</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex gap-2 flex-wrap">
-              {["open", "in_progress", "completed", "cancelled"].map((s) => (
-                <Button
-                  key={s}
-                  size="sm"
-                  variant={funeralCase.status === s ? "default" : "outline"}
-                  onClick={() => onUpdateStatus(s)}
-                  disabled={funeralCase.status === s}
-                  data-testid={`button-status-${s}`}
-                >
-                  {s.replace("_", " ").toUpperCase()}
-                </Button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <CardSection title="Status Management" icon={CheckCircle2}>
+          <div className="flex gap-2 flex-wrap">
+            {["open", "in_progress", "completed", "cancelled"].map((s) => (
+              <Button
+                key={s}
+                size="sm"
+                variant={funeralCase.status === s ? "default" : "outline"}
+                onClick={() => onUpdateStatus(s)}
+                disabled={funeralCase.status === s}
+                data-testid={`button-status-${s}`}
+              >
+                {s.replace("_", " ").toUpperCase()}
+              </Button>
+            ))}
+          </div>
+        </CardSection>
       </div>
 
-      <Card className="shadow-sm">
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-base">Task Checklist</CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">
-                {completedTasks}/{tasks.length} completed
-              </p>
-            </div>
-            <Button size="sm" variant="outline" className="gap-2" onClick={onAddTask} data-testid="button-add-task">
-              <Plus className="h-3 w-3" /> Add Task
-            </Button>
+      <CardSection
+        title="Task Checklist"
+        description={`${completedTasks}/${tasks.length} completed`}
+        icon={CheckCircle2}
+        headerRight={(
+          <Button size="sm" variant="outline" className="gap-2" onClick={onAddTask} data-testid="button-add-task">
+            <Plus className="h-3 w-3" /> Add Task
+          </Button>
+        )}
+      >
+        {tasksLoading ? (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        </CardHeader>
-        <CardContent>
-          {tasksLoading ? (
-            <div className="flex items-center justify-center py-6">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : tasks.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4" data-testid="text-no-tasks">
-              No tasks yet. Add tasks to track funeral logistics.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {tasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 transition-colors"
-                  data-testid={`row-task-${task.id}`}
-                >
-                  <Checkbox
-                    checked={task.status === "completed"}
-                    onCheckedChange={() => onToggleTask(task)}
-                    data-testid={`checkbox-task-${task.id}`}
-                  />
-                  <div className="flex-1">
-                    <p className={`text-sm font-medium ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}>
-                      {task.taskName}
-                    </p>
-                    {task.description && (
-                      <p className="text-xs text-muted-foreground">{task.description}</p>
-                    )}
-                  </div>
-                  <Badge
-                    variant="outline"
-                    className={`text-[10px] ${task.status === "completed" ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}`}
-                  >
-                    {task.status.toUpperCase()}
-                  </Badge>
+        ) : tasks.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-4" data-testid="text-no-tasks">
+            No tasks yet. Add tasks to track funeral logistics.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {tasks.map((task) => (
+              <div
+                key={task.id}
+                className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 transition-colors"
+                data-testid={`row-task-${task.id}`}
+              >
+                <Checkbox
+                  checked={task.status === "completed"}
+                  onCheckedChange={() => onToggleTask(task)}
+                  data-testid={`checkbox-task-${task.id}`}
+                />
+                <div className="flex-1">
+                  <p className={`text-sm font-medium ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`}>
+                    {task.taskName}
+                  </p>
+                  {task.description && (
+                    <p className="text-xs text-muted-foreground">{task.description}</p>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] ${task.status === "completed" ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}`}
+                >
+                  {task.status.toUpperCase()}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardSection>
     </div>
   );
 }

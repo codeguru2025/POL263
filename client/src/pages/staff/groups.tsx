@@ -2,7 +2,6 @@ import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -413,14 +412,8 @@ export default function StaffGroups() {
           const gPolicies = getGroupPolicies(group.id);
           if (gPolicies.length === 0) return null;
           return (
-            <Card key={group.id} className="shadow-sm" data-testid={`card-group-detail-${group.id}`}>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Layers className="h-4 w-4" />
-                  {group.name} — Assigned Policies ({gPolicies.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
+            <div key={group.id} data-testid={`card-group-detail-${group.id}`}>
+            <CardSection title={`${group.name} — Assigned Policies (${gPolicies.length})`} icon={Layers} flush>
                 <Table>
                   <TableHeader className="bg-muted/30">
                     <TableRow>
@@ -464,8 +457,8 @@ export default function StaffGroups() {
                     ))}
                   </TableBody>
                 </Table>
-              </CardContent>
-            </Card>
+            </CardSection>
+            </div>
           );
         })}
       </PageShell>

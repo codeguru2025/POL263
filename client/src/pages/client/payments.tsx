@@ -8,8 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
-import { PageHeader, PageShell } from "@/components/ds";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader, PageShell, CardSection, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -250,14 +249,12 @@ export default function ClientPayments() {
   if (meFetched && (meError || !me?.client)) {
     return (
       <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardContent className="pt-6 text-center space-y-4">
-            <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto" />
-            <h2 className="text-xl font-bold">Session Expired</h2>
-            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
-            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
-          </CardContent>
-        </Card>
+        <div className="text-center space-y-4">
+          <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto" />
+          <h2 className="text-xl font-bold">Session Expired</h2>
+          <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+          <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
+        </div>
       </div>
     );
   }
@@ -330,8 +327,8 @@ export default function ClientPayments() {
           }
         />
 
-        <Card>
-          <CardContent className="space-y-4 pt-6">
+        <CardSection title="Pay premium" icon={CreditCard}>
+          <div className="space-y-4">
             {!paynowConfig?.enabled && (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-center gap-2 text-amber-800 text-sm">
                 <AlertCircle className="h-4 w-4 shrink-0" />
@@ -529,8 +526,8 @@ export default function ClientPayments() {
                 )}
               </>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </CardSection>
 
         {myGroups.length > 0 && <GroupReceiptSection groups={myGroups} />}
 
@@ -601,17 +598,8 @@ function GroupReceiptSection({ groups }: { groups: any[] }) {
     : null;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Users className="h-5 w-5" />
-          Group Receipting
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">
-          As a group executive, you can record payments for group members.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <CardSection title="Group Receipting" description="As a group executive, you can record payments for group members." icon={Users}>
+      <div className="space-y-4">
         {groups.length > 1 && (
           <div>
             <Label>Select Group</Label>
@@ -695,8 +683,8 @@ function GroupReceiptSection({ groups }: { groups: any[] }) {
             )}
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </CardSection>
   );
 }
 
@@ -708,50 +696,42 @@ function ReceiptsList() {
   const base = getApiBase();
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Receipt className="h-5 w-5" />
-          My receipts
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {!receipts || receipts.length === 0 ? (
-          <p className="text-muted-foreground text-sm text-center py-6">No receipts yet.</p>
-        ) : (
-          <ul className="space-y-2">
-            {receipts.map((r) => (
-              <li key={r.id} className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <p className="font-medium text-sm">Receipt #{formatReceiptNumber(r.receiptNumber)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {r.currency} {r.amount} — {new Date(r.issuedAt).toLocaleString()}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <a
-                    href={`${base}/api/client-auth/receipts/${r.id}/download`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-primary hover:underline"
-                  >
-                    Download PDF
-                  </a>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1 text-xs"
-                    onClick={() => printDocument(`${base}/api/client-auth/receipts/${r.id}/download`)}
-                  >
-                    <Printer className="h-3.5 w-3.5" />
-                    Print
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+    <CardSection title="My receipts" icon={Receipt}>
+      {!receipts || receipts.length === 0 ? (
+        <EmptyState title="No receipts yet" description="Receipts will appear here once you make a payment." icon={Receipt} />
+      ) : (
+        <ul className="space-y-2">
+          {receipts.map((r) => (
+            <li key={r.id} className="flex items-center justify-between p-3 border rounded-lg">
+              <div>
+                <p className="font-medium text-sm">Receipt #{formatReceiptNumber(r.receiptNumber)}</p>
+                <p className="text-xs text-muted-foreground">
+                  {r.currency} {r.amount} — {new Date(r.issuedAt).toLocaleString()}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={`${base}/api/client-auth/receipts/${r.id}/download`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-primary hover:underline"
+                >
+                  Download PDF
+                </a>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => printDocument(`${base}/api/client-auth/receipts/${r.id}/download`)}
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                  Print
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </CardSection>
   );
 }

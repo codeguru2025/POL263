@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell } from "@/components/ds";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { PageHeader, PageShell, CardSection, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -334,14 +333,12 @@ export default function StaffNotifications() {
           )}
         />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Payment Automation Triggers</CardTitle>
-            <CardDescription>
-              After the thresholds below, clients get reminders and (if enabled) a mobile wallet payment prompt is sent to their saved number so they can approve with their PIN on the phone. Card is not used for automation.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <CardSection
+          title="Payment Automation Triggers"
+          description="After the thresholds below, clients get reminders and (if enabled) a mobile wallet payment prompt is sent to their saved number so they can approve with their PIN on the phone. Card is not used for automation."
+          icon={Bell}
+        >
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
               <Label>Enable automation</Label>
               <Switch checked={autoSettings.isEnabled} onCheckedChange={(v) => setAutoSettings((s) => ({ ...s, isEnabled: v }))} />
@@ -385,94 +382,87 @@ export default function StaffNotifications() {
                 {runAutomationNowMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Run Now
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardSection>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Automation Activity</CardTitle>
-            <CardDescription>Recent automation runs: mobile payment prompts, skips, and reminder dispatches.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {automationRuns.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No automation activity yet.</p>
-            ) : (
+        <CardSection title="Automation Activity" description="Recent automation runs: mobile payment prompts, skips, and reminder dispatches." icon={Bell}>
+          {automationRuns.length === 0 ? (
+            <EmptyState
+              title="No automation activity"
+              description="No runs have been recorded yet."
+              className="border-0 rounded-none bg-transparent py-6"
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>Action</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Message</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {automationRuns.slice(0, 30).map((r: any) => (
+                  <TableRow key={r.id}>
+                    <TableCell>{r.createdAt ? new Date(r.createdAt).toLocaleString() : "—"}</TableCell>
+                    <TableCell className="capitalize">{String(r.actionType || "—").replace(/_/g, " ")}</TableCell>
+                    <TableCell><Badge variant="outline" className="capitalize">{r.status || "—"}</Badge></TableCell>
+                    <TableCell className="capitalize">{r.methodType || "—"}</TableCell>
+                    <TableCell className="max-w-[420px] truncate" title={r.message || ""}>{r.message || "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardSection>
+
+        <CardSection title="Message Templates" description="Each template triggers automatically when its event occurs. Dynamic tags are replaced with real policy data." icon={Bell}>
+          {isLoading ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : templates.length === 0 ? (
+            <EmptyState
+              title="No notification templates"
+              description="Default messages will be used for each event. Create templates to customize them."
+              className="border-0 rounded-none bg-transparent py-8"
+            />
+          ) : (
+            <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>When</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Method</TableHead>
-                    <TableHead>Message</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Event Trigger</TableHead>
+                    <TableHead>Channel</TableHead>
+                    <TableHead>Subject</TableHead>
+                    <TableHead>Active</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {automationRuns.slice(0, 30).map((r: any) => (
-                    <TableRow key={r.id}>
-                      <TableCell>{r.createdAt ? new Date(r.createdAt).toLocaleString() : "—"}</TableCell>
-                      <TableCell className="capitalize">{String(r.actionType || "—").replace(/_/g, " ")}</TableCell>
-                      <TableCell><Badge variant="outline" className="capitalize">{r.status || "—"}</Badge></TableCell>
-                      <TableCell className="capitalize">{r.methodType || "—"}</TableCell>
-                      <TableCell className="max-w-[420px] truncate" title={r.message || ""}>{r.message || "—"}</TableCell>
+                  {templates.map((t: any) => (
+                    <TableRow key={t.id} data-testid={`row-template-${t.id}`}>
+                      <TableCell className="font-medium">{t.name}</TableCell>
+                      <TableCell><Badge variant="outline">{(eventTypes.find(e => e.value === t.eventType)?.label) || t.eventType.replace(/_/g, " ")}</Badge></TableCell>
+                      <TableCell><Badge variant="secondary">{t.channel}</Badge></TableCell>
+                      <TableCell className="text-sm max-w-48 truncate">{t.subject || "—"}</TableCell>
+                      <TableCell>
+                        <Switch checked={t.isActive} onCheckedChange={(v) => toggleMutation.mutate({ id: t.id, isActive: v })} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="icon" onClick={() => openEdit(t)}><Pencil className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => { if (confirm("Delete this template?")) deleteMutation.mutate(t.id); }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5" />Message Templates</CardTitle>
-            <CardDescription>Each template triggers automatically when its event occurs. Dynamic tags are replaced with real policy data.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-            ) : templates.length === 0 ? (
-              <div className="text-center py-8">
-                <p className="text-muted-foreground mb-2">No notification templates configured yet.</p>
-                <p className="text-sm text-muted-foreground">Default messages will be used for each event. Create templates to customize them.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Event Trigger</TableHead>
-                      <TableHead>Channel</TableHead>
-                      <TableHead>Subject</TableHead>
-                      <TableHead>Active</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {templates.map((t: any) => (
-                      <TableRow key={t.id} data-testid={`row-template-${t.id}`}>
-                        <TableCell className="font-medium">{t.name}</TableCell>
-                        <TableCell><Badge variant="outline">{(eventTypes.find(e => e.value === t.eventType)?.label) || t.eventType.replace(/_/g, " ")}</Badge></TableCell>
-                        <TableCell><Badge variant="secondary">{t.channel}</Badge></TableCell>
-                        <TableCell className="text-sm max-w-48 truncate">{t.subject || "—"}</TableCell>
-                        <TableCell>
-                          <Switch checked={t.isActive} onCheckedChange={(v) => toggleMutation.mutate({ id: t.id, isActive: v })} />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => openEdit(t)}><Pencil className="h-4 w-4" /></Button>
-                            <Button variant="ghost" size="icon" onClick={() => { if (confirm("Delete this template?")) deleteMutation.mutate(t.id); }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+          )}
+        </CardSection>
       </PageShell>
     </StaffLayout>
   );

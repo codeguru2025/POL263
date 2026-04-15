@@ -1,7 +1,6 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, KpiStatCard } from "@/components/ds";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader, PageShell, KpiStatCard, CardSection, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -112,100 +111,95 @@ export default function StaffApprovals() {
           </TabsList>
 
           <TabsContent value={activeTab} className="mt-4">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle>{activeTab === "pending" ? "Pending Approvals" : "Resolved Approvals"}</CardTitle>
-                <CardDescription>
-                  {activeTab === "pending"
-                    ? "These requests require your review and action."
-                    : "Previously approved or rejected requests."}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="flex items-center justify-center py-12">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  </div>
-                ) : filteredApprovals.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                    <ShieldCheck className="h-12 w-12 mb-3 opacity-30" />
-                    <p className="text-sm">No {activeTab} approval requests.</p>
-                  </div>
-                ) : (
-                  <div className="border rounded-md overflow-hidden">
-                    <Table>
-                      <TableHeader className="bg-muted/50">
-                        <TableRow>
-                          <TableHead>Type</TableHead>
-                          <TableHead>Entity</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Created</TableHead>
-                          <TableHead className="text-right">Actions</TableHead>
+            <CardSection
+              title={activeTab === "pending" ? "Pending Approvals" : "Resolved Approvals"}
+              description={activeTab === "pending" ? "These requests require your review and action." : "Previously approved or rejected requests."}
+              icon={ShieldCheck}
+            >
+              {isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : filteredApprovals.length === 0 ? (
+                <EmptyState
+                  title={`No ${activeTab} approval requests`}
+                  description="Nothing to review at the moment."
+                  className="border-0 rounded-none bg-transparent py-10"
+                />
+              ) : (
+                <div className="border rounded-md overflow-hidden">
+                  <Table>
+                    <TableHeader className="bg-muted/50">
+                      <TableRow>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Entity</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredApprovals.map((approval: any) => (
+                        <TableRow key={approval.id} data-testid={`row-approval-${approval.id}`}>
+                          <TableCell>
+                            <span className="font-medium">{approval.requestType}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-xs text-muted-foreground">{approval.entityType}</span>
+                            <br />
+                            <span className="text-xs font-mono">{approval.entityId?.slice(0, 8)}...</span>
+                          </TableCell>
+                          <TableCell>{statusBadge(approval.status)}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {approval.createdAt ? new Date(approval.createdAt).toLocaleDateString() : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setSelectedApproval(approval)}
+                                data-testid={`btn-view-${approval.id}`}
+                              >
+                                <Eye className="h-4 w-4 mr-1" /> View
+                              </Button>
+                              {approval.status === "pending" && (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                                    onClick={() => {
+                                      setSelectedApproval(approval);
+                                      setResolveAction("approve");
+                                    }}
+                                    data-testid={`btn-approve-${approval.id}`}
+                                  >
+                                    <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-red-600 border-red-200 hover:bg-red-50"
+                                    onClick={() => {
+                                      setSelectedApproval(approval);
+                                      setResolveAction("reject");
+                                    }}
+                                    data-testid={`btn-reject-${approval.id}`}
+                                  >
+                                    <XCircle className="h-4 w-4 mr-1" /> Reject
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredApprovals.map((approval: any) => (
-                          <TableRow key={approval.id} data-testid={`row-approval-${approval.id}`}>
-                            <TableCell>
-                              <span className="font-medium">{approval.requestType}</span>
-                            </TableCell>
-                            <TableCell>
-                              <span className="text-xs text-muted-foreground">{approval.entityType}</span>
-                              <br />
-                              <span className="text-xs font-mono">{approval.entityId?.slice(0, 8)}...</span>
-                            </TableCell>
-                            <TableCell>{statusBadge(approval.status)}</TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {approval.createdAt ? new Date(approval.createdAt).toLocaleDateString() : "—"}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex items-center justify-end gap-2">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => setSelectedApproval(approval)}
-                                  data-testid={`btn-view-${approval.id}`}
-                                >
-                                  <Eye className="h-4 w-4 mr-1" /> View
-                                </Button>
-                                {approval.status === "pending" && (
-                                  <>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
-                                      onClick={() => {
-                                        setSelectedApproval(approval);
-                                        setResolveAction("approve");
-                                      }}
-                                      data-testid={`btn-approve-${approval.id}`}
-                                    >
-                                      <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
-                                    </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="text-red-600 border-red-200 hover:bg-red-50"
-                                      onClick={() => {
-                                        setSelectedApproval(approval);
-                                        setResolveAction("reject");
-                                      }}
-                                      data-testid={`btn-reject-${approval.id}`}
-                                    >
-                                      <XCircle className="h-4 w-4 mr-1" /> Reject
-                                    </Button>
-                                  </>
-                                )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardSection>
           </TabsContent>
         </Tabs>
       </PageShell>

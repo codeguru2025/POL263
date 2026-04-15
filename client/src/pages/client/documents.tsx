@@ -6,8 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
-import { PageHeader, PageShell } from "@/components/ds";
-import { Card, CardContent } from "@/components/ui/card";
+import { PageHeader, PageShell, CardSection, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { FileText, ArrowLeft, Download, Eye, Printer } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
@@ -33,12 +32,10 @@ export default function ClientDocuments() {
   if (meFetched && (meError || !me?.client)) {
     return (
       <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardContent className="pt-6 text-center space-y-4">
-            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
-            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
-          </CardContent>
-        </Card>
+        <div className="text-center space-y-4">
+          <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+          <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
+        </div>
       </div>
     );
   }
@@ -61,52 +58,54 @@ export default function ClientDocuments() {
           description="View or download your policy certificate (policy document) for each policy below."
         />
 
-        <Card>
-          <CardContent className="pt-6">
-            {isLoading ? (
-              <p className="text-muted-foreground text-sm py-6 text-center">Loading…</p>
-            ) : !policies || policies.length === 0 ? (
-              <p className="text-muted-foreground text-sm py-6 text-center">No policies found.</p>
-            ) : (
-              <ul className="space-y-3">
-                {policies.map((p) => (
-                  <li key={p.id} className="flex items-center justify-between gap-4 p-4 border rounded-lg flex-wrap">
-                    <div>
-                      <p className="font-medium text-sm">{p.policyNumber}</p>
-                      <p className="text-xs text-muted-foreground capitalize">{p.status.replace(/_/g, " ")} — {p.currency} {p.premiumAmount}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Link href={`/client/documents/view/${p.id}`}>
-                        <Button variant="outline" size="sm" className="gap-2">
-                          <Eye className="h-4 w-4" />
-                          View
-                        </Button>
-                      </Link>
-                      <a
-                        href={`${base}/api/client-auth/policies/${p.id}/document?download=1`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-sm text-primary hover:underline"
-                      >
-                        <Download className="h-4 w-4" />
-                        Download
-                      </a>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="gap-2"
-                        onClick={() => printDocument(`${base}/api/client-auth/policies/${p.id}/document`)}
-                      >
-                        <Printer className="h-4 w-4" />
-                        Print
+        <CardSection title="Your policies" icon={FileText}>
+          {isLoading ? (
+            <p className="text-muted-foreground text-sm py-6 text-center">Loading…</p>
+          ) : !policies || policies.length === 0 ? (
+            <EmptyState
+              title="No policies found"
+              description="No policy documents are available yet."
+              className="border-0 rounded-none bg-transparent py-8"
+            />
+          ) : (
+            <ul className="space-y-3">
+              {policies.map((p) => (
+                <li key={p.id} className="flex items-center justify-between gap-4 p-4 border rounded-lg flex-wrap">
+                  <div>
+                    <p className="font-medium text-sm">{p.policyNumber}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{p.status.replace(/_/g, " ")} — {p.currency} {p.premiumAmount}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Link href={`/client/documents/view/${p.id}`}>
+                      <Button variant="outline" size="sm" className="gap-2">
+                        <Eye className="h-4 w-4" />
+                        View
                       </Button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+                    </Link>
+                    <a
+                      href={`${base}/api/client-auth/policies/${p.id}/document?download=1`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 text-sm text-primary hover:underline"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download
+                    </a>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => printDocument(`${base}/api/client-auth/policies/${p.id}/document`)}
+                    >
+                      <Printer className="h-4 w-4" />
+                      Print
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardSection>
       </PageShell>
     </ClientLayout>
   );

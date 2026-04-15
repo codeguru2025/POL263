@@ -6,8 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, useRoute } from "wouter";
 import { getApiBase } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
-import { PageShell } from "@/components/ds";
-import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import { PageShell, CardSection } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { FileText, ArrowLeft, Printer } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
@@ -30,12 +29,10 @@ export default function ClientDocumentView() {
   if (meFetched && (meError || !me?.client)) {
     return (
       <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardContent className="pt-6 text-center space-y-4">
-            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
-            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
-          </CardContent>
-        </Card>
+        <div className="text-center space-y-4">
+          <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+          <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
+        </div>
       </div>
     );
   }
@@ -48,11 +45,9 @@ export default function ClientDocumentView() {
             <ArrowLeft className="h-4 w-4" />
             Back to documents
           </Button>
-          <Card>
-            <CardContent className="pt-6">
-              <p className="text-muted-foreground text-center py-8">Invalid or missing policy. Go back to documents.</p>
-            </CardContent>
-          </Card>
+          <CardSection title="Document not found" icon={FileText}>
+            <p className="text-muted-foreground text-center py-8">Invalid or missing policy. Go back to documents.</p>
+          </CardSection>
         </PageShell>
       </ClientLayout>
     );
@@ -67,32 +62,28 @@ export default function ClientDocumentView() {
             Back to documents
           </Button>
           {policy && (
-            <div className="flex items-center gap-3">
-              <CardTitle className="flex items-center gap-2 text-lg font-medium">
-                <FileText className="h-5 w-5 text-primary" />
-                Policy document — {policy.policyNumber}
-              </CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => printDocument(documentUrl)}
-                data-testid="btn-print-client-doc"
-              >
-                <Printer className="h-4 w-4" /> Print
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => printDocument(documentUrl)}
+              data-testid="btn-print-client-doc"
+            >
+              <Printer className="h-4 w-4" /> Print
+            </Button>
           )}
         </div>
-        <Card>
-          <CardContent className="p-0">
-            <iframe
-              title={`Policy document ${policy?.policyNumber ?? policyId}`}
-              src={documentUrl}
-              className="w-full min-h-[80vh] border-0 rounded-b-lg"
-            />
-          </CardContent>
-        </Card>
+        <CardSection
+          title={policy ? `Policy document — ${policy.policyNumber}` : "Policy document"}
+          icon={FileText}
+          flush
+        >
+          <iframe
+            title={`Policy document ${policy?.policyNumber ?? policyId}`}
+            src={documentUrl}
+            className="w-full min-h-[80vh] border-0 rounded-b-xl"
+          />
+        </CardSection>
       </PageShell>
     </ClientLayout>
   );

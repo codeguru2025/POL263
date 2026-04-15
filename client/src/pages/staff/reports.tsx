@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -800,149 +799,94 @@ export default function StaffReports() {
           </TabsContent>
 
           <TabsContent value="active-policies">
-            <Card>
-              <CardHeader className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><CheckCircle className="h-5 w-5" />Active policies</CardTitle>
-                  <ExportButton reportType="active-policies" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground pr-8">
-                  Policies with status active. When from/to are set, results are limited to policies captured in that window (same as other policy lists).
-                </p>
-              </CardHeader>
-              <CardContent>
-                {loadingActivePolicies ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : activePolicies.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No active policies match the filters.</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Schedule</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {activePolicies.slice(0, 50).map((p: any) => (
-                        <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="default">active</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell>{p.paymentSchedule}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="Active policies" icon={CheckCircle} description="Policies with status active. When from/to are set, results are limited to policies captured in that window (same as other policy lists)." headerRight={<ExportButton reportType="active-policies" filters={filters} />} flush>
+              {loadingActivePolicies ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : activePolicies.length === 0 ? (
+                <EmptyState title="No active policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Schedule</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {activePolicies.slice(0, 50).map((p: any) => (
+                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="default">active</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell>{p.paymentSchedule}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="awaiting-payments">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Clock className="h-5 w-5" />Policies Awaiting Payments</CardTitle>
-                  <ExportButton reportType="awaiting-payments" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingAwaitingPayments ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : awaitingPayments.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">None in range</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {awaitingPayments.slice(0, 50).map((p: any) => (
-                        <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="secondary">{p.status}</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="Policies Awaiting Payments" icon={Clock} headerRight={<ExportButton reportType="awaiting-payments" filters={filters} />} flush>
+              {loadingAwaitingPayments ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : awaitingPayments.length === 0 ? (
+                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {awaitingPayments.slice(0, 50).map((p: any) => (
+                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="secondary">{p.status}</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="overdue">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><AlertCircle className="h-5 w-5" />Overdue Payments (Grace)</CardTitle>
-                  <ExportButton reportType="overdue" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingOverdue ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : overduePolicies.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">None in range</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {overduePolicies.slice(0, 50).map((p: any) => (
-                        <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="Overdue Payments (Grace)" icon={AlertCircle} headerRight={<ExportButton reportType="overdue" filters={filters} />} flush>
+              {loadingOverdue ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : overduePolicies.length === 0 ? (
+                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {overduePolicies.slice(0, 50).map((p: any) => (
+                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="pre-lapse">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><AlertCircle className="h-5 w-5" />Pre-lapse (Grace period)</CardTitle>
-                  <ExportButton reportType="pre-lapse" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingPreLapse ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : preLapsePolicies.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">None in range</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {preLapsePolicies.slice(0, 50).map((p: any) => (
-                        <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="Pre-lapse (Grace period)" icon={AlertCircle} headerRight={<ExportButton reportType="pre-lapse" filters={filters} />} flush>
+              {loadingPreLapse ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : preLapsePolicies.length === 0 ? (
+                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {preLapsePolicies.slice(0, 50).map((p: any) => (
+                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="lapsed">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><AlertCircle className="h-5 w-5" />Lapsed Policies</CardTitle>
-                  <ExportButton reportType="lapsed" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingLapsed ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : lapsedPolicies.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">None in range</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {lapsedPolicies.slice(0, 50).map((p: any) => (
-                        <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="secondary">lapsed</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="Lapsed Policies" icon={AlertCircle} headerRight={<ExportButton reportType="lapsed" filters={filters} />} flush>
+              {loadingLapsed ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : lapsedPolicies.length === 0 ? (
+                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {lapsedPolicies.slice(0, 50).map((p: any) => (
+                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="secondary">lapsed</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="new-joinings">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div>
-                    <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />New joinings report</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      All policies captured in the date range (inactive through cancelled), paid or unpaid. Filter by branch, product, or agent above; status filter does not apply to this report.
-                    </p>
-                  </div>
-                  <ExportButton reportType="new-joinings" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
+            <CardSection title="New joinings report" icon={FileText} description="All policies captured in the date range (inactive through cancelled), paid or unpaid. Filter by branch, product, or agent above; status filter does not apply to this report." headerRight={<ExportButton reportType="new-joinings" filters={filters} />} flush>
                 {loadingNewJoinings ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : newJoinings.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No policies in range. Set from/to dates or widen filters.</p>
+                  <EmptyState title="No policies in range" description="Set from/to dates or widen filters." className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
                   <div className="overflow-x-auto min-w-0">
                     <Table>
@@ -1017,30 +961,17 @@ export default function StaffReports() {
                     </Table>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="agent-productivity">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div>
-                    <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5" />Agent productivity</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Policies captured and issued at least one receipt in the same from/to window. Set both dates; branch, product, and agent filters apply.
-                    </p>
-                  </div>
-                  <ExportButton reportType="agent-productivity" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {!fromDate || !toDate ? (
-                  <p className="text-center text-muted-foreground py-8">Choose a from date and to date to run this report.</p>
-                ) : loadingAgentProductivity ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : agentProductivity.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No policies match (registered and receipt-issued in range).</p>
+            <CardSection title="Agent productivity" icon={TrendingUp} description="Policies captured and issued at least one receipt in the same from/to window. Set both dates; branch, product, and agent filters apply." headerRight={<ExportButton reportType="agent-productivity" filters={filters} />} flush>
+              {!fromDate || !toDate ? (
+                <EmptyState title="Set date range" description="Choose a from date and to date to run this report." className="border-0 rounded-none bg-transparent py-8" />
+              ) : loadingAgentProductivity ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : agentProductivity.length === 0 ? (
+                <EmptyState title="No policies match" description="No policies registered and receipt-issued in range." className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
                   <div className="overflow-x-auto min-w-0">
                     <Table>
@@ -1087,121 +1018,89 @@ export default function StaffReports() {
                     </Table>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="activations">
-            <Card>
-              <CardHeader className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><UserCheck className="h-5 w-5" />Policy activations</CardTitle>
-                  <ExportButton reportType="activations" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground pr-8">
-                  Rows when a policy moved to active (status history). From/to filter that event time; branch, product, and agent filter the policy.
-                </p>
-              </CardHeader>
-              <CardContent>
-                {loadingActivations ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : activations.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No activations in this period.</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Policy #</TableHead>
-                        <TableHead>Client</TableHead>
-                        <TableHead>Previous status</TableHead>
-                        <TableHead>Activated at</TableHead>
-                        <TableHead>Reason</TableHead>
-                        <TableHead>Current status</TableHead>
+            <CardSection title="Policy activations" icon={UserCheck} description="Rows when a policy moved to active (status history). From/to filter that event time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="activations" filters={filters} />} flush>
+              {loadingActivations ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : activations.length === 0 ? (
+                <EmptyState title="No activations in this period" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Policy #</TableHead>
+                      <TableHead>Client</TableHead>
+                      <TableHead>Previous status</TableHead>
+                      <TableHead>Activated at</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead>Current status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {activations.map((r: any) => (
+                      <TableRow key={`${r.policyId}-${r.activatedAt}`}>
+                        <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
+                        <TableCell>{r.clientName}</TableCell>
+                        <TableCell><Badge variant="outline">{r.fromStatus || "—"}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(r.activatedAt).toLocaleString()}</TableCell>
+                        <TableCell>{r.reason || "—"}</TableCell>
+                        <TableCell><Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge></TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {activations.map((r: any) => (
-                        <TableRow key={`${r.policyId}-${r.activatedAt}`}>
-                          <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
-                          <TableCell>{r.clientName}</TableCell>
-                          <TableCell><Badge variant="outline">{r.fromStatus || "—"}</Badge></TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(r.activatedAt).toLocaleString()}</TableCell>
-                          <TableCell>{r.reason || "—"}</TableCell>
-                          <TableCell><Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="claims">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />Claims Summary</CardTitle>
-                  <ExportButton reportType="claims" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
-                  {Object.entries(claimSummary).map(([status, count]) => (
-                    <div key={status} className="text-center p-3 rounded-lg bg-muted">
-                      <p className="text-xl font-bold">{count}</p>
-                      <p className="text-xs text-muted-foreground capitalize">{status}</p>
-                    </div>
-                  ))}
-                </div>
-                {loadingClaims ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Claim #</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Approved Amount</TableHead>
-                        <TableHead>Deceased</TableHead>
-                        <TableHead>Created</TableHead>
+            <CardSection title="Claims Summary" icon={FileText} headerRight={<ExportButton reportType="claims" filters={filters} />}>
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+                {Object.entries(claimSummary).map(([status, count]) => (
+                  <div key={status} className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xl font-bold">{count}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{status}</p>
+                  </div>
+                ))}
+              </div>
+              {loadingClaims ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Claim #</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Approved Amount</TableHead>
+                      <TableHead>Deceased</TableHead>
+                      <TableHead>Created</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {claims.slice(0, 20).map((c: any) => (
+                      <TableRow key={c.id}>
+                        <TableCell className="font-mono text-sm">{c.claimNumber}</TableCell>
+                        <TableCell><Badge variant="outline">{c.claimType}</Badge></TableCell>
+                        <TableCell><Badge>{c.status}</Badge></TableCell>
+                        <TableCell className="font-semibold">{c.approvedAmount ? `${c.currency || "USD"} ${c.approvedAmount}` : "—"}</TableCell>
+                        <TableCell>{c.deceasedName || "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleDateString()}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {claims.slice(0, 20).map((c: any) => (
-                        <TableRow key={c.id}>
-                          <TableCell className="font-mono text-sm">{c.claimNumber}</TableCell>
-                          <TableCell><Badge variant="outline">{c.claimType}</Badge></TableCell>
-                          <TableCell><Badge>{c.status}</Badge></TableCell>
-                          <TableCell className="font-semibold">{c.approvedAmount ? `${c.currency || "USD"} ${c.approvedAmount}` : "—"}</TableCell>
-                          <TableCell>{c.deceasedName || "—"}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleDateString()}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="receipts">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2"><Receipt className="h-5 w-5" />Daily receipts report</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {receiptReport.length} receipts{filters.fromDate ? ` from ${filters.fromDate}` : ""}{filters.toDate ? ` to ${filters.toDate}` : ""}. Includes UTC <span className="font-mono">DTSTAMP</span> (YYYYMMDDTHHmmssZ) per receipt and policy-receipt detail columns for export.
-                    </p>
-                  </div>
-                  <ExportButton reportType="receipts" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
+            <CardSection title="Daily receipts report" icon={Receipt} description={<>{receiptReport.length} receipts{filters.fromDate ? ` from ${filters.fromDate}` : ""}{filters.toDate ? ` to ${filters.toDate}` : ""}. Includes UTC <span className="font-mono">DTSTAMP</span> (YYYYMMDDTHHmmssZ) per receipt and policy-receipt detail columns for export.</>} headerRight={<ExportButton reportType="receipts" filters={filters} />} flush>
                 {loadingReceipts ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : receiptReport.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No receipts found. Use the date filters above to select a reporting period.</p>
+                  <EmptyState title="No receipts found" description="Use the date filters above to select a reporting period." className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
                   <div className="overflow-x-auto min-w-0">
                     <Table>
@@ -1304,296 +1203,239 @@ export default function StaffReports() {
                     </Table>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="payments">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Payment Transactions</CardTitle>
-                  <ExportButton reportType="payments" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingPayments ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : payments.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No payments recorded</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Reference</TableHead>
-                        <TableHead>Amount</TableHead>
-                        <TableHead>Method</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Received</TableHead>
+            <CardSection title="Payment Transactions" icon={Receipt} headerRight={<ExportButton reportType="payments" filters={filters} />} flush>
+              {loadingPayments ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : payments.length === 0 ? (
+                <EmptyState title="No payments recorded" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Reference</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Method</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Received</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {payments.slice(0, 20).map((p: any) => (
+                      <TableRow key={p.id}>
+                        <TableCell className="font-mono text-sm">{p.reference || "—"}</TableCell>
+                        <TableCell className="font-semibold">{p.currency} {p.amount}</TableCell>
+                        <TableCell>{p.paymentMethod}</TableCell>
+                        <TableCell><Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>{p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {payments.slice(0, 20).map((p: any) => (
-                        <TableRow key={p.id}>
-                          <TableCell className="font-mono text-sm">{p.reference || "—"}</TableCell>
-                          <TableCell className="font-semibold">{p.currency} {p.amount}</TableCell>
-                          <TableCell>{p.paymentMethod}</TableCell>
-                          <TableCell><Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>{p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}</Badge></TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="funerals">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Funeral Cases</CardTitle>
-                  <ExportButton reportType="funerals" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {funeralCases.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No funeral cases recorded</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Case #</TableHead>
-                        <TableHead>Deceased</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Funeral Date</TableHead>
+            <CardSection title="Funeral Cases" icon={FolderOpen} headerRight={<ExportButton reportType="funerals" filters={filters} />} flush>
+              {funeralCases.length === 0 ? (
+                <EmptyState title="No funeral cases recorded" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Case #</TableHead>
+                      <TableHead>Deceased</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Funeral Date</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {funeralCases.slice(0, 20).map((fc: any) => (
+                      <TableRow key={fc.id}>
+                        <TableCell className="font-mono text-sm">{fc.caseNumber}</TableCell>
+                        <TableCell>{fc.deceasedName}</TableCell>
+                        <TableCell><Badge>{fc.status}</Badge></TableCell>
+                        <TableCell>{fc.funeralDate || "TBD"}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {funeralCases.slice(0, 20).map((fc: any) => (
-                        <TableRow key={fc.id}>
-                          <TableCell className="font-mono text-sm">{fc.caseNumber}</TableCell>
-                          <TableCell>{fc.deceasedName}</TableCell>
-                          <TableCell><Badge>{fc.status}</Badge></TableCell>
-                          <TableCell>{fc.funeralDate || "TBD"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="fleet">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Truck className="h-5 w-5" />Fleet Vehicles</CardTitle>
-                  <ExportButton reportType="fleet" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingFleet ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : fleet.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-fleet">No fleet vehicles recorded</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Registration</TableHead>
-                        <TableHead>Make</TableHead>
-                        <TableHead>Model</TableHead>
-                        <TableHead>Year</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Mileage</TableHead>
+            <CardSection title="Fleet Vehicles" icon={Truck} headerRight={<ExportButton reportType="fleet" filters={filters} />} flush>
+              {loadingFleet ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : fleet.length === 0 ? (
+                <EmptyState title="No fleet vehicles recorded" data-testid="text-no-fleet" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Registration</TableHead>
+                      <TableHead>Make</TableHead>
+                      <TableHead>Model</TableHead>
+                      <TableHead>Year</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Mileage</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {fleet.slice(0, 20).map((v: any) => (
+                      <TableRow key={v.id} data-testid={`row-fleet-${v.id}`}>
+                        <TableCell className="font-mono text-sm">{v.registration}</TableCell>
+                        <TableCell>{v.make}</TableCell>
+                        <TableCell>{v.model}</TableCell>
+                        <TableCell>{v.year}</TableCell>
+                        <TableCell><Badge variant={v.status === "active" ? "default" : "secondary"}>{v.status}</Badge></TableCell>
+                        <TableCell>{v.currentMileage || "—"}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {fleet.slice(0, 20).map((v: any) => (
-                        <TableRow key={v.id} data-testid={`row-fleet-${v.id}`}>
-                          <TableCell className="font-mono text-sm">{v.registration}</TableCell>
-                          <TableCell>{v.make}</TableCell>
-                          <TableCell>{v.model}</TableCell>
-                          <TableCell>{v.year}</TableCell>
-                          <TableCell><Badge variant={v.status === "active" ? "default" : "secondary"}>{v.status}</Badge></TableCell>
-                          <TableCell>{v.currentMileage || "—"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="expenditures">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5" />Expenditure Report</CardTitle>
-                  <ExportButton reportType="expenditures" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingExpenditures ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : expenditures.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-expenditures">No expenditures recorded</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead>Amount</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Receipt ref</TableHead>
+            <CardSection title="Expenditure Report" icon={DollarSign} headerRight={<ExportButton reportType="expenditures" filters={filters} />} flush>
+              {loadingExpenditures ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : expenditures.length === 0 ? (
+                <EmptyState title="No expenditures recorded" data-testid="text-no-expenditures" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Receipt ref</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {expenditures.slice(0, 20).map((e: any) => (
+                      <TableRow key={e.id} data-testid={`row-expenditure-${e.id}`}>
+                        <TableCell>{e.description}</TableCell>
+                        <TableCell><Badge variant="outline">{e.category}</Badge></TableCell>
+                        <TableCell className="font-semibold">{e.currency} {e.amount}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{e.spentAt || (e.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—")}</TableCell>
+                        <TableCell>{e.receiptRef || "—"}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {expenditures.slice(0, 20).map((e: any) => (
-                        <TableRow key={e.id} data-testid={`row-expenditure-${e.id}`}>
-                          <TableCell>{e.description}</TableCell>
-                          <TableCell><Badge variant="outline">{e.category}</Badge></TableCell>
-                          <TableCell className="font-semibold">{e.currency} {e.amount}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{e.spentAt || (e.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—")}</TableCell>
-                          <TableCell>{e.receiptRef || "—"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="cashups">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Calendar className="h-5 w-5" />Daily Cashups by User</CardTitle>
-                  <ExportButton reportType="cashups" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground">Use the Report filters above to set date range and optional user.</p>
-              </CardHeader>
-              <CardContent>
-                {loadingCashups ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : cashups.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-cashups">No cashups in range</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Cashup date</TableHead>
-                        <TableHead>Currency</TableHead>
-                        <TableHead>Total amount</TableHead>
-                        <TableHead>Transaction count</TableHead>
-                        <TableHead>Locked</TableHead>
-                        <TableHead>Prepared by</TableHead>
-                        <TableHead>Created</TableHead>
+            <CardSection title="Daily Cashups by User" icon={Calendar} description="Use the Report filters above to set date range and optional user." headerRight={<ExportButton reportType="cashups" filters={filters} />} flush>
+              {loadingCashups ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : cashups.length === 0 ? (
+                <EmptyState title="No cashups in range" data-testid="text-no-cashups" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Cashup date</TableHead>
+                      <TableHead>Currency</TableHead>
+                      <TableHead>Total amount</TableHead>
+                      <TableHead>Transaction count</TableHead>
+                      <TableHead>Locked</TableHead>
+                      <TableHead>Prepared by</TableHead>
+                      <TableHead>Created</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cashups.map((c: any) => (
+                      <TableRow key={c.id} data-testid={`row-cashup-${c.id}`}>
+                        <TableCell className="font-mono text-sm">{c.cashupDate}</TableCell>
+                        <TableCell>{c.currency || "USD"}</TableCell>
+                        <TableCell className="font-semibold">{c.currency || "USD"} {c.totalAmount}</TableCell>
+                        <TableCell>{c.transactionCount}</TableCell>
+                        <TableCell><Badge variant={c.isLocked ? "default" : "secondary"}>{c.isLocked ? "Locked" : "Open"}</Badge></TableCell>
+                        <TableCell>{(users as any[])?.find((u: any) => u.id === c.preparedBy)?.displayName || c.preparedBy || "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {cashups.map((c: any) => (
-                        <TableRow key={c.id} data-testid={`row-cashup-${c.id}`}>
-                          <TableCell className="font-mono text-sm">{c.cashupDate}</TableCell>
-                          <TableCell>{c.currency || "USD"}</TableCell>
-                          <TableCell className="font-semibold">{c.currency || "USD"} {c.totalAmount}</TableCell>
-                          <TableCell>{c.transactionCount}</TableCell>
-                          <TableCell><Badge variant={c.isLocked ? "default" : "secondary"}>{c.isLocked ? "Locked" : "Open"}</Badge></TableCell>
-                          <TableCell>{(users as any[])?.find((u: any) => u.id === c.preparedBy)?.displayName || c.preparedBy || "—"}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="payroll">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5" />Payroll Report</CardTitle>
-                  <ExportButton reportType="payroll" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingPayroll ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : payrollEmployees.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-payroll">No payroll employees recorded</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Employee Name</TableHead>
-                        <TableHead>ID Number</TableHead>
-                        <TableHead>Position</TableHead>
-                        <TableHead>Department</TableHead>
-                        <TableHead>Basic Salary</TableHead>
-                        <TableHead>Status</TableHead>
+            <CardSection title="Payroll Report" icon={Users} headerRight={<ExportButton reportType="payroll" filters={filters} />} flush>
+              {loadingPayroll ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : payrollEmployees.length === 0 ? (
+                <EmptyState title="No payroll employees recorded" data-testid="text-no-payroll" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Employee Name</TableHead>
+                      <TableHead>ID Number</TableHead>
+                      <TableHead>Position</TableHead>
+                      <TableHead>Department</TableHead>
+                      <TableHead>Basic Salary</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {payrollEmployees.slice(0, 20).map((emp: any) => (
+                      <TableRow key={emp.id} data-testid={`row-payroll-${emp.id}`}>
+                        <TableCell className="font-medium">{emp.employeeName}</TableCell>
+                        <TableCell className="font-mono text-sm">{emp.idNumber}</TableCell>
+                        <TableCell>{emp.position}</TableCell>
+                        <TableCell>{emp.department}</TableCell>
+                        <TableCell className="font-semibold">{emp.currency || "USD"} {emp.basicSalary}</TableCell>
+                        <TableCell><Badge variant={emp.status === "active" ? "default" : "secondary"}>{emp.status}</Badge></TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {payrollEmployees.slice(0, 20).map((emp: any) => (
-                        <TableRow key={emp.id} data-testid={`row-payroll-${emp.id}`}>
-                          <TableCell className="font-medium">{emp.employeeName}</TableCell>
-                          <TableCell className="font-mono text-sm">{emp.idNumber}</TableCell>
-                          <TableCell>{emp.position}</TableCell>
-                          <TableCell>{emp.department}</TableCell>
-                          <TableCell className="font-semibold">{emp.currency || "USD"} {emp.basicSalary}</TableCell>
-                          <TableCell><Badge variant={emp.status === "active" ? "default" : "secondary"}>{emp.status}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="commissions" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2"><Percent className="h-5 w-5" />Commissions report</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Per-agent totals from the commission ledger for the selected date range and filters. Payroll columns without a system source (PAYE, advances, etc.) are left blank.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    <ExportButton reportType="commissions" filters={filters} />
-                    {agentId && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const suffix = q ? `${q}&` : "?";
-                          window.open(getApiBase() + `/api/reports/export/commissions${suffix}mode=ledger`, "_blank");
-                        }}
-                        data-testid="button-export-commission-ledger"
-                      >
-                        <Download className="h-4 w-4 mr-1" />
-                        Agent ledger CSV
-                      </Button>
-                    )}
-                  </div>
+            <CardSection
+              title="Commissions report"
+              icon={Percent}
+              description={<>Per-agent totals from the commission ledger for the selected date range and filters. Payroll columns without a system source (PAYE, advances, etc.) are left blank.{!agentId ? <span className="block mt-1">Select an agent above to download that agent&apos;s detailed ledger lines (optional).</span> : null}</>}
+              headerRight={
+                <div className="flex flex-wrap items-center gap-2">
+                  <ExportButton reportType="commissions" filters={filters} />
+                  {agentId && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const suffix = q ? `${q}&` : "?";
+                        window.open(getApiBase() + `/api/reports/export/commissions${suffix}mode=ledger`, "_blank");
+                      }}
+                      data-testid="button-export-commission-ledger"
+                    >
+                      <Download className="h-4 w-4 mr-1" />
+                      Agent ledger CSV
+                    </Button>
+                  )}
                 </div>
-                {!agentId ? (
-                  <p className="text-sm text-muted-foreground">Select an agent above to download that agent&apos;s detailed ledger lines (optional).</p>
-                ) : null}
-              </CardHeader>
-              <CardContent className="overflow-x-auto">
+              }
+              contentClassName="overflow-x-auto"
+              flush>
                 {loadingCommissionSummary ? (
                   <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : commissionSummary.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-commissions">No commission ledger activity in this period.</p>
+                  <EmptyState title="No commission ledger activity in this period" data-testid="text-no-commissions" className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
                   <Table>
                     <TableHeader>
@@ -1654,176 +1496,139 @@ export default function StaffReports() {
                     </TableBody>
                   </Table>
                 )}
-              </CardContent>
-            </Card>
+            </CardSection>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2"><Percent className="h-5 w-5" />Commission plans</CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">Configured commission rules for products (reference).</p>
-              </CardHeader>
-              <CardContent>
-                {loadingCommissionPlans ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : commissionPlans.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No commission plans recorded</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Plan Name</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Rate (%)</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Created</TableHead>
+            <CardSection title="Commission plans" icon={Percent} description="Configured commission rules for products (reference)." flush>
+              {loadingCommissionPlans ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : commissionPlans.length === 0 ? (
+                <EmptyState title="No commission plans recorded" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Plan Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Rate (%)</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Created</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {commissionPlans.slice(0, 20).map((cp: any) => (
+                      <TableRow key={cp.id} data-testid={`row-commission-plan-${cp.id}`}>
+                        <TableCell className="font-medium">{cp.name}</TableCell>
+                        <TableCell><Badge variant="outline">{cp.commissionType}</Badge></TableCell>
+                        <TableCell>{cp.ratePercent}%</TableCell>
+                        <TableCell><Badge variant={cp.isActive ? "default" : "secondary"}>{cp.isActive ? "Active" : "Inactive"}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(cp.createdAt).toLocaleDateString()}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {commissionPlans.slice(0, 20).map((cp: any) => (
-                        <TableRow key={cp.id} data-testid={`row-commission-plan-${cp.id}`}>
-                          <TableCell className="font-medium">{cp.name}</TableCell>
-                          <TableCell><Badge variant="outline">{cp.commissionType}</Badge></TableCell>
-                          <TableCell>{cp.ratePercent}%</TableCell>
-                          <TableCell><Badge variant={cp.isActive ? "default" : "secondary"}>{cp.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(cp.createdAt).toLocaleDateString()}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="platform">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><Building className="h-5 w-5" />POL263 Platform Revenue Share</CardTitle>
-                  <ExportButton reportType="platform" filters={filters} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingPlatform ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : platformReceivables.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-platform-receivables">No POL263 Platform receivables recorded</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Amount</TableHead>
-                        <TableHead>Currency</TableHead>
-                        <TableHead>Settled</TableHead>
-                        <TableHead>Created</TableHead>
+            <CardSection title="POL263 Platform Revenue Share" icon={Building} headerRight={<ExportButton reportType="platform" filters={filters} />} flush>
+              {loadingPlatform ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : platformReceivables.length === 0 ? (
+                <EmptyState title="No POL263 Platform receivables recorded" data-testid="text-no-platform-receivables" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Currency</TableHead>
+                      <TableHead>Settled</TableHead>
+                      <TableHead>Created</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {platformReceivables.slice(0, 20).map((cr: any) => (
+                      <TableRow key={cr.id} data-testid={`row-platform-receivable-${cr.id}`}>
+                        <TableCell>{cr.description}</TableCell>
+                        <TableCell className="font-semibold">{cr.currency || "USD"} {cr.amount}</TableCell>
+                        <TableCell>{cr.currency}</TableCell>
+                        <TableCell><Badge variant={cr.isSettled ? "default" : "secondary"}>{cr.isSettled ? "Settled" : "Pending"}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(cr.createdAt).toLocaleDateString()}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {platformReceivables.slice(0, 20).map((cr: any) => (
-                        <TableRow key={cr.id} data-testid={`row-platform-receivable-${cr.id}`}>
-                          <TableCell>{cr.description}</TableCell>
-                          <TableCell className="font-semibold">{cr.currency || "USD"} {cr.amount}</TableCell>
-                          <TableCell>{cr.currency}</TableCell>
-                          <TableCell><Badge variant={cr.isSettled ? "default" : "secondary"}>{cr.isSettled ? "Settled" : "Pending"}</Badge></TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(cr.createdAt).toLocaleDateString()}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="conversions">
-            <Card>
-              <CardHeader className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><RotateCcw className="h-5 w-5" />Policy conversions</CardTitle>
-                  <ExportButton reportType="conversions" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground pr-8">
-                  Inactive to active conversions. From/to filter the status-change time; branch, product, and agent filter the policy.
-                </p>
-              </CardHeader>
-              <CardContent>
-                {loadingConversions ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : conversions.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No conversions in this period.</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Policy #</TableHead>
-                        <TableHead>Client</TableHead>
-                        <TableHead>Converted at</TableHead>
-                        <TableHead>Reason</TableHead>
-                        <TableHead>Current status</TableHead>
+            <CardSection title="Policy conversions" icon={RotateCcw} description="Inactive to active conversions. From/to filter the status-change time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="conversions" filters={filters} />} flush>
+              {loadingConversions ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : conversions.length === 0 ? (
+                <EmptyState title="No conversions in this period" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Policy #</TableHead>
+                      <TableHead>Client</TableHead>
+                      <TableHead>Converted at</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead>Current status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {conversions.map((r: any) => (
+                      <TableRow key={`${r.policyId}-${r.convertedAt}`}>
+                        <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
+                        <TableCell>{r.clientName}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(r.convertedAt).toLocaleString()}</TableCell>
+                        <TableCell>{r.reason || "—"}</TableCell>
+                        <TableCell><Badge variant="outline">{r.currentStatus}</Badge></TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {conversions.map((r: any) => (
-                        <TableRow key={`${r.policyId}-${r.convertedAt}`}>
-                          <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
-                          <TableCell>{r.clientName}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(r.convertedAt).toLocaleString()}</TableCell>
-                          <TableCell>{r.reason || "—"}</TableCell>
-                          <TableCell><Badge variant="outline">{r.currentStatus}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="reinstatements">
-            <Card>
-              <CardHeader className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2"><RotateCcw className="h-5 w-5" />Reinstated policies</CardTitle>
-                  <ExportButton reportType="reinstatements" filters={filters} />
-                </div>
-                <p className="text-sm text-muted-foreground pr-8">
-                  Lapsed to active reinstatements. From/to filter the status-change time; branch, product, and agent filter the policy.
-                </p>
-              </CardHeader>
-              <CardContent>
-                {loadingReinstatements ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : reinstatements.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8" data-testid="text-no-reinstatements">No reinstatements in this period.</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Policy #</TableHead>
-                        <TableHead>Client</TableHead>
-                        <TableHead>Previous status</TableHead>
-                        <TableHead>Reinstated date</TableHead>
-                        <TableHead>Reason</TableHead>
-                        <TableHead>Current status</TableHead>
+            <CardSection title="Reinstated policies" icon={RotateCcw} description="Lapsed to active reinstatements. From/to filter the status-change time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="reinstatements" filters={filters} />} flush>
+              {loadingReinstatements ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : reinstatements.length === 0 ? (
+                <EmptyState title="No reinstatements in this period" data-testid="text-no-reinstatements" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Policy #</TableHead>
+                      <TableHead>Client</TableHead>
+                      <TableHead>Previous status</TableHead>
+                      <TableHead>Reinstated date</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead>Current status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reinstatements.map((r: any) => (
+                      <TableRow key={`${r.policyId}-${r.reinstatedAt}`} data-testid={`row-reinstatement-${r.policyId}`}>
+                        <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
+                        <TableCell>{r.clientName}</TableCell>
+                        <TableCell><Badge variant="outline">{r.fromStatus || "—"}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(r.reinstatedAt).toLocaleString()}</TableCell>
+                        <TableCell>{r.reason || "—"}</TableCell>
+                        <TableCell><Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge></TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {reinstatements.map((r: any) => (
-                        <TableRow key={`${r.policyId}-${r.reinstatedAt}`} data-testid={`row-reinstatement-${r.policyId}`}>
-                          <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
-                          <TableCell>{r.clientName}</TableCell>
-                          <TableCell><Badge variant="outline">{r.fromStatus || "—"}</Badge></TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(r.reinstatedAt).toLocaleString()}</TableCell>
-                          <TableCell>{r.reason || "—"}</TableCell>
-                          <TableCell><Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
             </Tabs>
         </div>

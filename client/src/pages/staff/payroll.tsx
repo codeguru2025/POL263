@@ -1,8 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, KpiStatCard } from "@/components/ds";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader, PageShell, KpiStatCard, CardSection, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -165,169 +164,145 @@ export default function StaffPayroll() {
           </TabsList>
 
           <TabsContent value="employees">
-            <Card>
-              <CardHeader>
-                <CardTitle>Employee List</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {loadingEmployees ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : employees.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Users className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-                    <p className="text-muted-foreground mb-1">No employees added yet</p>
-                    <p className="text-sm text-muted-foreground/70 mb-4">Add employees to start managing payroll</p>
-                    <Button variant="outline" size="sm" onClick={() => { resetEmployeeForm(); setShowEmployeeDialog(true); }} data-testid="button-add-first-employee">
-                      <Plus className="h-4 w-4 mr-2" />Add First Employee
-                    </Button>
-                  </div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Employee #</TableHead>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Position</TableHead>
-                        <TableHead>Department</TableHead>
-                        <TableHead>Base Salary</TableHead>
-                        <TableHead>Status</TableHead>
+            <CardSection title="Employee List" icon={Users}>
+              {loadingEmployees ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : employees.length === 0 ? (
+                <EmptyState
+                  title="No employees added yet"
+                  description="Add employees to start managing payroll."
+                  action={<Button variant="outline" size="sm" onClick={() => { resetEmployeeForm(); setShowEmployeeDialog(true); }} data-testid="button-add-first-employee"><Plus className="h-4 w-4 mr-2" />Add First Employee</Button>}
+                  className="border-0 rounded-none bg-transparent py-10"
+                />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Employee #</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Position</TableHead>
+                      <TableHead>Department</TableHead>
+                      <TableHead>Base Salary</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {employees.map((emp: any) => (
+                      <TableRow key={emp.id} data-testid={`row-employee-${emp.id}`}>
+                        <TableCell className="font-mono text-sm">{emp.employeeNumber}</TableCell>
+                        <TableCell className="font-medium">{emp.firstName} {emp.lastName}</TableCell>
+                        <TableCell>{emp.position || "—"}</TableCell>
+                        <TableCell>{emp.department || "—"}</TableCell>
+                        <TableCell className="font-semibold">{emp.currency} {parseFloat(emp.baseSalary || "0").toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant={emp.isActive ? "default" : "secondary"}>
+                            {emp.isActive ? "Active" : "Inactive"}
+                          </Badge>
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {employees.map((emp: any) => (
-                        <TableRow key={emp.id} data-testid={`row-employee-${emp.id}`}>
-                          <TableCell className="font-mono text-sm">{emp.employeeNumber}</TableCell>
-                          <TableCell className="font-medium">{emp.firstName} {emp.lastName}</TableCell>
-                          <TableCell>{emp.position || "—"}</TableCell>
-                          <TableCell>{emp.department || "—"}</TableCell>
-                          <TableCell className="font-semibold">{emp.currency} {parseFloat(emp.baseSalary || "0").toFixed(2)}</TableCell>
-                          <TableCell>
-                            <Badge variant={emp.isActive ? "default" : "secondary"}>
-                              {emp.isActive ? "Active" : "Inactive"}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="runs">
-            <Card>
-              <CardHeader>
-                <CardTitle>Payroll Runs</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {loadingRuns ? (
-                  <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-                ) : runs.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Calendar className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-                    <p className="text-muted-foreground mb-1">No payroll runs yet</p>
-                    <p className="text-sm text-muted-foreground/70 mb-4">Create a payroll run to process employee salaries</p>
-                    <Button variant="outline" size="sm" onClick={() => setShowRunDialog(true)} data-testid="button-create-first-run">
-                      <Plus className="h-4 w-4 mr-2" />Create First Run
-                    </Button>
-                  </div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Period</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Total Gross</TableHead>
-                        <TableHead>Total Deductions</TableHead>
-                        <TableHead>Total Net</TableHead>
-                        <TableHead>Created</TableHead>
-                        <TableHead>Actions</TableHead>
+            <CardSection title="Payroll Runs" icon={Calendar}>
+              {loadingRuns ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : runs.length === 0 ? (
+                <EmptyState
+                  title="No payroll runs yet"
+                  description="Create a payroll run to process employee salaries."
+                  action={<Button variant="outline" size="sm" onClick={() => setShowRunDialog(true)} data-testid="button-create-first-run"><Plus className="h-4 w-4 mr-2" />Create First Run</Button>}
+                  className="border-0 rounded-none bg-transparent py-10"
+                />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Period</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Total Gross</TableHead>
+                      <TableHead>Total Deductions</TableHead>
+                      <TableHead>Total Net</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {runs.map((run: any) => (
+                      <TableRow key={run.id} data-testid={`row-run-${run.id}`}>
+                        <TableCell className="font-medium">
+                          {run.periodStart} — {run.periodEnd}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={getStatusColor(run.status)}>{run.status}</Badge>
+                        </TableCell>
+                        <TableCell className="font-semibold">{run.totalGross ? parseFloat(run.totalGross).toFixed(2) : "—"}</TableCell>
+                        <TableCell>{run.totalDeductions ? parseFloat(run.totalDeductions).toFixed(2) : "—"}</TableCell>
+                        <TableCell className="font-semibold">{run.totalNet ? parseFloat(run.totalNet).toFixed(2) : "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{new Date(run.createdAt).toLocaleDateString()}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setSelectedRun(selectedRun?.id === run.id ? null : run)}
+                            data-testid={`button-view-run-${run.id}`}
+                          >
+                            <FileSpreadsheet className="h-4 w-4 mr-1" />View
+                          </Button>
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {runs.map((run: any) => (
-                        <TableRow key={run.id} data-testid={`row-run-${run.id}`}>
-                          <TableCell className="font-medium">
-                            {run.periodStart} — {run.periodEnd}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={getStatusColor(run.status)}>{run.status}</Badge>
-                          </TableCell>
-                          <TableCell className="font-semibold">{run.totalGross ? parseFloat(run.totalGross).toFixed(2) : "—"}</TableCell>
-                          <TableCell>{run.totalDeductions ? parseFloat(run.totalDeductions).toFixed(2) : "—"}</TableCell>
-                          <TableCell className="font-semibold">{run.totalNet ? parseFloat(run.totalNet).toFixed(2) : "—"}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{new Date(run.createdAt).toLocaleDateString()}</TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setSelectedRun(selectedRun?.id === run.id ? null : run)}
-                              data-testid={`button-view-run-${run.id}`}
-                            >
-                              <FileSpreadsheet className="h-4 w-4 mr-1" />View
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardSection>
 
             {selectedRun && (
-              <Card className="mt-4">
-                <CardHeader>
-                  <CardTitle>Payslips for {selectedRun.periodStart} — {selectedRun.periodEnd}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground py-4">
-                    Payslip generation is available when the run is processed. Current status: <Badge variant={getStatusColor(selectedRun.status)}>{selectedRun.status}</Badge>
-                  </p>
-                </CardContent>
-              </Card>
+              <CardSection
+                title={`Payslips for ${selectedRun.periodStart} — ${selectedRun.periodEnd}`}
+                icon={FileSpreadsheet}
+                className="mt-4"
+              >
+                <p className="text-sm text-muted-foreground py-4">
+                  Payslip generation is available when the run is processed. Current status: <Badge variant={getStatusColor(selectedRun.status)}>{selectedRun.status}</Badge>
+                </p>
+              </CardSection>
             )}
           </TabsContent>
 
           <TabsContent value="payslips">
-            <Card>
-              <CardHeader>
-                <CardTitle>Payslip Data</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {runs.length === 0 ? (
-                  <div className="text-center py-12">
-                    <FileSpreadsheet className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-                    <p className="text-muted-foreground mb-1">No payslips available</p>
-                    <p className="text-sm text-muted-foreground/70">Create and process a payroll run to generate payslips</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {runs.map((run: any) => (
-                      <Card key={run.id} className="border-dashed">
-                        <CardContent className="pt-4">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="font-medium">Period: {run.periodStart} — {run.periodEnd}</p>
-                              <p className="text-sm text-muted-foreground">
-                                Status: <Badge variant={getStatusColor(run.status)} className="ml-1">{run.status}</Badge>
-                              </p>
-                            </div>
-                            <div className="text-right">
-                              {run.totalNet && (
-                                <p className="font-semibold text-lg">Net: {run.currency} {parseFloat(run.totalNet).toFixed(2)}</p>
-                              )}
-                              <p className="text-xs text-muted-foreground">Created {new Date(run.createdAt).toLocaleDateString()}</p>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="Payslip Data" icon={FileSpreadsheet}>
+              {runs.length === 0 ? (
+                <EmptyState
+                  title="No payslips available"
+                  description="Create and process a payroll run to generate payslips."
+                  className="border-0 rounded-none bg-transparent py-10"
+                />
+              ) : (
+                <div className="space-y-3">
+                  {runs.map((run: any) => (
+                    <div key={run.id} className="flex items-center justify-between p-4 border rounded-lg">
+                      <div>
+                        <p className="font-medium">Period: {run.periodStart} — {run.periodEnd}</p>
+                        <p className="text-sm text-muted-foreground">
+                          Status: <Badge variant={getStatusColor(run.status)} className="ml-1">{run.status}</Badge>
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        {run.totalNet && (
+                          <p className="font-semibold text-lg">Net: {run.currency} {parseFloat(run.totalNet).toFixed(2)}</p>
+                        )}
+                        <p className="text-xs text-muted-foreground">Created {new Date(run.createdAt).toLocaleDateString()}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardSection>
           </TabsContent>
         </Tabs>
       </PageShell>

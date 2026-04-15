@@ -7,8 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
-import { PageHeader, PageShell } from "@/components/ds";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader, PageShell, CardSection, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -42,12 +41,10 @@ export default function ClientFeedback() {
   if (meFetched && (meError || !me?.client)) {
     return (
       <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardContent className="pt-6 text-center space-y-4">
-            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
-            <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
-          </CardContent>
-        </Card>
+        <div className="text-center space-y-4">
+          <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+          <Button onClick={() => setLocation("/client/login")}>Sign In</Button>
+        </div>
       </div>
     );
   }
@@ -97,38 +94,40 @@ export default function ClientFeedback() {
           )}
         />
 
-        <Card>
-          <CardContent className="pt-6">
-            {isLoading ? (
-              <p className="text-muted-foreground text-sm py-6 text-center">Loading…</p>
-            ) : items.length === 0 ? (
-              <p className="text-muted-foreground text-sm py-6 text-center">No complaints or feedback yet. Use &quot;New&quot; to submit.</p>
-            ) : (
-              <ul className="space-y-3">
-                {items.map((item) => (
-                  <li key={item.id} className="p-4 border rounded-lg">
-                    <div className="flex justify-between items-start gap-2">
-                      <div>
-                        <p className="font-medium text-sm capitalize">{item.type}</p>
-                        <p className="text-sm mt-1">{item.subject}</p>
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{item.message}</p>
-                        <p className="text-xs text-muted-foreground mt-2">{formatDate(item.createdAt)} — {formatStatus(item.status)}</p>
-                      </div>
+        <CardSection title="Submitted items" icon={MessageSquare}>
+          {isLoading ? (
+            <p className="text-muted-foreground text-sm py-6 text-center">Loading…</p>
+          ) : items.length === 0 ? (
+            <EmptyState
+              title="Nothing submitted yet"
+              description='Use "New" to submit a complaint or feedback.'
+              className="border-0 rounded-none bg-transparent py-8"
+            />
+          ) : (
+            <ul className="space-y-3">
+              {items.map((item) => (
+                <li key={item.id} className="p-4 border rounded-lg">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <p className="font-medium text-sm capitalize">{item.type}</p>
+                      <p className="text-sm mt-1">{item.subject}</p>
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{item.message}</p>
+                      <p className="text-xs text-muted-foreground mt-2">{formatDate(item.createdAt)} — {formatStatus(item.status)}</p>
                     </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardSection>
 
         {showForm && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Submit complaint or feedback</CardTitle>
-              <p className="text-sm text-muted-foreground">Send a complaint or general feedback. We will respond as soon as we can.</p>
-            </CardHeader>
-            <CardContent className="space-y-4">
+          <CardSection
+            title="Submit complaint or feedback"
+            description="Send a complaint or general feedback. We will respond as soon as we can."
+            icon={Plus}
+          >
+            <div className="space-y-4">
               <div>
                 <Label>Type</Label>
                 <Select value={form.type} onValueChange={(v: "complaint" | "feedback") => setForm((p) => ({ ...p, type: v }))}>
@@ -157,8 +156,8 @@ export default function ClientFeedback() {
                 </Button>
                 <Button variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </CardSection>
         )}
       </PageShell>
     </ClientLayout>

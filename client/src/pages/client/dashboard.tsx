@@ -3,8 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
-import { PageHeader, PageShell } from "@/components/ds";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { PageHeader, PageShell, CardSection } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -245,46 +244,38 @@ function ClientCreditBalances() {
   });
   if (!balances.length) return null;
   return (
-    <Card className="shadow-sm">
-      <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2">
-          <DollarSign className="h-5 w-5 text-primary" />
-          Policy Balances
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          {balances.map((b) => {
-            const bal = parseFloat(b.balance);
-            const premium = parseFloat(b.premiumAmount);
-            return (
-              <div key={b.policyId} className="p-3 border rounded-lg flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">{b.policyNumber}</p>
-                  <p className="text-xs text-muted-foreground capitalize">{b.status}</p>
-                </div>
-                <div className="text-right">
-                  {bal < 0 ? (
-                    <p className="text-sm font-semibold text-red-600">
-                      Owing: {b.currency} {Math.abs(bal).toFixed(2)}
-                    </p>
-                  ) : bal > 0 ? (
-                    <p className="text-sm font-semibold text-green-600">
-                      Credit: {b.currency} {bal.toFixed(2)}
-                    </p>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Balance: {b.currency} 0.00</p>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    Premium: {b.currency} {isNaN(premium) ? "—" : premium.toFixed(2)}
-                  </p>
-                </div>
+    <CardSection title="Policy Balances" icon={DollarSign}>
+      <div className="space-y-3">
+        {balances.map((b) => {
+          const bal = parseFloat(b.balance);
+          const premium = parseFloat(b.premiumAmount);
+          return (
+            <div key={b.policyId} className="p-3 border rounded-lg flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">{b.policyNumber}</p>
+                <p className="text-xs text-muted-foreground capitalize">{b.status}</p>
               </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+              <div className="text-right">
+                {bal < 0 ? (
+                  <p className="text-sm font-semibold text-red-600">
+                    Owing: {b.currency} {Math.abs(bal).toFixed(2)}
+                  </p>
+                ) : bal > 0 ? (
+                  <p className="text-sm font-semibold text-green-600">
+                    Credit: {b.currency} {bal.toFixed(2)}
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Balance: {b.currency} 0.00</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Premium: {b.currency} {isNaN(premium) ? "—" : premium.toFixed(2)}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </CardSection>
   );
 }
 
@@ -436,16 +427,14 @@ export default function ClientDashboard() {
   if (meError || !meData?.client) {
     return (
       <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardContent className="pt-6 text-center space-y-4">
-            <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto" />
-            <h2 className="text-xl font-bold">Session Expired</h2>
-            <p className="text-muted-foreground">Please sign in again to access your portal.</p>
-            <Button onClick={() => setLocation("/client/login")} data-testid="btn-go-login">
-              Sign In
-            </Button>
-          </CardContent>
-        </Card>
+        <div className="text-center space-y-4">
+          <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto" />
+          <h2 className="text-xl font-bold">Session Expired</h2>
+          <p className="text-muted-foreground">Please sign in again to access your portal.</p>
+          <Button onClick={() => setLocation("/client/login")} data-testid="btn-go-login">
+            Sign In
+          </Button>
+        </div>
       </div>
     );
   }
@@ -465,35 +454,31 @@ export default function ClientDashboard() {
         />
 
         {gracePolicy && (
-          <Card className="border-orange-300 bg-orange-50 shadow-sm">
-            <CardContent className="pt-4 flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-orange-600 mt-0.5 shrink-0" />
-              <div>
-                <p className="font-semibold text-orange-800">Grace Period Warning</p>
-                <p className="text-sm text-orange-700 mt-1">
-                  Policy <strong>{gracePolicy.policyNumber}</strong> is in a grace period.
-                  {gracePolicy.graceEndDate && (
-                    <> Grace ends {formatDate(gracePolicy.graceEndDate)} ({daysUntil(gracePolicy.graceEndDate)} days remaining).</>
-                  )}
-                  Please make a payment to avoid lapsing.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 p-4 shadow-sm">
+            <AlertTriangle className="h-5 w-5 text-orange-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold text-orange-800">Grace Period Warning</p>
+              <p className="text-sm text-orange-700 mt-1">
+                Policy <strong>{gracePolicy.policyNumber}</strong> is in a grace period.
+                {gracePolicy.graceEndDate && (
+                  <> Grace ends {formatDate(gracePolicy.graceEndDate)} ({daysUntil(gracePolicy.graceEndDate)} days remaining).</>
+                )}
+                Please make a payment to avoid lapsing.
+              </p>
+            </div>
+          </div>
         )}
 
         {lapsedPolicies.length > 0 && (
-          <Card className="border-red-300 bg-red-50 shadow-sm">
-            <CardContent className="pt-4 flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 shrink-0" />
-              <div>
-                <p className="font-semibold text-red-800">Lapsed Policy</p>
-                <p className="text-sm text-red-700 mt-1">
-                  {lapsedPolicies.length} {lapsedPolicies.length === 1 ? "policy has" : "policies have"} lapsed. Contact your agent or branch to discuss reinstatement.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 p-4 shadow-sm">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold text-red-800">Lapsed Policy</p>
+              <p className="text-sm text-red-700 mt-1">
+                {lapsedPolicies.length} {lapsedPolicies.length === 1 ? "policy has" : "policies have"} lapsed. Contact your agent or branch to discuss reinstatement.
+              </p>
+            </div>
+          </div>
         )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -518,89 +503,67 @@ export default function ClientDashboard() {
           <TabsContent value="overview" className="space-y-6 mt-6">
             <div className="grid md:grid-cols-3 gap-6">
               {activePolicy ? (
-                <Card className="md:col-span-2 border-primary/20 bg-primary/5 shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <CheckCircle2 className="h-5 w-5 text-primary" />
-                      Active Policy
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid sm:grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-sm text-muted-foreground">Policy Number</p>
-                        <p className="font-medium" data-testid="text-active-policy-number">{activePolicy.policyNumber}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-muted-foreground">Premium</p>
-                        <p className="font-medium">{formatCurrency(activePolicy.premiumAmount, activePolicy.currency)} / {activePolicy.paymentSchedule}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-muted-foreground">Effective Since</p>
-                        <p className="font-medium">{formatDate(activePolicy.effectiveDate)}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-muted-foreground">Current Cycle</p>
-                        <p className="font-medium">{formatDate(activePolicy.currentCycleStart)} — {formatDate(activePolicy.currentCycleEnd)}</p>
-                      </div>
-                      {activePolicy.balance != null && (
-                        <div>
-                          <p className="text-sm text-muted-foreground">Balance</p>
-                          <p className={`font-bold ${Number(activePolicy.balance) > 0 ? "text-emerald-600" : Number(activePolicy.balance) < 0 ? "text-red-600" : ""}`}>
-                            {formatCurrency(Math.abs(Number(activePolicy.balance)).toFixed(2), activePolicy.currency)}
-                            {Number(activePolicy.balance) > 0 ? " (Advance)" : Number(activePolicy.balance) < 0 ? " (Arrears)" : " (Up to date)"}
-                          </p>
-                        </div>
-                      )}
+                <CardSection title="Active Policy" icon={CheckCircle2} className="md:col-span-2">
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Policy Number</p>
+                      <p className="font-medium" data-testid="text-active-policy-number">{activePolicy.policyNumber}</p>
                     </div>
-
-                    {activePolicy.waitingPeriodEndDate && daysUntil(activePolicy.waitingPeriodEndDate) !== null && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0 && (
-                      <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
-                        <Timer className="h-5 w-5 text-blue-600" />
-                        <div>
-                          <p className="text-sm font-medium text-blue-800">Waiting Period Active</p>
-                          <p className="text-xs text-blue-600">{daysUntil(activePolicy.waitingPeriodEndDate)} days remaining until {formatDate(activePolicy.waitingPeriodEndDate)}</p>
-                        </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Premium</p>
+                      <p className="font-medium">{formatCurrency(activePolicy.premiumAmount, activePolicy.currency)} / {activePolicy.paymentSchedule}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Effective Since</p>
+                      <p className="font-medium">{formatDate(activePolicy.effectiveDate)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Current Cycle</p>
+                      <p className="font-medium">{formatDate(activePolicy.currentCycleStart)} — {formatDate(activePolicy.currentCycleEnd)}</p>
+                    </div>
+                    {activePolicy.balance != null && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">Balance</p>
+                        <p className={`font-bold ${Number(activePolicy.balance) > 0 ? "text-emerald-600" : Number(activePolicy.balance) < 0 ? "text-red-600" : ""}`}>
+                          {formatCurrency(Math.abs(Number(activePolicy.balance)).toFixed(2), activePolicy.currency)}
+                          {Number(activePolicy.balance) > 0 ? " (Advance)" : Number(activePolicy.balance) < 0 ? " (Arrears)" : " (Up to date)"}
+                        </p>
                       </div>
                     )}
+                  </div>
 
-                    <div className="mt-4">
-                      <Button variant="outline" className="gap-2" data-testid="btn-pay-now" onClick={() => setLocation(`/client/payments?policyId=${activePolicy.id}`)}>
-                        <CreditCard className="h-4 w-4" />
-                        Pay Now
-                      </Button>
-                      <p className="text-xs text-muted-foreground mt-2">
-                        Claimability: {isPolicyClaimable(activePolicy) ? (
-                          <span className="text-emerald-600 font-medium">Eligible for claims</span>
-                        ) : (
-                          <span>Not yet eligible (check status or waiting period)</span>
-                        )}
-                      </p>
+                  {activePolicy.waitingPeriodEndDate && daysUntil(activePolicy.waitingPeriodEndDate) !== null && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0 && (
+                    <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
+                      <Timer className="h-5 w-5 text-blue-600" />
+                      <div>
+                        <p className="text-sm font-medium text-blue-800">Waiting Period Active</p>
+                        <p className="text-xs text-blue-600">{daysUntil(activePolicy.waitingPeriodEndDate)} days remaining until {formatDate(activePolicy.waitingPeriodEndDate)}</p>
+                      </div>
                     </div>
-                  </CardContent>
-                </Card>
+                  )}
+
+                  <div className="mt-4">
+                    <Button variant="outline" className="gap-2" data-testid="btn-pay-now" onClick={() => setLocation(`/client/payments?policyId=${activePolicy.id}`)}>
+                      <CreditCard className="h-4 w-4" />
+                      Pay Now
+                    </Button>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Claimability: {isPolicyClaimable(activePolicy) ? (
+                        <span className="text-emerald-600 font-medium">Eligible for claims</span>
+                      ) : (
+                        <span>Not yet eligible (check status or waiting period)</span>
+                      )}
+                    </p>
+                  </div>
+                </CardSection>
               ) : (
-                <Card className="md:col-span-2 border-muted shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <Shield className="h-5 w-5 text-muted-foreground" />
-                      No Active Policy
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-muted-foreground">You don't have an active policy at the moment. Contact your agent for assistance.</p>
-                  </CardContent>
-                </Card>
+                <CardSection title="No Active Policy" icon={Shield} className="md:col-span-2">
+                  <p className="text-muted-foreground">You don't have an active policy at the moment. Contact your agent for assistance.</p>
+                </CardSection>
               )}
 
-              <Card className="shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <FileText className="h-5 w-5 text-primary" />
-                    Summary
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
+              <CardSection title="Summary" icon={FileText}>
+                <div className="space-y-3">
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Total Policies</span>
                     <span className="font-bold text-lg" data-testid="text-policy-count">{policies?.length ?? 0}</span>
@@ -617,60 +580,44 @@ export default function ClientDashboard() {
                     <span className="text-sm text-muted-foreground">Lapsed</span>
                     <span className="font-medium text-red-600">{lapsedPolicies.length}</span>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </CardSection>
             </div>
 
             <ClientCreditBalances />
 
-            <Card className="shadow-sm">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="flex items-center gap-2">
-                  <Shield className="h-5 w-5" />
-                  All Policies
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {policiesLoading ? (
-                  <div className="space-y-3">
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-16 w-full" />
-                  </div>
-                ) : !policies || policies.length === 0 ? (
-                  <p className="text-muted-foreground text-center py-8">No policies found.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {policies.map((policy) => (
-                      <PolicyCard
-                        key={policy.id}
-                        policy={policy}
-                        isExpanded={expandedPolicy === policy.id}
-                        onToggle={() => setExpandedPolicy(expandedPolicy === policy.id ? null : policy.id)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="All Policies" icon={Shield}>
+              {policiesLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-16 w-full" />
+                </div>
+              ) : !policies || policies.length === 0 ? (
+                <p className="text-muted-foreground text-center py-8">No policies found.</p>
+              ) : (
+                <div className="space-y-3">
+                  {policies.map((policy) => (
+                    <PolicyCard
+                      key={policy.id}
+                      policy={policy}
+                      isExpanded={expandedPolicy === policy.id}
+                      onToggle={() => setExpandedPolicy(expandedPolicy === policy.id ? null : policy.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="payments" className="space-y-6 mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Receipt className="h-5 w-5" />
-                  Payment History
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {policies?.map((policy) => (
-                  <PaymentSection key={policy.id} policy={policy} />
-                ))}
-                {(!policies || policies.length === 0) && (
-                  <p className="text-muted-foreground text-center py-8">No policies found.</p>
-                )}
-              </CardContent>
-            </Card>
+            <CardSection title="Payment History" icon={Receipt}>
+              {policies?.map((policy) => (
+                <PaymentSection key={policy.id} policy={policy} />
+              ))}
+              {(!policies || policies.length === 0) && (
+                <p className="text-muted-foreground text-center py-8">No policies found.</p>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="members" className="space-y-6 mt-6">
@@ -679,69 +626,48 @@ export default function ClientDashboard() {
               <BeneficiarySection key={policy.id} policy={policy} clientId={client.id} />
             ))}
             {(!policies || policies.length === 0) && (
-              <Card className="shadow-sm">
-                <CardContent className="pt-6">
-                  <p className="text-muted-foreground text-center py-8">No policies found.</p>
-                </CardContent>
-              </Card>
+              <p className="text-muted-foreground text-center py-8">No policies found.</p>
             )}
           </TabsContent>
 
           <TabsContent value="notifications" className="space-y-6 mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Bell className="h-5 w-5" />
-                  Notifications & Alerts
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {gracePolicy && (
-                    <div className="p-4 border rounded-lg bg-orange-50 border-orange-200 flex items-start gap-3" data-testid="alert-grace">
-                      <AlertTriangle className="h-5 w-5 text-orange-600 mt-0.5" />
-                      <div>
-                        <p className="font-medium text-orange-800">Grace Period - {gracePolicy.policyNumber}</p>
-                        <p className="text-sm text-orange-700 mt-1">Your policy is in grace. Pay before {formatDate(gracePolicy.graceEndDate)} to avoid lapsing.</p>
-                      </div>
+            <CardSection title="Notifications & Alerts" icon={Bell}>
+              <div className="space-y-3">
+                {gracePolicy && (
+                  <div className="p-4 border rounded-lg bg-orange-50 border-orange-200 flex items-start gap-3" data-testid="alert-grace">
+                    <AlertTriangle className="h-5 w-5 text-orange-600 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-orange-800">Grace Period - {gracePolicy.policyNumber}</p>
+                      <p className="text-sm text-orange-700 mt-1">Your policy is in grace. Pay before {formatDate(gracePolicy.graceEndDate)} to avoid lapsing.</p>
                     </div>
-                  )}
-                  {activePolicy?.waitingPeriodEndDate && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0 && (
-                    <div className="p-4 border rounded-lg bg-blue-50 border-blue-200 flex items-start gap-3" data-testid="alert-waiting">
-                      <Timer className="h-5 w-5 text-blue-600 mt-0.5" />
-                      <div>
-                        <p className="font-medium text-blue-800">Waiting Period Active</p>
-                        <p className="text-sm text-blue-700 mt-1">{daysUntil(activePolicy.waitingPeriodEndDate)} days remaining on your waiting period.</p>
-                      </div>
+                  </div>
+                )}
+                {activePolicy?.waitingPeriodEndDate && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0 && (
+                  <div className="p-4 border rounded-lg bg-blue-50 border-blue-200 flex items-start gap-3" data-testid="alert-waiting">
+                    <Timer className="h-5 w-5 text-blue-600 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-blue-800">Waiting Period Active</p>
+                      <p className="text-sm text-blue-700 mt-1">{daysUntil(activePolicy.waitingPeriodEndDate)} days remaining on your waiting period.</p>
                     </div>
-                  )}
-                  <ClientNotificationsList />
-                  <ClientCreditNotesList />
-                  <ClientNotificationSettings />
-                  {!gracePolicy && !(activePolicy?.waitingPeriodEndDate && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0) && (
-                    <div className="text-center py-8 text-muted-foreground flex flex-col items-center gap-3">
-                      <Heart className="h-8 w-8 text-green-500" />
-                      <p>All clear! You have no alerts at this time.</p>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+                  </div>
+                )}
+                <ClientNotificationsList />
+                <ClientCreditNotesList />
+                <ClientNotificationSettings />
+                {!gracePolicy && !(activePolicy?.waitingPeriodEndDate && (daysUntil(activePolicy.waitingPeriodEndDate) ?? 0) > 0) && (
+                  <div className="text-center py-8 text-muted-foreground flex flex-col items-center gap-3">
+                    <Heart className="h-8 w-8 text-green-500" />
+                    <p>All clear! You have no alerts at this time.</p>
+                  </div>
+                )}
+              </div>
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="account" className="space-y-6 mt-6">
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <KeyRound className="h-5 w-5" />
-                  Account &amp; security
-                </CardTitle>
-                <CardDescription>Change your client portal password.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ClientChangePassword />
-              </CardContent>
-            </Card>
+            <CardSection title="Account &amp; security" description="Change your client portal password." icon={KeyRound}>
+              <ClientChangePassword />
+            </CardSection>
           </TabsContent>
         </Tabs>
       </PageShell>
@@ -986,21 +912,8 @@ function DependentsSection({ clientId }: { clientId: string }) {
   });
 
   return (
-    <Card className="shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <div>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Dependents
-          </CardTitle>
-          <CardDescription>People covered under your policies</CardDescription>
-        </div>
-        <Button size="sm" variant="outline" className="gap-2" onClick={() => setShowForm(!showForm)} data-testid="btn-add-dependent">
-          <UserPlus className="h-4 w-4" />
-          Add Dependent
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <CardSection title="Dependents" description="People covered under your policies" icon={Users} headerRight={<Button size="sm" variant="outline" className="gap-2" onClick={() => setShowForm(!showForm)} data-testid="btn-add-dependent"><UserPlus className="h-4 w-4" />Add Dependent</Button>}>
+      <div className="space-y-4">
         {showForm && (
           <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
             <p className="text-sm font-medium">Add a new dependent</p>
@@ -1082,8 +995,8 @@ function DependentsSection({ clientId }: { clientId: string }) {
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </CardSection>
   );
 }
 
@@ -1151,20 +1064,8 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
   };
 
   return (
-    <Card className="shadow-sm">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Star className="h-5 w-5 text-amber-500" />
-              Beneficiary — {policy.policyNumber}
-            </CardTitle>
-            <CardDescription>The person who receives the payout for this policy (max 1)</CardDescription>
-          </div>
-          <Badge variant="outline" className={statusColors[policy.status] || "bg-gray-100"}>{formatStatus(policy.status)}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <CardSection title={`Beneficiary — ${policy.policyNumber}`} description="The person who receives the payout for this policy (max 1)" icon={Star} headerRight={<Badge variant="outline" className={statusColors[policy.status] || "bg-gray-100"}>{formatStatus(policy.status)}</Badge>}>
+      <div className="space-y-4">
         {benLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : beneficiary ? (
@@ -1282,7 +1183,7 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
             )}
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </CardSection>
   );
 }

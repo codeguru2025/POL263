@@ -1,6 +1,5 @@
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection } from "@/components/ds";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { BookOpen, LifeBuoy } from "lucide-react";
@@ -26,17 +25,12 @@ export default function StaffHelpCenter() {
             </Button>
           </div>
         </CardSection>
-        <Card>
-          <CardContent className="pt-6 flex items-start gap-3">
-            <LifeBuoy className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-            <div>
-              <p className="font-medium">Need something documented here?</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Ask your administrator to add org-specific procedures or video links to this page.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+        <CardSection title="Need help?" icon={LifeBuoy}>
+          <p className="font-medium">Need something documented here?</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Ask your administrator to add org-specific procedures or video links to this page.
+          </p>
+        </CardSection>
       </PageShell>
     </StaffLayout>
   );

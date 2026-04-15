@@ -61,6 +61,8 @@ const StaffHelpCenter = lazy(() => retryLazy(() => import("@/pages/staff/help-ce
 const StaffReminders = lazy(() => retryLazy(() => import("@/pages/staff/reminders")));
 const StaffOrderServices = lazy(() => retryLazy(() => import("@/pages/staff/order-services")));
 const StaffAssetsRegister = lazy(() => retryLazy(() => import("@/pages/staff/assets-register")));
+const StaffComingSoon = lazy(() => retryLazy(() => import("@/pages/staff/coming-soon")));
+const StaffEmployeeReports = lazy(() => retryLazy(() => import("@/pages/staff/employee-reports")));
 
 const ClientLogin = lazy(() => retryLazy(() => import("@/pages/client/login")));
 const ClientClaim = lazy(() => retryLazy(() => import("@/pages/client/claim")));
@@ -163,7 +165,37 @@ function Router() {
       <SafeRoute path="/staff/reminders" component={StaffReminders} />
       <SafeRoute path="/staff/order-services" component={StaffOrderServices} />
       <SafeRoute path="/staff/tools/assets" component={StaffAssetsRegister} />
-      
+      <SafeRoute path="/staff/employee-reports" component={StaffEmployeeReports} />
+
+      {/* Stub pages — under construction */}
+      <SafeRoute path="/staff/transactions/society" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/tombstone" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/credit-notes" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/invoices" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/petty-cash" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/bank-deposits" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/debit-orders" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/fax" component={StaffComingSoon} />
+      <SafeRoute path="/staff/reports/dynamic-generic" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/easypay" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/print-policy-cards" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/statistics" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/statistical-graphs" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/claims-form" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/transport-companies" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/contacts" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/society" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/tombstones" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/invoice-items" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/agents" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/brokers" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/member-cards" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/terminals" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/branches" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/sub-groups" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/underwriters" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/undertakers" component={StaffComingSoon} />
+
       <SafeRoute path="/join" component={JoinPage} />
       <SafeRoute path="/join/register" component={JoinRegisterPage} />
       

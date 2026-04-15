@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, KpiStatCard } from "@/components/ds";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -767,50 +766,10 @@ export default function StaffFinance() {
 
         {!commissionOnly && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <DollarSign className="h-8 w-8 text-primary" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Payments</p>
-                  <p className="text-2xl font-bold" data-testid="text-payment-count">{payments.length}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-8 w-8 text-green-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Receipted</p>
-                  <p className="text-2xl font-bold" data-testid="text-total-cleared">{paymentCurrency} {totalCleared.toFixed(2)}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <TrendingUp className="h-8 w-8 text-blue-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Commission Configs</p>
-                  <p className="text-2xl font-bold">{commissionConfigs.length}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <Wallet className="h-8 w-8 text-orange-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Expenditures</p>
-                  <p className="text-2xl font-bold">{expenditures.length}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <KpiStatCard label="Total Payments" value={<span data-testid="text-payment-count">{payments.length}</span>} icon={DollarSign} />
+          <KpiStatCard label="Total Receipted" value={<span data-testid="text-total-cleared">{paymentCurrency} {totalCleared.toFixed(2)}</span>} icon={CheckCircle2} />
+          <KpiStatCard label="Commission Configs" value={commissionConfigs.length} icon={TrendingUp} />
+          <KpiStatCard label="Expenditures" value={expenditures.length} icon={Wallet} />
         </div>
         )}
 
@@ -1143,41 +1102,11 @@ export default function StaffFinance() {
                 return (
                   <>
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                      <Card className="bg-blue-50 dark:bg-blue-950/20 border-blue-200">
-                        <CardContent className="pt-4 text-center">
-                          <p className="text-xs text-muted-foreground mb-1">New Business</p>
-                          <p className="text-xl font-bold text-blue-700" data-testid="stat-comm-new-biz">{fmt(newBizTotal)}</p>
-                          <p className="text-[10px] text-muted-foreground">{newBusiness.length} entries</p>
-                        </CardContent>
-                      </Card>
-                      <Card className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200">
-                        <CardContent className="pt-4 text-center">
-                          <p className="text-xs text-muted-foreground mb-1">Existing Business</p>
-                          <p className="text-xl font-bold text-emerald-700" data-testid="stat-comm-existing-biz">{fmt(existBizTotal)}</p>
-                          <p className="text-[10px] text-muted-foreground">{existingBusiness.length} entries</p>
-                        </CardContent>
-                      </Card>
-                      <Card className="bg-red-50 dark:bg-red-950/20 border-red-200">
-                        <CardContent className="pt-4 text-center">
-                          <p className="text-xs text-muted-foreground mb-1">Clawbacks</p>
-                          <p className="text-xl font-bold text-red-700" data-testid="stat-comm-clawbacks">{clawbackTotal !== 0 ? `−${fmt(clawbackTotal)}` : fmt(0)}</p>
-                          <p className="text-[10px] text-muted-foreground">{clawbacks.length} entries</p>
-                        </CardContent>
-                      </Card>
-                      <Card className="bg-amber-50 dark:bg-amber-950/20 border-amber-200">
-                        <CardContent className="pt-4 text-center">
-                          <p className="text-xs text-muted-foreground mb-1">Rollbacks</p>
-                          <p className="text-xl font-bold text-amber-700" data-testid="stat-comm-rollbacks">{fmt(rollbackTotal)}</p>
-                          <p className="text-[10px] text-muted-foreground">{rollbacks.length} entries</p>
-                        </CardContent>
-                      </Card>
-                      <Card className="bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200">
-                        <CardContent className="pt-4 text-center">
-                          <p className="text-xs text-muted-foreground mb-1">Total Commissions</p>
-                          <p className={`text-xl font-bold ${netTotal < 0 ? "text-red-600" : "text-indigo-700"}`} data-testid="stat-comm-total">{netTotal < 0 ? `−${fmt(netTotal)}` : fmt(netTotal)}</p>
-                          <p className="text-[10px] text-muted-foreground">{commissionLedger.length} entries</p>
-                        </CardContent>
-                      </Card>
+                      <KpiStatCard label="New Business" value={<span className="text-blue-700" data-testid="stat-comm-new-biz">{fmt(newBizTotal)}</span>} hint={`${newBusiness.length} entries`} className="bg-blue-50 dark:bg-blue-950/20 border-blue-200" />
+                      <KpiStatCard label="Existing Business" value={<span className="text-emerald-700" data-testid="stat-comm-existing-biz">{fmt(existBizTotal)}</span>} hint={`${existingBusiness.length} entries`} className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200" />
+                      <KpiStatCard label="Clawbacks" value={<span className="text-red-700" data-testid="stat-comm-clawbacks">{clawbackTotal !== 0 ? `−${fmt(clawbackTotal)}` : fmt(0)}</span>} hint={`${clawbacks.length} entries`} className="bg-red-50 dark:bg-red-950/20 border-red-200" />
+                      <KpiStatCard label="Rollbacks" value={<span className="text-amber-700" data-testid="stat-comm-rollbacks">{fmt(rollbackTotal)}</span>} hint={`${rollbacks.length} entries`} className="bg-amber-50 dark:bg-amber-950/20 border-amber-200" />
+                      <KpiStatCard label="Total Commissions" value={<span className={netTotal < 0 ? "text-red-600" : "text-indigo-700"} data-testid="stat-comm-total">{netTotal < 0 ? `−${fmt(netTotal)}` : fmt(netTotal)}</span>} hint={`${commissionLedger.length} entries`} className="bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200" />
                     </div>
                   </>
                 );
@@ -1519,28 +1448,26 @@ export default function StaffFinance() {
             </div>
 
             {receiptDialogPolicy && (
-              <Card className="bg-muted/40 border-dashed">
-                <CardContent className="pt-4 pb-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="font-mono font-semibold text-sm" data-testid="text-selected-policy">{receiptDialogPolicy.policyNumber}</p>
-                      {getClient(receiptDialogPolicy.clientId) && (
-                        <p className="text-sm text-muted-foreground">
-                          {getClient(receiptDialogPolicy.clientId).firstName} {getClient(receiptDialogPolicy.clientId).lastName}
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <Badge variant={receiptDialogPolicy.status === "active" ? "default" : "secondary"}>{receiptDialogPolicy.status}</Badge>
-                      {receiptDialogPolicy.premiumAmount && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Premium: {formatAmount(receiptDialogPolicy.premiumAmount, receiptDialogPolicy.premiumCurrency)}
-                        </p>
-                      )}
-                    </div>
+              <div className="rounded-lg bg-muted/40 border border-dashed p-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="font-mono font-semibold text-sm" data-testid="text-selected-policy">{receiptDialogPolicy.policyNumber}</p>
+                    {getClient(receiptDialogPolicy.clientId) && (
+                      <p className="text-sm text-muted-foreground">
+                        {getClient(receiptDialogPolicy.clientId).firstName} {getClient(receiptDialogPolicy.clientId).lastName}
+                      </p>
+                    )}
                   </div>
-                </CardContent>
-              </Card>
+                  <div className="text-right">
+                    <Badge variant={receiptDialogPolicy.status === "active" ? "default" : "secondary"}>{receiptDialogPolicy.status}</Badge>
+                    {receiptDialogPolicy.premiumAmount && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Premium: {formatAmount(receiptDialogPolicy.premiumAmount, receiptDialogPolicy.premiumCurrency)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
             )}
 
             <Separator />
@@ -1857,46 +1784,44 @@ export default function StaffFinance() {
                   <Receipt className="h-8 w-8 text-green-600/50" />
                 </div>
               )}
-              <Card className="bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900">
-                <CardContent className="pt-4 space-y-2">
+              <div className="rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900 p-4 space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Policy</span>
+                  <span className="font-mono text-sm font-medium" data-testid="text-receipt-policy">
+                    {receiptResult.policyId ? getPolicyNumber(receiptResult.policyId) : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Amount</span>
+                  <span className="font-semibold" data-testid="text-receipt-amount">
+                    {receiptResult.currency} {parseFloat(receiptResult.amount).toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Method</span>
+                  <Badge variant="outline">{receiptResult.paymentMethod}</Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Status</span>
+                  <Badge variant="default">Cleared</Badge>
+                </div>
+                {receiptResult.reference && (
                   <div className="flex justify-between">
-                    <span className="text-sm text-muted-foreground">Policy</span>
-                    <span className="font-mono text-sm font-medium" data-testid="text-receipt-policy">
-                      {receiptResult.policyId ? getPolicyNumber(receiptResult.policyId) : "—"}
-                    </span>
+                    <span className="text-sm text-muted-foreground">Reference</span>
+                    <span className="font-mono text-xs">{receiptResult.reference}</span>
                   </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Date</span>
+                  <span className="text-sm">{new Date(receiptResult.receivedAt).toLocaleString()}</span>
+                </div>
+                {receiptResult.receipt && (
                   <div className="flex justify-between">
-                    <span className="text-sm text-muted-foreground">Amount</span>
-                    <span className="font-semibold" data-testid="text-receipt-amount">
-                      {receiptResult.currency} {parseFloat(receiptResult.amount).toFixed(2)}
-                    </span>
+                    <span className="text-sm text-muted-foreground">Issued At</span>
+                    <span className="text-sm">{new Date(receiptResult.receipt.issuedAt).toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-muted-foreground">Method</span>
-                    <Badge variant="outline">{receiptResult.paymentMethod}</Badge>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-muted-foreground">Status</span>
-                    <Badge variant="default">Cleared</Badge>
-                  </div>
-                  {receiptResult.reference && (
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Reference</span>
-                      <span className="font-mono text-xs">{receiptResult.reference}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-sm text-muted-foreground">Date</span>
-                    <span className="text-sm">{new Date(receiptResult.receivedAt).toLocaleString()}</span>
-                  </div>
-                  {receiptResult.receipt && (
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Issued At</span>
-                      <span className="text-sm">{new Date(receiptResult.receipt.issuedAt).toLocaleString()}</span>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground text-center">
                 An immutable receipt has been generated automatically. This entry cannot be edited — corrections must be made via reversal entries.
               </p>

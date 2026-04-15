@@ -4693,6 +4693,201 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ]);
           break;
         }
+        // ─── Employee Report types ────────────────────────────────
+        case "policies-per-agent": {
+          const joinRaw = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Client Name", "Client Phone", "Product", "Branch", "Group", "Agent", "Inception Date", "Capture Date"];
+          rows = joinRaw.map((r: any) => [
+            r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule,
+            `${r.clientFirstName || ""} ${r.clientLastName || ""}`.trim(), r.clientPhone || "",
+            r.productName || "", r.branchName || "", r.groupName || "",
+            r.agentDisplayName || r.agentEmail || "", r.inceptionDate || "", r.policyCreatedAt || "",
+          ]);
+          break;
+        }
+        case "new-joinings-summary": {
+          const joinRaw = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const agentMap: Record<string, { name: string; count: number; premium: number }> = {};
+          for (const r of joinRaw) {
+            const key = r.agentEmail || r.agentDisplayName || "Unknown";
+            if (!agentMap[key]) agentMap[key] = { name: r.agentDisplayName || key, count: 0, premium: 0 };
+            agentMap[key].count++;
+            agentMap[key].premium += parseFloat(String(r.premiumAmount ?? 0)) || 0;
+          }
+          headers = ["Agent", "New Joinings", "Total Premium"];
+          rows = Object.values(agentMap).sort((a, b) => b.count - a.count).map((a) => [a.name, a.count, a.premium.toFixed(2)]);
+          break;
+        }
+        case "cashiers-summary": {
+          const cashupsList = await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, reportFilters);
+          const cashierMap: Record<string, { name: string; count: number; total: number }> = {};
+          for (const r of cashupsList) {
+            const key = (r as any).preparedBy || "Unknown";
+            if (!cashierMap[key]) cashierMap[key] = { name: key, count: 0, total: 0 };
+            cashierMap[key].count++;
+            cashierMap[key].total += parseFloat(String((r as any).totalAmount ?? 0)) || 0;
+          }
+          headers = ["Cashier", "Cashup Count", "Total Amount"];
+          rows = Object.values(cashierMap).map((c) => [c.name, c.count, c.total.toFixed(2)]);
+          break;
+        }
+        case "audit-trail": {
+          const { rows: auditRows } = await storage.getAuditLogs(user.organizationId, Math.min(REPORT_EXPORT_MAX_ROWS, 5000), 0, {
+            from: reportFilters.fromDate,
+            to: reportFilters.toDate,
+          });
+          headers = ["Action", "Entity Type", "Entity ID", "User", "IP Address", "Timestamp"];
+          rows = auditRows.map((r: any) => [r.action, r.entityType, r.entityId, r.userName || r.userId || "", r.ipAddress || "", r.createdAt]);
+          break;
+        }
+        case "irp5-reconciliation": {
+          const employees = await storage.getPayrollEmployees(user.organizationId);
+          headers = ["Employee Name", "ID Number", "Position", "Department", "Currency", "Basic Salary", "Status", "Tax Year"];
+          rows = employees.map((r: any) => [r.employeeName, r.idNumber, r.position, r.department, r.currency || "USD", r.basicSalary, r.status, new Date().getFullYear()]);
+          break;
+        }
+        case "deleted-receipts":
+        case "edited-receipts":
+        case "moved-receipts":
+        case "backdated-receipts": {
+          const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = ["DTSTAMP", "agentsName", "policy_number", "surname", "Product_Name", "DatePaid", "AmountCollected", "Currency", "ReceiptNumber", "CapturedBy"];
+          rows = receiptRows.map((r: any) => [r.DTSTAMP ?? "", r.agentsName ?? "", r.policy_number ?? "", r.surname ?? "", r.Product_Name ?? "", r.DatePaid ?? "", r.AmountCollected ?? "", r.Currency ?? "", r.ReceiptNumber ?? "", r.CapturedBy ?? ""]);
+          break;
+        }
+        case "employee-summary": {
+          const empList = await storage.getUsersByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS);
+          headers = ["Name", "Email", "Status", "Created"];
+          rows = empList.map((r: any) => [r.displayName || r.email, r.email, r.isActive !== false ? "Active" : "Inactive", r.createdAt]);
+          break;
+        }
+        case "arrears-breakdown": {
+          const graceRaw = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters });
+          const graceOnly = graceRaw.filter((r: any) => r.status === "grace");
+          headers = ["Policy Number", "Client", "Phone", "Status", "Currency", "Premium", "Agent", "Branch", "Grace End", "Days Overdue"];
+          rows = graceOnly.map((r: any) => {
+            const graceEnd = r.graceEndDate ? new Date(r.graceEndDate) : null;
+            const daysOverdue = graceEnd ? Math.max(0, Math.floor((Date.now() - graceEnd.getTime()) / 86400000)) : 0;
+            return [r.policyNumber, `${r.clientFirstName || ""} ${r.clientLastName || ""}`.trim(), r.clientPhone || "", r.status, r.currency, r.premiumAmount, r.agentDisplayName || "", r.branchName || "", r.graceEndDate || "", daysOverdue];
+          });
+          break;
+        }
+        case "outstanding-payments": {
+          const awaitingRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
+          rows = awaitingRaw.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "captured-per-employee": {
+          const joinRaw2 = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const empMap: Record<string, { name: string; count: number; premium: number }> = {};
+          for (const r of joinRaw2) {
+            const key = r.agentEmail || r.agentDisplayName || "Unknown";
+            if (!empMap[key]) empMap[key] = { name: r.agentDisplayName || key, count: 0, premium: 0 };
+            empMap[key].count++;
+            empMap[key].premium += parseFloat(String(r.premiumAmount ?? 0)) || 0;
+          }
+          headers = ["Agent / Employee", "Policies Captured", "Total Premium"];
+          rows = Object.values(empMap).sort((a, b) => b.count - a.count).map((e) => [e.name, e.count, e.premium.toFixed(2)]);
+          break;
+        }
+        case "complaint-report": {
+          headers = ["Date", "Policy Number", "Client", "Complaint Type", "Description", "Status", "Resolved At"];
+          rows = [];
+          break;
+        }
+        // Agent commission reports — detailed ledger view
+        case "agent-commission":
+        case "agent-commission-mm-ext":
+        case "commission-group-override":
+        case "commission-group-benefits":
+        case "joining-commission":
+        case "joining-comms-detail":
+        case "joining-comm-inception":
+        case "dynamic-comm-summary":
+        case "broker-commission-mm":
+        case "broker-commission-2":
+        case "broker-commission-ext":
+        case "tier-commission":
+        case "tier-commission-breakdown": {
+          const ledger = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, reportFilters.agentId || undefined);
+          headers = ["Agent", "Policy Number", "Client", "Entry Type", "Amount", "Currency", "Payment Date", "Status", "Description", "Created"];
+          rows = ledger.map((r: any) => [
+            r.agentDisplayName || r.agentEmail || "",
+            r.policyNumber || "",
+            `${r.clientFirstName || ""} ${r.clientLastName || ""}`.trim(),
+            r.entryType, r.amount, r.currency,
+            r.paymentDate || "", r.status, r.description || "", r.createdAt,
+          ]);
+          break;
+        }
+        // Agent commission summary reports — grouped by agent
+        case "agent-commission-summary":
+        case "agent-total-commission":
+        case "joining-comms-summary": {
+          const ledger2 = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, reportFilters.agentId || undefined);
+          const summaryMap: Record<string, { name: string; total: number; currency: string; count: number }> = {};
+          for (const r of ledger2) {
+            const key = r.agentEmail || r.agentDisplayName || "Unknown";
+            if (!summaryMap[key]) summaryMap[key] = { name: r.agentDisplayName || key, total: 0, currency: r.currency || "USD", count: 0 };
+            summaryMap[key].total += parseFloat(String(r.amount ?? 0)) || 0;
+            summaryMap[key].count++;
+          }
+          headers = ["Agent", "Entries", "Total Commission", "Currency"];
+          rows = Object.values(summaryMap).sort((a, b) => b.total - a.total).map((a) => [a.name, a.count, a.total.toFixed(2), a.currency]);
+          break;
+        }
+        case "agent-commission-by-count": {
+          const ledger3 = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, reportFilters.agentId || undefined);
+          const countMap: Record<string, { name: string; total: number; receiptCount: number }> = {};
+          for (const r of ledger3) {
+            const key = r.agentEmail || r.agentDisplayName || "Unknown";
+            if (!countMap[key]) countMap[key] = { name: r.agentDisplayName || key, total: 0, receiptCount: 0 };
+            countMap[key].total += parseFloat(String(r.amount ?? 0)) || 0;
+            if (r.transactionId) countMap[key].receiptCount++;
+          }
+          headers = ["Agent", "Receipt Count", "Total Commission"];
+          rows = Object.values(countMap).sort((a, b) => b.receiptCount - a.receiptCount).map((a) => [a.name, a.receiptCount, a.total.toFixed(2)]);
+          break;
+        }
+        case "manager-commission": {
+          const mgrRows = await storage.getCommissionReportByOrg(user.organizationId, reportFilters);
+          headers = ["Agent Name", "Number of Policies", "Total", "Net Pay"];
+          rows = mgrRows.map((r: any) => [r.agentName, r.numberOfPolicies, r.total, r.netPay]);
+          break;
+        }
+        case "select-count": {
+          const scRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const scMap: Record<string, number> = {};
+          for (const r of scRaw) {
+            const key = (r as any).agentId || "unassigned";
+            scMap[key] = (scMap[key] || 0) + 1;
+          }
+          headers = ["Agent ID", "Policy Count"];
+          rows = Object.entries(scMap).map(([k, v]) => [k, v]);
+          break;
+        }
+        case "broker-policies": {
+          const bpRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
+          rows = bpRaw.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          break;
+        }
+        case "branch-report": {
+          const brRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const brMap: Record<string, { name: string; active: number; lapsed: number; grace: number; premium: number }> = {};
+          for (const r of brRaw) {
+            const key = (r as any).branchId || "no-branch";
+            if (!brMap[key]) brMap[key] = { name: key, active: 0, lapsed: 0, grace: 0, premium: 0 };
+            if ((r as any).status === "active") brMap[key].active++;
+            else if ((r as any).status === "lapsed") brMap[key].lapsed++;
+            else if ((r as any).status === "grace") brMap[key].grace++;
+            brMap[key].premium += parseFloat(String((r as any).premiumAmount ?? 0)) || 0;
+          }
+          headers = ["Branch ID", "Active Policies", "Lapsed Policies", "Grace Policies", "Total Premium"];
+          rows = Object.values(brMap).map((b) => [b.name, b.active, b.lapsed, b.grace, b.premium.toFixed(2)]);
+          break;
+        }
         default:
           return res.status(400).json({ message: `Unknown report type: ${reportType}` });
       }
