@@ -38,28 +38,36 @@ export default function AgentLogin() {
     }
     setSubmitting(true);
     try {
-      const res = await apiRequest("POST", "/api/agent-auth/login", { email: email.trim(), password });
+      const base = getApiBase();
+      const csrf = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/)?.[1];
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (csrf) headers["X-XSRF-TOKEN"] = decodeURIComponent(csrf);
+      const res = await fetch(`${base}/api/agent-auth/login`, {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 401) {
+          setError("Invalid email or password. Use the email and password set by your administrator.");
+        } else if (res.status === 403) {
+          setError(data.message || "Access denied. Please contact your administrator.");
+        } else {
+          setError(data.message || "Login failed. Please try again.");
+        }
+        return;
+      }
       if (data.redirect) {
-        const base = getApiBase();
         const path = typeof data.redirect === "string" && data.redirect.startsWith("/") ? data.redirect : "/staff";
         const homeWithReturn = base ? `${base.replace(/\/$/, "")}/?returnTo=${encodeURIComponent(path)}` : `/?returnTo=${encodeURIComponent(path)}`;
         window.location.href = homeWithReturn;
       } else {
         setLocation("/staff");
       }
-    } catch (err: any) {
-      const msg = err.message || "Login failed";
-      if (msg.includes("401")) {
-        setError("Invalid email or password. Use the email and password set by your administrator.");
-      } else if (msg.includes("403")) {
-        const jsonMatch = msg.match(/\d+:\s*(.+)/);
-        let parsed: any = {};
-        if (jsonMatch) try { parsed = JSON.parse(jsonMatch[1]); } catch {}
-        setError(parsed.message || "Access denied. Please contact your administrator.");
-      } else {
-        setError("Network error. Please try again.");
-      }
+    } catch {
+      setError("Connection error. Please check your internet and try again.");
     } finally {
       setSubmitting(false);
     }

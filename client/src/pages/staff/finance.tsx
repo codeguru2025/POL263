@@ -408,7 +408,13 @@ export default function StaffFinance() {
       setShowReceiptDialog(true);
       toast({ title: "Payment recorded & receipt generated", description: `Receipt for ${receiptDialogPolicy?.policyNumber || "policy"}` });
     },
-    onError: (err: any) => toast({ title: "Payment failed", description: err.message, variant: "destructive" }),
+    onError: (err: any) => toast({
+      title: "Payment failed",
+      description: err.message?.includes("duplicate") || err.message?.includes("constraint")
+        ? "A duplicate payment may have been submitted. Please check your payments list before trying again."
+        : (err.message || "Please try again. If the problem persists, contact support."),
+      variant: "destructive",
+    }),
   });
 
   const cashReceiptMutation = useMutation({
