@@ -470,6 +470,7 @@ export function setupAuth(app: Express) {
       // Resolve tenant: subdomain middleware (production) takes priority,
       // body orgId is the fallback for local dev or direct URL access.
       const tenantId = ((req as any).tenantId as string | undefined) || orgId;
+      structuredLog("info", "Agent login attempt", { hostname: req.hostname, tenantId: tenantId ?? null, hasOrgId: !!orgId });
       let user = await storage.getUserByEmail(email.toLowerCase().trim());
       if (!user && tenantId) {
         const { getDbForOrg } = await import("./tenant-db");
