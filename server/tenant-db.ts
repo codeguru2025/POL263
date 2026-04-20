@@ -172,8 +172,8 @@ async function upsertRegistryUserIntoTenantDb(tdb: OrgDataDb, orgId: string, reg
     nextOfKinPhone: registryUser.nextOfKinPhone,
     createdAt: registryUser.createdAt,
   };
-  const [exist] = await tdb.select({ id: users.id }).from(users).where(eq(users.id, registryUser.id)).limit(1);
-  if (exist) {
+  const [existById] = await tdb.select({ id: users.id }).from(users).where(eq(users.id, registryUser.id)).limit(1);
+  if (existById) {
     await tdb
       .update(users)
       .set({
@@ -197,7 +197,20 @@ async function upsertRegistryUserIntoTenantDb(tdb: OrgDataDb, orgId: string, reg
       })
       .where(eq(users.id, registryUser.id));
   } else {
-    await tdb.insert(users).values(row);
+    // If a user with this email already exists under a different ID (registry/tenant ID mismatch),
+    // skip the insert to avoid a unique-email constraint error. The payment will record
+    // recorded_by as null (nullable FK), which is safe.
+    const [existByEmail] = await tdb.select({ id: users.id }).from(users).where(eq(users.email, registryUser.email)).limit(1);
+    if (!existByEmail) {
+      await tdb.insert(users).values(row);
+    } else {
+      structuredLog("warn", "Skipping user mirror: email already exists with different ID in tenant DB", {
+        orgId,
+        registryUserId: registryUser.id,
+        tenantUserId: existByEmail.id,
+        email: registryUser.email,
+      });
+    }
   }
 }
 
