@@ -225,7 +225,7 @@ export interface IStorage {
   getBranch(id: string, organizationId: string): Promise<Branch | undefined>;
   getBranchesByOrg(organizationId: string): Promise<Branch[]>;
   createBranch(branch: InsertBranch): Promise<Branch>;
-  getUser(id: string): Promise<User | undefined>;
+  getUser(id: string, organizationId?: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
   getUserByReferralCode(code: string): Promise<User | undefined>;
@@ -516,7 +516,12 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(branches).values(branch).returning();
     return created;
   }
-  async getUser(id: string): Promise<User | undefined> {
+  async getUser(id: string, organizationId?: string): Promise<User | undefined> {
+    if (organizationId) {
+      const tdb = await getDbForOrg(organizationId);
+      const [user] = await tdb.select().from(users).where(eq(users.id, id)).limit(1);
+      if (user) return user;
+    }
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
   }
@@ -533,7 +538,8 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
   async getUsersByOrg(organizationId: string, limit = 500, offset = 0): Promise<User[]> {
-    return db.select().from(users).where(eq(users.organizationId, organizationId))
+    const tdb = await getDbForOrg(organizationId);
+    return tdb.select().from(users).where(eq(users.organizationId, organizationId))
       .orderBy(desc(users.createdAt)).limit(limit).offset(offset);
   }
   async createUser(user: InsertUser): Promise<User> {
