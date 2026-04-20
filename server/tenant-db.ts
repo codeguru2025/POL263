@@ -118,9 +118,12 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
   }
 
   await evictLeastRecentPool();
+  // Mask credentials in logs: keep host only
+  const urlHost = (() => { try { return new URL(url).host; } catch { return "<invalid-url>"; } })();
+  structuredLog("info", "Creating dedicated tenant pool", { orgId, host: urlHost });
   const tenantPool = new pg.Pool(buildPoolConfig(url, { forTenant: true }));
   tenantPool.on("error", (err) => {
-    structuredLog("warn", "Tenant pool error", { orgId, error: err.message });
+    structuredLog("warn", "Tenant pool error", { orgId, host: urlHost, error: err.message });
   });
   poolCache.set(orgId, tenantPool);
   poolLastAccess.set(orgId, Date.now());
