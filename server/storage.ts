@@ -246,7 +246,7 @@ export interface IStorage {
   getUserRolesBatch(userIds: string[], organizationId: string): Promise<Record<string, (Role & { branchId: string | null })[]>>;
   addUserRole(userId: string, roleId: string, orgId: string, branchId?: string): Promise<void>;
   removeUserRole(userId: string, roleId: string): Promise<void>;
-  clearUserRoles(userId: string): Promise<void>;
+  clearUserRoles(userId: string, organizationId?: string): Promise<void>;
   getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]>;
   addUserPermissionOverride(userId: string, permissionId: string, isGranted: boolean): Promise<void>;
   getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]>;
@@ -651,11 +651,10 @@ export class DatabaseStorage implements IStorage {
     }
     await db.delete(userRoles).where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
   }
-  async clearUserRoles(userId: string): Promise<void> {
-    const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-    const orgId = user?.organizationId ?? null;
-    if (orgId != null) {
-      const tdb = await getDbForOrg(orgId as string);
+  async clearUserRoles(userId: string, organizationId?: string): Promise<void> {
+    const orgId = organizationId ?? (await db.select({ organizationId: users.organizationId }).from(users).where(eq(users.id, userId)).limit(1))[0]?.organizationId ?? null;
+    if (orgId) {
+      const tdb = await getDbForOrg(orgId);
       await tdb.delete(userRoles).where(eq(userRoles.userId, userId));
       return;
     }
