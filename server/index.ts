@@ -196,13 +196,15 @@ if (enableCsrf) {
     next();
   });
 
-  setupAuth(app);
-  setupClientAuth(app);
-
-  // Resolve tenant for every request. Must come after auth so session-based
-  // fallback (req.user.organizationId) is available.
+  // Tenant resolver must run before auth routes so req.tenantId is available
+  // on login endpoints (e.g. /api/agent-auth/login). Session-based fallback
+  // (req.user.organizationId) won't be available yet, but subdomain/header
+  // resolution doesn't need it.
   const { tenantResolverMiddleware } = await import("./tenant-resolver");
   app.use(tenantResolverMiddleware);
+
+  setupAuth(app);
+  setupClientAuth(app);
 
   await registerRoutes(httpServer, app);
 
