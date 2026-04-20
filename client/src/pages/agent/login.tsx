@@ -46,7 +46,7 @@ export default function AgentLogin() {
         method: "POST",
         headers,
         credentials: "include",
-        body: JSON.stringify({ email: email.trim(), password }),
+        body: JSON.stringify({ email: email.trim(), password, orgId: orgIdFromUrl }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

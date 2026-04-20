@@ -462,12 +462,26 @@ export function setupAuth(app: Express) {
   }
 
   app.post("/api/agent-auth/login", async (req: Request, res: Response) => {
-    const { email, password } = req.body;
+    const { email, password, orgId } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
     }
     try {
-      const user = await storage.getUserByEmail(email.toLowerCase().trim());
+      // For tenants with a dedicated database the user won't be in the shared
+      // registry — look them up in their own DB when orgId is supplied.
+      let user = await storage.getUserByEmail(email.toLowerCase().trim());
+      if (!user && orgId) {
+        const { getDbForOrg } = await import("./tenant-db");
+        const { users: usersTable } = await import("@shared/schema");
+        const { eq } = await import("drizzle-orm");
+        const tdb = await getDbForOrg(orgId);
+        const [tenantUser] = await tdb
+          .select()
+          .from(usersTable)
+          .where(eq(usersTable.email, email.toLowerCase().trim()))
+          .limit(1);
+        user = tenantUser ?? undefined;
+      }
       if (!user) {
         return res.status(401).json({ message: "Invalid email or password" });
       }
