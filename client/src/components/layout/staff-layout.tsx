@@ -80,6 +80,7 @@ type StaffNavItem = {
   permission?: string;
   permissions?: string[];
   badge?: number;
+  agentHidden?: boolean;
 };
 
 
@@ -258,6 +259,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
   const filterNav = (items: StaffNavItem[]) =>
     items.filter((item) => {
+      if (isAgent && item.agentHidden) return false;
       const perms = item.permissions ?? (item.permission ? [item.permission] : []);
       return hasAny(perms);
     });
@@ -265,23 +267,23 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const administrationMenu: StaffNavItem[] = isControlPlaneMode
     ? []
     : filterNav([
-        { href: "/staff/policies", label: "Policy Admin", icon: FileStack, permission: "read:policy" },
-        { href: "/staff/admin/society", label: "Society Admin", icon: Building2 },
+        { href: "/staff/policies", label: "Policy Admin", icon: FileStack, permission: "read:policy", agentHidden: true },
+        { href: "/staff/admin/society", label: "Society Admin", icon: Building2, agentHidden: true },
         { href: "/staff/funerals", label: "Funeral Files", icon: Truck, permission: "read:funeral_ops" },
-        { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone },
+        { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone, agentHidden: true },
         { href: "/staff/claims", label: "Claims Admin", icon: FileText, permission: "read:claim" },
         { href: "/staff/products", label: "Product Admin", icon: Box, permission: "write:product" },
-        { href: "/staff/admin/invoice-items", label: "Invoice Items Admin", icon: ClipboardList },
+        { href: "/staff/admin/invoice-items", label: "Invoice Items Admin", icon: ClipboardList, agentHidden: true },
         { href: "/staff/users", label: "User Admin", icon: UserCog, permission: "read:user" },
-        { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck },
-        { href: "/staff/admin/brokers", label: "Broker Admin", icon: Briefcase },
-        { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard },
-        { href: "/staff/admin/terminals", label: "Terminals + Cards Admin", icon: Monitor },
-        { href: "/staff/admin/branches", label: "Branch Admin", icon: MapPin },
-        { href: "/staff/groups", label: "Employer Admin", icon: Layers, permissions: ["write:policy"] },
-        { href: "/staff/admin/sub-groups", label: "Sub Group Admin", icon: GitBranch },
-        { href: "/staff/admin/underwriters", label: "Underwriter Admin", icon: Shield },
-        { href: "/staff/admin/undertakers", label: "Undertaker Admin", icon: HeartHandshake },
+        { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck, agentHidden: true },
+        { href: "/staff/admin/brokers", label: "Broker Admin", icon: Briefcase, agentHidden: true },
+        { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard, agentHidden: true },
+        { href: "/staff/admin/terminals", label: "Terminals + Cards Admin", icon: Monitor, agentHidden: true },
+        { href: "/staff/admin/branches", label: "Branch Admin", icon: MapPin, agentHidden: true },
+        { href: "/staff/groups", label: "Employer Admin", icon: Layers, permissions: ["write:policy"], agentHidden: true },
+        { href: "/staff/admin/sub-groups", label: "Sub Group Admin", icon: GitBranch, agentHidden: true },
+        { href: "/staff/admin/underwriters", label: "Underwriter Admin", icon: Shield, agentHidden: true },
+        { href: "/staff/admin/undertakers", label: "Undertaker Admin", icon: HeartHandshake, agentHidden: true },
         { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
         { href: "/staff/clients", label: isAgent ? "My Clients" : "Clients", icon: Users, permission: "read:client" },
         { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
@@ -293,26 +295,26 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     : filterNav([
         { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy" },
         { href: "/staff/funerals", label: "Funeral File Transactions", icon: Truck, permission: "read:funeral_ops" },
-        { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2 },
-        { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone },
-        { href: "/staff/transactions/credit-notes", label: "Credit Notes", icon: FileMinus },
-        { href: "/staff/transactions/invoices", label: "Invoices", icon: FileText },
+        { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
+        { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
+        { href: "/staff/transactions/credit-notes", label: "Credit Notes", icon: FileMinus, agentHidden: true },
+        { href: "/staff/transactions/invoices", label: "Invoices", icon: FileText, agentHidden: true },
         { href: "/staff/finance", label: "Receipts", icon: Receipt, permissions: ["read:finance", "read:commission"] },
         { href: "/staff/leads", label: "Quotations", icon: Target, permission: "read:lead" },
         { href: "/staff/finance?tab=cashups", label: "Cashup", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/transactions/petty-cash", label: "Petty Cash", icon: Wallet2 },
-        { href: "/staff/transactions/bank-deposits", label: "Bank Deposits", icon: Landmark },
-        { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard },
-        { href: "/staff/transactions/fax", label: "Fax", icon: Printer },
+        { href: "/staff/transactions/petty-cash", label: "Petty Cash", icon: Wallet2, agentHidden: true },
+        { href: "/staff/transactions/bank-deposits", label: "Bank Deposits", icon: Landmark, agentHidden: true },
+        { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard, agentHidden: true },
+        { href: "/staff/transactions/fax", label: "Fax", icon: Printer, agentHidden: true },
         { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
       ]);
 
   const reportsMenu: StaffNavItem[] = isControlPlaneMode
     ? []
     : filterNav([
-        { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2 },
+        { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2, agentHidden: true },
         { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
-        { href: "/staff/employee-reports", label: "Employee Reports", icon: Users, permission: "read:report" },
+        { href: "/staff/employee-reports", label: "Employee Reports", icon: Users, permission: "read:report", agentHidden: true },
         { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
         { href: "/staff/reports?section=finance", label: "Transactional Reports", icon: Receipt, permission: "read:report" },
         { href: "/staff/diagnostics", label: "System Issue Reports", icon: Stethoscope, permission: "read:audit_log" },
@@ -323,20 +325,20 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     : filterNav([
         { href: "/staff/tools/assets", label: "Asset Register", icon: Archive, permission: "read:audit_log" },
         { href: "/staff/audit", label: "Audit Trail", icon: History, permission: "read:audit_log" },
-        { href: "/staff/tools/easypay", label: "Manage EasyPay", icon: Zap },
+        { href: "/staff/tools/easypay", label: "Manage EasyPay", icon: Zap, agentHidden: true },
         { href: "/staff/clients", label: "CRM Module", icon: Users, permission: "read:client" },
         { href: "/staff/tools/print-policy-cards", label: "Print Policy Cards", icon: Printer },
         { href: "/staff/notifications", label: "SMS Tools", icon: Bell, permission: "read:notification" },
-        { href: "/staff/tools/statistics", label: "Statistics", icon: BarChart2 },
-        { href: "/staff/tools/statistical-graphs", label: "Statistical Graphs", icon: LineChart },
-        { href: "/staff/settings", label: "System Setup", icon: Settings },
+        { href: "/staff/tools/statistics", label: "Statistics", icon: BarChart2, agentHidden: true },
+        { href: "/staff/tools/statistical-graphs", label: "Statistical Graphs", icon: LineChart, agentHidden: true },
+        { href: "/staff/settings", label: "System Setup", icon: Settings, agentHidden: true },
         { href: "/staff/finance", label: "Billing", icon: DollarSign, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/tools/claims-form", label: "Manage Online Claims Form", icon: ClipboardList },
-        { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck },
+        { href: "/staff/tools/claims-form", label: "Manage Online Claims Form", icon: ClipboardList, agentHidden: true },
+        { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck, agentHidden: true },
         { href: "/staff/tools/contacts", label: "Contacts Manager", icon: BookOpen },
         { href: "/staff/help", label: "Help Centre", icon: HelpCircle },
         { href: "/staff/reminders", label: "Reminders", icon: Clock },
-        { href: "/staff/order-services", label: "Order SMS & Prepaid", icon: DollarSign },
+        { href: "/staff/order-services", label: "Order SMS & Prepaid", icon: DollarSign, agentHidden: true },
       ]);
 
   const controlPlaneNavExtras: StaffNavItem[] = isControlPlaneMode

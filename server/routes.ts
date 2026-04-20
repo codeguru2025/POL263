@@ -2828,6 +2828,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canReadFinance = perms.includes("read:finance");
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const userId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
@@ -2836,8 +2838,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (fromDate) filters.fromDate = fromDate;
     if (toDate) filters.toDate = toDate;
     if (status) filters.status = status;
-    if (canReadFinance && userId) filters.preparedBy = userId;
-    if (!canReadFinance) filters.preparedBy = user.id;
+    if (isAgent) filters.preparedBy = user.id;
+    else if (canReadFinance && userId) filters.preparedBy = userId;
+    else if (!canReadFinance) filters.preparedBy = user.id;
     const list = await storage.getCashups(user.organizationId, 100, filters);
     return res.json(list);
   });
@@ -2872,7 +2875,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const cashup = await storage.getCashup(req.params.id as string, user.organizationId);
     if (!cashup) return res.status(404).json({ message: "Not found" });
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-    if (!perms.includes("read:finance") && cashup.preparedBy !== user.id) return res.status(403).json({ message: "You can only view your own cashups" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if ((isAgent || !perms.includes("read:finance")) && cashup.preparedBy !== user.id) return res.status(403).json({ message: "You can only view your own cashups" });
     return res.json(cashup);
   });
 

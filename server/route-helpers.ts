@@ -255,8 +255,6 @@ export async function enforceAgentScope(req: any, filters: any): Promise<any> {
   const user = req.user as any;
   if (!user) return filters;
   if (user.isPlatformOwner) return filters;
-  const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-  if (perms.includes("read:report") || perms.includes("read:finance")) return filters;
   const userRoles = await storage.getUserRoles(user.id, user.organizationId);
   const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
   if (isAgent) return { ...filters, agentId: user.id };
