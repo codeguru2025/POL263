@@ -151,6 +151,23 @@ async function run() {
       await tenantPool.end();
     }
   }
+
+  // Migrate all known dedicated tenant databases (FALAKHE_DATABASE_URL, etc.)
+  // These must receive the same migrations as the shared DB since they hold tenant data.
+  const dedicatedTenantEnvs = [
+    { key: "FALAKHE_DATABASE_URL", label: "FALAKHE_DATABASE_URL" },
+  ];
+  for (const { key, label } of dedicatedTenantEnvs) {
+    const raw = process.env[key]?.trim();
+    if (!raw || normalizeConn(raw) === mainUrl) continue;
+    console.log(`\nRunning migrations on ${label}…`);
+    const tenantPool = await connectPool(raw);
+    try {
+      await migrateOneDatabase(label, tenantPool);
+    } finally {
+      await tenantPool.end();
+    }
+  }
 }
 
 run().catch((err) => {
