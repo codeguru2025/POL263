@@ -620,7 +620,7 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(organizationId);
     const rows = await tdb.select({ role: roles, branchId: userRoles.branchId }).from(userRoles)
       .innerJoin(roles, eq(userRoles.roleId, roles.id))
-      .where(eq(userRoles.userId, userId));
+      .where(and(eq(userRoles.userId, userId), eq(roles.organizationId, organizationId)));
     return rows.map((r) => ({ ...r.role, branchId: r.branchId }));
   }
   async getUserRolesBatch(userIds: string[], organizationId: string): Promise<Record<string, (Role & { branchId: string | null })[]>> {
@@ -677,28 +677,23 @@ export class DatabaseStorage implements IStorage {
       tenantOrSharedUser ??
       (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
     const effectiveOrgId = orgId ?? user?.organizationId;
+
+    // Fetch role names and permission IDs from the tenant DB.
+    // Permission *names* are resolved in a second step against the shared (registry) DB
+    // because dedicated tenant DBs have the permissions schema but no rows — permissions
+    // are only seeded into the shared DB.
     const roleRows = effectiveOrgId
       ? await (await getDbForOrg(effectiveOrgId))
-          .select({
-            roleId: roles.id,
-            roleName: roles.name,
-            permissionName: permissions.name,
-          })
+          .select({ roleName: roles.name, permissionId: rolePermissions.permissionId })
           .from(userRoles)
           .innerJoin(roles, eq(userRoles.roleId, roles.id))
           .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
-          .leftJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
-          .where(eq(userRoles.userId, userId))
+          .where(and(eq(userRoles.userId, userId), eq(roles.organizationId, effectiveOrgId)))
       : await db
-          .select({
-            roleId: roles.id,
-            roleName: roles.name,
-            permissionName: permissions.name,
-          })
+          .select({ roleName: roles.name, permissionId: rolePermissions.permissionId })
           .from(userRoles)
           .innerJoin(roles, eq(userRoles.roleId, roles.id))
           .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
-          .leftJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
           .where(eq(userRoles.userId, userId));
 
     const hasSuperuserRole = roleRows.some((row) => row.roleName === "superuser");
@@ -707,11 +702,13 @@ export class DatabaseStorage implements IStorage {
       return allPerms.map((p) => p.name);
     }
 
+    // Resolve permission IDs → names from the shared DB (single source of truth for permission definitions).
+    const permIds = Array.from(new Set(roleRows.map((r) => r.permissionId).filter((id): id is string => !!id)));
     const permSet = new Set<string>();
-    for (const row of roleRows) {
-      if (row.permissionName) {
-        permSet.add(row.permissionName);
-      }
+    if (permIds.length > 0) {
+      const permRows = await db.select({ name: permissions.name }).from(permissions)
+        .where(inArray(permissions.id, permIds));
+      for (const row of permRows) permSet.add(row.name);
     }
 
     const overrides = await this.getUserPermissionOverrides(userId);
@@ -721,8 +718,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (user?.email?.toLowerCase() === PLATFORM_SUPERUSER_EMAIL.toLowerCase()) {
-      const permissionsDb = effectiveOrgId ? await getDbForOrg(effectiveOrgId) : db;
-      const allPermsForOwner = await permissionsDb.select().from(permissions);
+      const allPermsForOwner = await db.select().from(permissions);
       for (const p of allPermsForOwner) permSet.add(p.name);
       permSet.add("create:tenant");
       permSet.add("delete:tenant");

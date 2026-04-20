@@ -81,6 +81,7 @@ type StaffNavItem = {
   permissions?: string[];
   badge?: number;
   agentHidden?: boolean;
+  agentOnly?: boolean;
 };
 
 
@@ -260,6 +261,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const filterNav = (items: StaffNavItem[]) =>
     items.filter((item) => {
       if (isAgent && item.agentHidden) return false;
+      if (!isAgent && item.agentOnly) return false;
       const perms = item.permissions ?? (item.permission ? [item.permission] : []);
       return hasAny(perms);
     });
@@ -293,7 +295,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const transactionsMenu: StaffNavItem[] = isControlPlaneMode
     ? []
     : filterNav([
-        { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy" },
+        { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy", agentOnly: true },
         { href: "/staff/funerals", label: "Funeral File Transactions", icon: Truck, permission: "read:funeral_ops" },
         { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
         { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },

@@ -22,7 +22,7 @@ import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPay
 import * as objectStorage from "./object-storage";
 import { getPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
-import { PLATFORM_OWNER_EMAIL } from "./constants";
+import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS, ROLE_PERMISSION_MAP } from "./constants";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
@@ -677,62 +677,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         name: "Head Office",
         isActive: true,
       });
-
-      const ROLE_PERMISSION_MAP: Record<string, string[]> = {
-        superuser: [],
-        executive: [
-          "read:organization", "read:branch", "read:user", "read:role", "read:audit_log",
-          "read:policy", "read:claim", "read:client", "read:product", "read:funeral_ops",
-          "read:finance", "read:fleet", "read:commission", "read:payroll", "read:report",
-          "read:lead", "read:notification",
-        ],
-        manager: [
-          "read:organization", "read:branch", "write:branch", "read:user", "write:user",
-          "read:role", "read:audit_log", "read:policy", "write:policy", "read:claim",
-          "write:claim", "approve:claim", "read:client", "write:client", "read:product",
-          "write:product", "manage:settings",
-          "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
-          "read:commission", "read:report", "write:report", "read:lead", "write:lead",
-          "read:notification", "manage:approvals",
-          "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
-          "view:all_clients",
-        ],
-        administrator: [
-          "read:organization", "write:organization", "read:branch", "write:branch",
-          "read:user", "write:user", "delete:user", "read:role", "write:role",
-          "manage:permissions", "read:audit_log", "read:policy", "write:policy",
-          "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
-          "read:product", "write:product", "manage:settings", "read:funeral_ops",
-          "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
-          "read:fleet", "write:fleet", "read:commission", "write:commission",
-          "read:payroll", "write:payroll", "read:report", "write:report",
-          "read:lead", "write:lead", "read:notification", "write:notification",
-          "manage:approvals", "backdate:payment",
-          "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
-          "view:own_clients", "view:all_clients",
-          "delete:policy", "delete:payment", "delete:receipt", "edit:payment", "edit:receipt",
-        ],
-        cashier: [
-          "read:policy", "read:client", "read:finance", "write:finance", "read:report",
-          "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
-        ],
-        agent: [
-          "read:policy", "write:policy", "read:client", "write:client", "read:product",
-          "read:lead", "write:lead", "read:commission", "read:report",
-          "read:finance", "receipt:cash",
-        ],
-        claims_officer: [
-          "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
-          "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report",
-        ],
-        fleet_ops: [
-          "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
-        ],
-        staff: [
-          "read:organization", "read:branch", "read:policy", "read:claim",
-          "read:client", "read:product", "read:funeral_ops", "read:report",
-        ],
-      };
 
       const allPerms = await storage.getPermissions();
       const permMap = new Map<string, string>();
