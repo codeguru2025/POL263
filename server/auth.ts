@@ -483,14 +483,18 @@ export function setupAuth(app: Express) {
           .where(eq(usersTable.email, email.toLowerCase().trim()))
           .limit(1);
         user = tenantUser ?? undefined;
+        structuredLog("info", "Agent login tenant lookup", { found: !!user, tenantId });
       }
       if (!user) {
+        structuredLog("info", "Agent login: user not found", { email: email.toLowerCase().trim() });
         return res.status(401).json({ message: "Invalid email or password" });
       }
       if (!user.isActive) {
+        structuredLog("info", "Agent login: account disabled", { userId: user.id });
         return res.status(403).json({ message: "Account is disabled" });
       }
       if (!user.passwordHash) {
+        structuredLog("info", "Agent login: no password hash", { userId: user.id });
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
@@ -501,11 +505,13 @@ export function setupAuth(app: Express) {
 
       const roles = await storage.getUserRoles(user.id, user.organizationId);
       const isAgent = roles.some((r) => r.name === "agent");
+      structuredLog("info", "Agent login role check", { userId: user.id, roles: roles.map(r => r.name), isAgent });
       if (!isAgent) {
         return res.status(403).json({ message: "Use the staff login (Google) for this account." });
       }
 
       const valid = await argon2.verify(user.passwordHash, password);
+      structuredLog("info", "Agent login password check", { userId: user.id, valid });
       if (!valid) {
         return res.status(401).json({ message: "Invalid email or password" });
       }
