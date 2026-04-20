@@ -462,19 +462,21 @@ export function setupAuth(app: Express) {
   }
 
   app.post("/api/agent-auth/login", async (req: Request, res: Response) => {
-    const { email, password, orgId } = req.body;
+    const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
     }
     try {
-      // For tenants with a dedicated database the user won't be in the shared
-      // registry — look them up in their own DB when orgId is supplied.
+      // req.tenantId is set by tenantResolverMiddleware from the subdomain
+      // (e.g. falakhe.pol263.com → Falakhe's org ID). For dedicated-DB tenants
+      // the user won't be in the shared registry, so query their own DB first.
+      const tenantId = (req as any).tenantId as string | undefined;
       let user = await storage.getUserByEmail(email.toLowerCase().trim());
-      if (!user && orgId) {
+      if (!user && tenantId) {
         const { getDbForOrg } = await import("./tenant-db");
         const { users: usersTable } = await import("@shared/schema");
         const { eq } = await import("drizzle-orm");
-        const tdb = await getDbForOrg(orgId);
+        const tdb = await getDbForOrg(tenantId);
         const [tenantUser] = await tdb
           .select()
           .from(usersTable)
