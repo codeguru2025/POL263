@@ -106,6 +106,9 @@ envs:
   - key: SUPERUSER_EMAIL
     value: ausiziba@gmail.com
     scope: RUN_AND_BUILD_TIME
+  - key: APP_BASE_DOMAIN
+    value: pol263.com
+    scope: RUN_AND_BUILD_TIME
   - key: FALAKHE_DATABASE_URL
     value: SET_IN_DASHBOARD
     scope: RUN_AND_BUILD_TIME

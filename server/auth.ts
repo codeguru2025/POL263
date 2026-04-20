@@ -462,15 +462,14 @@ export function setupAuth(app: Express) {
   }
 
   app.post("/api/agent-auth/login", async (req: Request, res: Response) => {
-    const { email, password } = req.body;
+    const { email, password, orgId } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
     }
     try {
-      // req.tenantId is set by tenantResolverMiddleware from the subdomain
-      // (e.g. falakhe.pol263.com → Falakhe's org ID). For dedicated-DB tenants
-      // the user won't be in the shared registry, so query their own DB first.
-      const tenantId = (req as any).tenantId as string | undefined;
+      // Resolve tenant: subdomain middleware (production) takes priority,
+      // body orgId is the fallback for local dev or direct URL access.
+      const tenantId = ((req as any).tenantId as string | undefined) || orgId;
       let user = await storage.getUserByEmail(email.toLowerCase().trim());
       if (!user && tenantId) {
         const { getDbForOrg } = await import("./tenant-db");
