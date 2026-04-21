@@ -11,7 +11,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope } from "./route-helpers";
+import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope, enforceAgentPolicyAccess } from "./route-helpers";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -1808,7 +1808,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    
+    // Enforce agent access control using helper function
+    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
 
     const { toStatus, reason } = req.body;
     const allowed = VALID_POLICY_TRANSITIONS[policy.status];
@@ -1846,7 +1851,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("delete:policy"), async (req, res) => {
     const user = req.user as any;
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    
+    // Enforce agent access control using helper function
+    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
     await storage.deletePolicy(policy.id, user.organizationId);
     await auditLog(req, "DELETE_POLICY", "Policy", policy.id, policy, null);
     structuredLog("warn", "Hard-deleted policy", { userId: user.id, email: user.email, policyId: policy.id, policyNumber: policy.policyNumber });
@@ -1908,7 +1918,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    
+    // Enforce agent access control using helper function
+    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
     const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
     const today = new Date().toISOString().split("T")[0];
     const todayDate = new Date();
@@ -2011,7 +2026,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    
+    // Enforce agent access control using helper function
+    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
 
     const { dependentId, clientId, role } = req.body;
     if (!dependentId && !clientId) return res.status(400).json({ message: "dependentId or clientId is required" });
@@ -2044,7 +2064,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/policies/:id/sync-members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    
+    // Enforce agent access control using helper function
+    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
 
     const existingMembers = await storage.getPolicyMembers(policy.id, user.organizationId);
     const existingDepIds = new Set(existingMembers.filter((m: any) => m.dependentId).map((m: any) => m.dependentId));
@@ -2083,6 +2108,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const policyId = req.params.id as string;
     const orgId = user.organizationId;
+    
+    // Enforce agent access control using helper function
+    const policy = await storage.getPolicy(policyId, orgId);
+    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
+    
     const intents = await storage.getPaymentIntentsByPolicy(policyId, orgId);
     const paidForPolicy = intents.filter((i: any) => i.status === "paid");
     for (const intent of paidForPolicy) {
@@ -2233,7 +2266,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    return res.json(await storage.getPaymentReceiptsByPolicy(req.params.id as string, user.organizationId));
+    const policyId = req.params.id as string;
+    const orgId = user.organizationId;
+    
+    // Enforce agent access control using helper function
+    const policy = await storage.getPolicy(policyId, orgId);
+    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
+    
+    return res.json(await storage.getPaymentReceiptsByPolicy(policyId, orgId));
   });
 
   // ─── Payment intents (Paynow) & receipts ─────────────────────

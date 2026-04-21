@@ -260,3 +260,31 @@ export async function enforceAgentScope(req: any, filters: any): Promise<any> {
   if (isAgent) return { ...filters, agentId: user.id };
   return filters;
 }
+
+/**
+ * Enforces agent access control for a specific policy.
+ * Agents can only access policies they are assigned to.
+ * Returns an object with access status and error response if denied.
+ */
+export async function enforceAgentPolicyAccess(req: any, policy: any): Promise<{ hasAccess: boolean; errorResponse?: any }> {
+  const user = req.user as any;
+  if (!user || !policy) return { hasAccess: false, errorResponse: { status: 404, json: { message: "Policy not found" } } };
+  
+  // Check tenant scope
+  if (policy.organizationId !== user.organizationId) {
+    return { hasAccess: false, errorResponse: { status: 404, json: { message: "Policy not found" } } };
+  }
+  
+  // Platform owners bypass all checks
+  if (user.isPlatformOwner) return { hasAccess: true };
+  
+  // Check if user is an agent and enforce policy ownership
+  const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+  const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+  
+  if (isAgent && (policy as any).agentId !== user.id) {
+    return { hasAccess: false, errorResponse: { status: 403, json: { message: "Access denied" } } };
+  }
+  
+  return { hasAccess: true };
+}
