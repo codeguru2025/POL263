@@ -473,17 +473,44 @@ export function setupAuth(app: Express) {
       structuredLog("info", "Agent login attempt", { hostname: req.hostname, tenantId: tenantId ?? null, hasOrgId: !!orgId });
       let user = await storage.getUserByEmail(email.toLowerCase().trim());
       if (!user && tenantId) {
-        const { getDbForOrg } = await import("./tenant-db");
-        const { users: usersTable } = await import("@shared/schema");
-        const { eq } = await import("drizzle-orm");
+        // Tenant resolved via subdomain/header: check that tenant's DB directly.
         const tdb = await getDbForOrg(tenantId);
         const [tenantUser] = await tdb
           .select()
-          .from(usersTable)
-          .where(eq(usersTable.email, email.toLowerCase().trim()))
+          .from(users)
+          .where(eq(users.email, email.toLowerCase().trim()))
           .limit(1);
         user = tenantUser ?? undefined;
         structuredLog("info", "Agent login tenant lookup", { found: !!user, tenantId });
+      }
+      if (!user) {
+        // Last resort: search all orgs with dedicated databases (e.g. user exists only in
+        // tenant DB because they were migrated from Supabase or created before the registry
+        // mirror was in place). Only runs when shared-DB lookup already returned nothing.
+        const { db: registryDb } = await import("./db");
+        const { organizations } = await import("@shared/schema");
+        const { isNotNull } = await import("drizzle-orm");
+        const orgsWithDedicatedDb = await registryDb
+          .select({ id: organizations.id })
+          .from(organizations)
+          .where(isNotNull(organizations.databaseUrl));
+        for (const org of orgsWithDedicatedDb) {
+          try {
+            const tdb = await getDbForOrg(org.id);
+            const [tenantUser] = await tdb
+              .select()
+              .from(users)
+              .where(eq(users.email, email.toLowerCase().trim()))
+              .limit(1);
+            if (tenantUser) {
+              user = tenantUser;
+              structuredLog("info", "Agent login: found user in dedicated tenant DB", { orgId: org.id });
+              break;
+            }
+          } catch {
+            // unreachable tenant DB — skip
+          }
+        }
       }
       if (!user) {
         structuredLog("info", "Agent login: user not found", { email: email.toLowerCase().trim() });
