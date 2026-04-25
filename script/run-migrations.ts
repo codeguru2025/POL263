@@ -33,6 +33,7 @@ async function connectPool(connectionString: string): Promise<pg.Pool> {
 
   const poolConfig: pg.PoolConfig = {
     connectionString: cs,
+    connectionTimeoutMillis: 15_000,
     ...(acceptSelfSigned && { ssl: { rejectUnauthorized: false } }),
   };
   let pool = new pg.Pool(poolConfig);
@@ -154,6 +155,7 @@ async function run() {
 
   // Migrate all known dedicated tenant databases (FALAKHE_DATABASE_URL, etc.)
   // These must receive the same migrations as the shared DB since they hold tenant data.
+  // Failures here are non-fatal: a temporarily unreachable tenant DB must not block deployment.
   const dedicatedTenantEnvs = [
     { key: "FALAKHE_DATABASE_URL", label: "FALAKHE_DATABASE_URL" },
   ];
@@ -161,11 +163,15 @@ async function run() {
     const raw = process.env[key]?.trim();
     if (!raw || normalizeConn(raw) === mainUrl) continue;
     console.log(`\nRunning migrations on ${label}…`);
-    const tenantPool = await connectPool(raw);
+    let tenantPool: pg.Pool | undefined;
     try {
+      tenantPool = await connectPool(raw);
       await migrateOneDatabase(label, tenantPool);
+    } catch (err: any) {
+      console.warn(`[${label}] WARNING: migrations skipped — ${err?.message || err}`);
+      console.warn(`[${label}] Run migrations manually once the database is reachable.`);
     } finally {
-      await tenantPool.end();
+      await tenantPool?.end().catch(() => {});
     }
   }
 }
