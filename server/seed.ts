@@ -2,9 +2,7 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { securityQuestions } from "@shared/schema";
-import { eq } from "drizzle-orm";
 import { SYSTEM_PERMISSIONS, ROLE_PERMISSION_MAP } from "./constants";
-
 
 const DEFAULT_SECURITY_QUESTIONS = [
   "What was the name of your first pet?",
@@ -14,9 +12,8 @@ const DEFAULT_SECURITY_QUESTIONS = [
   "What was the make of your first car?",
 ];
 
-export async function seedDatabase() {
-  structuredLog("info", "Starting database seed...");
-
+/** Upserts all system permissions into the shared DB. Returns a name→id map. */
+export async function seedPermissions(): Promise<Map<string, string>> {
   const existingPerms = await storage.getPermissions();
   const permMap = new Map<string, string>();
 
@@ -30,6 +27,46 @@ export async function seedDatabase() {
       structuredLog("info", `Created permission: ${perm.name}`);
     }
   }
+  return permMap;
+}
+
+/**
+ * Resets all system roles for the given org to match the current ROLE_PERMISSION_MAP.
+ * Creates missing roles, then clears and re-applies permissions for each role.
+ * Pass a pre-built permMap to avoid redundant DB calls when calling after seedPermissions().
+ */
+export async function seedOrgRoles(orgId: string, permMap?: Map<string, string>): Promise<void> {
+  const map = permMap ?? await seedPermissions();
+
+  for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
+    let role = await storage.getRoleByName(roleName, orgId);
+    if (!role) {
+      role = await storage.createRole({
+        name: roleName,
+        organizationId: orgId,
+        description: `System ${roleName} role`,
+        isSystem: true,
+      });
+      structuredLog("info", `Created role: ${roleName} for org ${orgId}`);
+    }
+
+    if (roleName === "superuser") continue;
+
+    // Reset to system defaults: clear existing permissions then apply the current map.
+    await storage.clearRolePermissions(role.id, orgId);
+    for (const permName of permNames) {
+      const permId = map.get(permName);
+      if (permId) await storage.addRolePermission(role.id, permId, orgId);
+    }
+  }
+
+  structuredLog("info", `Roles seeded for org ${orgId}`);
+}
+
+export async function seedDatabase() {
+  structuredLog("info", "Starting database seed...");
+
+  const permMap = await seedPermissions();
 
   let defaultOrg = (await storage.getOrganizations())[0];
   if (!defaultOrg) {
@@ -52,27 +89,7 @@ export async function seedDatabase() {
     structuredLog("info", `Created default branch: ${defaultBranch.name}`);
   }
 
-  for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
-    let role = await storage.getRoleByName(roleName, defaultOrg.id);
-    if (!role) {
-      role = await storage.createRole({
-        name: roleName,
-        organizationId: defaultOrg.id,
-        description: `System ${roleName} role`,
-        isSystem: true,
-      });
-      structuredLog("info", `Created role: ${roleName}`);
-    }
-
-    if (roleName !== "superuser") {
-      for (const permName of permNames) {
-        const permId = permMap.get(permName);
-        if (permId) {
-          await storage.addRolePermission(role.id, permId, defaultOrg.id);
-        }
-      }
-    }
-  }
+  await seedOrgRoles(defaultOrg.id, permMap);
 
   for (const question of DEFAULT_SECURITY_QUESTIONS) {
     await db

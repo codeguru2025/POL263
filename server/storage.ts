@@ -1,7 +1,7 @@
 import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, exists, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
-import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb } from "./tenant-db";
+import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
 import {
@@ -242,6 +242,7 @@ export interface IStorage {
   getRolePermissions(roleId: string, organizationId: string): Promise<Permission[]>;
   addRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void>;
   removeRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void>;
+  clearRolePermissions(roleId: string, orgId: string): Promise<void>;
   getUserRoles(userId: string, organizationId: string): Promise<(Role & { branchId: string | null })[]>;
   getUserRolesBatch(userIds: string[], organizationId: string): Promise<Record<string, (Role & { branchId: string | null })[]>>;
   addUserRole(userId: string, roleId: string, orgId: string, branchId?: string): Promise<void>;
@@ -543,10 +544,16 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(users.createdAt)).limit(limit).offset(offset);
   }
   async createUser(user: InsertUser): Promise<User> {
-    const [created] = await db.insert(users).values({ ...user, email: user.email.toLowerCase() }).returning();
+    const orgId = user.organizationId;
+    // For dedicated-DB orgs, branches live only in the tenant DB — not the shared registry.
+    // Storing a tenant branch ID in the shared DB would violate the branches FK constraint.
+    // Strip it here; the correct value is written to the tenant DB via the mirror below.
+    const isDedicated = orgId ? await orgUsesDedicatedDatabase(orgId) : false;
+    const sharedRow = isDedicated ? { ...user, email: user.email.toLowerCase(), branchId: null } : { ...user, email: user.email.toLowerCase() };
+    const [created] = await db.insert(users).values(sharedRow).returning();
     if (created.organizationId) {
       try {
-        await ensureRegistryUserMirroredToOrgDataDb(created.organizationId, created.id);
+        await ensureRegistryUserMirroredToOrgDataDb(created.organizationId, created.id, isDedicated ? (user.branchId ?? null) : undefined);
       } catch (err: any) {
         structuredLog("warn", "mirror user after createUser failed", { orgId: created.organizationId, userId: created.id, error: err?.message || String(err) });
       }
@@ -554,10 +561,17 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
   async updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined> {
-    const [updated] = await db.update(users).set(data).where(eq(users.id, id)).returning();
+    const orgId = data.organizationId
+      ?? (await db.select({ organizationId: users.organizationId }).from(users).where(eq(users.id, id)).limit(1))[0]?.organizationId
+      ?? undefined;
+    const isDedicated = orgId ? await orgUsesDedicatedDatabase(orgId) : false;
+    // Strip branchId from the shared-DB update for dedicated-DB orgs (same FK reason as createUser).
+    const sharedUpdate = isDedicated && data.branchId !== undefined ? { ...data, branchId: null } : data;
+    const [updated] = await db.update(users).set(sharedUpdate).where(eq(users.id, id)).returning();
     if (updated?.organizationId) {
       try {
-        await ensureRegistryUserMirroredToOrgDataDb(updated.organizationId, id);
+        const branchOverride = isDedicated && data.branchId !== undefined ? (data.branchId ?? null) : undefined;
+        await ensureRegistryUserMirroredToOrgDataDb(updated.organizationId, id, branchOverride);
       } catch (err: any) {
         structuredLog("warn", "mirror user after updateUser failed", { orgId: updated.organizationId, userId: id, error: err?.message || String(err) });
       }
@@ -599,15 +613,24 @@ export class DatabaseStorage implements IStorage {
   }
   async getRolePermissions(roleId: string, organizationId: string): Promise<Permission[]> {
     const tdb = await getDbForOrg(organizationId);
-    const rows = await tdb.select({ permission: permissions }).from(rolePermissions)
-      .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
+    // Step 1: get permissionIds from the tenant DB (may be dedicated with empty permissions table)
+    const rows = await tdb.select({ permissionId: rolePermissions.permissionId })
+      .from(rolePermissions)
       .where(eq(rolePermissions.roleId, roleId));
-    return rows.map((r) => r.permission);
+    const permIds = rows.map((r) => r.permissionId).filter(Boolean) as string[];
+    if (!permIds.length) return [];
+    // Step 2: resolve Permission objects from the shared DB (single source of truth for permission defs)
+    return db.select().from(permissions).where(inArray(permissions.id, permIds));
   }
   async addRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
     const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
     if (!role) throw new Error("Role not found in organization");
+    // Mirror the permission row into the target DB so the FK constraint is satisfied.
+    // For shared-DB tenants this is a no-op; for dedicated-DB tenants it copies the row.
+    const [sharedPerm] = await db.select().from(permissions).where(eq(permissions.id, permissionId)).limit(1);
+    if (!sharedPerm) throw new Error("Permission not found");
+    await tdb.insert(permissions).values(sharedPerm).onConflictDoNothing();
     await tdb.insert(rolePermissions).values({ roleId, permissionId }).onConflictDoNothing();
   }
   async removeRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void> {
@@ -615,6 +638,10 @@ export class DatabaseStorage implements IStorage {
     const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
     if (!role) throw new Error("Role not found in organization");
     await tdb.delete(rolePermissions).where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)));
+  }
+  async clearRolePermissions(roleId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId));
   }
   async getUserRoles(userId: string, organizationId: string): Promise<(Role & { branchId: string | null })[]> {
     const tdb = await getDbForOrg(organizationId);

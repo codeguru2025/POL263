@@ -148,9 +148,13 @@ function mayMirrorUserToOrg(
   return isPlatformOwnerForMirror(registryUser.email);
 }
 
-async function upsertRegistryUserIntoTenantDb(tdb: OrgDataDb, orgId: string, registryUser: typeof users.$inferSelect) {
+async function upsertRegistryUserIntoTenantDb(tdb: OrgDataDb, orgId: string, registryUser: typeof users.$inferSelect, branchIdOverride?: string | null) {
   if (!mayMirrorUserToOrg(registryUser, orgId)) return;
-  const branchForMirror = registryUser.organizationId === orgId ? registryUser.branchId : null;
+  // branchIdOverride is supplied when the shared-DB record was stored with branchId=null to avoid
+  // the shared-DB FK constraint (branches for dedicated-DB orgs only exist in the tenant DB).
+  const branchForMirror = branchIdOverride !== undefined
+    ? branchIdOverride
+    : (registryUser.organizationId === orgId ? registryUser.branchId : null);
   const row = {
     id: registryUser.id,
     email: registryUser.email,
@@ -219,12 +223,12 @@ async function upsertRegistryUserIntoTenantDb(tdb: OrgDataDb, orgId: string, reg
  * Only runs for dedicated tenant databases. Allowed: same-org staff, or platform owner (mirrored
  * with `organization_id = orgId` for local FK satisfaction).
  */
-export async function ensureRegistryUserMirroredToOrgDataDb(orgId: string, userId: string): Promise<void> {
+export async function ensureRegistryUserMirroredToOrgDataDb(orgId: string, userId: string, branchIdOverride?: string | null): Promise<void> {
   if (!(await orgUsesDedicatedDatabase(orgId))) return;
   const [registryUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!registryUser) return;
   const tdb = await getDbForOrg(orgId);
-  await upsertRegistryUserIntoTenantDb(tdb, orgId, registryUser);
+  await upsertRegistryUserIntoTenantDb(tdb, orgId, registryUser, branchIdOverride);
 }
 
 /**

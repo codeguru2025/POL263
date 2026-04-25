@@ -1357,6 +1357,7 @@ function RBACPermissionRow({
   permsByRoleId: Record<string, any[] | undefined>;
 }) {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const toggleMutation = useMutation({
     mutationFn: async ({ roleId, permId, grant }: { roleId: string; permId: string; grant: boolean }) => {
@@ -1368,6 +1369,9 @@ function RBACPermissionRow({
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: [`/api/roles/${variables.roleId}/permissions`] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to update permission", description: err?.message ?? "Unknown error", variant: "destructive" });
     },
   });
 

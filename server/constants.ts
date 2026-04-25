@@ -119,9 +119,14 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
   ],
   agent: [
-    "read:policy", "write:policy", "read:client", "write:client", "read:product",
-    "read:lead", "write:lead", "read:commission", "read:report",
-    "read:finance", "receipt:cash",
+    "read:policy", "write:policy",
+    "read:client", "write:client", "view:own_clients",
+    "read:product",
+    "read:lead", "write:lead",
+    "read:commission",
+    "read:report",
+    "read:finance",
+    "receipt:mobile", "receipt:transfer",
   ],
   claims_officer: [
     "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",

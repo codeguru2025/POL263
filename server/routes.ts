@@ -5124,8 +5124,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/admin/sync-permissions", requireAuth, requireTenantScope, requirePermission("manage:permissions"), async (req, res) => {
     const user = req.user as any;
     try {
-      const { seedDatabase } = await import("./seed");
-      await seedDatabase();
+      const { seedPermissions, seedOrgRoles } = await import("./seed");
+      const permMap = await seedPermissions();
+      await seedOrgRoles(user.organizationId, permMap);
       return res.json({ success: true, message: "Permissions and roles synchronized" });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
