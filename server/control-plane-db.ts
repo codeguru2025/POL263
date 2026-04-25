@@ -11,14 +11,21 @@ import { structuredLog } from "./logger";
 
 let connectionString = (
   process.env.CONTROL_PLANE_DATABASE_URL ||
-  process.env.CONTROL_PLANE_DIRECT_URL
+  process.env.CONTROL_PLANE_DIRECT_URL ||
+  process.env.DATABASE_URL
 )?.trim();
 
 if (!connectionString) {
   throw new Error(
-    "CONTROL_PLANE_DATABASE_URL (or CONTROL_PLANE_DIRECT_URL) must be set. " +
-    "Get it from DigitalOcean → Databases → pol263-control-plane → Connection Details."
+    "DATABASE_URL must be set. " +
+    "Set CONTROL_PLANE_DATABASE_URL for a dedicated control plane database."
   );
+}
+
+if (!process.env.CONTROL_PLANE_DATABASE_URL && !process.env.CONTROL_PLANE_DIRECT_URL) {
+  // No dedicated control plane DB — using shared DB. tenant_databases table may not exist;
+  // getPoolForOrg already falls back to organizations.database_url on query failure.
+  structuredLog("warn", "CONTROL_PLANE_DATABASE_URL not set — falling back to DATABASE_URL for control plane");
 }
 
 // If we provide explicit ssl config, strip sslmode from URL so pg doesn't force
