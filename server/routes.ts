@@ -468,6 +468,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Platform Owner: Tenant Switching ──────────────────────────
 
+  app.post("/api/platform/backup-sync", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) {
+      return res.status(403).json({ message: "Platform owner access required" });
+    }
+    try {
+      const { runBackupSync } = await import("./backup-sync");
+      // Run async — don't block the response
+      runBackupSync().catch((err) => structuredLog("error", "Manual backup failed", { error: (err as Error).message }));
+      return res.json({ message: "Backup sync triggered. Check logs for progress." });
+    } catch (err) {
+      return res.status(500).json({ message: "Failed to trigger backup" });
+    }
+  });
+
   app.post("/api/platform/switch-tenant", requireAuth, async (req, res) => {
     const user = req.user as any;
     if (!user.isPlatformOwner) {
@@ -2456,10 +2471,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const receipt = user.organizationId
       ? await storage.getPaymentReceiptById(id, user.organizationId)
       : await findPaymentReceiptById(id);
-    if (!receipt) return res.status(404).json({ message: "Not found" });
+    if (!receipt) {
+      structuredLog("warn", "Receipt download: receipt not found in DB", { receiptId: id, orgId: user.organizationId });
+      return res.status(404).json({ message: "Not found" });
+    }
     if (user.organizationId && receipt.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
-    const result = await getReceiptPdfPath(receipt.pdfStorageKey);
-    if (!result) return res.status(404).json({ message: "Receipt PDF not available" });
+    structuredLog("info", "Receipt download: fetching PDF", { receiptId: id, pdfStorageKey: receipt.pdfStorageKey });
+    let result = await getReceiptPdfPath(receipt.pdfStorageKey);
+    // Auto-generate PDF on demand if missing (handles migrated receipts or failed outbox)
+    if (!result) {
+      structuredLog("info", "Receipt download: PDF missing, regenerating on demand", { receiptId: id });
+      const { generateReceiptPdf } = await import("./receipt-pdf");
+      const newKey = await generateReceiptPdf(id);
+      if (newKey) {
+        await storage.updatePaymentReceipt(id, { pdfStorageKey: newKey }, receipt.organizationId);
+        result = await getReceiptPdfPath(newKey);
+      }
+    }
+    if (!result) {
+      structuredLog("warn", "Receipt download: PDF not available after regeneration attempt", { receiptId: id, pdfStorageKey: receipt.pdfStorageKey });
+      return res.status(404).json({ message: "Receipt PDF not available" });
+    }
     if (Buffer.isBuffer(result)) {
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="receipt-${receipt.receiptNumber}.pdf"`);

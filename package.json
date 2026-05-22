@@ -26,6 +26,7 @@
     "db:migrate:shared-registry": "tsx script/migrate-orgs-users-to-do.ts",
     "db:push:tenant": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push --config=drizzle.tenant.config.ts",
     "db:push:falakhe": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push --config=drizzle.falakhe.config.ts",
+    "db:push:backup": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push --config=drizzle.backup.config.ts",
     "db:migrate:falakhe": "tsx script/migrate-supabase-to-do.ts",
     "db:cp:set-falakhe-db": "tsx script/cp-set-tenant-db.ts",
     "db:seed": "tsx script/run-seed.ts",

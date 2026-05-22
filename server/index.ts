@@ -250,6 +250,9 @@ if (enableCsrf) {
       structuredLog("info", `POL263 serving on ${host}:${port}`);
       startOutboxBackgroundDrain();
 
+      // Start daily backup sync to Supabase (if SUPABASE_BACKUP_URL is configured)
+      import("./backup-sync").then(({ startBackupScheduler }) => startBackupScheduler()).catch(() => {});
+
       // Fix 12: Warn in production if platform-owner MFA is not enforced.
       // The PLATFORM_OWNER_EMAIL account bypasses all RBAC — a compromise is catastrophic.
       if (process.env.NODE_ENV === "production" && !process.env.PLATFORM_OWNER_MFA_ENFORCED) {
@@ -265,6 +268,7 @@ if (enableCsrf) {
   async function gracefulShutdown(signal: string) {
     structuredLog("info", `Received ${signal}, shutting down gracefully`);
     httpServer.close();
+    import("./backup-sync").then(({ stopBackupScheduler }) => stopBackupScheduler()).catch(() => {});
     await drainActiveJobs(30_000);
     structuredLog("info", "Graceful shutdown complete");
     process.exit(0);

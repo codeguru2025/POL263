@@ -119,24 +119,30 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     } catch (_) {}
   }
   const headerLeft = logoBuffer ? 130 : 50;
+  const schedNameMaxWidth = logoBuffer ? 200 : 250;
+  const schedOrgName = org?.name || "POL263";
+  const schedNameFontSize = schedOrgName.length > 20 ? 16 : 22;
   doc
     .fillColor(docBlack)
-    .fontSize(22)
+    .fontSize(schedNameFontSize)
     .font("Helvetica-Bold")
-    .text(org?.name || "POL263", headerLeft, 25, { align: "left" });
+    .text(schedOrgName, headerLeft, 25, { width: schedNameMaxWidth });
+  const schedSubY = Math.max(25 + schedNameFontSize + 6, (doc as any).y + 4);
   doc
     .fontSize(10)
     .font("Helvetica")
-    .text("POLICY SCHEDULE", headerLeft, 55, { align: "left" });
+    .text("POLICY SCHEDULE", headerLeft, schedSubY, { width: schedNameMaxWidth });
   const headerRight: string[] = [];
   if (org?.address) headerRight.push(org.address);
   if (org?.phone) headerRight.push(`Tel: ${org.phone}`);
   if (org?.email) headerRight.push(org.email);
   if (org?.website) headerRight.push(org.website);
   if (headerRight.length > 0) {
-    doc.fillColor(docBlack).fontSize(8).text(headerRight.join(" | "), 50, 75, {
+    const schedContactX = headerLeft + schedNameMaxWidth + 10;
+    const schedContactWidth = doc.page.width - schedContactX - 50;
+    doc.fillColor(docBlack).fontSize(8).font("Helvetica").text(headerRight.join(" | "), schedContactX, 25, {
       align: "right",
-      width: doc.page.width - 100,
+      width: schedContactWidth,
     });
   }
   let y = 120;
@@ -555,14 +561,18 @@ export function registerPolicyDocumentRoute(app: Express) {
       } catch (_) {}
     }
     const headerLeft = logoBufferEstatement ? 130 : 50;
-    const headerTextWidth = 280;
+    // Limit company name width to avoid overlapping with right-aligned contact info
+    const nameMaxWidth = logoBufferEstatement ? 200 : 250;
+    const orgName = org?.name || "POL263";
+    // Use smaller font for long org names to prevent overflow
+    const nameFontSize = orgName.length > 20 ? 14 : 18;
     let hy = 20;
     doc
       .fillColor(docBlack)
-      .fontSize(18)
+      .fontSize(nameFontSize)
       .font("Helvetica-Bold")
-      .text(org?.name || "POL263", headerLeft, hy, { width: headerTextWidth });
-    hy = Math.max(hy + 24, (doc as any).y + 4);
+      .text(orgName, headerLeft, hy, { width: nameMaxWidth });
+    hy = Math.max(hy + nameFontSize + 6, (doc as any).y + 4);
     doc.fillColor(docBlack).fontSize(10).font("Helvetica").text("E-STATEMENT", headerLeft, hy);
     hy += 16;
     const headerRight: string[] = [];
@@ -570,7 +580,10 @@ export function registerPolicyDocumentRoute(app: Express) {
     if (org?.phone) headerRight.push(`Tel: ${org.phone}`);
     if (org?.email) headerRight.push(org.email);
     if (headerRight.length > 0) {
-      doc.fillColor(docBlack).fontSize(8).text(headerRight.join("  |  "), 300, 25, { align: "right", width: doc.page.width - 350 });
+      // Position contact info in the right column, separated from the company name
+      const contactX = headerLeft + nameMaxWidth + 10;
+      const contactWidth = doc.page.width - contactX - 50;
+      doc.fillColor(docBlack).fontSize(8).font("Helvetica").text(headerRight.join("  |  "), contactX, 25, { align: "right", width: contactWidth });
     }
 
     let y = headerHeight + 10;
