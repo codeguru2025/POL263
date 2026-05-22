@@ -26,6 +26,8 @@ const recentJobs: JobEntry[] = [];
 const MAX_RECENT = 200;
 let activeCount = 0;
 const MAX_CONCURRENT = parseInt(process.env.JOB_MAX_CONCURRENT || "5", 10);
+// Fix 10: Cap in-memory queue to prevent OOM under burst load.
+const MAX_PENDING_JOBS = parseInt(process.env.JOB_MAX_PENDING || "500", 10);
 const pendingQueue: (() => void)[] = [];
 
 function trackJob(entry: JobEntry) {
@@ -81,9 +83,43 @@ export function enqueueJob(
 
   if (activeCount < MAX_CONCURRENT) {
     setImmediate(execute);
+  } else if (pendingQueue.length >= MAX_PENDING_JOBS) {
+    // Fix 10: Queue full — drop job and log rather than growing the heap unboundedly.
+    entry.status = "failed";
+    entry.completedAt = Date.now();
+    entry.error = "Job queue full — dropped";
+    structuredLog("error", `Background job dropped: queue full (${MAX_PENDING_JOBS})`, {
+      jobName: name,
+      data,
+      pending: pendingQueue.length,
+    });
   } else {
     pendingQueue.push(execute);
   }
+}
+
+/**
+ * Fix 11: Wait until all currently active jobs have finished (or timeout expires).
+ * Call this from the SIGTERM handler before process.exit() to avoid dropping in-flight work.
+ */
+export function drainActiveJobs(timeoutMs = 30_000): Promise<void> {
+  return new Promise((resolve) => {
+    if (activeCount === 0) return resolve();
+    const deadline = setTimeout(() => {
+      structuredLog("warn", "drainActiveJobs: timed out waiting for active jobs", {
+        activeCount,
+        timeoutMs,
+      });
+      resolve();
+    }, timeoutMs);
+    const interval = setInterval(() => {
+      if (activeCount === 0) {
+        clearInterval(interval);
+        clearTimeout(deadline);
+        resolve();
+      }
+    }, 100);
+  });
 }
 
 export function getJobStats(): {

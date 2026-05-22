@@ -12,6 +12,7 @@ import compression from "compression";
 import cookieParser from "cookie-parser";
 import { pool } from "./db";
 import { startOutboxBackgroundDrain } from "./outbox";
+import { drainActiveJobs } from "./job-queue";
 import csurf from "csurf";
 import { createRedisStore } from "./rate-limit-redis-store";
 
@@ -248,8 +249,29 @@ if (enableCsrf) {
     () => {
       structuredLog("info", `POL263 serving on ${host}:${port}`);
       startOutboxBackgroundDrain();
+
+      // Fix 12: Warn in production if platform-owner MFA is not enforced.
+      // The PLATFORM_OWNER_EMAIL account bypasses all RBAC — a compromise is catastrophic.
+      if (process.env.NODE_ENV === "production" && !process.env.PLATFORM_OWNER_MFA_ENFORCED) {
+        structuredLog("warn", "SECURITY: PLATFORM_OWNER_MFA_ENFORCED is not set. "
+          + "The platform owner account has unrestricted access to all tenant data. "
+          + "Enable MFA via your identity provider and set PLATFORM_OWNER_MFA_ENFORCED=true.");
+      }
     }
   );
+
+  // Fix 11: Graceful shutdown — stop accepting requests, wait for in-flight
+  // background jobs (PDF generation, commissions, notifications) to finish.
+  async function gracefulShutdown(signal: string) {
+    structuredLog("info", `Received ${signal}, shutting down gracefully`);
+    httpServer.close();
+    await drainActiveJobs(30_000);
+    structuredLog("info", "Graceful shutdown complete");
+    process.exit(0);
+  }
+  process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.once("SIGINT",  () => gracefulShutdown("SIGINT"));
+
 })().catch((err) => {
   structuredLog("error", "Fatal startup error", { error: err?.message, stack: err?.stack });
   process.exit(1);

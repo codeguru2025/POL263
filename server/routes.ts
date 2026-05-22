@@ -43,7 +43,8 @@ import {
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches,
 } from "@shared/schema";
-import { sql, eq, count, and } from "drizzle-orm";
+import { sql, eq, count, and, max } from "drizzle-orm";
+import { pool } from "./db";
 import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
 import { enqueueJob, getJobStats } from "./job-queue";
 import {
@@ -105,11 +106,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return policy;
   }
 
+  // Fix 5: Derive a stable uint32 advisory lock key from an orgId UUID so that
+  // multiple processes don't run premium backfill for the same org concurrently.
+  const BACKFILL_LOCK_CLASS = 900263002; // distinct namespace from payment automation (9002630001)
+  function orgIdToLockId(orgId: string): number {
+    const hex = orgId.replace(/-/g, "").slice(0, 8);
+    return (parseInt(hex, 16) >>> 0); // unsigned 32-bit int
+  }
+
   function schedulePolicyPremiumBackfill(orgId: string) {
     if (!orgId || premiumBackfillRunning.has(orgId)) return;
     premiumBackfillRunning.add(orgId);
     enqueueJob("policy_premium_backfill", { orgId }, async () => {
+      let lockClient: any = null;
+      let lockAcquired = false;
       try {
+        // Fix 5: acquire per-org pg advisory lock to prevent multi-process duplicate backfill
+        lockClient = await pool.connect();
+        const { rows } = await lockClient.query(
+          "SELECT pg_try_advisory_lock($1, $2) AS ok",
+          [BACKFILL_LOCK_CLASS, orgIdToLockId(orgId)],
+        );
+        lockAcquired = rows[0]?.ok === true;
+        if (!lockAcquired) return; // another replica is already backfilling this org
+
         let offset = 0;
         const limit = 200;
         while (true) {
@@ -124,6 +144,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } catch (err: any) {
         structuredLog("error", "Policy premium backfill failed", { orgId, error: err?.message, stack: err?.stack });
       } finally {
+        if (lockAcquired && lockClient) {
+          await lockClient.query("SELECT pg_advisory_unlock($1, $2)", [BACKFILL_LOCK_CLASS, orgIdToLockId(orgId)]).catch(() => {});
+        }
+        if (lockClient) lockClient.release();
         premiumBackfillRunning.delete(orgId);
       }
     });
@@ -162,21 +186,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const settings = await storage.getPaymentAutomationSettings(orgId);
     if (!settings?.isEnabled) return { scanned: 0, reminded: 0, attempted: 0, skipped: 0 };
 
-    const policies = await storage.getPoliciesByOrg(orgId, 100000, 0, { statuses: ["active", "grace"] });
+    // Fix 3: Bulk-load last cleared payment date per policy once (still a single GROUP BY query).
+    const tdbForAuto = await getDbForOrg(orgId);
+    const lastPmtRows = await tdbForAuto
+      .select({ policyId: paymentTransactions.policyId, lastCleared: max(paymentTransactions.receivedAt) })
+      .from(paymentTransactions)
+      .where(and(eq(paymentTransactions.organizationId, orgId), sql`${paymentTransactions.status} = 'cleared'`))
+      .groupBy(paymentTransactions.policyId);
+    const lastClearedMap = new Map<string, Date>();
+    for (const r of lastPmtRows) {
+      if (r.policyId && r.lastCleared) lastClearedMap.set(r.policyId, new Date(r.lastCleared));
+    }
+
     const now = new Date();
     const msPerDay = 24 * 60 * 60 * 1000;
     let reminded = 0;
     let attempted = 0;
     let skipped = 0;
+    let totalScanned = 0;
+
+    // Fix 3: Paginate policy load (200 per page) instead of loading up to 100k rows into memory.
+    const AUTO_PAGE = 200;
+    let offset = 0;
+    let pageHasRows = true;
+    while (pageHasRows) {
+      const policies = await storage.getPoliciesByOrg(orgId, AUTO_PAGE, offset, { statuses: ["active", "grace"] });
+      if (policies.length === 0) break;
+      pageHasRows = policies.length === AUTO_PAGE;
+      offset += policies.length;
+      totalScanned += policies.length;
 
     for (const policy of policies) {
       if (!policy.clientId) continue;
-      const payments = await storage.getPaymentsByPolicy(policy.id, orgId);
-      const cleared = payments.filter((p: any) => p.status === "cleared");
-      const lastClearedAt = cleared
-        .map((p: any) => new Date(p.receivedAt || p.createdAt || policy.createdAt))
-        .filter((d: Date) => !Number.isNaN(d.getTime()))
-        .sort((a: Date, b: Date) => b.getTime() - a.getTime())[0];
+      const lastClearedAt = lastClearedMap.get(policy.id) ?? null;
       const baseline = lastClearedAt || new Date(policy.inceptionDate || policy.effectiveDate || policy.createdAt);
       if (Number.isNaN(baseline.getTime())) continue;
 
@@ -304,17 +346,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         },
       } as any);
       await storage.updatePolicy(policy.id, { lastAutoReminderAt: now, lastAutoPaymentAttemptAt: now }, orgId);
-    }
-
-    return { scanned: policies.length, reminded, attempted, skipped };
+    } // end for policy
+    } // end while page
+    return { scanned: totalScanned, reminded, attempted, skipped };
   }
 
   let paymentAutomationTickRunning = false;
+  const PAYMENT_AUTO_LOCK_KEY = 9_002_630_001; // stable pg advisory lock key for this scheduler
   const automationTickMs = Math.max(60_000, parseInt(process.env.PAYMENT_AUTOMATION_TICK_MS || "", 10) || (6 * 60 * 60 * 1000));
   setInterval(async () => {
     if (paymentAutomationTickRunning) return;
-    paymentAutomationTickRunning = true;
+    let lockClient: any = null;
+    let lockAcquired = false;
     try {
+      lockClient = await pool.connect();
+      const { rows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS ok", [PAYMENT_AUTO_LOCK_KEY]);
+      lockAcquired = rows[0]?.ok === true;
+      if (!lockAcquired) return; // Another replica is already running
+      paymentAutomationTickRunning = true;
       const orgs = await storage.getOrganizations();
       for (const org of orgs) {
         await runPaymentAutomationForOrg(org.id);
@@ -322,6 +371,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       structuredLog("error", "Payment automation scheduler failed", { error: err?.message, stack: err?.stack });
     } finally {
+      if (lockAcquired && lockClient) await lockClient.query("SELECT pg_advisory_unlock($1)", [PAYMENT_AUTO_LOCK_KEY]).catch(() => {});
+      if (lockClient) lockClient.release();
       paymentAutomationTickRunning = false;
     }
   }, automationTickMs);
@@ -354,15 +405,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(200).send(result.ok ? "OK" : "Error");
   });
 
+  // Fix 7: SVG removed from both upload allowlists.
+  // SVG files can contain embedded <script> tags / event handlers, enabling stored XSS
+  // when served with Content-Type: image/svg+xml by a CDN.
   const memUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
-      const allowed = /\.(jpg|jpeg|png|gif|webp|svg)$/i;
+      const allowed = /\.(jpg|jpeg|png|gif|webp)$/i;
       const hasAllowedExtension = allowed.test(path.extname(file.originalname));
-      const isImageMime = file.mimetype.startsWith("image/");
+      const isImageMime = file.mimetype.startsWith("image/") && file.mimetype !== "image/svg+xml";
       if (hasAllowedExtension && isImageMime) cb(null, true);
-      else cb(new Error("Only image files are allowed"));
+      else cb(new Error("Only image files are allowed (jpg, jpeg, png, gif, webp)"));
     },
   });
 
@@ -370,11 +424,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
-      const allowed = /\.(png|jpg|jpeg|webp|svg)$/i;
+      const allowed = /\.(png|jpg|jpeg|webp)$/i;
       const hasAllowedExtension = allowed.test(path.extname(file.originalname));
-      const allowedMimes = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
+      const allowedMimes = ["image/png", "image/jpeg", "image/webp"];
       if (hasAllowedExtension && allowedMimes.includes(file.mimetype)) cb(null, true);
-      else cb(new Error("Logo must be PNG, JPG, WebP, or SVG"));
+      else cb(new Error("Logo must be PNG, JPG, or WebP"));
     },
   });
 
@@ -497,8 +551,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       .leftJoin(cpTenantBranding, eq(cpTenantBranding.tenantId, cpTenants.id))
       .where(and(eq(cpTenants.isActive, true), sql`${cpTenants.name} NOT LIKE '%(deleted)'`));
 
-    const perTenant = await Promise.all(
-      tenantRows.map(async (tenant) => {
+    const DASHBOARD_BATCH = 5;
+    const perTenant: any[] = [];
+    for (let _bi = 0; _bi < tenantRows.length; _bi += DASHBOARD_BATCH) {
+      const batch = tenantRows.slice(_bi, _bi + DASHBOARD_BATCH);
+      const batchResults = await Promise.all(batch.map(async (tenant) => {
         try {
           const tdb = await getDbForOrg(tenant.id);
           // Always scope by organizationId so shared-DB tenants only count their own rows.
@@ -529,9 +586,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         } catch (err: any) {
           return {
             ...tenant,
-            usersCount: 0,
-            policiesCount: 0,
-            activePoliciesCount: 0,
+            usersCount: 0 as number,
+            policiesCount: 0 as number,
+            activePoliciesCount: 0 as number,
             clientsCount: 0,
             claimsCount: 0,
             leadsCount: 0,
@@ -539,8 +596,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             loadError: err?.message || "Failed to load tenant metrics",
           };
         }
-      })
-    );
+      }));
+      perTenant.push(...batchResults);
+    }
 
     const summary = perTenant.reduce(
       (acc, t) => {
@@ -636,16 +694,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!canManageTenants && (id !== user.organizationId || !canWriteOrg)) {
       return res.status(403).json({ message: "Cross-tenant access denied or insufficient permissions" });
     }
-    const isPlatformOwner = user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
-    delete req.body.id;
-    delete req.body.createdAt;
-    if (!isPlatformOwner) {
-      delete req.body.databaseUrl;
-      delete req.body.isWhitelabeled;
+    const isPlatformOwner = user.isPlatformOwner ?? user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+    const TENANT_WRITE_FIELDS = new Set([
+      "name", "address", "phone", "email", "website", "logoUrl", "primaryColor",
+      "footerText", "policyNumberPrefix", "policyNumberPadding",
+    ]);
+    const PLATFORM_ONLY_ORG_FIELDS = new Set(["slug", "isActive", "licenseStatus", "isWhitelabeled", "databaseUrl"]);
+    const sanitizedOrg: Record<string, any> = {};
+    for (const [key, value] of Object.entries(req.body)) {
+      if (TENANT_WRITE_FIELDS.has(key)) sanitizedOrg[key] = value;
+      else if (PLATFORM_ONLY_ORG_FIELDS.has(key) && isPlatformOwner) sanitizedOrg[key] = value;
     }
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updateOrganization(id, req.body);
+    if (Object.keys(sanitizedOrg).length === 0) return res.json(before);
+    const updated = await storage.updateOrganization(id, sanitizedOrg);
     await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, updated, id);
     return res.json(updated);
   });
@@ -748,17 +811,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const org = await storage.getOrganization(id);
     if (!org) return res.status(404).json({ message: "Not found" });
 
-    const usersInOrg = await storage.getUsersByOrg(id, 100, 0);
     const isPlatformOwner = user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
-    const allPlatformOwners = usersInOrg.every((u: any) => u.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase());
-
-    if (usersInOrg.length > 0 && !allPlatformOwners) {
+    // Count non-platform-owner users directly (avoids fetching only first 100)
+    const tdbDel = await getDbForOrg(id);
+    const [{ nonOwnerCount }] = await tdbDel
+      .select({ nonOwnerCount: count() })
+      .from(users)
+      .where(and(
+        eq(users.organizationId, id),
+        sql`LOWER(${users.email}) != ${PLATFORM_OWNER_EMAIL.toLowerCase()}`,
+      ));
+    if (nonOwnerCount > 0) {
       return res.status(400).json({
         message: "Cannot delete tenant that has users. Remove or reassign users first.",
       });
     }
 
-    // Clear organizationId for all users in this org (e.g. platform owner) so they can log in with no tenant
+    // Clear organizationId for platform owner users in this org so they can log in with no tenant
+    const usersInOrg = await storage.getUsersByOrg(id, 1000, 0);
     for (const u of usersInOrg) {
       await storage.updateUser(u.id, { organizationId: null });
     }
@@ -1028,8 +1098,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
     if (isAgent) {
-      const agentClients = await storage.getClientsByAgent(user.id, user.organizationId, 10000, 0);
-      if (!agentClients.some((c: any) => c.id === client.id)) return res.status(403).json({ message: "Access denied" });
+      const hasAccess = await storage.isClientAccessibleByAgent(user.id, client.id, user.organizationId);
+      if (!hasAccess) return res.status(403).json({ message: "Access denied" });
     }
     return res.json(client);
   });
@@ -1125,8 +1195,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
     if (isAgent) {
-      const agentClients = await storage.getClientsByAgent(user.id, user.organizationId, 10000, 0);
-      if (!agentClients.some((c: any) => c.id === before.id)) return res.status(403).json({ message: "Access denied" });
+      const hasAccess = await storage.isClientAccessibleByAgent(user.id, before.id, user.organizationId);
+      if (!hasAccess) return res.status(403).json({ message: "Access denied" });
     }
     delete req.body.id;
     delete req.body.organizationId;
@@ -1699,7 +1769,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!user.isPlatformOwner) delete body.agentId;
 
     const ALLOWED_FIELDS = new Set([
-      "currency", "paymentSchedule", "effectiveDate", "branchId", "agentId", "groupId", "status",
+      "currency", "paymentSchedule", "effectiveDate", "branchId", "agentId", "groupId",
       "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryRelationship",
       "beneficiaryNationalId", "beneficiaryPhone", "beneficiaryDependentId",
     ]);
@@ -1868,10 +1938,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getPaymentTransaction(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const body = { ...req.body };
-    delete body.id;
-    delete body.organizationId;
-    delete body.createdAt;
+    const PAYMENT_EDIT_FIELDS = new Set(["notes", "postedDate", "valueDate", "reference", "paymentMethod", "amount", "currency", "status", "branchId"]);
+    const body: Record<string, any> = {};
+    for (const [key, value] of Object.entries(req.body)) {
+      if (PAYMENT_EDIT_FIELDS.has(key)) body[key] = value;
+    }
     const updated = await storage.updatePaymentTransaction(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_PAYMENT", "PaymentTransaction", req.params.id as string, before, updated);
     structuredLog("warn", "Edited payment transaction", { userId: user.id, email: user.email, transactionId: req.params.id });
@@ -1894,10 +1965,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const body = { ...req.body };
-    delete body.id;
-    delete body.organizationId;
-    delete body.createdAt;
+    const RECEIPT_EDIT_FIELDS = new Set(["notes", "status", "amount", "currency", "paymentChannel", "printFormat", "branchId"]);
+    const body: Record<string, any> = {};
+    for (const [key, value] of Object.entries(req.body)) {
+      if (RECEIPT_EDIT_FIELDS.has(key)) body[key] = value;
+    }
     const updated = await storage.updatePaymentReceipt(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_RECEIPT", "PaymentReceipt", req.params.id as string, before, updated);
     structuredLog("warn", "Edited receipt", { userId: user.id, email: user.email, receiptId: req.params.id });

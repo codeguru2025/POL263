@@ -114,6 +114,12 @@ export function setupAuth(app: Express) {
       if (!user) {
         user = await storage.getUser(userId);
       }
+      // Fix 8: Immediately reject deactivated accounts rather than waiting up to
+      // session maxAge (24 h). deserializeUser runs on every authenticated request
+      // so this revocation is near-instant without extra middleware.
+      if (user && user.isActive === false) {
+        return done(null, null);
+      }
       done(null, user || null);
     } catch (err) {
       done(err, null);
@@ -607,7 +613,9 @@ export function setupAuth(app: Express) {
       // return null and wrongly erase the activeTenantId they just selected.
       if (!user.isPlatformOwner && user.organizationId) {
         const org = await storage.getOrganization(user.organizationId);
-        if (!org || org.name?.endsWith(" (deleted)")) {
+        // Fix 9: Case-insensitive soft-delete check. TODO: replace name-suffix soft-delete
+        // with a proper `deleted_at` timestamp column in the organizations schema.
+        if (!org || org.name?.toLowerCase().endsWith(" (deleted)")) {
           await storage.updateUser(user.id, { organizationId: null });
           user.organizationId = null;
           (req.session as any).activeTenantId = null;
@@ -739,6 +747,18 @@ export function requireTenantScope(req: Request, res: Response, next: NextFuncti
       return res.status(403).json({ message: "Select a tenant first", code: "NO_TENANT_SELECTED" });
     }
     return res.status(403).json({ message: "No tenant scope assigned" });
+  }
+  // Guard: reject if a non-platform-owner sends an X-Tenant-ID header pointing to a
+  // different org — prevents cross-tenant data access if any route reads req.tenantId.
+  const headerTenant = req.headers["x-tenant-id"] as string | undefined;
+  if (headerTenant && !user?.isPlatformOwner && headerTenant !== effectiveOrgId) {
+    structuredLog("warn", "X-Tenant-ID header mismatch for non-owner", {
+      userId: user?.id,
+      userOrg: effectiveOrgId,
+      headerTenant,
+      requestId: (req as any).requestId,
+    });
+    return res.status(403).json({ message: "Tenant header does not match your session" });
   }
   // Keep downstream handlers tenant-scoped even if they read user.organizationId directly.
   user.organizationId = effectiveOrgId;

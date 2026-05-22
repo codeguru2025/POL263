@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { differenceInCalendarMonths } from "date-fns";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { z } from "zod";
@@ -46,12 +47,9 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "System not configured" });
       }
 
-      let client = null;
-      let matchedOrgId: string | null = null;
-      for (const org of orgs) {
-        client = await storage.getClientByActivationCode(activationCode, org.id);
-        if (client) { matchedOrgId = org.id; break; }
-      }
+      const claimResults = await Promise.all(orgs.map((org) => storage.getClientByActivationCode(activationCode, org.id)));
+      const client = claimResults.find(Boolean) ?? null;
+      const matchedOrgId = client?.organizationId ?? null;
       if (!client || !matchedOrgId) {
         return constantTimeResponse(res, 400, { message: "Invalid activation code or policy number" });
       }
@@ -95,11 +93,8 @@ export function setupClientAuth(app: Express) {
 
     try {
       const orgs = await storage.getOrganizations();
-      let client = null;
-      for (const org of orgs) {
-        client = await storage.getClient(clientId, org.id);
-        if (client) break;
-      }
+      const enrollResults = await Promise.all(orgs.map((org) => storage.getClient(clientId, org.id)));
+      const client = enrollResults.find(Boolean) ?? null;
       if (!client || client.isEnrolled) {
         return res.status(400).json({ message: "Invalid enrollment request" });
       }
@@ -163,11 +158,8 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid credentials" });
       }
 
-      let policy = null;
-      for (const org of orgs) {
-        policy = await storage.getPolicyByNumber(policyNumber, org.id);
-        if (policy) break;
-      }
+      const loginResults = await Promise.all(orgs.map((org) => storage.getPolicyByNumber(policyNumber, org.id)));
+      const policy = loginResults.find(Boolean) ?? null;
       if (!policy) {
         return constantTimeResponse(res, 401, { message: "Invalid credentials" });
       }
@@ -221,14 +213,9 @@ export function setupClientAuth(app: Express) {
 
     const client = clientOrgId
       ? await storage.getClient(clientId, clientOrgId)
-      : await (async () => {
-          const orgs = await storage.getOrganizations();
-          for (const org of orgs) {
-            const c = await storage.getClient(clientId, org.id);
-            if (c) return c;
-          }
-          return undefined;
-        })();
+      : await storage.getOrganizations().then((orgs) =>
+          Promise.all(orgs.map((org) => storage.getClient(clientId, org.id))).then((rs) => rs.find(Boolean))
+        );
     if (!client) {
       return res.status(401).json({ message: "Not authenticated" });
     }
@@ -287,10 +274,18 @@ export function setupClientAuth(app: Express) {
           const start = new Date(startDate);
           const now = new Date();
           if (!isNaN(start.getTime()) && start <= now) {
-            const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
             const schedule = p.paymentSchedule || "monthly";
-            const periodDays = schedule === "weekly" ? 7 : schedule === "biweekly" ? 14 : schedule === "quarterly" ? 91.31 : schedule === "annually" ? 365.25 : 30.44;
-            periodsElapsed = Math.ceil(daysElapsed / periodDays);
+            if (schedule === "monthly") {
+              periodsElapsed = Math.max(0, differenceInCalendarMonths(now, start));
+            } else if (schedule === "quarterly") {
+              periodsElapsed = Math.max(0, Math.floor(differenceInCalendarMonths(now, start) / 3));
+            } else if (schedule === "annually") {
+              periodsElapsed = Math.max(0, Math.floor(differenceInCalendarMonths(now, start) / 12));
+            } else {
+              const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
+              const periodDays = schedule === "weekly" ? 7 : 14;
+              periodsElapsed = Math.max(0, Math.ceil(daysElapsed / periodDays));
+            }
             totalDue = periodsElapsed * premium;
           }
         }
@@ -308,12 +303,11 @@ export function setupClientAuth(app: Express) {
 
     if (!clientOrgId) {
       const orgs = await storage.getOrganizations();
-      for (const org of orgs) {
-        const c = await storage.getClient(clientId, org.id);
-        if (c) {
-          const rawPolicies = await storage.getPoliciesByClient(clientId, c.organizationId);
-          return res.json(await enrichWithBalance(rawPolicies, c.organizationId));
-        }
+      const clientResults = await Promise.all(orgs.map((org) => storage.getClient(clientId, org.id)));
+      const foundClient = clientResults.find(Boolean);
+      if (foundClient) {
+        const rawPolicies = await storage.getPoliciesByClient(clientId, foundClient.organizationId);
+        return res.json(await enrichWithBalance(rawPolicies, foundClient.organizationId));
       }
       return res.json([]);
     }
@@ -356,13 +350,16 @@ export function setupClientAuth(app: Express) {
       const allPolicies = await storage.getPoliciesByClient(client.id, clientOrgId);
       matchedPolicies = allPolicies;
     }
-    const payables = matchedPolicies.filter((p) => p.policyNumber != null && String(p.policyNumber).trim() !== "");
+    const payables = matchedPolicies.filter((p: any) => p.policyNumber != null && String(p.policyNumber).trim() !== "");
+    const LOOKUP_TTL_MS = 10 * 60 * 1000; // 10 minutes
     (req.session as any).lookedUpClientId = client.id;
     (req.session as any).lookedUpClientIdAt = Date.now();
+    (req.session as any).lookedUpClientOrgId = clientOrgId;
+    (req.session as any).lookedUpClientIdExpiry = Date.now() + LOOKUP_TTL_MS;
     return res.json({
       clientId: client.id,
       clientName: [client.title, client.firstName, client.lastName].filter(Boolean).join(" "),
-      policies: payables.map((p) => ({
+      policies: payables.map((p: any) => ({
         id: p.id,
         policyNumber: p.policyNumber,
         status: p.status,
@@ -498,11 +495,8 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 
-      let policy = null;
-      for (const org of orgs) {
-        policy = await storage.getPolicyByNumber(policyNumber, org.id);
-        if (policy) break;
-      }
+      const resetResults = await Promise.all(orgs.map((org) => storage.getPolicyByNumber(policyNumber, org.id)));
+      const policy = resetResults.find(Boolean) ?? null;
       if (!policy) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }

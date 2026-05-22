@@ -5,6 +5,7 @@
 
 import { storage, findPaymentIntentById } from "./storage";
 import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from "./tenant-db";
+import { rollbackClawbacks } from "./route-helpers";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { getPaynowConfig, getPaynowIntegrationId } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
@@ -26,31 +27,6 @@ function isPaynowPaidStatus(status: string): boolean {
 }
 function isPaynowFailedStatus(status: string): boolean {
   return status === "cancelled" || status === "failed" || status === "disputed";
-}
-
-async function rollbackClawbacksForPolicy(orgId: string, policy: any) {
-  if (!policy.agentId) return;
-  try {
-    const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
-    const clawbacks = entries.filter((e: any) => e.entryType === "clawback" && e.status === "earned");
-    const existingRollbacks = entries.filter((e: any) => e.entryType === "rollback");
-    const clawbackTotal = clawbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
-    const rollbackTotal = existingRollbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
-    const unreversed = clawbackTotal + rollbackTotal;
-    if (unreversed >= 0) return;
-    await storage.createCommissionLedgerEntry({
-      organizationId: orgId,
-      agentId: policy.agentId,
-      policyId: policy.id,
-      entryType: "rollback",
-      amount: Math.abs(unreversed).toFixed(2),
-      currency: policy.currency || "USD",
-      description: `Rollback — policy reinstated, clawback reversed`,
-      status: "earned",
-    });
-  } catch (err) {
-    structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId: policy.id });
-  }
 }
 
 /** actor_id in payment_events references users.id; clients are not in users. Use null when actor is client. */
@@ -443,12 +419,10 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
   const orgs = await storage.getOrganizations();
   if (orgs.length === 0) return { ok: false, reason: "No tenant" };
 
-  // Search all tenants for the matching payment intent (multi-tenant safe)
+  // Search all tenants in parallel for the matching payment intent
   let intent: Awaited<ReturnType<typeof storage.getPaymentIntentByMerchantReference>> = undefined;
-  for (const org of orgs) {
-    intent = await storage.getPaymentIntentByMerchantReference(org.id, reference);
-    if (intent) break;
-  }
+  const intentResults = await Promise.all(orgs.map((org) => storage.getPaymentIntentByMerchantReference(org.id, reference)));
+  intent = intentResults.find(Boolean);
 
   if (intent) {
     await storage.createPaymentEvent({
@@ -490,13 +464,12 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
     return { ok: true };
   }
 
-  // Try group payment intent across all tenants
+  // Try group payment intent across all tenants in parallel
   let groupIntent: Awaited<ReturnType<typeof storage.getGroupPaymentIntentByMerchantReference>> = undefined;
   let groupOrgId = "";
-  for (const org of orgs) {
-    groupIntent = await storage.getGroupPaymentIntentByMerchantReference(org.id, reference);
-    if (groupIntent) { groupOrgId = org.id; break; }
-  }
+  const groupResults = await Promise.all(orgs.map((org) => storage.getGroupPaymentIntentByMerchantReference(org.id, reference).then((gi) => ({ gi, orgId: org.id }))));
+  const groupMatch = groupResults.find((r) => r.gi);
+  if (groupMatch) { groupIntent = groupMatch.gi; groupOrgId = groupMatch.orgId; }
 
   if (!groupIntent) {
     structuredLog("warn", "Paynow result unknown reference", { reference });
@@ -546,7 +519,13 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
         keys: Array.from(parsed.keys()).filter((k) => k.toLowerCase() !== "hash").join(","),
       });
       if (isPaynowPaidStatus(status)) {
-        structuredLog("warn", "Paynow poll hash mismatch but status is PAID — applying payment anyway", { intentId: intent.id, paynowStatus: status });
+        // Only apply on hash-mismatch if the intent is in a state we can confidently advance
+        const applyableStates = ["initiated", "polling", "sent", "created"];
+        if (!applyableStates.includes(intent.status)) {
+          structuredLog("warn", "Paynow poll hash mismatch: intent not in applyable state, skipping", { intentId: intent.id, intentStatus: intent.status, paynowStatus: status });
+          return { status: intent.status, error: "Verifying payment with gateway...", paynowStatus: status };
+        }
+        structuredLog("warn", "Paynow poll hash mismatch but status is PAID — applying payment", { intentId: intent.id, paynowStatus: status });
         const applied = await applyPaymentToPolicy(intent.id, "system", null);
         if (applied.ok) return { status: "paid", paid: true, paynowStatus: status };
         structuredLog("error", "applyPaymentToPolicy failed after hash-mismatch paid", { intentId: intent.id, error: applied.error });
@@ -594,19 +573,6 @@ export async function applyPaymentToPolicy(
   if (!intent) return { ok: false, error: "Intent not found" };
   const orgId = intent.organizationId;
 
-  const existingTx = await storage.getPaymentTransactionByIdempotencyKey(`paynow-${intent.id}`, orgId);
-  if (existingTx) {
-    const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId, orgId);
-    const existing = receipts.find((r) => r.paymentIntentId === intentId);
-    return { ok: true, transactionId: existingTx.id, receiptId: existing?.id };
-  }
-
-  if (intent.status === "paid") {
-    const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId, orgId);
-    const existingReceipt = receipts.find((r) => r.paymentIntentId === intentId);
-    if (existingReceipt) return { ok: true, receiptId: existingReceipt.id };
-  }
-
   const policy = await storage.getPolicy(intent.policyId, orgId);
   if (!policy) return { ok: false, error: "Policy not found" };
 
@@ -626,6 +592,25 @@ export async function applyPaymentToPolicy(
 
   try {
     const result = await withOrgTransaction(orgId, async (txDb) => {
+      // Lock the intent row and re-check idempotency inside the transaction to prevent races
+      const [lockedIntent] = await txDb
+        .select({ id: paymentIntents.id, status: paymentIntents.status })
+        .from(paymentIntents)
+        .where(eq(paymentIntents.id, intentId))
+        .limit(1)
+        .for("update");
+      if (lockedIntent?.status === "paid") {
+        const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId, orgId);
+        const existingReceipt = receipts.find((r) => r.paymentIntentId === intentId);
+        return { alreadyPaid: true, receiptId: existingReceipt?.id };
+      }
+      const existingIdempotentTx = await storage.getPaymentTransactionByIdempotencyKey(`paynow-${intent.id}`, orgId);
+      if (existingIdempotentTx) {
+        const receipts = await storage.getPaymentReceiptsByPolicy(intent.policyId, orgId);
+        const existingReceipt = receipts.find((r) => r.paymentIntentId === intentId);
+        return { alreadyPaid: true, transactionId: existingIdempotentTx.id, receiptId: existingReceipt?.id };
+      }
+
       let recordedByForLedger: string | null = null;
       if (effectiveUserId) {
         await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, orgId, effectiveUserId);
@@ -684,18 +669,26 @@ export async function applyPaymentToPolicy(
         },
       });
 
-      return { transaction: tx, receipt: rec };
+      return { transaction: tx, receipt: rec, alreadyPaid: false };
     });
 
-    transaction = result.transaction;
-    receipt = result.receipt;
+    if (result.alreadyPaid) {
+      return { ok: true, transactionId: result.transactionId, receiptId: result.receiptId };
+    }
+    transaction = result.transaction!;
+    receipt = result.receipt!;
   } catch (err: any) {
     structuredLog("error", "applyPaymentToPolicy failed", { intentId, error: err?.message || String(err), stack: err?.stack });
     return { ok: false, error: err?.message || "Failed to apply payment" };
   }
 
   if (policy.status === "lapsed") {
-    await rollbackClawbacksForPolicy(orgId, policy);
+    // Clawback rollback runs after the TX; log clearly if it fails so it can be corrected manually
+    rollbackClawbacks(orgId, policy).catch((err: any) => {
+      structuredLog("error", "Clawback rollback failed after payment applied — manual correction required", {
+        orgId, policyId: policy.id, intentId, error: err?.message || String(err),
+      });
+    });
   }
 
   requestOutboxDrain(orgId);
@@ -789,7 +782,11 @@ export async function applyGroupPaymentToPolicies(
 
       // Post-transaction best-effort side effects
       if (policy.status === "lapsed") {
-        await rollbackClawbacksForPolicy(orgId, policy);
+        rollbackClawbacks(orgId, policy).catch((err: any) => {
+          structuredLog("error", "Clawback rollback failed after group payment applied — manual correction required", {
+            orgId, policyId: policy.id, groupIntentId, error: err?.message || String(err),
+          });
+        });
       }
 
       if (!notifiedClients.has(policy.clientId!)) {

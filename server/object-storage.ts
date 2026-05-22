@@ -18,6 +18,7 @@ import { structuredLog } from "./logger";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import dns from "dns/promises";
 
 // Resolve config — DO_SPACES_* first, then R2_* legacy
 const ENDPOINT =
@@ -165,6 +166,29 @@ export async function fetchFile(key: string): Promise<Buffer | null> {
   }
 }
 
+// Fix 2: SSRF guard — block requests to private/loopback/link-local IP ranges.
+// Covers: 10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x (metadata service), ::1, fc00::/7
+const PRIVATE_IP_RE =
+  /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.|0\.0\.0\.0|::1$|fd[0-9a-f]{2}:|fc[0-9a-f]{2}:)/i;
+
+async function isSsrfSafeUrl(rawUrl: string): Promise<boolean> {
+  let parsed: URL;
+  try { parsed = new URL(rawUrl); } catch { return false; }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  const host = parsed.hostname;
+  if (PRIVATE_IP_RE.test(host)) return false;
+  // Resolve hostname and verify the resulting IP is not private
+  try {
+    const addrs = await dns.lookup(host, { all: true });
+    for (const { address } of addrs) {
+      if (PRIVATE_IP_RE.test(address)) return false;
+    }
+  } catch {
+    return false; // unresolvable host — refuse
+  }
+  return true;
+}
+
 /**
  * Resolve any image URL/path to a Buffer for PDF embedding.
  * Handles: full https URLs, Spaces public URLs, /uploads/... relative paths.
@@ -174,8 +198,16 @@ export async function resolveImage(url: string | null | undefined): Promise<Buff
   const u = url.trim();
 
   if (u.startsWith("http://") || u.startsWith("https://")) {
+    // Fix 2: Validate URL against SSRF targets before fetching
+    if (!(await isSsrfSafeUrl(u))) {
+      structuredLog("warn", "resolveImage: blocked SSRF-risky URL", { url: u });
+      return null;
+    }
     try {
-      const res = await fetch(u, { headers: { "User-Agent": "POL263" } });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      const res = await fetch(u, { headers: { "User-Agent": "POL263" }, signal: controller.signal });
+      clearTimeout(timeout);
       if (!res.ok) return null;
       return Buffer.from(await res.arrayBuffer());
     } catch {

@@ -255,6 +255,8 @@ export interface IStorage {
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getClientsByOrg(organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
   getClientsByAgent(agentId: string, organizationId: string, limit?: number, offset?: number, search?: string): Promise<Client[]>;
+  /** Returns true if the given agent has access to the client via a policy, lead, or direct assignment. */
+  isClientAccessibleByAgent(agentId: string, clientId: string, organizationId: string): Promise<boolean>;
   getClient(id: string, orgId: string): Promise<Client | undefined>;
   getClientByActivationCode(code: string, orgId: string): Promise<Client | undefined>;
   /** Find first client in org by email (case-insensitive). */
@@ -870,6 +872,30 @@ export class DatabaseStorage implements IStorage {
     }
     return tdb.select().from(clients).where(and(...conditions))
       .orderBy(desc(clients.createdAt)).limit(limit).offset(offset);
+  }
+  async isClientAccessibleByAgent(agentId: string, clientId: string, organizationId: string): Promise<boolean> {
+    const tdb = await getDbForOrg(organizationId);
+    const [byPolicy] = await tdb
+      .select({ clientId: policies.clientId })
+      .from(policies)
+      .where(and(eq(policies.agentId, agentId), eq(policies.clientId, clientId), eq(policies.organizationId, organizationId)))
+      .limit(1);
+    if (byPolicy) return true;
+    const [byLead] = await tdb
+      .select({ clientId: leads.clientId })
+      .from(leads)
+      .where(and(eq(leads.agentId, agentId), eq(leads.clientId, clientId)))
+      .limit(1);
+    if (byLead) return true;
+    try {
+      const [direct] = await tdb
+        .select({ id: clients.id })
+        .from(clients)
+        .where(and(eq(clients.id, clientId), eq(clients.agentId, agentId), eq(clients.organizationId, organizationId)))
+        .limit(1);
+      if (direct) return true;
+    } catch { /* agentId column may not exist before migration */ }
+    return false;
   }
   async getClient(id: string, orgId: string): Promise<Client | undefined> {
     const tdb = await getDbForOrg(orgId);

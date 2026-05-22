@@ -8,7 +8,31 @@ vi.mock("../../server/db", () => ({
 let insertCallCount = 0;
 const txInsertData: Record<string, any>[] = [];
 
+// Mutable per-test control for the in-TX SELECT FOR UPDATE response
+let mockLockedIntentStatus: string | null = "created";
+// Mutable per-test control for the in-TX idempotency key lookup
+let mockInTxIdempotentTx: any = null;
+
+function makeSelectChain(returnRows: any[]) {
+  const chain: any = {
+    from: () => chain,
+    where: () => chain,
+    limit: () => chain,
+    for: () => Promise.resolve(returnRows),
+    // also allow direct await (some callers don't call .for)
+    then: (resolve: any) => Promise.resolve(returnRows).then(resolve),
+  };
+  return chain;
+}
+
 const mockTxDb = {
+  select: vi.fn((_fields?: any) => {
+    // Return the locked intent row for the FOR UPDATE select
+    const row = mockLockedIntentStatus !== null
+      ? [{ id: "intent-1", status: mockLockedIntentStatus }]
+      : [];
+    return makeSelectChain(row);
+  }),
   insert: vi.fn(() => ({
     values: vi.fn((data: any) => {
       txInsertData.push(data);
@@ -107,6 +131,8 @@ describe("PaymentService", () => {
     vi.clearAllMocks();
     insertCallCount = 0;
     txInsertData.length = 0;
+    mockLockedIntentStatus = "created"; // default: intent not yet paid in the DB
+    mockInTxIdempotentTx = null;
     vi.mocked(storage.getPolicy).mockResolvedValue({
       id: "policy-1",
       policyNumber: "POL001",
@@ -176,18 +202,15 @@ describe("PaymentService", () => {
 
   describe("applyPaymentToPolicy receipting (online PayNow)", () => {
     it("creates transaction and receipt inside a DB transaction when intent not paid", async () => {
+      // Locked row shows intent not yet paid — full insert path
+      mockLockedIntentStatus = "created";
       vi.mocked(findPaymentIntentById).mockResolvedValue({ ...mockIntent, status: "created" } as any);
       vi.mocked(storage.getPaymentTransactionByIdempotencyKey).mockResolvedValue(null);
       vi.mocked(storage.getPaymentReceiptsByPolicy).mockResolvedValue([]);
       vi.mocked(storage.getPolicy).mockResolvedValue({
-        id: "policy-1",
-        policyNumber: "POL001",
-        status: "active",
-        clientId: "client-1",
-        organizationId: "org-1",
-        branchId: null,
-        currency: "USD",
-        premiumAmount: "10",
+        id: "policy-1", policyNumber: "POL001", status: "active",
+        clientId: "client-1", organizationId: "org-1", branchId: null,
+        currency: "USD", premiumAmount: "10",
       } as any);
       vi.mocked(storage.allocatePaymentReceiptNumberInTx).mockResolvedValue("2");
       vi.mocked(storage.createPaymentEvent).mockResolvedValue(undefined as any);
@@ -205,8 +228,9 @@ describe("PaymentService", () => {
     });
 
     it("returns existing receipt when intent already paid (idempotent)", async () => {
+      // SELECT FOR UPDATE returns the row as already paid — early exit inside TX
+      mockLockedIntentStatus = "paid";
       vi.mocked(findPaymentIntentById).mockResolvedValue({ ...mockIntent, status: "paid" } as any);
-      vi.mocked(storage.getPaymentTransactionByIdempotencyKey).mockResolvedValue(null);
       const existingReceipt = { id: "existing-receipt", receiptNumber: "1", paymentIntentId: "intent-1" };
       vi.mocked(storage.getPaymentReceiptsByPolicy).mockResolvedValue([existingReceipt] as any);
 
@@ -218,6 +242,8 @@ describe("PaymentService", () => {
     });
 
     it("returns existing transaction when idempotency key already exists", async () => {
+      // Locked row shows 'created' but idempotency key already has a tx — second guard inside TX
+      mockLockedIntentStatus = "created";
       vi.mocked(findPaymentIntentById).mockResolvedValue({ ...mockIntent, status: "created" } as any);
       const existingTx = { id: "existing-tx-1", amount: "10", currency: "USD" };
       vi.mocked(storage.getPaymentTransactionByIdempotencyKey).mockResolvedValue(existingTx as any);
