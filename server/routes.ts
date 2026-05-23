@@ -1281,6 +1281,74 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(204).send();
   });
 
+  // ─── Client Documents (ID copies, proof of address, etc.) ───
+
+  app.get("/api/clients/:clientId/documents", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    // Agent scope: agent must have access to this client
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent) {
+      const hasAccess = await storage.isClientAccessibleByAgent(user.id, client.id, user.organizationId);
+      if (!hasAccess) return res.status(403).json({ message: "Access denied" });
+    }
+    return res.json(await storage.getClientDocuments(client.id, user.organizationId));
+  });
+
+  app.post("/api/clients/:clientId/documents", requireAuth, requireTenantScope, requirePermission("write:client"), memUpload.single("file"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+    const documentType = (req.body.documentType || "other") as string;
+    const label = (req.body.label || req.file.originalname) as string;
+
+    // Upload to DO Spaces under client-documents/ prefix
+    const { url, key } = await objectStorage.uploadFile(
+      req.file.buffer, req.file.originalname, req.file.mimetype, "client-documents"
+    );
+
+    const doc = await storage.createClientDocument({
+      organizationId: user.organizationId,
+      clientId: client.id,
+      documentType,
+      label,
+      fileName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      fileUrl: url,
+      storageKey: key,
+      fileSize: req.file.size,
+      uploadedBy: user.id,
+    });
+
+    await auditLog(req, "UPLOAD_CLIENT_DOCUMENT", "ClientDocument", doc.id, null, { clientId: client.id, documentType, fileName: req.file.originalname });
+    return res.status(201).json(doc);
+  });
+  app.use("/api/clients/:clientId/documents", handleMulterError);
+
+  app.delete("/api/clients/:clientId/documents/:docId", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+
+    // Fetch the doc to get the storage key for deletion
+    const docs = await storage.getClientDocuments(client.id, user.organizationId);
+    const doc = docs.find(d => d.id === req.params.docId);
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+
+    // Delete from object storage
+    if (doc.storageKey) {
+      await objectStorage.deleteFile(doc.storageKey);
+    }
+
+    await storage.deleteClientDocument(doc.id, user.organizationId);
+    await auditLog(req, "DELETE_CLIENT_DOCUMENT", "ClientDocument", doc.id, { fileName: doc.fileName }, null);
+    return res.status(204).send();
+  });
+
   app.get("/api/clients/:clientId/payment-methods", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
     const user = req.user as any;
     const client = await storage.getClient(req.params.clientId as string, user.organizationId);
@@ -2188,7 +2256,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
-    return res.json(await storage.getPaymentsByOrg(user.organizationId, limit, offset, filters));
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const agentId = isAgent ? user.id : undefined;
+    return res.json(await storage.getPaymentsByOrg(user.organizationId, limit, offset, filters, agentId));
   });
 
   app.get("/api/policies/:id/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -2370,7 +2441,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    return res.json(await storage.getPaymentIntentsByOrg(user.organizationId, limit));
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    const agentId = isAgent ? user.id : undefined;
+    return res.json(await storage.getPaymentIntentsByOrg(user.organizationId, limit, agentId));
   });
 
   app.get("/api/payment-intents/:id", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -3334,6 +3408,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/expenditures", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+    if (isAgent) return res.json([]);
     const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
     const offset = parseInt(req.query.offset as string) || 0;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;

@@ -6,7 +6,7 @@ import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
-  userRoles, userPermissionOverrides, auditLogs, clients, dependents,
+  userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
   products, productVersions, benefitCatalogItems, benefitBundles, addOns,
   ageBandConfigs, policies, policyMembers, policyStatusHistory, policyAddOns,
   orgMemberSequences, orgPolicySequences,
@@ -34,6 +34,7 @@ import {
   type Permission, type InsertPermission,
   type AuditLog, type InsertAuditLog,
   type Client, type InsertClient,
+  type ClientDocument, type InsertClientDocument,
   type ClientPaymentMethod, type InsertClientPaymentMethod,
   type PaymentAutomationSettings, type InsertPaymentAutomationSettings,
   type PaymentAutomationRun, type InsertPaymentAutomationRun,
@@ -269,6 +270,9 @@ export interface IStorage {
   getClientIdsByOrgSearch(organizationId: string, search: string): Promise<string[]>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, data: Partial<InsertClient>, orgId: string): Promise<Client | undefined>;
+  getClientDocuments(clientId: string, orgId: string): Promise<ClientDocument[]>;
+  createClientDocument(doc: InsertClientDocument): Promise<ClientDocument>;
+  deleteClientDocument(id: string, orgId: string): Promise<void>;
   getDependentsByClient(clientId: string, orgId: string): Promise<Dependent[]>;
   getDependent(id: string, orgId: string): Promise<Dependent | undefined>;
   createDependent(dep: InsertDependent): Promise<Dependent>;
@@ -337,7 +341,7 @@ export interface IStorage {
   addPolicyAddOns(policyId: string, addOnIds: string[], orgId: string): Promise<void>;
   createPaymentTransaction(tx: InsertPaymentTransaction): Promise<PaymentTransaction>;
   getPaymentsByPolicy(policyId: string, orgId: string): Promise<PaymentTransaction[]>;
-  getPaymentsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PaymentTransaction[]>;
+  getPaymentsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters, agentId?: string): Promise<PaymentTransaction[]>;
   getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined>;
   /** True if a platform receivable already exists for this payment transaction (idempotent outbox retries). */
   hasPlatformReceivableForTransaction(orgId: string, transactionId: string): Promise<boolean>;
@@ -351,7 +355,7 @@ export interface IStorage {
   getPaymentIntentById(id: string, orgId: string): Promise<PaymentIntent | undefined>;
   getPaymentIntentByOrgAndIdempotencyKey(orgId: string, idempotencyKey: string): Promise<PaymentIntent | undefined>;
   getPaymentIntentByMerchantReference(orgId: string, merchantReference: string): Promise<PaymentIntent | undefined>;
-  getPaymentIntentsByOrg(orgId: string, limit?: number): Promise<PaymentIntent[]>;
+  getPaymentIntentsByOrg(orgId: string, limit?: number, agentId?: string): Promise<PaymentIntent[]>;
   getPaymentIntentsByClient(clientId: string, orgId: string): Promise<PaymentIntent[]>;
   getPaymentIntentsByPolicy(policyId: string, orgId: string): Promise<PaymentIntent[]>;
   createPaymentIntent(intent: InsertPaymentIntent): Promise<PaymentIntent>;
@@ -971,6 +975,23 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(clients).set(data).where(eq(clients.id, id)).returning();
     return updated;
+  }
+
+  // ─── Client Documents ──────────────────────────────────────
+  async getClientDocuments(clientId: string, orgId: string): Promise<ClientDocument[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(clientDocuments)
+      .where(and(eq(clientDocuments.clientId, clientId), eq(clientDocuments.organizationId, orgId)))
+      .orderBy(desc(clientDocuments.createdAt));
+  }
+  async createClientDocument(doc: InsertClientDocument): Promise<ClientDocument> {
+    const tdb = await getDbForOrg(doc.organizationId);
+    const [created] = await tdb.insert(clientDocuments).values(doc).returning();
+    return created;
+  }
+  async deleteClientDocument(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(clientDocuments).where(and(eq(clientDocuments.id, id), eq(clientDocuments.organizationId, orgId)));
   }
 
   // ─── Dependents ────────────────────────────────────────────
@@ -2075,12 +2096,20 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(paymentTransactions).where(eq(paymentTransactions.policyId, policyId))
       .orderBy(desc(paymentTransactions.receivedAt));
   }
-  async getPaymentsByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters): Promise<PaymentTransaction[]> {
+  async getPaymentsByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters, agentId?: string): Promise<PaymentTransaction[]> {
     const tdb = await getDbForOrg(orgId);
-    const conditions = [eq(paymentTransactions.organizationId, orgId)];
+    const conditions: SQL[] = [eq(paymentTransactions.organizationId, orgId)];
     const dateCol = paymentTransactions.receivedAt;
     if (filters?.fromDate) conditions.push(gte(dateCol, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(dateCol, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (agentId) {
+      conditions.push(
+        exists(
+          tdb.select({ id: policies.id }).from(policies)
+            .where(and(eq(policies.id, paymentTransactions.policyId), eq(policies.agentId, agentId)))
+        )
+      );
+    }
     return tdb.select().from(paymentTransactions).where(and(...conditions))
       .orderBy(desc(paymentTransactions.receivedAt)).limit(limit).offset(offset);
   }
@@ -2413,9 +2442,18 @@ export class DatabaseStorage implements IStorage {
     const [row] = await tdb.select().from(paymentIntents).where(and(eq(paymentIntents.organizationId, orgId), eq(paymentIntents.merchantReference, merchantReference)));
     return row;
   }
-  async getPaymentIntentsByOrg(orgId: string, limit = 100): Promise<PaymentIntent[]> {
+  async getPaymentIntentsByOrg(orgId: string, limit = 100, agentId?: string): Promise<PaymentIntent[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(paymentIntents).where(eq(paymentIntents.organizationId, orgId))
+    const conditions: SQL[] = [eq(paymentIntents.organizationId, orgId)];
+    if (agentId) {
+      conditions.push(
+        exists(
+          tdb.select({ id: policies.id }).from(policies)
+            .where(and(eq(policies.id, paymentIntents.policyId), eq(policies.agentId, agentId)))
+        )
+      );
+    }
+    return tdb.select().from(paymentIntents).where(and(...conditions))
       .orderBy(desc(paymentIntents.createdAt)).limit(limit);
   }
   async getPaymentIntentsByClient(clientId: string, orgId: string): Promise<PaymentIntent[]> {

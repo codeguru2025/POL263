@@ -222,6 +222,41 @@ export const clients = pgTable(
   ]
 );
 
+// ─── CLIENT DOCUMENTS (uploaded ID copies, proof of address, etc.) ───
+export const clientDocuments = pgTable(
+  "client_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    /** e.g. national_id, proof_of_address, passport, birth_certificate, other */
+    documentType: text("document_type").notNull(),
+    /** Display name / description */
+    label: text("label"),
+    /** Original file name */
+    fileName: text("file_name").notNull(),
+    /** MIME type */
+    mimeType: text("mime_type"),
+    /** URL in object storage */
+    fileUrl: text("file_url").notNull(),
+    /** Object storage key (for deletion) */
+    storageKey: text("storage_key"),
+    /** File size in bytes */
+    fileSize: integer("file_size"),
+    /** Who uploaded it */
+    uploadedBy: uuid("uploaded_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("client_docs_org_idx").on(t.organizationId),
+    index("client_docs_client_idx").on(t.clientId),
+  ]
+);
+
 // ─── CLIENT DEVICE TOKENS (for push notifications) ───
 export const clientDeviceTokens = pgTable(
   "client_device_tokens",
@@ -1613,6 +1648,7 @@ export const insertRoleSchema = createInsertSchema(roles).omit({ id: true, creat
 export const insertPermissionSchema = createInsertSchema(permissions).omit({ id: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true });
 export const insertClientSchema = createInsertSchema(clients).omit({ id: true, createdAt: true });
+export const insertClientDocumentSchema = createInsertSchema(clientDocuments).omit({ id: true, createdAt: true });
 export const insertDependentSchema = createInsertSchema(dependents).omit({ id: true, createdAt: true });
 export const insertClientPaymentMethodSchema = createInsertSchema(clientPaymentMethods).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPaymentAutomationSettingsSchema = createInsertSchema(paymentAutomationSettings).omit({ id: true, createdAt: true, updatedAt: true });
@@ -1674,6 +1710,8 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type Client = typeof clients.$inferSelect;
 export type InsertClient = z.infer<typeof insertClientSchema>;
+export type ClientDocument = typeof clientDocuments.$inferSelect;
+export type InsertClientDocument = z.infer<typeof insertClientDocumentSchema>;
 export type Dependent = typeof dependents.$inferSelect;
 export type InsertDependent = z.infer<typeof insertDependentSchema>;
 export type ClientPaymentMethod = typeof clientPaymentMethods.$inferSelect;

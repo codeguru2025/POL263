@@ -775,7 +775,7 @@ export default function StaffFinance() {
           <KpiStatCard label="Total Payments" value={<span data-testid="text-payment-count">{payments.length}</span>} icon={DollarSign} />
           <KpiStatCard label="Total Receipted" value={<span data-testid="text-total-cleared">{paymentCurrency} {totalCleared.toFixed(2)}</span>} icon={CheckCircle2} />
           <KpiStatCard label="Commission Configs" value={commissionConfigs.length} icon={TrendingUp} />
-          <KpiStatCard label="Expenditures" value={expenditures.length} icon={Wallet} />
+          {!isAgent && <KpiStatCard label="Expenditures" value={expenditures.length} icon={Wallet} />}
         </div>
         )}
 
@@ -785,10 +785,10 @@ export default function StaffFinance() {
             {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow">Paynow & Cash</TabsTrigger>}
             {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>}
             {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>}
-            {!commissionOnly && <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>}
-            {!commissionOnly && <TabsTrigger value="platform" data-testid="tab-platform">POL263</TabsTrigger>}
-            {canWriteFinance && <TabsTrigger value="month-end" data-testid="tab-month-end">Month-end run</TabsTrigger>}
-            {canWriteFinance && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt">Group receipt</TabsTrigger>}
+            {!commissionOnly && !isAgent && <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>}
+            {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform">POL263</TabsTrigger>}
+            {canWriteFinance && !isAgent && <TabsTrigger value="month-end" data-testid="tab-month-end">Month-end run</TabsTrigger>}
+            {canWriteFinance && !isAgent && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt">Group receipt</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="payments">

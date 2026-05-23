@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,9 @@ import {
   TrendingUp,
   ArrowRight,
   KeyRound,
+  FileText,
+  Upload,
+  ExternalLink,
 } from "lucide-react";
 
 interface Client {
@@ -83,6 +86,21 @@ interface Dependent {
   gender: string | null;
   relationship: string;
   isActive: boolean;
+  createdAt: string;
+}
+
+interface ClientDocument {
+  id: string;
+  clientId: string;
+  organizationId: string;
+  documentType: string;
+  label: string | null;
+  fileName: string;
+  mimeType: string | null;
+  fileUrl: string;
+  storageKey: string | null;
+  fileSize: number | null;
+  uploadedBy: string | null;
   createdAt: string;
 }
 
@@ -188,6 +206,12 @@ export default function StaffClients() {
   const [editingDep, setEditingDep] = useState<Dependent | null>(null);
   const [depForm, setDepForm] = useState<DependentFormData>(emptyDependent);
 
+  const [showUploadDocDialog, setShowUploadDocDialog] = useState(false);
+  const [uploadDocType, setUploadDocType] = useState("other");
+  const [uploadDocLabel, setUploadDocLabel] = useState("");
+  const [uploadDocFile, setUploadDocFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const { data: clientsList, isLoading } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
   });
@@ -214,6 +238,16 @@ export default function StaffClients() {
   const { data: clientPolicies } = useQuery<Policy[]>({
     queryKey: ["/api/policies"],
     enabled: viewMode === "detail" && !!selectedClientId,
+  });
+
+  const { data: clientDocumentsList, isLoading: isLoadingDocs } = useQuery<ClientDocument[]>({
+    queryKey: ["/api/clients", selectedClientId, "documents"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/clients/${selectedClientId}/documents`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!selectedClientId && viewMode === "detail",
   });
 
   const { data: clientDependents, isLoading: isLoadingDeps } = useQuery<Dependent[]>({
@@ -318,6 +352,46 @@ export default function StaffClients() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "dependents"] });
       toast({ title: "Dependent removed" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const uploadDocMutation = useMutation({
+    mutationFn: async ({ clientId, file, documentType, label }: { clientId: string; file: File; documentType: string; label: string }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("documentType", documentType);
+      formData.append("label", label || file.name);
+      const res = await fetch(getApiBase() + `/api/clients/${clientId}/documents`, {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "documents"] });
+      setShowUploadDocDialog(false);
+      setUploadDocFile(null);
+      setUploadDocLabel("");
+      setUploadDocType("other");
+      toast({ title: "Document uploaded", description: "The document has been stored." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteDocMutation = useMutation({
+    mutationFn: async ({ clientId, docId }: { clientId: string; docId: string }) => {
+      await apiRequest("DELETE", `/api/clients/${clientId}/documents/${docId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "documents"] });
+      toast({ title: "Document deleted" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -674,6 +748,88 @@ export default function StaffClients() {
                   )}
               </CardSection>
 
+              <CardSection
+                className="md:col-span-2"
+                title="Client Documents"
+                icon={FileText}
+                headerRight={(
+                  <Button
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => { setUploadDocType("other"); setUploadDocLabel(""); setUploadDocFile(null); setShowUploadDocDialog(true); }}
+                  >
+                    <Upload className="h-3.5 w-3.5" /> Upload Document
+                  </Button>
+                )}
+                flush
+              >
+                {isLoadingDocs ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : !clientDocumentsList || clientDocumentsList.length === 0 ? (
+                  <EmptyState
+                    title="No documents uploaded"
+                    description="Upload ID copies, proof of address, or other supporting documents."
+                    className="border-0 rounded-none bg-transparent py-8"
+                  />
+                ) : (
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Document</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Size</TableHead>
+                        <TableHead>Uploaded</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {clientDocumentsList.map((doc) => (
+                        <TableRow key={doc.id} className="hover:bg-muted/40">
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                              <span className="truncate max-w-[200px]">{doc.label || doc.fileName}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="capitalize">{doc.documentType.replace(/_/g, " ")}</Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-sm">
+                            {doc.fileSize ? `${(doc.fileSize / 1024).toFixed(1)} KB` : "—"}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-sm">
+                            {new Date(doc.createdAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                                <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
+                                  <ExternalLink className="h-4 w-4" />
+                                </a>
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:text-destructive"
+                                onClick={() => {
+                                  if (confirm(`Delete "${doc.label || doc.fileName}"?`)) {
+                                    deleteDocMutation.mutate({ clientId: selectedClientId!, docId: doc.id });
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                )}
+              </CardSection>
+
               <CardSection title="Enrollment & Access" icon={KeyRound}>
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
@@ -733,6 +889,81 @@ export default function StaffClients() {
           isPending={updateDepMutation.isPending}
           submitLabel="Save Changes"
         />
+
+        <Dialog open={showUploadDocDialog} onOpenChange={setShowUploadDocDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Upload Document</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label>Document Type</Label>
+                <Select value={uploadDocType} onValueChange={setUploadDocType}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="national_id">National ID</SelectItem>
+                    <SelectItem value="passport">Passport</SelectItem>
+                    <SelectItem value="proof_of_address">Proof of Address</SelectItem>
+                    <SelectItem value="birth_certificate">Birth Certificate</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Label <span className="text-muted-foreground">(optional)</span></Label>
+                <Input
+                  placeholder="e.g. Front of ID"
+                  value={uploadDocLabel}
+                  onChange={(e) => setUploadDocLabel(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>File</Label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,.pdf"
+                  className="hidden"
+                  onChange={(e) => setUploadDocFile(e.target.files?.[0] ?? null)}
+                />
+                <div
+                  className="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:bg-muted/30 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploadDocFile ? (
+                    <div className="flex items-center justify-center gap-2 text-sm">
+                      <FileText className="h-4 w-4" />
+                      <span className="font-medium">{uploadDocFile.name}</span>
+                      <span className="text-muted-foreground">({(uploadDocFile.size / 1024).toFixed(1)} KB)</span>
+                    </div>
+                  ) : (
+                    <div className="text-muted-foreground text-sm">
+                      <Upload className="h-6 w-6 mx-auto mb-2" />
+                      <p>Click to select a file (image or PDF)</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowUploadDocDialog(false)}>Cancel</Button>
+              <Button
+                disabled={!uploadDocFile || uploadDocMutation.isPending}
+                onClick={() => {
+                  if (!uploadDocFile || !selectedClientId) return;
+                  uploadDocMutation.mutate({
+                    clientId: selectedClientId,
+                    file: uploadDocFile,
+                    documentType: uploadDocType,
+                    label: uploadDocLabel,
+                  });
+                }}
+              >
+                {uploadDocMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Uploading...</> : "Upload"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </StaffLayout>
     );
   }
