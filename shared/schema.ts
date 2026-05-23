@@ -1945,3 +1945,23 @@ export type InsertPlatformReceivable = z.infer<typeof insertPlatformReceivableSc
 export const insertSettlementSchema = createInsertSchema(settlements).omit({ id: true, createdAt: true });
 export type Settlement = typeof settlements.$inferSelect;
 export type InsertSettlement = z.infer<typeof insertSettlementSchema>;
+
+// ─── APP DOWNLOAD INTEREST REGISTRATIONS ──────────────────────
+// Platform-level (not org-scoped): captures name + email of people who
+// click the App Store / Play Store badges on the login screen.
+
+export const appDownloadInterests = pgTable(
+  "app_download_interests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    fullName: text("full_name").notNull(),
+    email: text("email").notNull(),
+    platform: text("platform").notNull(), // 'ios' | 'android'
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("app_dl_created_idx").on(t.createdAt)]
+);
+
+export const insertAppDownloadInterestSchema = createInsertSchema(appDownloadInterests).omit({ id: true, createdAt: true });
+export type AppDownloadInterest = typeof appDownloadInterests.$inferSelect;
+export type InsertAppDownloadInterest = z.infer<typeof insertAppDownloadInterestSchema>;
