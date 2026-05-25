@@ -1027,6 +1027,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  app.get("/api/users/:id/agent-policies", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
+    const user = req.user as any;
+    const target = await storage.getUser(req.params.id as string);
+    if (!target || target.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const agentPolicies = await storage.getPoliciesByAgent(target.id, user.organizationId);
+    return res.json({ count: agentPolicies.length, policies: agentPolicies.map(p => ({ id: p.id, policyNumber: p.policyNumber, status: p.status })) });
+  });
+
+  app.post("/api/users/:id/reassign-policies", requireAuth, requireTenantScope, requirePermission("delete:user"), async (req, res) => {
+    const user = req.user as any;
+    const { toAgentId } = req.body;
+    const target = await storage.getUser(req.params.id as string);
+    if (!target || target.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    if (toAgentId) {
+      const toAgent = await storage.getUser(toAgentId as string);
+      if (!toAgent || toAgent.organizationId !== user.organizationId) {
+        return res.status(404).json({ message: "Target agent not found" });
+      }
+      const count = await storage.reassignAgentPolicies(target.id, toAgentId as string, user.organizationId);
+      await auditLog(req, "REASSIGN_AGENT_POLICIES", "User", target.id, { fromAgentId: target.id }, { toAgentId, count });
+    }
+    const updated = await storage.updateUser(target.id, { isActive: false });
+    await auditLog(req, "DEACTIVATE_USER", "User", target.id, target, updated);
+    return res.json({ ok: true });
+  });
+
   // ─── Roles ──────────────────────────────────────────────────
 
   app.get("/api/roles", requireAuth, requireTenantScope, requirePermission("read:role"), async (req, res) => {

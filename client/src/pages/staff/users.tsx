@@ -6,12 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import { UserPlus, Shield, Copy, Search, UserX, Pencil, Check, X, Trash2, Users } from "lucide-react";
+import { UserPlus, Shield, Copy, Search, Pencil, Check, Trash2, Users, KeyRound, AlertTriangle } from "lucide-react";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, KpiStatCard, EmptyState } from "@/components/ds";
 
 export default function StaffUsers() {
@@ -25,6 +26,17 @@ export default function StaffUsers() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const [newUser, setNewUser] = useState({ email: "", displayName: "", roleIds: [] as string[], branchId: "", password: "", phone: "", address: "", nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", nextOfKinName: "", nextOfKinPhone: "" });
+
+  // Delete / reassign dialog state
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleteAgentPolicies, setDeleteAgentPolicies] = useState<{ count: number; policies: any[] } | null>(null);
+  const [reassignToId, setReassignToId] = useState("__none__");
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
+
+  // Reset password dialog state
+  const [resetTarget, setResetTarget] = useState<any>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/users"] });
   const { data: roles = [] } = useQuery<any[]>({ queryKey: ["/api/roles"] });
@@ -61,19 +73,58 @@ export default function StaffUsers() {
     },
   });
 
-  const deactivateMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await apiRequest("DELETE", `/api/users/${id}`);
+  const reassignDeleteMutation = useMutation({
+    mutationFn: async ({ userId, toAgentId }: { userId: string; toAgentId: string | null }) => {
+      const res = await apiRequest("POST", `/api/users/${userId}/reassign-policies`, { toAgentId: toAgentId || null });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
-      toast({ title: "User deleted", description: "The user has been deactivated and can no longer sign in." });
+      setDeleteTarget(null);
+      setDeleteAgentPolicies(null);
+      setReassignToId("__none__");
+      setEditingUser(null);
+      toast({ title: "User deleted", description: "The user has been deactivated and policies reassigned (if applicable)." });
     },
     onError: (err: any) => {
-      toast({ title: "Error", description: err.message || "Failed to deactivate user", variant: "destructive" });
+      toast({ title: "Error", description: err.message || "Failed to delete user", variant: "destructive" });
     },
   });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async ({ userId, password }: { userId: string; password: string }) => {
+      const res = await apiRequest("POST", `/api/users/${userId}/reset-password`, { newPassword: password });
+      return res.json();
+    },
+    onSuccess: () => {
+      setResetTarget(null);
+      setNewPassword("");
+      setConfirmPassword("");
+      toast({ title: "Password reset", description: "The user's password has been updated." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to reset password", variant: "destructive" });
+    },
+  });
+
+  const openDeleteDialog = async (u: any) => {
+    setDeleteTarget(u);
+    setReassignToId("__none__");
+    setDeleteAgentPolicies(null);
+    const isAgent = u.roles?.some((r: any) => r.name === "agent");
+    if (isAgent) {
+      setLoadingPolicies(true);
+      try {
+        const res = await apiRequest("GET", `/api/users/${u.id}/agent-policies`);
+        const data = await res.json();
+        setDeleteAgentPolicies(data);
+      } catch {
+        setDeleteAgentPolicies({ count: 0, policies: [] });
+      } finally {
+        setLoadingPolicies(false);
+      }
+    }
+  };
 
   const filtered = users.filter((u: any) =>
     (u.email || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -301,11 +352,16 @@ export default function StaffUsers() {
                       <TableCell className="text-muted-foreground text-sm">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => setEditingUser({ ...u, roleIds: u.roles?.map((r: any) => r.id) || [], branchId: u.branchId || "" })} data-testid={`button-edit-user-${u.id}`}>
+                          <Button variant="ghost" size="sm" onClick={() => setEditingUser({ ...u, roleIds: u.roles?.map((r: any) => r.id) || [], branchId: u.branchId || "" })} data-testid={`button-edit-user-${u.id}`} title="Edit user">
                             <Pencil className="h-4 w-4" />
                           </Button>
+                          {canEditUsers && (
+                            <Button variant="ghost" size="sm" onClick={() => { setResetTarget(u); setNewPassword(""); setConfirmPassword(""); }} data-testid={`button-reset-pw-${u.id}`} title="Reset password">
+                              <KeyRound className="h-4 w-4" />
+                            </Button>
+                          )}
                           {canDeleteUsers && u.isActive && (
-                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => { if (confirm(`Delete user ${u.displayName || u.email}? They will be deactivated and cannot sign in.`)) deactivateMutation.mutate(u.id); }} data-testid={`button-deactivate-user-${u.id}`} title="Delete user">
+                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => openDeleteDialog(u)} data-testid={`button-deactivate-user-${u.id}`} title="Delete user">
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           )}
@@ -456,13 +512,7 @@ export default function StaffUsers() {
                 <Button
                   variant="destructive"
                   className="mr-auto"
-                  onClick={() => {
-                    if (confirm(`Delete user ${editingUser?.displayName || editingUser?.email}? They will be deactivated and cannot sign in.`)) {
-                      deactivateMutation.mutate(editingUser.id);
-                      setEditingUser(null);
-                    }
-                  }}
-                  disabled={deactivateMutation.isPending}
+                  onClick={() => { openDeleteDialog(editingUser); setEditingUser(null); }}
                   data-testid="button-delete-user-in-dialog"
                 >
                   <Trash2 className="h-4 w-4 mr-1" />
@@ -478,6 +528,121 @@ export default function StaffUsers() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* ── Delete / Reassign Dialog ── */}
+        <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteAgentPolicies(null); setReassignToId("__none__"); } }}>
+          <AlertDialogContent className="sm:max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-destructive" />
+                Delete {deleteTarget?.displayName || deleteTarget?.email}?
+              </AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3">
+                  <p>This will deactivate the account immediately. The user will no longer be able to sign in. All audit trail records and historical policy data are preserved.</p>
+                  {loadingPolicies && (
+                    <p className="text-sm text-muted-foreground">Checking assigned policies...</p>
+                  )}
+                  {deleteAgentPolicies && deleteAgentPolicies.count > 0 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 space-y-2">
+                      <p className="text-sm font-medium text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                        <AlertTriangle className="h-4 w-4" />
+                        This agent has {deleteAgentPolicies.count} assigned {deleteAgentPolicies.count === 1 ? "policy" : "policies"}
+                      </p>
+                      <p className="text-sm text-amber-700 dark:text-amber-400">Select an agent to reassign them to, or leave unassigned.</p>
+                      <Select value={reassignToId} onValueChange={setReassignToId}>
+                        <SelectTrigger className="bg-white dark:bg-background">
+                          <SelectValue placeholder="Select agent to reassign to..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Leave unassigned</SelectItem>
+                          {(users as any[])
+                            .filter((u: any) => u.id !== deleteTarget?.id && u.isActive && u.roles?.some((r: any) => r.name === "agent"))
+                            .map((u: any) => (
+                              <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}</SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={reassignDeleteMutation.isPending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={reassignDeleteMutation.isPending || loadingPolicies}
+                onClick={(e) => {
+                  e.preventDefault();
+                  reassignDeleteMutation.mutate({
+                    userId: deleteTarget.id,
+                    toAgentId: reassignToId === "__none__" ? null : reassignToId,
+                  });
+                }}
+                data-testid="button-confirm-delete-user"
+              >
+                {reassignDeleteMutation.isPending ? "Deleting..." : "Delete user"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* ── Reset Password Dialog ── */}
+        <Dialog open={!!resetTarget} onOpenChange={(open) => { if (!open) { setResetTarget(null); setNewPassword(""); setConfirmPassword(""); } }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <KeyRound className="h-4 w-4" />
+                Reset password
+              </DialogTitle>
+              <DialogDescription>
+                Set a new password for <strong>{resetTarget?.displayName || resetTarget?.email}</strong>. They will need to use this password to sign in.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="new-pw">New password</Label>
+                <Input
+                  id="new-pw"
+                  type="password"
+                  placeholder="Min. 8 characters"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  data-testid="input-reset-password"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="confirm-pw">Confirm password</Label>
+                <Input
+                  id="confirm-pw"
+                  type="password"
+                  placeholder="Repeat password"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  data-testid="input-reset-password-confirm"
+                />
+              </div>
+              {newPassword && confirmPassword && newPassword !== confirmPassword && (
+                <p className="text-sm text-destructive">Passwords do not match.</p>
+              )}
+              {newPassword && newPassword.length > 0 && newPassword.length < 8 && (
+                <p className="text-sm text-destructive">Password must be at least 8 characters.</p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setResetTarget(null)}>Cancel</Button>
+              <Button
+                onClick={() => resetPasswordMutation.mutate({ userId: resetTarget.id, password: newPassword })}
+                disabled={resetPasswordMutation.isPending || newPassword.length < 8 || newPassword !== confirmPassword}
+                data-testid="button-confirm-reset-password"
+              >
+                {resetPasswordMutation.isPending ? "Resetting..." : "Reset password"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
       </PageShell>
     </StaffLayout>
   );

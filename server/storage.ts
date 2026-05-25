@@ -233,6 +233,8 @@ export interface IStorage {
   getUsersByOrg(organizationId: string, limit?: number, offset?: number): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined>;
+  getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]>;
+  reassignAgentPolicies(fromAgentId: string, toAgentId: string, orgId: string): Promise<number>;
   getRole(id: string, organizationId: string): Promise<Role | undefined>;
   getRolesByIds(roleIds: string[], organizationId: string): Promise<Role[]>;
   getRolesByOrg(organizationId: string): Promise<Role[]>;
@@ -1785,7 +1787,12 @@ export class DatabaseStorage implements IStorage {
   }
   async getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(policies).where(eq(policies.agentId, agentId));
+    return tdb.select().from(policies).where(and(eq(policies.agentId, agentId), eq(policies.organizationId, orgId)));
+  }
+  async reassignAgentPolicies(fromAgentId: string, toAgentId: string, orgId: string): Promise<number> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.update(policies).set({ agentId: toAgentId }).where(and(eq(policies.agentId, fromAgentId), eq(policies.organizationId, orgId))).returning({ id: policies.id });
+    return result.length;
   }
   async getPolicy(id: string, orgId: string): Promise<Policy | undefined> {
     const tdb = await getDbForOrg(orgId);

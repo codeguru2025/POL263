@@ -599,6 +599,25 @@ export function setupAuth(app: Express) {
     return res.json({ message: "Password updated" });
   });
 
+  app.post("/api/users/:id/reset-password", requireAuth, async (req: Request, res: Response) => {
+    const admin = req.user as any;
+    const { newPassword } = req.body;
+    if (!newPassword || String(newPassword).length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    }
+    const target = await storage.getUser(req.params.id as string);
+    if (!target || target.organizationId !== admin.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const perms = await storage.getUserEffectivePermissions(admin.id, admin.organizationId);
+    if (!perms.includes("write:user") && !admin.isPlatformOwner) {
+      return res.status(403).json({ message: "Insufficient permissions" });
+    }
+    const passwordHash = await argon2.hash(String(newPassword), { type: argon2.argon2id });
+    await storage.updateUser(target.id, { passwordHash });
+    return res.json({ message: "Password reset successfully" });
+  });
+
   app.get("/api/auth/me", async (req, res) => {
     if (!req.isAuthenticated() || !req.user) {
       return res.status(401).json({ message: "Not authenticated" });
