@@ -15,10 +15,10 @@ module.exports = function withGradleWrapper(config) {
         let content = fs.readFileSync(wrapperPath, 'utf-8');
         content = content.replace(
           /distributionUrl=https\\:\/\/services\.gradle\.org\/distributions\/gradle-.*-bin\.zip/,
-          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-bin.zip'
+          'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip'
         );
         fs.writeFileSync(wrapperPath, content);
-        console.log('[withGradleWrapper] Pinned Gradle wrapper to 8.13');
+        console.log('[withGradleWrapper] Pinned Gradle wrapper to 8.10.2');
       }
 
       return config;
