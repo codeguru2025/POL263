@@ -584,7 +584,7 @@ export default function StaffSettings() {
                           <CardHeader className="pb-3">
                             <div className="flex items-start gap-3">
                               {org.logoUrl ? (
-                                <img src={resolveAssetUrl(org.logoUrl)} alt="" className="h-10 w-10 rounded-lg object-contain border bg-background shrink-0" loading="lazy" />
+                                <img src={resolveAssetUrl(org.logoUrl)} alt="" className="h-10 w-10 rounded-lg object-contain border bg-white shrink-0" loading="lazy" />
                               ) : (
                                 <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                                   <Building2 className="h-5 w-5 text-primary" />
@@ -905,7 +905,7 @@ export default function StaffSettings() {
                 <div className="space-y-4">
                   <Label>Organization Logo</Label>
                   <div className="flex items-center gap-6">
-                    <div className="h-28 w-28 rounded-xl border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
+                    <div className="h-28 w-28 rounded-xl border-2 border-dashed flex items-center justify-center bg-white overflow-hidden shrink-0">
                       {(logoUrl || currentOrg?.logoUrl) ? (
                         <img
                           src={`${resolveAssetUrl(logoUrl || currentOrg?.logoUrl)}?v=${Date.now()}`}

@@ -444,7 +444,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             <img
               src={resolveAssetUrl((currentOrg?.logoUrl && String(currentOrg.logoUrl).trim()) || brandLogo)}
               alt={brandName}
-              className="h-8 w-auto max-w-[160px] sm:max-w-[200px] rounded-md object-contain object-left shrink-0"
+              className="h-8 w-auto max-w-[160px] sm:max-w-[200px] rounded-md object-contain object-left shrink-0 bg-white p-0.5"
               loading="lazy"
             />
             <div className="min-w-0 leading-tight">

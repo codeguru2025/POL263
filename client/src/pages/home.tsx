@@ -165,7 +165,7 @@ export default function Home() {
     >
       <div className={cn(APP_SHELL_MAX, "flex-1 flex flex-col items-center px-4 py-10")}>
         <div className="mb-14 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-14 sm:h-16 w-auto max-w-[min(360px,90vw)] mb-5 object-contain object-center" fetchPriority="high" />
+          <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-14 sm:h-16 w-auto max-w-[min(360px,90vw)] mb-5 object-contain object-center bg-white rounded-2xl p-2" fetchPriority="high" />
           <h1 className="sr-only">{displayName}</h1>
           <p className="text-muted-foreground text-lg font-medium">Insurance Management Platform</p>
         </div>

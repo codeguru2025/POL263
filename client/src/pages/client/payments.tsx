@@ -14,11 +14,12 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft, Printer, Users } from "lucide-react";
+import { Loader2, CreditCard, CheckCircle, AlertCircle, Receipt, ArrowLeft, Printer, Users, Eye, Download } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { useToast } from "@/hooks/use-toast";
 import { openPaymentInSystemBrowser, redirectToAppIfMobileReturn, isNativeMobile } from "@/lib/mobile-payment";
 import { formatReceiptNumber } from "@/lib/assetUrl";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 interface PaymentIntent {
   id: string;
@@ -694,44 +695,77 @@ function ReceiptsList() {
     retry: false,
   });
   const base = getApiBase();
+  const [viewUrl, setViewUrl] = useState<string | null>(null);
+  const [viewLabel, setViewLabel] = useState("");
 
   return (
-    <CardSection title="My receipts" icon={Receipt}>
-      {!receipts || receipts.length === 0 ? (
-        <EmptyState title="No receipts yet" description="Receipts will appear here once you make a payment." icon={Receipt} />
-      ) : (
-        <ul className="space-y-2">
-          {receipts.map((r) => (
-            <li key={r.id} className="flex items-center justify-between p-3 border rounded-lg">
-              <div>
-                <p className="font-medium text-sm">Receipt #{formatReceiptNumber(r.receiptNumber)}</p>
-                <p className="text-xs text-muted-foreground">
-                  {r.currency} {r.amount} — {new Date(r.issuedAt).toLocaleString()}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <a
-                  href={`${base}/api/client-auth/receipts/${r.id}/download`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-primary hover:underline"
-                >
-                  Download PDF
+    <>
+      <CardSection title="My receipts" icon={Receipt}>
+        {!receipts || receipts.length === 0 ? (
+          <EmptyState title="No receipts yet" description="Receipts will appear here once you make a payment." icon={Receipt} />
+        ) : (
+          <ul className="space-y-2">
+            {receipts.map((r) => (
+              <li key={r.id} className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <p className="font-medium text-sm">Receipt #{formatReceiptNumber(r.receiptNumber)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {r.currency} {r.amount} — {new Date(r.issuedAt).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 text-xs"
+                    onClick={() => { setViewUrl(`${base}/api/client-auth/receipts/${r.id}/download?inline=1`); setViewLabel(`Receipt #${formatReceiptNumber(r.receiptNumber)}`); }}
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                    View
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1 text-xs"
+                    onClick={() => printDocument(`${base}/api/client-auth/receipts/${r.id}/download`)}
+                  >
+                    <Printer className="h-3.5 w-3.5" />
+                    Print
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardSection>
+
+      <Dialog open={!!viewUrl} onOpenChange={(open) => { if (!open) setViewUrl(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col w-[min(100vw-2rem,42rem)]">
+          <DialogHeader>
+            <DialogTitle>{viewLabel}</DialogTitle>
+            <DialogDescription>Review your receipt below before downloading or printing.</DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 flex flex-col gap-3">
+            {viewUrl && (
+              <iframe
+                title={viewLabel}
+                src={viewUrl}
+                className="w-full flex-1 min-h-[60vh] border rounded-md"
+              />
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" className="gap-2" asChild>
+                <a href={viewUrl?.replace("?inline=1", "") ?? ""} target="_blank" rel="noopener noreferrer">
+                  <Download className="h-4 w-4" /> Download PDF
                 </a>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1 text-xs"
-                  onClick={() => printDocument(`${base}/api/client-auth/receipts/${r.id}/download`)}
-                >
-                  <Printer className="h-3.5 w-3.5" />
-                  Print
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </CardSection>
+              </Button>
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => { if (viewUrl) printDocument(viewUrl.replace("?inline=1", "")); }}>
+                <Printer className="h-4 w-4" /> Print
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

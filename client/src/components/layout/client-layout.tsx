@@ -200,7 +200,7 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
             <img
               src={resolveAssetUrl(tenant?.logoUrl?.trim() ? tenant.logoUrl : getDefaultLogoUrl())}
               alt={tenant?.name || "Logo"}
-              className="h-8 w-auto max-w-[160px] sm:max-w-[220px] rounded-md object-contain object-left shrink-0"
+              className="h-8 w-auto max-w-[160px] sm:max-w-[220px] rounded-md object-contain object-left shrink-0 bg-white p-0.5"
               loading="lazy"
             />
             {tenant?.name && (
