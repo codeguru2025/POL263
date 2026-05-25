@@ -29,8 +29,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "1adda9f6-1147-46c2-ab1f-626e2a4c1094"
+        "projectId": "386c3ab4-70c5-4814-99a1-112e93bfa0b0"
       }
-    }
+    },
+    "owner": "gustozw"
   }
 }
