@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, Image,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, Image, Linking,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useNetwork } from "../context/NetworkContext";
@@ -8,12 +8,14 @@ import { getSyncStatus, fullSync, type SyncStatus } from "../sync/engine";
 import { getDb } from "../db/schema";
 import { colors, spacing, fontSize } from "../theme";
 import { API_BASE } from "../config";
+import { useAppVersion } from "../hooks/useAppVersion";
 
 export default function SettingsScreen() {
   const { user, logout } = useAuth();
   const { isOnline } = useNetwork();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const { updateAvailable, appInfo } = useAppVersion();
 
   const loadStatus = useCallback(async () => {
     const status = await getSyncStatus();
@@ -147,8 +149,19 @@ export default function SettingsScreen() {
         <Text style={styles.logoutText}>Sign Out</Text>
       </TouchableOpacity>
 
+      {updateAvailable && appInfo?.downloadUrl && (
+        <TouchableOpacity
+          style={[styles.actionButton, styles.updateButton]}
+          onPress={() => Linking.openURL(appInfo.downloadUrl!)}
+        >
+          <Text style={styles.updateText}>⬆ Update Available — v{appInfo.version}</Text>
+        </TouchableOpacity>
+      )}
+
       <Image source={require("../../assets/logo.png")} style={styles.footerLogo} resizeMode="contain" />
-      <Text style={styles.version}>POL263 Agent v1.0.0</Text>
+      <Text style={styles.version}>
+        POL263 Agent v1.0.0{appInfo?.version ? ` · Latest: v${appInfo.version}` : ""}
+      </Text>
     </ScrollView>
   );
 }
@@ -193,6 +206,8 @@ const styles = StyleSheet.create({
   actionText: { fontSize: fontSize.md, fontWeight: "500", color: colors.text },
   logoutButton: { borderColor: colors.danger },
   logoutText: { fontSize: fontSize.md, fontWeight: "600", color: colors.danger },
+  updateButton: { borderColor: colors.primary, backgroundColor: colors.primary + "10" },
+  updateText: { fontSize: fontSize.md, fontWeight: "700", color: colors.primary },
   footerLogo: { width: 120, height: 36, alignSelf: "center", marginTop: spacing.lg },
   version: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: "center", marginTop: spacing.sm },
 });

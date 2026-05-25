@@ -25,8 +25,17 @@
     },
     "plugins": [
       "expo-sqlite",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-updates"
     ],
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/386c3ab4-70c5-4814-99a1-112e93bfa0b0",
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD"
+    },
     "extra": {
       "eas": {
         "projectId": "386c3ab4-70c5-4814-99a1-112e93bfa0b0"

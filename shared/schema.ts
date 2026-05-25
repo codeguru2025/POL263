@@ -1965,3 +1965,29 @@ export const appDownloadInterests = pgTable(
 export const insertAppDownloadInterestSchema = createInsertSchema(appDownloadInterests).omit({ id: true, createdAt: true });
 export type AppDownloadInterest = typeof appDownloadInterests.$inferSelect;
 export type InsertAppDownloadInterest = z.infer<typeof insertAppDownloadInterestSchema>;
+
+// ─── APP RELEASES ──────────────────────────────────────────────
+// Platform-level: tracks each APK release, minimum supported version,
+// and download URL. Used for in-app version enforcement and OTA checks.
+
+export const appReleases = pgTable(
+  "app_releases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    version: text("version").notNull(),              // e.g. "1.2.0"
+    buildNumber: integer("build_number").notNull(),  // EAS auto-incremented versionCode
+    minVersion: text("min_version").notNull().default("1.0.0"),
+    minBuildNumber: integer("min_build_number").notNull().default(1),
+    downloadUrl: text("download_url").notNull(),
+    releaseNotes: text("release_notes"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("app_releases_active_idx").on(t.isActive, t.createdAt),
+  ]
+);
+
+export const insertAppReleaseSchema = createInsertSchema(appReleases).omit({ id: true, createdAt: true });
+export type AppRelease = typeof appReleases.$inferSelect;
+export type InsertAppRelease = z.infer<typeof insertAppReleaseSchema>;

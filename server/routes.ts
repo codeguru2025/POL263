@@ -41,7 +41,7 @@ import {
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertDependentSchema, insertTermsSchema,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
-  policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches,
+  policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases,
 } from "@shared/schema";
 import { sql, eq, count, and, max } from "drizzle-orm";
 import { pool } from "./db";
@@ -465,6 +465,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ url, filename: key });
   });
   app.use("/api/upload/avatar", handleMulterError);
+
+  // ─── App Release Management ──────────────────────────────────
+
+  app.get("/api/app-info", requireAuth, async (req, res) => {
+    const [release] = await db.select().from(appReleases).where(eq(appReleases.isActive, true)).orderBy(sql`${appReleases.createdAt} desc`).limit(1);
+    if (!release) return res.json({ available: false });
+    return res.json({ available: true, version: release.version, buildNumber: release.buildNumber, minVersion: release.minVersion, minBuildNumber: release.minBuildNumber, downloadUrl: release.downloadUrl, releaseNotes: release.releaseNotes });
+  });
+
+  app.get("/api/platform/app-releases", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const releases = await db.select().from(appReleases).orderBy(sql`${appReleases.createdAt} desc`).limit(20);
+    return res.json(releases);
+  });
+
+  app.post("/api/platform/app-release", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const { version, buildNumber, minVersion, minBuildNumber, downloadUrl, releaseNotes } = req.body;
+    if (!version || !buildNumber || !downloadUrl) return res.status(400).json({ message: "version, buildNumber and downloadUrl are required" });
+    await db.insert(appReleases).values({ version: String(version), buildNumber: Number(buildNumber), minVersion: minVersion || "1.0.0", minBuildNumber: Number(minBuildNumber) || 1, downloadUrl: String(downloadUrl), releaseNotes: releaseNotes || null, isActive: true });
+    const [created] = await db.select().from(appReleases).orderBy(sql`${appReleases.createdAt} desc`).limit(1);
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/platform/app-release/:id", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });
+    const { version, buildNumber, minVersion, minBuildNumber, downloadUrl, releaseNotes, isActive } = req.body;
+    const updates: Record<string, any> = {};
+    if (version !== undefined) updates.version = String(version);
+    if (buildNumber !== undefined) updates.buildNumber = Number(buildNumber);
+    if (minVersion !== undefined) updates.minVersion = String(minVersion);
+    if (minBuildNumber !== undefined) updates.minBuildNumber = Number(minBuildNumber);
+    if (downloadUrl !== undefined) updates.downloadUrl = String(downloadUrl);
+    if (releaseNotes !== undefined) updates.releaseNotes = releaseNotes;
+    if (isActive !== undefined) updates.isActive = Boolean(isActive);
+    const [updated] = await db.update(appReleases).set(updates).where(eq(appReleases.id, req.params.id as string)).returning();
+    if (!updated) return res.status(404).json({ message: "Release not found" });
+    return res.json(updated);
+  });
 
   // ─── Platform Owner: Tenant Switching ──────────────────────────
 

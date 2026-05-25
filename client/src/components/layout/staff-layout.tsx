@@ -53,6 +53,8 @@ import {
   Shield,
   HeartHandshake,
   Monitor,
+  Smartphone,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -172,6 +174,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const { toast } = useToast();
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const { data: appInfo } = useQuery<any>({ queryKey: ["/api/app-info"], staleTime: 5 * 60 * 1000 });
 
   async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -661,6 +664,15 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                 </div>
                 <div className="border-t p-3 space-y-2 bg-muted/30">
                   {user?.referralCode && <ReferralLinkBox referralCode={user.referralCode} />}
+                  {appInfo?.available && (
+                    <a href={appInfo.downloadUrl} target="_blank" rel="noopener noreferrer" download className="block">
+                      <Button variant="outline" className="w-full gap-2">
+                        <Smartphone className="h-4 w-4" />
+                        Download Agent App v{appInfo.version}
+                        <Download className="h-3.5 w-3.5 ml-auto opacity-60" />
+                      </Button>
+                    </a>
+                  )}
                   <Button variant="outline" className="w-full" data-testid="btn-logout-mobile" onClick={handleLogout}>
                     <LogOut className="h-4 w-4 mr-2" />
                     Log out
@@ -670,7 +682,22 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             </Sheet>
           </div>
 
-          <div className="hidden md:flex items-center shrink-0 py-0.5">
+          <div className="hidden md:flex items-center gap-2 shrink-0 py-0.5">
+            {appInfo?.available && (
+              <a href={appInfo.downloadUrl} target="_blank" rel="noopener noreferrer" download>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="border-primary-foreground/35 text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground gap-1.5"
+                  title={`Download Agent App v${appInfo.version}`}
+                >
+                  <Smartphone className="h-3.5 w-3.5" />
+                  <span className="hidden lg:inline">Agent App</span>
+                  <Download className="h-3 w-3 opacity-70" />
+                </Button>
+              </a>
+            )}
             <Button
               type="button"
               variant="outline"
