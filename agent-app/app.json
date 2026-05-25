@@ -26,7 +26,8 @@
     "plugins": [
       "expo-sqlite",
       "expo-secure-store",
-      "expo-updates"
+      "expo-updates",
+      "./plugins/withGradleWrapper"
     ],
     "runtimeVersion": {
       "policy": "appVersion"
