@@ -77,6 +77,11 @@ if (enableCsrf) {
     return csrfProtection(req, res, next);
   });
 
+  // Mobile app token endpoint: GET request, csurf runs for generation only (no validation on GET)
+  app.get("/api/agent-auth/csrf-token", csrfProtection, (req: Request, res: Response) => {
+    return res.json({ token: (req as any).csrfToken() });
+  });
+
   app.use((req, res, next) => {
     try {
       const token = (req as any).csrfToken?.();
