@@ -67,7 +67,11 @@ if (enableCsrf) {
     },
   });
 
-  const CSRF_EXEMPT_PATHS = ["/api/payments/paynow/result"];
+  const CSRF_EXEMPT_PATHS = [
+    "/api/payments/paynow/result",
+    "/api/agent-auth/login",
+    "/api/agent-auth/logout",
+  ];
   app.use((req, res, next) => {
     if (CSRF_EXEMPT_PATHS.includes(req.path)) return next();
     return csrfProtection(req, res, next);
