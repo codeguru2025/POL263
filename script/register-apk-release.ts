@@ -2,6 +2,7 @@
  * One-shot script to register a specific APK build in the app_releases table.
  * Usage: npx tsx script/register-apk-release.ts
  */
+import "dotenv/config";
 import { db } from "../server/db";
 import { appReleases } from "../shared/schema";
 import { eq } from "drizzle-orm";
