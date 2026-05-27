@@ -164,6 +164,17 @@ if (enableCsrf) {
   app.use("/api/upload", writeLimiter);
   app.use("/api/public/register-policy", writeLimiter);
 
+  app.use(
+    "/api/public/agent-app-latest",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("agent-app-dl"),
+      windowMs: 60 * 1000,
+      max: 30,
+      message: { message: "Too many requests, please slow down" },
+    })
+  );
+
   app.get("/api/health", async (_req, res) => {
     try {
       const result = await pool.query("SELECT 1");

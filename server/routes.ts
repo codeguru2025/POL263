@@ -44,7 +44,7 @@ import {
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases,
 } from "@shared/schema";
 import { sql, eq, count, and, max } from "drizzle-orm";
-import { pool } from "./db";
+import { pool, db } from "./db";
 import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
 import { enqueueJob, getJobStats } from "./job-queue";
 import {
@@ -468,10 +468,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── App Release Management ──────────────────────────────────
 
-  app.get("/api/app-info", requireAuth, async (req, res) => {
-    const [release] = await db.select().from(appReleases).where(eq(appReleases.isActive, true)).orderBy(sql`${appReleases.createdAt} desc`).limit(1);
-    if (!release) return res.json({ available: false });
-    return res.json({ available: true, version: release.version, buildNumber: release.buildNumber, minVersion: release.minVersion, minBuildNumber: release.minBuildNumber, downloadUrl: release.downloadUrl, releaseNotes: release.releaseNotes });
+  app.get("/api/public/agent-app-latest", async (_req, res) => {
+    try {
+      const [release] = await db.select().from(appReleases).where(eq(appReleases.isActive, true)).orderBy(sql`${appReleases.createdAt} desc`).limit(1);
+      if (!release) return res.status(404).json({ message: "No release available" });
+      res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+      return res.json({ url: release.downloadUrl, version: release.version, buildNumber: release.buildNumber, updatedAt: release.createdAt });
+    } catch {
+      return res.status(503).json({ message: "Service temporarily unavailable" });
+    }
+  });
+
+  app.get("/api/app-info", requireAuth, async (_req, res) => {
+    try {
+      const [release] = await db.select().from(appReleases).where(eq(appReleases.isActive, true)).orderBy(sql`${appReleases.createdAt} desc`).limit(1);
+      if (!release) return res.json({ available: false });
+      return res.json({ available: true, version: release.version, buildNumber: release.buildNumber, minVersion: release.minVersion, minBuildNumber: release.minBuildNumber, downloadUrl: release.downloadUrl, releaseNotes: release.releaseNotes });
+    } catch {
+      return res.status(503).json({ message: "Service temporarily unavailable" });
+    }
   });
 
   app.get("/api/platform/app-releases", requireAuth, async (req, res) => {

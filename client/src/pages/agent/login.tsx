@@ -136,6 +136,15 @@ export default function AgentLogin() {
             </Button>
           </form>
 
+          <div className="text-center pt-2 border-t">
+            <p className="text-xs text-muted-foreground mb-1">Don&apos;t have the app yet?</p>
+            <Link href="/agent/download">
+              <Button variant="outline" className="w-full gap-2" size="sm">
+                Download Agent App
+              </Button>
+            </Link>
+          </div>
+
           <p className="text-xs text-center text-muted-foreground pt-2">
             Staff with Google accounts should use the{" "}
             <Link href="/staff/login">

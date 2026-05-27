@@ -38,6 +38,7 @@ function retryLazy<T>(
 }
 const StaffLogin = lazy(() => retryLazy(() => import("@/pages/staff/login")));
 const AgentLogin = lazy(() => retryLazy(() => import("@/pages/agent/login")));
+const AgentDownload = lazy(() => retryLazy(() => import("@/pages/agent/download")));
 const StaffDashboard = lazy(() => retryLazy(() => import("@/pages/staff/dashboard")));
 const AuditLogs = lazy(() => retryLazy(() => import("@/pages/staff/audit")));
 const StaffSettings = lazy(() => retryLazy(() => import("@/pages/staff/settings")));
@@ -140,6 +141,7 @@ function Router() {
       
       <SafeRoute path="/staff/login" component={StaffLogin} />
       <SafeRoute path="/agent/login" component={AgentLogin} />
+      <SafeRoute path="/agent/download" component={AgentDownload} />
       <SafeRoute path="/staff" component={StaffDashboard} />
       <SafeRoute path="/staff/" component={StaffDashboard} />
       <SafeRoute path="/staff/audit" component={AuditLogs} />
