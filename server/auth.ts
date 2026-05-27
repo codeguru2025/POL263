@@ -557,8 +557,10 @@ export function setupAuth(app: Express) {
         return res.json({ user: sanitizeUser(user), redirect: "/staff" });
       });
     } catch (err) {
-      structuredLog("error", "Agent login error", { error: (err as Error).message });
-      return res.status(500).json({ message: "Internal server error" });
+      const errMsg = (err as Error).message || String(err);
+      structuredLog("error", "Agent login error", { error: errMsg, stack: (err as Error).stack?.split("\n")[0] });
+      const detail = process.env.NODE_ENV !== "production" ? errMsg : undefined;
+      return res.status(500).json({ message: "Internal server error", ...(detail && { detail }) });
     }
   });
 
@@ -673,6 +675,7 @@ function sanitizeUser(user: any) {
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
     organizationId: user.organizationId,
+    branchId: user.branchId ?? null,
     isActive: user.isActive,
     referralCode: user.referralCode,
     isPlatformOwner: user.isPlatformOwner || false,
