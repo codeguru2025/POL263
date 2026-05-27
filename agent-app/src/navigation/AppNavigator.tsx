@@ -2,6 +2,7 @@ import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Text, View, StyleSheet, Image, TouchableOpacity } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import DashboardScreen from "../screens/DashboardScreen";
 import ClientsScreen from "../screens/ClientsScreen";
 import PoliciesScreen from "../screens/PoliciesScreen";
@@ -67,7 +68,7 @@ function MoreMenuScreen({ navigation }: any) {
   ];
 
   return (
-    <View style={moreStyles.container}>
+    <SafeAreaView style={moreStyles.safeArea} edges={["top"]}>
       <Image source={require("../../assets/logo.png")} style={moreStyles.logo} resizeMode="contain" />
       {menuItems.map(item => (
         <TouchableOpacity key={item.screen} style={moreStyles.item} onPress={() => navigation.navigate(item.screen)}>
@@ -78,12 +79,12 @@ function MoreMenuScreen({ navigation }: any) {
           </View>
         </TouchableOpacity>
       ))}
-    </View>
+    </SafeAreaView>
   );
 }
 
 const moreStyles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, padding: 16 },
+  safeArea: { flex: 1, backgroundColor: colors.background, padding: 16 },
   logo: { width: 140, height: 40, alignSelf: "center", marginBottom: 16 },
   item: {
     flexDirection: "row", alignItems: "center", backgroundColor: colors.surface,

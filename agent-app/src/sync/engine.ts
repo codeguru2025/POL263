@@ -102,6 +102,7 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
     // ── 1. Sync unsynced clients ──────────────────────────────────
     const unsyncedClients = await db.getAllAsync<{
       local_id: string;
+      title: string | null;
       first_name: string;
       last_name: string;
       phone: string | null;
@@ -109,11 +110,14 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
       national_id: string | null;
       date_of_birth: string | null;
       gender: string | null;
+      marital_status: string | null;
+      address: string | null;
     }>("SELECT * FROM clients WHERE synced = 0 ORDER BY created_at ASC");
 
     for (const c of unsyncedClients) {
       try {
         const { data: serverClient, conflict } = await apiPostWithConflict("/api/clients", {
+          title: c.title || undefined,
           firstName: c.first_name,
           lastName: c.last_name,
           phone: c.phone || undefined,
@@ -121,6 +125,8 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
           nationalId: c.national_id || undefined,
           dateOfBirth: c.date_of_birth || undefined,
           gender: c.gender || undefined,
+          maritalStatus: c.marital_status || undefined,
+          address: c.address || undefined,
         });
 
         // Whether newly created or matched to existing, link the server ID
@@ -152,6 +158,11 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
       payment_provider: string;
       payment_mobile_number: string | null;
       add_on_ids: string;
+      beneficiary_first_name: string | null;
+      beneficiary_last_name: string | null;
+      beneficiary_relationship: string | null;
+      beneficiary_national_id: string | null;
+      beneficiary_phone: string | null;
     }>("SELECT * FROM policies WHERE synced = 0 ORDER BY created_at ASC");
 
     for (const p of unsyncedPolicies) {
@@ -192,6 +203,14 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
         }));
 
         try {
+          const beneficiary = p.beneficiary_first_name && p.beneficiary_last_name ? {
+            firstName: p.beneficiary_first_name,
+            lastName: p.beneficiary_last_name,
+            relationship: p.beneficiary_relationship || "Other",
+            nationalId: p.beneficiary_national_id || "",
+            phone: p.beneficiary_phone || "",
+          } : undefined;
+
           const serverPolicy = await apiPost("/api/policies", {
             clientId: clientServerId,
             productVersionId: p.product_version_id,
@@ -206,6 +225,7 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
             },
             addOnIds,
             members,
+            beneficiary,
           });
 
           await db.runAsync(

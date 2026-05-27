@@ -6,6 +6,7 @@ import { fetchCsrfToken, clearCsrfToken } from "../api";
 interface User {
   id: string;
   email: string;
+  displayName: string;
   firstName: string;
   lastName: string;
   organizationId: string;
@@ -75,11 +76,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json();
       // Session cookie is set automatically via credentials: "include"
       const authToken = "session";
+      const displayName = data.user?.displayName || data.displayName || email;
+      const nameParts = displayName.trim().split(/\s+/);
       const userData: User = {
         id: data.user?.id || data.id,
         email: data.user?.email || data.email || email,
-        firstName: data.user?.firstName || data.firstName || "",
-        lastName: data.user?.lastName || data.lastName || "",
+        displayName,
+        firstName: nameParts[0] || "",
+        lastName: nameParts.slice(1).join(" ") || "",
         organizationId: data.user?.organizationId || data.organizationId || "",
         branchId: data.user?.branchId || data.branchId,
       };

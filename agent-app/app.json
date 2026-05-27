@@ -6,6 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1e3a5f"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.pol263.agent"
@@ -28,7 +33,8 @@
       "expo-secure-store",
       "expo-updates",
       "expo-image-picker",
-      "./plugins/withGradleWrapper"
+      "./plugins/withGradleWrapper",
+      "expo-splash-screen"
     ],
     "runtimeVersion": {
       "policy": "appVersion"

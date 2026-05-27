@@ -2,6 +2,8 @@ import React, { useEffect } from "react";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import { NetworkProvider } from "./src/context/NetworkContext";
 import AppNavigator from "./src/navigation/AppNavigator";
@@ -11,16 +13,22 @@ import { useAppVersion } from "./src/hooks/useAppVersion";
 import { getDb } from "./src/db/schema";
 import { colors } from "./src/theme";
 
+SplashScreen.preventAutoHideAsync();
+
 function RootNavigator() {
   const { user, loading } = useAuth();
   const { forceUpdate, updateAvailable, appInfo, promptUpdate } = useAppVersion();
 
-  // Initialize database on mount
   useEffect(() => {
     getDb().catch(console.warn);
   }, []);
 
-  // Prompt optional update once user is logged in
+  useEffect(() => {
+    if (!loading) {
+      SplashScreen.hideAsync();
+    }
+  }, [loading]);
+
   useEffect(() => {
     if (user && updateAvailable && appInfo?.downloadUrl) {
       promptUpdate(appInfo.downloadUrl);
@@ -59,11 +67,13 @@ function RootNavigator() {
 
 export default function App() {
   return (
-    <NetworkProvider>
-      <AuthProvider>
-        <StatusBar style="light" />
-        <RootNavigator />
-      </AuthProvider>
-    </NetworkProvider>
+    <SafeAreaProvider>
+      <NetworkProvider>
+        <AuthProvider>
+          <StatusBar style="light" />
+          <RootNavigator />
+        </AuthProvider>
+      </NetworkProvider>
+    </SafeAreaProvider>
   );
 }

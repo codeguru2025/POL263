@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, Image, Linking,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useNetwork } from "../context/NetworkContext";
 import { getSyncStatus, fullSync, type SyncStatus } from "../sync/engine";
@@ -84,6 +85,7 @@ export default function SettingsScreen() {
   };
 
   return (
+    <SafeAreaView style={styles.safeArea} edges={["bottom"]}>
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
@@ -96,7 +98,7 @@ export default function SettingsScreen() {
             {(user?.firstName?.[0] || "")}{(user?.lastName?.[0] || "")}
           </Text>
         </View>
-        <Text style={styles.name}>{user?.firstName} {user?.lastName}</Text>
+        <Text style={styles.name}>{user?.displayName || `${user?.firstName || ""} ${user?.lastName || ""}`.trim() || "Agent"}</Text>
         <Text style={styles.email}>{user?.email}</Text>
       </View>
 
@@ -163,10 +165,12 @@ export default function SettingsScreen() {
         POL263 Agent v1.0.0{appInfo?.version ? ` · Latest: v${appInfo.version}` : ""}
       </Text>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: colors.background },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.md, paddingBottom: 40 },
   card: {

@@ -51,8 +51,8 @@ export default function ClientsScreen() {
   const [showCreate, setShowCreate] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [form, setForm] = useState({
-    firstName: "", lastName: "", phone: "", email: "",
-    nationalId: "", dateOfBirth: "", gender: "",
+    title: "", firstName: "", lastName: "", phone: "", email: "",
+    nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", address: "",
   });
 
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -136,9 +136,10 @@ export default function ClientsScreen() {
     const db = await getDb();
     const localId = uuidv4();
     await db.runAsync(
-      `INSERT INTO clients (local_id, first_name, last_name, phone, email, national_id, date_of_birth, gender, synced)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO clients (local_id, title, first_name, last_name, phone, email, national_id, date_of_birth, gender, marital_status, address, synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       localId,
+      form.title || null,
       form.firstName.trim().toUpperCase(),
       form.lastName.trim().toUpperCase(),
       form.phone.trim() || null,
@@ -146,8 +147,10 @@ export default function ClientsScreen() {
       form.nationalId.trim().toUpperCase() || null,
       form.dateOfBirth.trim() || null,
       form.gender.trim().toUpperCase() || null,
+      form.maritalStatus || null,
+      form.address.trim() || null,
     );
-    setForm({ firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" });
+    setForm({ title: "", firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", address: "" });
     setShowCreate(false);
     await loadClients();
     if (isOnline) {
@@ -292,7 +295,17 @@ export default function ClientsScreen() {
               <Text style={styles.saveText}>Save</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.modalBody}>
+          <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
+            <Text style={styles.label}>Title</Text>
+            <View style={styles.genderRow}>
+              {["Mr","Mrs","Ms","Miss","Dr","Prof"].map(t => (
+                <TouchableOpacity key={t} style={[styles.genderButton, form.title === t && styles.genderSelected]}
+                  onPress={() => setForm(f => ({ ...f, title: t }))}>
+                  <Text style={[styles.genderText, form.title === t && styles.genderSelectedText]}>{t}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             <Text style={styles.label}>First Name *</Text>
             <TextInput style={styles.input} value={form.firstName} onChangeText={(v) => setForm(f => ({ ...f, firstName: v }))} autoCapitalize="characters" />
 
@@ -313,7 +326,7 @@ export default function ClientsScreen() {
 
             <Text style={styles.label}>Gender</Text>
             <View style={styles.genderRow}>
-              {["MALE", "FEMALE"].map(g => (
+              {["MALE", "FEMALE", "OTHER"].map(g => (
                 <TouchableOpacity
                   key={g}
                   style={[styles.genderButton, form.gender === g && styles.genderSelected]}
@@ -323,6 +336,22 @@ export default function ClientsScreen() {
                 </TouchableOpacity>
               ))}
             </View>
+
+            <Text style={styles.label}>Marital Status</Text>
+            <View style={styles.genderRow}>
+              {["Single","Married","Divorced","Widowed"].map(s => (
+                <TouchableOpacity key={s} style={[styles.genderButton, form.maritalStatus === s && styles.genderSelected]}
+                  onPress={() => setForm(f => ({ ...f, maritalStatus: s }))}>
+                  <Text style={[styles.genderText, form.maritalStatus === s && styles.genderSelectedText]}>{s}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.label}>Address</Text>
+            <TextInput style={[styles.input, { minHeight: 60 }]} value={form.address}
+              onChangeText={(v) => setForm(f => ({ ...f, address: v }))}
+              placeholder="Street, suburb, city..." placeholderTextColor={colors.textMuted}
+              multiline />
           </ScrollView>
         </View>
       </Modal>

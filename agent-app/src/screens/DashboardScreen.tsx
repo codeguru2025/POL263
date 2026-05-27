@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, RefreshControl,
   TouchableOpacity, Alert, Image,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useNetwork } from "../context/NetworkContext";
 import { getSyncStatus, fullSync, type SyncStatus } from "../sync/engine";
@@ -94,6 +95,7 @@ export default function DashboardScreen() {
   };
 
   return (
+    <SafeAreaView style={styles.safeArea} edges={["top"]}>
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
@@ -112,7 +114,7 @@ export default function DashboardScreen() {
       </View>
 
       <Text style={styles.greeting}>
-        Hello, {user?.firstName || "Agent"} 👋
+        Hello, {user?.displayName?.split(" ")[0] || user?.firstName || "Agent"} 👋
       </Text>
 
       <View style={styles.cardRow}>
@@ -156,10 +158,12 @@ export default function DashboardScreen() {
         <Text style={styles.lastSync}>Last sync: {syncStatus.lastSync}</Text>
       )}
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: colors.background },
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.md },
   statusBanner: {

@@ -163,4 +163,24 @@ async function initSchema(db: SQLite.SQLiteDatabase) {
       value TEXT
     );
   `);
+
+  // v2 migration: beneficiary fields on policies (idempotent — SQLite ignores duplicate columns via try/catch)
+  for (const sql of [
+    "ALTER TABLE policies ADD COLUMN beneficiary_first_name TEXT",
+    "ALTER TABLE policies ADD COLUMN beneficiary_last_name TEXT",
+    "ALTER TABLE policies ADD COLUMN beneficiary_relationship TEXT",
+    "ALTER TABLE policies ADD COLUMN beneficiary_national_id TEXT",
+    "ALTER TABLE policies ADD COLUMN beneficiary_phone TEXT",
+  ]) {
+    try { await db.execAsync(sql); } catch {}
+  }
+
+  // v3 migration: extra fields on clients
+  for (const sql of [
+    "ALTER TABLE clients ADD COLUMN title TEXT",
+    "ALTER TABLE clients ADD COLUMN address TEXT",
+    "ALTER TABLE clients ADD COLUMN marital_status TEXT",
+  ]) {
+    try { await db.execAsync(sql); } catch {}
+  }
 }
