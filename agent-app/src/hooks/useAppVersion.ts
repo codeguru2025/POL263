@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import * as Updates from "expo-updates";
+import Constants from "expo-constants";
 import { Alert, Linking } from "react-native";
 import { API_BASE } from "../config";
 
-const APP_VERSION = "1.0.0";   // keep in sync with app.json version
-const APP_BUILD   = 1;          // keep in sync with EAS build number (auto-incremented)
+const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
+const APP_BUILD   = parseInt(Constants.nativeBuildVersion ?? "1", 10);
 
 export interface AppInfo {
   available: boolean;

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, FlatList, RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { getDb } from "../db/schema";
 import { useNetwork } from "../context/NetworkContext";
 import { fullSync } from "../sync/engine";
@@ -66,7 +67,7 @@ export default function CommissionsScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.summaryCard}>
         <Text style={styles.summaryLabel}>Total Earned</Text>
         <Text style={styles.summaryValue}>USD {totalEarned}</Text>
@@ -102,7 +103,7 @@ export default function CommissionsScreen() {
           </View>
         )}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 

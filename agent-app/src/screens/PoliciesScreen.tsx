@@ -3,10 +3,13 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import * as WebBrowser from "expo-web-browser";
 import { getDb } from "../db/schema";
 import { useNetwork } from "../context/NetworkContext";
 import { fullSync } from "../sync/engine";
 import { colors, spacing, fontSize } from "../theme";
+import { API_BASE } from "../config";
 
 interface PolicyItem {
   local_id: string;
@@ -107,7 +110,7 @@ export default function PoliciesScreen({ navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
         <TextInput
           style={styles.search}
@@ -157,6 +160,17 @@ export default function PoliciesScreen({ navigation }: any) {
             {item.effective_date && (
               <Text style={styles.dateText}>Effective: {item.effective_date}</Text>
             )}
+            {item.server_id && isOnline && (
+              <TouchableOpacity
+                style={styles.viewDocBtn}
+                onPress={() => WebBrowser.openBrowserAsync(
+                  `${API_BASE}/api/policies/${item.server_id}/document`,
+                  { presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET, toolbarColor: colors.primary, controlsColor: "#fff" }
+                )}
+              >
+                <Text style={styles.viewDocBtnText}>🗂 View Policy Document</Text>
+              </TouchableOpacity>
+            )}
             {!item.synced && (
               <View style={styles.syncNote}>
                 <Text style={styles.syncNoteText}>
@@ -167,7 +181,7 @@ export default function PoliciesScreen({ navigation }: any) {
           </View>
         )}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -200,6 +214,12 @@ const styles = StyleSheet.create({
   policyDetails: { flexDirection: "row", justifyContent: "space-between", marginTop: spacing.xs },
   detailText: { fontSize: fontSize.sm, color: colors.textSecondary },
   dateText: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: spacing.xs },
+  viewDocBtn: {
+    flexDirection: "row", alignItems: "center", backgroundColor: "#eff6ff",
+    borderRadius: 8, padding: spacing.sm, marginTop: spacing.sm,
+    borderWidth: 1, borderColor: "#bfdbfe",
+  },
+  viewDocBtnText: { fontSize: fontSize.xs, fontWeight: "700", color: colors.primary },
   syncNote: {
     backgroundColor: "#fef3c7", borderRadius: 6, padding: spacing.sm, marginTop: spacing.sm,
   },

@@ -298,6 +298,39 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
       }
     }
 
+    // ── 4. Flush offline payment queue (client portal payments queued while offline) ───
+    const pendingPayments = await db.getAllAsync<{
+      id: number; policy_id: string; policy_number: string | null;
+      amount: string; currency: string; method: string; phone: string; retry_count: number;
+    }>("SELECT * FROM payment_queue WHERE status = 'pending' ORDER BY created_at ASC");
+
+    for (const pq of pendingPayments) {
+      try {
+        const key = `pq-${pq.id}-${pq.policy_id}`;
+        const intentRes = await fetch(`${API_BASE}/api/client-auth/payment-intents`, {
+          method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ policyId: pq.policy_id, amount: pq.amount, purpose: "premium", idempotencyKey: key }),
+        });
+        if (!intentRes.ok) throw new Error(`intent ${intentRes.status}`);
+        const { intent } = await intentRes.json();
+        const initRes = await fetch(`${API_BASE}/api/client-auth/payment-intents/${intent.id}/initiate`, {
+          method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ method: pq.method, payerPhone: pq.phone }),
+        });
+        if (!initRes.ok) throw new Error(`initiate ${initRes.status}`);
+        await db.runAsync("UPDATE payment_queue SET status = 'initiated', error = NULL WHERE id = ?", pq.id);
+        synced++;
+      } catch (e: any) {
+        const retries = pq.retry_count + 1;
+        if (retries >= 3) {
+          await db.runAsync("UPDATE payment_queue SET status = 'failed', error = ?, retry_count = ? WHERE id = ?", e.message, retries, pq.id);
+        } else {
+          await db.runAsync("UPDATE payment_queue SET retry_count = ?, error = ? WHERE id = ?", retries, e.message, pq.id);
+        }
+        errors.push(`Payment queue ${pq.id}: ${e.message}`);
+      }
+    }
+
     // Update last sync time
     await db.runAsync(
       "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync', datetime('now'))"
@@ -428,6 +461,30 @@ export async function pullFromServer(): Promise<void> {
       }
     } catch { /* payments permission may not exist */ }
 
+    // Cache agent claims
+    try {
+      const claims = await apiGet<any[]>("/api/claims?limit=500");
+      await db.runAsync("DELETE FROM cache_my_claims");
+      for (const c of claims) {
+        await db.runAsync(
+          "INSERT OR REPLACE INTO cache_my_claims (id, data, updated_at) VALUES (?, ?, datetime('now'))",
+          c.id, JSON.stringify(c)
+        );
+      }
+    } catch { /* claims permission may not exist */ }
+
+    // Cache agent notifications
+    try {
+      const notifs = await apiGet<any[]>("/api/notifications?limit=200");
+      await db.runAsync("DELETE FROM cache_my_notifications");
+      for (const n of notifs) {
+        await db.runAsync(
+          "INSERT OR REPLACE INTO cache_my_notifications (id, data, updated_at) VALUES (?, ?, datetime('now'))",
+          n.id, JSON.stringify(n)
+        );
+      }
+    } catch { /* notifications permission may not exist */ }
+
     await db.runAsync(
       "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_pull', datetime('now'))"
     );
@@ -443,4 +500,128 @@ export async function fullSync(): Promise<{ synced: number; errors: string[] }> 
   const result = await pushToServer();
   await pullFromServer();
   return result;
+}
+
+/**
+ * Pull and cache all client portal data into SQLite for offline access.
+ * Called by ClientPortalScreen on successful load.
+ */
+export async function clientSync(): Promise<void> {
+  const db = await getDb();
+  try {
+    const base = API_BASE;
+    const fetchJson = async (path: string) => {
+      const res = await fetch(`${base}${path}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    };
+
+    const [policies, receipts, claims, dependents, notifs, feedback] = await Promise.allSettled([
+      fetchJson("/api/client-auth/policies"),
+      fetchJson("/api/client-auth/receipts"),
+      fetchJson("/api/client-auth/claims"),
+      fetchJson("/api/client-auth/dependents"),
+      fetchJson("/api/client-auth/notifications"),
+      fetchJson("/api/client-auth/feedback"),
+    ]);
+
+    const upsert = async (table: string, items: any[]) => {
+      if (!Array.isArray(items)) return;
+      await db.runAsync(`DELETE FROM ${table}`);
+      for (const item of items) {
+        await db.runAsync(
+          `INSERT OR REPLACE INTO ${table} (id, data, updated_at) VALUES (?, ?, datetime('now'))`,
+          item.id, JSON.stringify(item)
+        );
+      }
+    };
+
+    if (policies.status === "fulfilled" && policies.value) await upsert("cache_client_policies", policies.value);
+    if (receipts.status === "fulfilled" && receipts.value) await upsert("cache_client_receipts", receipts.value);
+    if (claims.status === "fulfilled" && claims.value) await upsert("cache_client_claims", claims.value);
+    if (dependents.status === "fulfilled" && dependents.value) await upsert("cache_client_dependents", dependents.value);
+    if (notifs.status === "fulfilled" && notifs.value) {
+      const items = Array.isArray(notifs.value) ? notifs.value : (notifs.value?.notifications ?? []);
+      await upsert("cache_client_notifications", items);
+    }
+    if (feedback.status === "fulfilled" && feedback.value) await upsert("cache_client_feedback", feedback.value);
+
+    // Flush payment queue (client-auth endpoint, so must run inside clientSync not pushToServer)
+    const pendingPq = await db.getAllAsync<{
+      id: number; policy_id: string; amount: string; method: string; phone: string; retry_count: number;
+    }>("SELECT * FROM payment_queue WHERE status = 'pending' ORDER BY created_at ASC");
+
+    for (const pq of pendingPq) {
+      try {
+        const key = `pq-${pq.id}-${pq.policy_id}`;
+        const ir = await fetch(`${base}/api/client-auth/payment-intents`, {
+          method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ policyId: pq.policy_id, amount: pq.amount, purpose: "premium", idempotencyKey: key }),
+        });
+        if (!ir.ok) throw new Error(`intent ${ir.status}`);
+        const { intent } = await ir.json();
+        const init = await fetch(`${base}/api/client-auth/payment-intents/${intent.id}/initiate`, {
+          method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ method: pq.method, payerPhone: pq.phone }),
+        });
+        if (!init.ok) throw new Error(`initiate ${init.status}`);
+        await db.runAsync("UPDATE payment_queue SET status = 'initiated', error = NULL WHERE id = ?", pq.id);
+      } catch (e: any) {
+        const retries = pq.retry_count + 1;
+        const nextStatus = retries >= 3 ? "failed" : "pending";
+        await db.runAsync("UPDATE payment_queue SET status = ?, retry_count = ?, error = ? WHERE id = ?", nextStatus, retries, e.message, pq.id);
+      }
+    }
+
+    await db.runAsync("INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('client_last_sync', datetime('now'))");
+  } catch (e: any) {
+    console.warn("clientSync failed:", e.message);
+  }
+}
+
+/**
+ * Load client portal data from SQLite cache (offline fallback).
+ */
+export async function loadClientCache() {
+  const db = await getDb();
+  const q = async (table: string) => {
+    const rows = await db.getAllAsync<{ id: string; data: string }>(`SELECT * FROM ${table} ORDER BY updated_at DESC`);
+    return rows.flatMap(r => { try { return [JSON.parse(r.data)]; } catch { return []; } });
+  };
+  const lastSync = await db.getFirstAsync<{ value: string | null }>("SELECT value FROM sync_meta WHERE key = 'client_last_sync'");
+  return {
+    policies:      await q("cache_client_policies"),
+    receipts:      await q("cache_client_receipts"),
+    claims:        await q("cache_client_claims"),
+    dependents:    await q("cache_client_dependents"),
+    notifications: await q("cache_client_notifications"),
+    feedback:      await q("cache_client_feedback"),
+    lastSync:      lastSync?.value ?? null,
+  };
+}
+
+/**
+ * Queue a payment for when the device comes back online.
+ */
+export async function queuePayment(opts: {
+  policyId: string; policyNumber: string; amount: string; currency: string; method: string; phone: string;
+}): Promise<number> {
+  const db = await getDb();
+  const res = await db.runAsync(
+    "INSERT INTO payment_queue (policy_id, policy_number, amount, currency, method, phone) VALUES (?, ?, ?, ?, ?, ?)",
+    opts.policyId, opts.policyNumber, opts.amount, opts.currency, opts.method, opts.phone
+  );
+  return res.lastInsertRowId;
+}
+
+/**
+ * Get all queued payments (all statuses).
+ */
+export async function getQueuedPayments() {
+  const db = await getDb();
+  return db.getAllAsync<{
+    id: number; policy_id: string; policy_number: string | null;
+    amount: string; currency: string; method: string; phone: string;
+    status: string; error: string | null; created_at: string;
+  }>("SELECT * FROM payment_queue ORDER BY created_at DESC");
 }

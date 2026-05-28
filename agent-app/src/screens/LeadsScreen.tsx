@@ -2,7 +2,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, RefreshControl, Modal, ScrollView, Alert,
+  KeyboardAvoidingView, Platform,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { v4 as uuidv4 } from "uuid";
 import { getDb } from "../db/schema";
 import { useNetwork } from "../context/NetworkContext";
@@ -100,7 +102,7 @@ export default function LeadsScreen() {
     : leads;
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
         <TextInput
           style={styles.search}
@@ -146,15 +148,16 @@ export default function LeadsScreen() {
                 <Text style={[styles.stageText, { color: stageColor(item.stage) }]}>{item.stage.toUpperCase()}</Text>
               </View>
             </View>
-            {item.phone && <Text style={styles.detail}>📱 {item.phone}</Text>}
-            {item.email && <Text style={styles.detail}>✉️ {item.email}</Text>}
+            {item.phone && <Text style={styles.detail}>� {item.phone}</Text>}
+            {item.email && <Text style={styles.detail}>@ {item.email}</Text>}
             {item.notes && <Text style={styles.notes}>{item.notes}</Text>}
           </View>
         )}
       />
 
       <Modal visible={showCreate} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.modalContainer}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={() => setShowCreate(false)}>
               <Text style={styles.cancelText}>Cancel</Text>
@@ -176,9 +179,10 @@ export default function LeadsScreen() {
             <Text style={styles.label}>Notes</Text>
             <TextInput style={[styles.input, { minHeight: 80, textAlignVertical: "top" }]} value={form.notes} onChangeText={v => setForm(f => ({ ...f, notes: v }))} multiline />
           </ScrollView>
-        </View>
+        </SafeAreaView>
+        </KeyboardAvoidingView>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

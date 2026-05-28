@@ -9,6 +9,7 @@ import { NetworkProvider } from "./src/context/NetworkContext";
 import AppNavigator from "./src/navigation/AppNavigator";
 import LoginScreen from "./src/screens/LoginScreen";
 import ForceUpdateScreen from "./src/screens/ForceUpdateScreen";
+import ClientPortalScreen from "./src/screens/ClientPortalScreen";
 import { useAppVersion } from "./src/hooks/useAppVersion";
 import { getDb } from "./src/db/schema";
 import { colors } from "./src/theme";
@@ -56,6 +57,10 @@ function RootNavigator() {
 
   if (!user) {
     return <LoginScreen />;
+  }
+
+  if (user.role === "client") {
+    return <ClientPortalScreen />;
   }
 
   return (

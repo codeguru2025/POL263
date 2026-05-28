@@ -11,6 +11,7 @@ interface User {
   lastName: string;
   organizationId: string;
   branchId?: string;
+  role: "agent" | "client";
 }
 
 interface AuthState {
@@ -19,6 +20,7 @@ interface AuthState {
   loading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
+  loginAsClient: (policyNumber: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -28,6 +30,7 @@ const AuthContext = createContext<AuthState>({
   loading: true,
   error: null,
   login: async () => {},
+  loginAsClient: async () => {},
   logout: async () => {},
 });
 
@@ -86,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         lastName: nameParts.slice(1).join(" ") || "",
         organizationId: data.user?.organizationId || data.organizationId || "",
         branchId: data.user?.branchId || data.branchId,
+        role: "agent",
       };
       await SecureStore.setItemAsync("auth_token", authToken);
       await SecureStore.setItemAsync("auth_user", JSON.stringify(userData));
@@ -93,6 +97,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(userData);
       // Fetch CSRF token for subsequent mutating API calls
       await fetchCsrfToken();
+    } catch (e: any) {
+      setError(e.message || "Login failed");
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loginAsClient = useCallback(async (policyNumber: string, password: string) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/client-auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ policyNumber: policyNumber.trim().toUpperCase(), password }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Login failed (${res.status})`);
+      }
+      const data = await res.json();
+      const client = data.client;
+      const displayName = `${client.firstName || ""} ${client.lastName || ""}`.trim();
+      const userData: User = {
+        id: client.id,
+        email: client.email || "",
+        displayName,
+        firstName: client.firstName || "",
+        lastName: client.lastName || "",
+        organizationId: "",
+        role: "client",
+      };
+      await SecureStore.setItemAsync("auth_token", "client-session");
+      await SecureStore.setItemAsync("auth_user", JSON.stringify(userData));
+      setToken("client-session");
+      setUser(userData);
     } catch (e: any) {
       setError(e.message || "Login failed");
       throw e;
@@ -117,7 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, error, login, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, error, login, loginAsClient, logout }}>
       {children}
     </AuthContext.Provider>
   );

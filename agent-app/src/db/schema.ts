@@ -157,6 +157,49 @@ async function initSchema(db: SQLite.SQLiteDatabase) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Offline payment queue (client portal — flushed to Paynow when back online)
+    CREATE TABLE IF NOT EXISTS payment_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      policy_id TEXT NOT NULL,
+      policy_number TEXT,
+      amount TEXT NOT NULL,
+      currency TEXT DEFAULT 'USD',
+      method TEXT DEFAULT 'ecocash',
+      phone TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      error TEXT,
+      retry_count INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Client portal offline cache
+    CREATE TABLE IF NOT EXISTS cache_client_policies (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cache_client_receipts (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cache_client_claims (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cache_client_dependents (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cache_client_notifications (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cache_client_feedback (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Agent claims + notifications cache
+    CREATE TABLE IF NOT EXISTS cache_my_claims (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cache_my_notifications (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Last sync timestamps
     CREATE TABLE IF NOT EXISTS sync_meta (
       key TEXT PRIMARY KEY,
