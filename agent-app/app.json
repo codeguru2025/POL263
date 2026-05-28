@@ -23,7 +23,10 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -49,15 +52,14 @@
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/386c3ab4-70c5-4814-99a1-112e93bfa0b0",
       "fallbackToCacheTimeout": 0,
       "checkAutomatically": "ON_LOAD"
     },
     "extra": {
       "eas": {
-        "projectId": "386c3ab4-70c5-4814-99a1-112e93bfa0b0"
+        "projectId": "381d1f0d-82ad-4d5c-8b29-0c4d83e0b735"
       }
     },
-    "owner": "gustozw"
+    "owner": "transitpay"
   }
 }

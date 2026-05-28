@@ -476,12 +476,15 @@ export function registerPolicyDocumentRoute(app: Express) {
 
   app.get("/api/policies/:id/document", requireAuth, async (req: Request, res: Response) => {
     const user = req.user as any;
-    if (!user?.organizationId) {
+    // Primary: org from session; fallback: orgId query param (mobile browser-opened URLs).
+    // The ownership check below (policy.organizationId === effectiveOrgId) enforces access.
+    const effectiveOrgId: string | undefined = user?.organizationId || (req.query.orgId as string | undefined);
+    if (!effectiveOrgId) {
       return res.status(403).json({ message: "Tenant scope required" });
     }
 
-    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    if (!policy || policy.organizationId !== user.organizationId) {
+    const policy = await storage.getPolicy(req.params.id as string, effectiveOrgId);
+    if (!policy || policy.organizationId !== effectiveOrgId) {
       return res.status(404).json({ message: "Policy not found" });
     }
 

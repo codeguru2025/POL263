@@ -1,6 +1,7 @@
 import { API_BASE } from "./config";
 
 let _csrfToken: string | null = null;
+let _orgId: string | null = null;
 
 /** Fetch and cache the CSRF token from the server. Call once after login. */
 export async function fetchCsrfToken(): Promise<void> {
@@ -21,6 +22,22 @@ export async function fetchCsrfToken(): Promise<void> {
 /** Clear stored CSRF token on logout. */
 export function clearCsrfToken(): void {
   _csrfToken = null;
+  _orgId = null;
+}
+
+/**
+ * Store the agent's organizationId after login.
+ * This is sent as X-Tenant-ID on every request so the server's tenant
+ * resolver can scope the request correctly without relying on subdomain routing.
+ */
+export function setOrgId(orgId: string | null): void {
+  _orgId = orgId || null;
+}
+
+/** Returns the tenant-scoped document URL for opening in a browser. */
+export function policyDocumentUrl(policyServerId: string, lang = "en"): string {
+  const base = `${API_BASE}/api/policies/${policyServerId}/document?lang=${lang}`;
+  return _orgId ? `${base}&orgId=${encodeURIComponent(_orgId)}` : base;
 }
 
 function getHeaders(mutating = false): Record<string, string> {
@@ -28,7 +45,19 @@ function getHeaders(mutating = false): Record<string, string> {
   if (mutating && _csrfToken) {
     headers["X-XSRF-TOKEN"] = _csrfToken;
   }
+  if (_orgId) {
+    headers["X-Tenant-ID"] = _orgId;
+  }
   return headers;
+}
+
+/**
+ * Returns headers suitable for mutating requests (POST/PATCH/DELETE).
+ * Includes CSRF token and X-Tenant-ID if available.
+ * Exported so the sync engine's raw fetch calls stay in sync with api.ts.
+ */
+export function getMutatingHeaders(): Record<string, string> {
+  return getHeaders(true);
 }
 
 export async function apiGet<T = any>(path: string): Promise<T> {

@@ -28,6 +28,23 @@ interface CommissionSummary {
   currency: string;
 }
 
+interface CommissionEntry {
+  id: string;
+  amount: string;
+  currency: string;
+  type: string;
+  status: string;
+  policyNumber?: string;
+  createdAt: string;
+}
+
+const PERIODS = [
+  { label: "This Month", value: "month" },
+  { label: "Last Month", value: "last_month" },
+  { label: "This Year", value: "year" },
+  { label: "All Time", value: "all" },
+];
+
 function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
   return (
     <View style={[statStyles.card, color ? { borderLeftColor: color, borderLeftWidth: 4 } : {}]}>
@@ -51,20 +68,24 @@ const statStyles = StyleSheet.create({
 
 export default function ReportsScreen() {
   const { isOnline } = useNetwork();
+  const [period, setPeriod] = useState("month");
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [commission, setCommission] = useState<CommissionSummary | null>(null);
+  const [commissionList, setCommissionList] = useState<CommissionEntry[]>([]);
   const [agentStats, setAgentStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (p = period) => {
     if (!isOnline) return;
     setLoading(true);
     try {
-      const [dashRes, commRes, agentRes] = await Promise.allSettled([
-        fetch(`${API_BASE}/api/dashboard`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/commissions/summary`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/agent/stats`, { credentials: "include" }),
+      const periodQ = `?period=${p}`;
+      const [dashRes, commRes, commListRes, agentRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/dashboard${periodQ}`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/commissions/summary${periodQ}`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/commissions${periodQ}&limit=20`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/agent-stats${periodQ}`, { credentials: "include" }),
       ]);
 
       if (dashRes.status === "fulfilled" && dashRes.value.ok) {
@@ -73,15 +94,19 @@ export default function ReportsScreen() {
       if (commRes.status === "fulfilled" && commRes.value.ok) {
         setCommission(await commRes.value.json());
       }
+      if (commListRes.status === "fulfilled" && commListRes.value.ok) {
+        const data = await commListRes.value.json();
+        setCommissionList(Array.isArray(data) ? data : (data.commissions ?? []));
+      }
       if (agentRes.status === "fulfilled" && agentRes.value.ok) {
         setAgentStats(await agentRes.value.json());
       }
     } catch {} finally { setLoading(false); }
-  }, [isOnline]);
+  }, [isOnline, period]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { fetchData(period); }, [period, isOnline]);
 
-  const onRefresh = async () => { setRefreshing(true); await fetchData(); setRefreshing(false); };
+  const onRefresh = async () => { setRefreshing(true); await fetchData(period); setRefreshing(false); };
 
   if (!isOnline) {
     return (
@@ -101,14 +126,29 @@ export default function ReportsScreen() {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {loading && !refreshing && <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.lg }} />}
+        {/* Period Filter */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.periodRow} contentContainerStyle={{ gap: spacing.sm }}>
+          {PERIODS.map(p => (
+            <TouchableOpacity
+              key={p.value}
+              style={[styles.periodChip, period === p.value && styles.periodChipActive]}
+              onPress={() => setPeriod(p.value)}
+            >
+              <Text style={[styles.periodChipText, period === p.value && styles.periodChipTextActive]}>
+                {p.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {loading && !refreshing && <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.md }} />}
 
         {/* Policy Stats */}
         <Text style={styles.sectionTitle}>📋 Policy Overview</Text>
         <View style={styles.grid}>
           <StatCard label="Total Policies" value={stats?.totalPolicies ?? "—"} color={colors.primary} />
           <StatCard label="Active" value={stats?.activePolicies ?? "—"} color={colors.success} />
-          <StatCard label="New This Month" value={stats?.newPoliciesThisMonth ?? "—"} color="#2563eb" />
+          <StatCard label="New This Period" value={stats?.newPoliciesThisMonth ?? "—"} color="#2563eb" />
           <StatCard label="Lapsed" value={stats?.lapsedPolicies ?? "—"} color={colors.danger} />
         </View>
 
@@ -116,7 +156,7 @@ export default function ReportsScreen() {
         <Text style={styles.sectionTitle}>👥 Clients</Text>
         <View style={styles.grid}>
           <StatCard label="Total Clients" value={stats?.totalClients ?? "—"} color={colors.primary} />
-          <StatCard label="New This Month" value={stats?.newClientsThisMonth ?? "—"} color={colors.success} />
+          <StatCard label="New This Period" value={stats?.newClientsThisMonth ?? "—"} color={colors.success} />
         </View>
 
         {/* Claims */}
@@ -137,19 +177,44 @@ export default function ReportsScreen() {
           </>
         )}
 
-        {/* Commissions */}
+        {/* Commission Summary */}
         {commission && (
           <>
             <Text style={styles.sectionTitle}>💰 My Commissions</Text>
             <View style={styles.grid}>
               <StatCard label="Total Earned" value={`${commission.currency} ${parseFloat(commission.totalEarned || "0").toLocaleString()}`} color={colors.success} />
-              <StatCard label="Pending Payment" value={`${commission.currency} ${parseFloat(commission.pendingPayment || "0").toLocaleString()}`} color={colors.warning} />
+              <StatCard label="Pending" value={`${commission.currency} ${parseFloat(commission.pendingPayment || "0").toLocaleString()}`} color={colors.warning} />
               <StatCard label="Paid Out" value={`${commission.currency} ${parseFloat(commission.paidOut || "0").toLocaleString()}`} color={colors.primary} />
             </View>
           </>
         )}
 
-        {/* Agent Stats */}
+        {/* Commission Transactions */}
+        {commissionList.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>🧾 Commission Transactions</Text>
+            <View style={styles.tableCard}>
+              {commissionList.map((c, i) => (
+                <View key={c.id} style={[styles.commRow, i === commissionList.length - 1 && { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.commAmount}>{c.currency} {parseFloat(c.amount || "0").toLocaleString()}</Text>
+                    <Text style={styles.commMeta}>{c.type?.replace(/_/g, " ")} · {c.policyNumber || "—"}</Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <View style={[styles.commStatus, { backgroundColor: c.status === "paid" ? "#dcfce7" : "#fef3c7" }]}>
+                      <Text style={[styles.commStatusText, { color: c.status === "paid" ? "#166534" : "#92400e" }]}>
+                        {c.status?.toUpperCase()}
+                      </Text>
+                    </View>
+                    <Text style={styles.commDate}>{new Date(c.createdAt).toLocaleDateString()}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </>
+        )}
+
+        {/* Agent Performance */}
         {agentStats && (
           <>
             <Text style={styles.sectionTitle}>🎯 My Performance</Text>
@@ -162,6 +227,9 @@ export default function ReportsScreen() {
               )}
               {agentStats.leadsConverted !== undefined && (
                 <StatCard label="Leads Converted" value={agentStats.leadsConverted} color="#2563eb" />
+              )}
+              {agentStats.conversionRate !== undefined && (
+                <StatCard label="Conversion Rate" value={`${agentStats.conversionRate}%`} color="#7c3aed" />
               )}
             </View>
           </>
@@ -180,6 +248,15 @@ const styles = StyleSheet.create({
   offlineEmoji: { fontSize: 48, marginBottom: spacing.md },
   offlineTitle: { fontSize: fontSize.xl, fontWeight: "700", color: colors.text },
   offlineSub: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: spacing.xs, textAlign: "center" },
+  periodRow: { marginBottom: spacing.sm, maxHeight: 50 },
+  periodChip: {
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderRadius: 20, borderWidth: 1.5, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  periodChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  periodChipText: { fontSize: fontSize.sm, fontWeight: "600", color: colors.textSecondary },
+  periodChipTextActive: { color: "#fff" },
   sectionTitle: { fontSize: fontSize.md, fontWeight: "700", color: colors.text, marginBottom: spacing.sm, marginTop: spacing.lg },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   fullCard: {
@@ -188,4 +265,17 @@ const styles = StyleSheet.create({
   },
   bigNum: { fontSize: fontSize.xxl, fontWeight: "800", color: colors.text },
   fullCardLabel: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 4, fontWeight: "600" },
+  tableCard: {
+    backgroundColor: colors.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: colors.border, overflow: "hidden",
+  },
+  commRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+  },
+  commAmount: { fontSize: fontSize.md, fontWeight: "700", color: colors.text },
+  commMeta: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2, textTransform: "capitalize" },
+  commStatus: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: 6 },
+  commStatusText: { fontSize: fontSize.xs, fontWeight: "700" },
+  commDate: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
 });

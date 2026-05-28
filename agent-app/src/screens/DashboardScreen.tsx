@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, RefreshControl,
-  TouchableOpacity, Alert, Image,
+  TouchableOpacity, Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
@@ -109,10 +109,6 @@ export default function DashboardScreen() {
         </Text>
       </View>
 
-      <View style={styles.brandRow}>
-        <Image source={require("../../assets/logo.png")} style={styles.headerLogo} resizeMode="contain" />
-      </View>
-
       <Text style={styles.greeting}>
         Hello, {user?.displayName?.split(" ")[0] || user?.firstName || "Agent"} 👋
       </Text>
@@ -179,14 +175,6 @@ const styles = StyleSheet.create({
   dotOnline: { backgroundColor: colors.success },
   dotOffline: { backgroundColor: colors.warning },
   statusText: { fontSize: fontSize.sm, color: colors.text, fontWeight: "500" },
-  brandRow: {
-    alignItems: "center",
-    marginBottom: spacing.sm,
-  },
-  headerLogo: {
-    width: 160,
-    height: 44,
-  },
   greeting: {
     fontSize: fontSize.xl,
     fontWeight: "700",

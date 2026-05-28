@@ -7,7 +7,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { v4 as uuidv4 } from "uuid";
 import { getDb } from "../db/schema";
 import { useNetwork } from "../context/NetworkContext";
-import { fullSync } from "../sync/engine";
+import { fullSync, refreshCache } from "../sync/engine";
+import { apiPost } from "../api";
 import { colors, spacing, fontSize } from "../theme";
 
 const RELATIONSHIPS = ["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","In-law","Other"];
@@ -143,50 +144,113 @@ export default function CreatePolicyScreen({ navigation }: any) {
       Alert.alert("Beneficiary Required", "Please go back and enter beneficiary details");
       return;
     }
+    if (!beneficiary.relationship) {
+      Alert.alert("Beneficiary Required", "Please select a relationship for the beneficiary");
+      return;
+    }
 
     setSaving(true);
     try {
       const db = await getDb();
       const localId = uuidv4();
-      await db.runAsync(
-        `INSERT INTO policies (
-          local_id, client_local_id, client_server_id, product_version_id,
-          product_name, premium_amount, currency, payment_schedule,
-          effective_date, payment_method_type, payment_provider,
-          payment_mobile_number, add_on_ids,
-          beneficiary_first_name, beneficiary_last_name, beneficiary_relationship,
-          beneficiary_national_id, beneficiary_phone,
-          synced
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-        localId, selectedClient.local_id, selectedClient.server_id, selectedVersion.id,
-        selectedProduct?.name || "", premiumAmount, currency, paymentSchedule,
-        effectiveDate, "mobile", paymentProvider, mobileNumber || null,
-        JSON.stringify(Array.from(selectedAddOns)),
-        beneficiary.firstName.trim().toUpperCase(), beneficiary.lastName.trim().toUpperCase(),
-        beneficiary.relationship, beneficiary.nationalId.trim().toUpperCase(),
-        beneficiary.phone.trim(),
-      );
+      const addOnIds = Array.from(selectedAddOns);
 
-      for (const dep of dependents) {
+      if (isOnline && selectedClient.server_id) {
+        // ── Direct API POST: errors surface immediately to the user ──
+        const serverPolicy = await apiPost("/api/policies", {
+          clientId: selectedClient.server_id,
+          productVersionId: selectedVersion.id,
+          currency,
+          paymentSchedule,
+          effectiveDate: effectiveDate || undefined,
+          // paymentMethod must be a nested object (server reads req.body.paymentMethod)
+          paymentMethod: {
+            methodType: "mobile",
+            provider: paymentProvider || undefined,
+            mobileNumber: mobileNumber || undefined,
+          },
+          addOnIds,
+          // beneficiary must be a nested object (server reads req.body.beneficiary)
+          beneficiary: {
+            firstName: beneficiary.firstName.trim().toUpperCase(),
+            lastName: beneficiary.lastName.trim().toUpperCase(),
+            relationship: beneficiary.relationship,
+            nationalId: beneficiary.nationalId.trim().toUpperCase() || undefined,
+            phone: beneficiary.phone.trim() || undefined,
+          },
+          members: dependents.map(d => ({
+            firstName: d.firstName,
+            lastName: d.lastName,
+            relationship: d.relationship || "dependent",
+            nationalId: d.nationalId || undefined,
+            dateOfBirth: d.dateOfBirth || undefined,
+          })),
+        });
+
+        // Cache locally as synced
         await db.runAsync(
-          `INSERT INTO dependents (local_id, policy_local_id, first_name, last_name, relationship, national_id, date_of_birth, synced)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-          uuidv4(), localId, dep.firstName, dep.lastName,
-          dep.relationship, dep.nationalId || null, dep.dateOfBirth || null,
+          `INSERT OR REPLACE INTO policies (
+            local_id, server_id, client_local_id, client_server_id, product_version_id,
+            product_name, premium_amount, currency, payment_schedule, effective_date,
+            payment_method_type, payment_provider, payment_mobile_number, add_on_ids,
+            beneficiary_first_name, beneficiary_last_name, beneficiary_relationship,
+            beneficiary_national_id, beneficiary_phone, policy_number, status, synced
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          localId, serverPolicy.id, selectedClient.local_id, selectedClient.server_id,
+          selectedVersion.id, selectedProduct?.name || "", serverPolicy.premiumAmount || premiumAmount,
+          currency, paymentSchedule, effectiveDate || null,
+          "mobile", paymentProvider || null, mobileNumber || null,
+          JSON.stringify(addOnIds),
+          beneficiary.firstName.trim().toUpperCase(), beneficiary.lastName.trim().toUpperCase(),
+          beneficiary.relationship, beneficiary.nationalId.trim().toUpperCase() || null,
+          beneficiary.phone.trim() || null,
+          serverPolicy.policyNumber || null, serverPolicy.status || "inactive",
         );
+
+        try { await refreshCache("policies"); } catch {}
+        Alert.alert("Policy Issued!", `Policy number: ${serverPolicy.policyNumber || "pending"}`, [
+          { text: "OK", onPress: () => navigation.goBack() },
+        ]);
+      } else {
+        // ── Offline / client not yet synced: save locally ──
+        await db.runAsync(
+          `INSERT INTO policies (
+            local_id, client_local_id, client_server_id, product_version_id,
+            product_name, premium_amount, currency, payment_schedule,
+            effective_date, payment_method_type, payment_provider,
+            payment_mobile_number, add_on_ids,
+            beneficiary_first_name, beneficiary_last_name, beneficiary_relationship,
+            beneficiary_national_id, beneficiary_phone, synced
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          localId, selectedClient.local_id, selectedClient.server_id,
+          selectedVersion.id, selectedProduct?.name || "", premiumAmount,
+          currency, paymentSchedule, effectiveDate || null,
+          "mobile", paymentProvider || null, mobileNumber || null,
+          JSON.stringify(addOnIds),
+          beneficiary.firstName.trim().toUpperCase(), beneficiary.lastName.trim().toUpperCase(),
+          beneficiary.relationship, beneficiary.nationalId.trim().toUpperCase() || null,
+          beneficiary.phone.trim() || null,
+        );
+
+        for (const dep of dependents) {
+          await db.runAsync(
+            `INSERT INTO dependents (local_id, policy_local_id, first_name, last_name, relationship, national_id, date_of_birth, synced)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+            uuidv4(), localId, dep.firstName, dep.lastName,
+            dep.relationship, dep.nationalId || null, dep.dateOfBirth || null,
+          );
+        }
+
+        const reason = !selectedClient.server_id
+          ? "Client not yet synced to server — policy will upload after client syncs."
+          : "You are offline — policy saved locally and will sync when connected.";
+
+        Alert.alert("Policy Saved Offline", reason, [
+          { text: "OK", onPress: () => navigation.goBack() },
+        ]);
       }
-
-      if (isOnline) { try { await fullSync(); } catch {} }
-
-      Alert.alert(
-        "Policy Saved",
-        isOnline
-          ? "Policy created and synced. A policy number will be assigned shortly."
-          : "Policy saved locally. It will sync when you're back online.",
-        [{ text: "OK", onPress: () => navigation.goBack() }]
-      );
     } catch (e: any) {
-      Alert.alert("Error", e.message);
+      Alert.alert("Error Saving Policy", e.message || "Please check your details and try again.");
     } finally {
       setSaving(false);
     }
@@ -309,6 +373,19 @@ export default function CreatePolicyScreen({ navigation }: any) {
                 ))}
               </>
             )}
+
+            <Text style={styles.sectionLabel}>Currency</Text>
+            <View style={styles.chipRow}>
+              {["USD", "ZAR"].map(c => (
+                <TouchableOpacity
+                  key={c}
+                  style={[styles.chip, currency === c && styles.chipSelected]}
+                  onPress={() => setCurrency(c)}
+                >
+                  <Text style={[styles.chipText, currency === c && styles.chipTextSelected]}>{c}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
             <Text style={styles.sectionLabel}>Payment Schedule</Text>
             <View style={styles.chipRow}>

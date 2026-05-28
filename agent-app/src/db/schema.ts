@@ -226,4 +226,40 @@ async function initSchema(db: SQLite.SQLiteDatabase) {
   ]) {
     try { await db.execAsync(sql); } catch {}
   }
+
+  // v4 migration: full web-parity client fields
+  for (const sql of [
+    "ALTER TABLE clients ADD COLUMN preferred_comm_method TEXT",
+    "ALTER TABLE clients ADD COLUMN location TEXT",
+    "ALTER TABLE clients ADD COLUMN selling_point TEXT",
+    "ALTER TABLE clients ADD COLUMN objections_faced TEXT",
+    "ALTER TABLE clients ADD COLUMN response_to_objections TEXT",
+    "ALTER TABLE clients ADD COLUMN client_feedback TEXT",
+  ]) {
+    try { await db.execAsync(sql); } catch {}
+  }
+
+  // v5 migration: performance indexes — these are CREATE INDEX IF NOT EXISTS so always safe to re-run
+  for (const sql of [
+    // Sync engine: WHERE synced = 0 (runs on every sync cycle)
+    "CREATE INDEX IF NOT EXISTS idx_clients_synced ON clients(synced)",
+    "CREATE INDEX IF NOT EXISTS idx_policies_synced ON policies(synced)",
+    // Policy creation: WHERE client_local_id = ? (fetch dependents per policy)
+    "CREATE INDEX IF NOT EXISTS idx_policies_client_local_id ON policies(client_local_id)",
+    // Client lookups by server_id after sync
+    "CREATE INDEX IF NOT EXISTS idx_clients_server_id ON clients(server_id)",
+    // Policies by server_id for duplicate resolution
+    "CREATE INDEX IF NOT EXISTS idx_policies_server_id ON policies(server_id)",
+    // Sync queue: WHERE status = 'pending' ORDER BY created_at
+    "CREATE INDEX IF NOT EXISTS idx_sync_queue_status_created ON sync_queue(status, created_at)",
+    // Document upload queue: WHERE status = 'pending'
+    "CREATE INDEX IF NOT EXISTS idx_doc_queue_status ON document_upload_queue(status)",
+    // Payment queue: WHERE status = 'pending'
+    "CREATE INDEX IF NOT EXISTS idx_payment_queue_status ON payment_queue(status)",
+    // Cache tables sorted by updated_at for freshness checks
+    "CREATE INDEX IF NOT EXISTS idx_cache_clients_updated ON cache_my_clients(updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_cache_policies_updated ON cache_my_policies(updated_at)",
+  ]) {
+    try { await db.execAsync(sql); } catch {}
+  }
 }

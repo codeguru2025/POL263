@@ -7,8 +7,9 @@ import * as ImagePicker from "expo-image-picker";
 import { v4 as uuidv4 } from "uuid";
 import { getDb } from "../db/schema";
 import { useNetwork } from "../context/NetworkContext";
-import { fullSync } from "../sync/engine";
+import { fullSync, refreshCache } from "../sync/engine";
 import { API_BASE } from "../config";
+import { apiPost } from "../api";
 import { colors, spacing, fontSize } from "../theme";
 
 interface Client {
@@ -21,6 +22,15 @@ interface Client {
   national_id: string | null;
   date_of_birth: string | null;
   gender: string | null;
+  title: string | null;
+  marital_status: string | null;
+  address: string | null;
+  preferred_comm_method: string | null;
+  location: string | null;
+  selling_point: string | null;
+  objections_faced: string | null;
+  response_to_objections: string | null;
+  client_feedback: string | null;
   synced: number;
 }
 
@@ -36,6 +46,27 @@ interface ServerDocument {
   createdAt: string;
 }
 
+interface Dependent {
+  id: string;
+  firstName: string;
+  lastName: string;
+  relationship: string | null;
+  nationalId: string | null;
+  dateOfBirth: string | null;
+}
+
+interface PolicySummary {
+  id: string;
+  policyNumber: string | null;
+  status: string;
+  premiumAmount: string | null;
+  currency: string;
+  paymentSchedule: string;
+  productName?: string;
+}
+
+const NATIONAL_ID_REGEX = /^\d+[A-Z]\d{2}$/;
+
 const DOC_TYPES = [
   { value: "national_id", label: "National ID" },
   { value: "passport", label: "Passport" },
@@ -44,20 +75,27 @@ const DOC_TYPES = [
   { value: "other", label: "Other" },
 ];
 
+const EMPTY_FORM = {
+  title: "", firstName: "", lastName: "", phone: "", email: "",
+  nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", address: "",
+  preferredCommMethod: "", location: "", sellingPoint: "",
+  objectionsFaced: "", responseToObjections: "", clientFeedback: "",
+};
+
 export default function ClientsScreen() {
   const { isOnline } = useNetwork();
   const [clients, setClients] = useState<Client[]>([]);
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [form, setForm] = useState({
-    title: "", firstName: "", lastName: "", phone: "", email: "",
-    nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", address: "",
-  });
+  const [form, setForm] = useState({ ...EMPTY_FORM });
 
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [clientDocs, setClientDocs] = useState<ServerDocument[]>([]);
-  const [isLoadingDocs, setIsLoadingDocs] = useState(false);
+  const [clientDeps, setClientDeps] = useState<Dependent[]>([]);
+  const [clientPolicies, setClientPolicies] = useState<PolicySummary[]>([]);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   const [showDocUpload, setShowDocUpload] = useState(false);
   const [docType, setDocType] = useState("other");
@@ -78,15 +116,17 @@ export default function ClientsScreen() {
       .map(c => {
         const d = JSON.parse(c.data);
         return {
-          local_id: c.id,
-          server_id: c.id,
-          first_name: d.firstName || "",
-          last_name: d.lastName || "",
-          phone: d.phone || null,
-          email: d.email || null,
-          national_id: d.nationalId || null,
-          date_of_birth: d.dateOfBirth || null,
-          gender: d.gender || null,
+          local_id: c.id, server_id: c.id,
+          first_name: d.firstName || "", last_name: d.lastName || "",
+          phone: d.phone || null, email: d.email || null,
+          national_id: d.nationalId || null, date_of_birth: d.dateOfBirth || null,
+          gender: d.gender || null, title: d.title || null,
+          marital_status: d.maritalStatus || null, address: d.address || null,
+          preferred_comm_method: d.preferredCommMethod || null,
+          location: d.location || null, selling_point: d.sellingPoint || null,
+          objections_faced: d.objectionsFaced || null,
+          response_to_objections: d.responseToObjections || null,
+          client_feedback: d.clientFeedback || null,
           synced: 1,
         };
       })
@@ -105,56 +145,154 @@ export default function ClientsScreen() {
     setRefreshing(false);
   }, [isOnline, loadClients]);
 
-  const loadClientDocuments = useCallback(async (serverId: string) => {
-    if (!isOnline) return;
-    setIsLoadingDocs(true);
+  const loadClientDetail = useCallback(async (client: Client) => {
+    setClientDocs([]);
+    setClientDeps([]);
+    setClientPolicies([]);
+    if (!client.server_id || !isOnline) return;
+    setIsLoadingDetail(true);
     try {
-      const res = await fetch(`${API_BASE}/api/clients/${serverId}/documents`, { credentials: "include" });
-      if (res.ok) setClientDocs(await res.json());
-    } catch {
-      // ignore offline / error
-    } finally {
-      setIsLoadingDocs(false);
-    }
+      const [docsRes, depsRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/clients/${client.server_id}/documents`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/clients/${client.server_id}/dependents`, { credentials: "include" }),
+      ]);
+      if (docsRes.status === "fulfilled" && docsRes.value.ok) {
+        setClientDocs(await docsRes.value.json());
+      }
+      if (depsRes.status === "fulfilled" && depsRes.value.ok) {
+        setClientDeps(await depsRes.value.json());
+      }
+      // Load policies from local cache filtered by this client
+      const db = await getDb();
+      const localPols = await db.getAllAsync<any>(
+        "SELECT * FROM policies WHERE client_server_id = ? OR client_local_id = ? ORDER BY created_at DESC",
+        client.server_id, client.local_id
+      );
+      const cachedPols = await db.getAllAsync<{ id: string; data: string }>("SELECT * FROM cache_my_policies");
+      const serverPols: PolicySummary[] = cachedPols
+        .map(p => JSON.parse(p.data))
+        .filter((p: any) => p.clientId === client.server_id)
+        .map((p: any) => ({
+          id: p.id, policyNumber: p.policyNumber, status: p.status,
+          premiumAmount: p.premiumAmount, currency: p.currency,
+          paymentSchedule: p.paymentSchedule, productName: p.productVersionId,
+        }));
+      const localPolsSummary: PolicySummary[] = localPols.map((p: any) => ({
+        id: p.local_id, policyNumber: p.policy_number || null, status: p.status || "pending_sync",
+        premiumAmount: p.premium_amount, currency: p.currency || "USD",
+        paymentSchedule: p.payment_schedule, productName: p.product_name,
+      }));
+      const allPolIds = new Set(serverPols.map(p => p.id));
+      setClientPolicies([...serverPols, ...localPolsSummary.filter(p => !allPolIds.has(p.id))]);
+    } catch {}
+    finally { setIsLoadingDetail(false); }
   }, [isOnline]);
 
   const openClientDetail = useCallback((client: Client) => {
     setSelectedClient(client);
-    setClientDocs([]);
-    if (client.server_id && isOnline) loadClientDocuments(client.server_id);
-  }, [loadClientDocuments, isOnline]);
+    loadClientDetail(client);
+  }, [loadClientDetail]);
 
   const handleCreate = async () => {
     if (!form.firstName.trim() || !form.lastName.trim()) {
-      Alert.alert("Error", "First name and last name are required");
+      Alert.alert("Validation Error", "First name and last name are required.");
       return;
     }
     if (!form.nationalId.trim()) {
-      Alert.alert("Error", "National ID is required");
+      Alert.alert("Validation Error", "National ID is required.");
       return;
     }
-    const db = await getDb();
-    const localId = uuidv4();
-    await db.runAsync(
-      `INSERT INTO clients (local_id, title, first_name, last_name, phone, email, national_id, date_of_birth, gender, marital_status, address, synced)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-      localId,
-      form.title || null,
-      form.firstName.trim().toUpperCase(),
-      form.lastName.trim().toUpperCase(),
-      form.phone.trim() || null,
-      form.email.trim() || null,
-      form.nationalId.trim().toUpperCase() || null,
-      form.dateOfBirth.trim() || null,
-      form.gender.trim().toUpperCase() || null,
-      form.maritalStatus || null,
-      form.address.trim() || null,
-    );
-    setForm({ title: "", firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", address: "" });
-    setShowCreate(false);
-    await loadClients();
-    if (isOnline) {
-      try { await fullSync(); await loadClients(); } catch {}
+    if (!NATIONAL_ID_REGEX.test(form.nationalId.trim().toUpperCase())) {
+      Alert.alert("Validation Error", "National ID must be digits followed by one letter then two digits (e.g. 08833089H38).");
+      return;
+    }
+    if (!form.phone.trim()) {
+      Alert.alert("Validation Error", "Phone number is required.");
+      return;
+    }
+    if (!form.dateOfBirth.trim()) {
+      Alert.alert("Validation Error", "Date of birth is required (YYYY-MM-DD).");
+      return;
+    }
+    if (!form.gender) {
+      Alert.alert("Validation Error", "Gender is required.");
+      return;
+    }
+    setSaving(true);
+    const payload = {
+      title: form.title || undefined,
+      firstName: form.firstName.trim().toUpperCase(),
+      lastName: form.lastName.trim().toUpperCase(),
+      phone: form.phone.trim() || undefined,
+      email: form.email.trim() || undefined,
+      nationalId: form.nationalId.trim().toUpperCase() || undefined,
+      dateOfBirth: form.dateOfBirth.trim() || undefined,
+      gender: form.gender || undefined,
+      maritalStatus: form.maritalStatus || undefined,
+      address: form.address.trim() || undefined,
+      preferredCommMethod: form.preferredCommMethod || undefined,
+      location: form.location.trim() || undefined,
+      sellingPoint: form.sellingPoint.trim() || undefined,
+      objectionsFaced: form.objectionsFaced.trim() || undefined,
+      responseToObjections: form.responseToObjections.trim() || undefined,
+      clientFeedback: form.clientFeedback.trim() || undefined,
+    };
+    try {
+      if (isOnline) {
+        // Direct API POST — surface server validation errors immediately
+        const serverClient = await apiPost("/api/clients", payload);
+        const db = await getDb();
+        const localId = uuidv4();
+        await db.runAsync(
+          `INSERT INTO clients (local_id, server_id, title, first_name, last_name, phone, email,
+            national_id, date_of_birth, gender, marital_status, address,
+            preferred_comm_method, location, selling_point, objections_faced,
+            response_to_objections, client_feedback, synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          localId, serverClient.id,
+          payload.title || null, payload.firstName, payload.lastName,
+          payload.phone || null, payload.email || null,
+          payload.nationalId || null, payload.dateOfBirth || null,
+          payload.gender || null, payload.maritalStatus || null,
+          payload.address || null, payload.preferredCommMethod || null,
+          payload.location || null, payload.sellingPoint || null,
+          payload.objectionsFaced || null, payload.responseToObjections || null,
+          payload.clientFeedback || null,
+        );
+      } else {
+        // Offline: save locally, sync later
+        const db = await getDb();
+        const localId = uuidv4();
+        await db.runAsync(
+          `INSERT INTO clients (local_id, title, first_name, last_name, phone, email,
+            national_id, date_of_birth, gender, marital_status, address,
+            preferred_comm_method, location, selling_point, objections_faced,
+            response_to_objections, client_feedback, synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          localId,
+          payload.title || null, payload.firstName, payload.lastName,
+          payload.phone || null, payload.email || null,
+          payload.nationalId || null, payload.dateOfBirth || null,
+          payload.gender || null, payload.maritalStatus || null,
+          payload.address || null, payload.preferredCommMethod || null,
+          payload.location || null, payload.sellingPoint || null,
+          payload.objectionsFaced || null, payload.responseToObjections || null,
+          payload.clientFeedback || null,
+        );
+      }
+      setForm({ ...EMPTY_FORM });
+      setShowCreate(false);
+      await loadClients();
+      if (isOnline) { try { await refreshCache("clients"); await loadClients(); } catch {} }
+    } catch (e: any) {
+      // Duplicate national ID: server responds 409 with existingClient
+      if (e.message?.includes("409") || e.message?.toLowerCase().includes("duplicate") || e.message?.toLowerCase().includes("already exists")) {
+        Alert.alert("Duplicate Client", "A client with this National ID already exists on the server.");
+      } else {
+        Alert.alert("Save Failed", e.message || "Could not save client.");
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -213,7 +351,8 @@ export default function ClientsScreen() {
           throw new Error(err.message || "Upload failed");
         }
         Alert.alert("Success", "Document uploaded.");
-        await loadClientDocuments(selectedClient.server_id);
+        const docsRes2 = await fetch(`${API_BASE}/api/clients/${selectedClient.server_id}/documents`, { credentials: "include" });
+        if (docsRes2.ok) setClientDocs(await docsRes2.json());
       } else {
         const db = await getDb();
         await db.runAsync(
@@ -287,12 +426,14 @@ export default function ClientsScreen() {
       <Modal visible={showCreate} animationType="slide" presentationStyle="pageSheet">
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setShowCreate(false)}>
+            <TouchableOpacity onPress={() => { setShowCreate(false); setForm({ ...EMPTY_FORM }); }}>
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>New Client</Text>
-            <TouchableOpacity onPress={handleCreate}>
-              <Text style={styles.saveText}>Save</Text>
+            <TouchableOpacity onPress={handleCreate} disabled={saving}>
+              {saving
+                ? <ActivityIndicator size="small" color={colors.accent} />
+                : <Text style={styles.saveText}>Save</Text>}
             </TouchableOpacity>
           </View>
           <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
@@ -327,8 +468,7 @@ export default function ClientsScreen() {
             <Text style={styles.label}>Gender</Text>
             <View style={styles.genderRow}>
               {["MALE", "FEMALE", "OTHER"].map(g => (
-                <TouchableOpacity
-                  key={g}
+                <TouchableOpacity key={g}
                   style={[styles.genderButton, form.gender === g && styles.genderSelected]}
                   onPress={() => setForm(f => ({ ...f, gender: g }))}
                 >
@@ -339,7 +479,7 @@ export default function ClientsScreen() {
 
             <Text style={styles.label}>Marital Status</Text>
             <View style={styles.genderRow}>
-              {["Single","Married","Divorced","Widowed"].map(s => (
+              {["Single","Married","Divorced","Widowed","Separated"].map(s => (
                 <TouchableOpacity key={s} style={[styles.genderButton, form.maritalStatus === s && styles.genderSelected]}
                   onPress={() => setForm(f => ({ ...f, maritalStatus: s }))}>
                   <Text style={[styles.genderText, form.maritalStatus === s && styles.genderSelectedText]}>{s}</Text>
@@ -351,6 +491,46 @@ export default function ClientsScreen() {
             <TextInput style={[styles.input, { minHeight: 60 }]} value={form.address}
               onChangeText={(v) => setForm(f => ({ ...f, address: v }))}
               placeholder="Street, suburb, city..." placeholderTextColor={colors.textMuted}
+              multiline />
+
+            <Text style={styles.label}>Location / Area</Text>
+            <TextInput style={styles.input} value={form.location}
+              onChangeText={(v) => setForm(f => ({ ...f, location: v }))}
+              placeholder="e.g. Harare CBD, Bulawayo" placeholderTextColor={colors.textMuted} />
+
+            <Text style={styles.label}>Preferred Contact Method</Text>
+            <View style={styles.genderRow}>
+              {["sms","whatsapp","calls","email"].map(m => (
+                <TouchableOpacity key={m}
+                  style={[styles.genderButton, form.preferredCommMethod === m && styles.genderSelected]}
+                  onPress={() => setForm(f => ({ ...f, preferredCommMethod: m }))}>
+                  <Text style={[styles.genderText, form.preferredCommMethod === m && styles.genderSelectedText]}>{m}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.label}>Selling Point / Notes</Text>
+            <TextInput style={[styles.input, { minHeight: 70 }]} value={form.sellingPoint}
+              onChangeText={(v) => setForm(f => ({ ...f, sellingPoint: v }))}
+              placeholder="What convinced the client?" placeholderTextColor={colors.textMuted}
+              multiline />
+
+            <Text style={styles.label}>Objections Faced</Text>
+            <TextInput style={[styles.input, { minHeight: 70 }]} value={form.objectionsFaced}
+              onChangeText={(v) => setForm(f => ({ ...f, objectionsFaced: v }))}
+              placeholder="Any objections raised..." placeholderTextColor={colors.textMuted}
+              multiline />
+
+            <Text style={styles.label}>Response to Objections</Text>
+            <TextInput style={[styles.input, { minHeight: 70 }]} value={form.responseToObjections}
+              onChangeText={(v) => setForm(f => ({ ...f, responseToObjections: v }))}
+              placeholder="How objections were resolved..." placeholderTextColor={colors.textMuted}
+              multiline />
+
+            <Text style={styles.label}>Client Feedback</Text>
+            <TextInput style={[styles.input, { minHeight: 70 }]} value={form.clientFeedback}
+              onChangeText={(v) => setForm(f => ({ ...f, clientFeedback: v }))}
+              placeholder="General client feedback..." placeholderTextColor={colors.textMuted}
               multiline />
           </ScrollView>
         </View>
@@ -412,6 +592,56 @@ export default function ClientsScreen() {
                 </View>
               </View>
 
+              {/* Linked Policies */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Linked Policies</Text>
+                {isLoadingDetail ? (
+                  <ActivityIndicator style={{ marginVertical: spacing.sm }} color={colors.primary} />
+                ) : clientPolicies.length === 0 ? (
+                  <Text style={styles.emptyDocsText}>No policies yet</Text>
+                ) : (
+                  clientPolicies.map(pol => (
+                    <View key={pol.id} style={styles.polRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.polNumber}>{pol.policyNumber || "Pending sync…"}</Text>
+                        <Text style={styles.polDetail}>{pol.currency} {pol.premiumAmount || "0"} / {pol.paymentSchedule}</Text>
+                      </View>
+                      <View style={[styles.statusPill, { backgroundColor: pol.status === "active" ? "#dcfce7" : pol.status === "pending_sync" ? "#fef3c7" : "#fee2e2" }]}>
+                        <Text style={[styles.statusPillText, { color: pol.status === "active" ? "#166534" : pol.status === "pending_sync" ? "#92400e" : "#991b1b" }]}>
+                          {pol.status === "pending_sync" ? "PENDING" : pol.status.toUpperCase()}
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+
+              {/* Dependents Section */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Dependents / Family</Text>
+                {isLoadingDetail ? (
+                  <ActivityIndicator style={{ marginVertical: spacing.sm }} color={colors.primary} />
+                ) : !selectedClient.server_id || !isOnline ? (
+                  <View style={styles.hint}>
+                    <Text style={styles.hintText}>📶 Connect to load dependents.</Text>
+                  </View>
+                ) : clientDeps.length === 0 ? (
+                  <Text style={styles.emptyDocsText}>No dependents on record</Text>
+                ) : (
+                  clientDeps.map(dep => (
+                    <View key={dep.id} style={styles.docRow}>
+                      <View style={styles.docInfo}>
+                        <Text style={styles.docName}>{dep.firstName} {dep.lastName}</Text>
+                        <Text style={styles.docMeta}>
+                          {dep.relationship || "Dependent"}{dep.nationalId ? ` · ${dep.nationalId}` : ""}
+                          {dep.dateOfBirth ? ` · ${dep.dateOfBirth}` : ""}
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+
               {/* Documents Section */}
               <View style={styles.sectionCard}>
                 <View style={styles.sectionHeader}>
@@ -434,7 +664,7 @@ export default function ClientsScreen() {
                   <View style={styles.hint}>
                     <Text style={styles.hintText}>📶 Offline — documents will load when you reconnect.</Text>
                   </View>
-                ) : isLoadingDocs ? (
+                ) : isLoadingDetail ? (
                   <ActivityIndicator style={{ marginVertical: spacing.md }} color={colors.primary} />
                 ) : clientDocs.length === 0 ? (
                   <View style={styles.emptyDocs}>
@@ -614,6 +844,12 @@ const styles = StyleSheet.create({
   docName: { fontSize: fontSize.sm, fontWeight: "600", color: colors.text },
   docMeta: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2, textTransform: "capitalize" },
   docDate: { fontSize: fontSize.xs, color: colors.textMuted },
+  // Policy rows in detail
+  polRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.xs, borderBottomWidth: 1, borderBottomColor: colors.border },
+  polNumber: { fontSize: fontSize.sm, fontWeight: "700", color: colors.primary },
+  polDetail: { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 1 },
+  statusPill: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: 6 },
+  statusPillText: { fontSize: fontSize.xs, fontWeight: "700" },
   // Document type chips
   typeRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, marginBottom: spacing.xs },
   typeChip: {

@@ -1,5 +1,5 @@
 import { getDb } from "../db/schema";
-import { apiGet, apiPost } from "../api";
+import { apiGet, apiPost, getMutatingHeaders } from "../api";
 import { API_BASE } from "../config";
 
 export interface SyncStatus {
@@ -55,7 +55,7 @@ async function apiPostWithConflict<T = any>(
 ): Promise<{ data: T; conflict: boolean }> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getMutatingHeaders(),
     credentials: "include",
     body: JSON.stringify(body),
   });
@@ -112,6 +112,12 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
       gender: string | null;
       marital_status: string | null;
       address: string | null;
+      preferred_comm_method: string | null;
+      location: string | null;
+      selling_point: string | null;
+      objections_faced: string | null;
+      response_to_objections: string | null;
+      client_feedback: string | null;
     }>("SELECT * FROM clients WHERE synced = 0 ORDER BY created_at ASC");
 
     for (const c of unsyncedClients) {
@@ -127,6 +133,12 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
           gender: c.gender || undefined,
           maritalStatus: c.marital_status || undefined,
           address: c.address || undefined,
+          preferredCommMethod: c.preferred_comm_method || undefined,
+          location: c.location || undefined,
+          sellingPoint: c.selling_point || undefined,
+          objectionsFaced: c.objections_faced || undefined,
+          responseToObjections: c.response_to_objections || undefined,
+          clientFeedback: c.client_feedback || undefined,
         });
 
         // Whether newly created or matched to existing, link the server ID
@@ -308,13 +320,13 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
       try {
         const key = `pq-${pq.id}-${pq.policy_id}`;
         const intentRes = await fetch(`${API_BASE}/api/client-auth/payment-intents`, {
-          method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+          method: "POST", credentials: "include", headers: getMutatingHeaders(),
           body: JSON.stringify({ policyId: pq.policy_id, amount: pq.amount, purpose: "premium", idempotencyKey: key }),
         });
         if (!intentRes.ok) throw new Error(`intent ${intentRes.status}`);
         const { intent } = await intentRes.json();
         const initRes = await fetch(`${API_BASE}/api/client-auth/payment-intents/${intent.id}/initiate`, {
-          method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+          method: "POST", credentials: "include", headers: getMutatingHeaders(),
           body: JSON.stringify({ method: pq.method, payerPhone: pq.phone }),
         });
         if (!initRes.ok) throw new Error(`initiate ${initRes.status}`);
@@ -500,6 +512,46 @@ export async function fullSync(): Promise<{ synced: number; errors: string[] }> 
   const result = await pushToServer();
   await pullFromServer();
   return result;
+}
+
+/**
+ * Targeted cache refresh after a direct API mutation.
+ * Avoids a full push+pull round-trip; only re-fetches the affected table.
+ */
+export async function refreshCache(type: "clients" | "policies" | "leads"): Promise<void> {
+  const db = await getDb();
+  try {
+    if (type === "clients") {
+      const clients = await apiGet<any[]>("/api/clients?limit=500");
+      await db.runAsync("DELETE FROM cache_my_clients");
+      for (const c of clients) {
+        await db.runAsync(
+          "INSERT OR REPLACE INTO cache_my_clients (id, data, updated_at) VALUES (?, ?, datetime('now'))",
+          c.id, JSON.stringify(c)
+        );
+      }
+    } else if (type === "policies") {
+      const policies = await apiGet<any[]>("/api/policies?limit=500");
+      await db.runAsync("DELETE FROM cache_my_policies");
+      for (const p of policies) {
+        await db.runAsync(
+          "INSERT OR REPLACE INTO cache_my_policies (id, data, updated_at) VALUES (?, ?, datetime('now'))",
+          p.id, JSON.stringify(p)
+        );
+      }
+    } else if (type === "leads") {
+      const leads = await apiGet<any[]>("/api/leads?limit=500");
+      await db.runAsync("DELETE FROM cache_my_leads");
+      for (const l of leads) {
+        await db.runAsync(
+          "INSERT OR REPLACE INTO cache_my_leads (id, data, updated_at) VALUES (?, ?, datetime('now'))",
+          l.id, JSON.stringify(l)
+        );
+      }
+    }
+  } catch (e: any) {
+    console.warn(`refreshCache(${type}) failed:`, e.message);
+  }
 }
 
 /**

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  TextInput, RefreshControl,
+  TextInput, RefreshControl, Modal, ScrollView, ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
@@ -10,6 +10,28 @@ import { useNetwork } from "../context/NetworkContext";
 import { fullSync } from "../sync/engine";
 import { colors, spacing, fontSize } from "../theme";
 import { API_BASE } from "../config";
+import { policyDocumentUrl } from "../api";
+
+interface PolicyDetail {
+  id: string;
+  policyNumber: string | null;
+  status: string;
+  currency: string;
+  premiumAmount: string | null;
+  paymentSchedule: string;
+  effectiveDate: string | null;
+  inceptionDate: string | null;
+  waitingPeriodEndDate: string | null;
+  beneficiaryFirstName: string | null;
+  beneficiaryLastName: string | null;
+  beneficiaryRelationship: string | null;
+  beneficiaryNationalId: string | null;
+  beneficiaryPhone: string | null;
+  client?: { firstName: string; lastName: string; phone?: string; email?: string };
+  members?: Array<{ id: string; firstName: string; lastName: string; role: string; memberNumber: string | null }>;
+  payments?: Array<{ id: string; amount: string; currency: string; paymentMethod: string; status: string; receivedAt: string }>;
+  receipts?: Array<{ id: string; receiptNumber: string; amount: string; paymentChannel: string; createdAt: string }>;
+}
 
 interface PolicyItem {
   local_id: string;
@@ -27,6 +49,8 @@ interface PolicyItem {
 
 export default function PoliciesScreen({ navigation }: any) {
   const { isOnline } = useNetwork();
+  const [selectedPolicy, setSelectedPolicy] = useState<{ local: PolicyItem; detail: PolicyDetail | null } | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
   const [policies, setPolicies] = useState<PolicyItem[]>([]);
   const [search, setSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -89,6 +113,37 @@ export default function PoliciesScreen({ navigation }: any) {
 
   useEffect(() => { loadPolicies(); }, [loadPolicies]);
 
+  const fetchPolicyDetail = useCallback(async (policy: PolicyItem) => {
+    setSelectedPolicy({ local: policy, detail: null });
+    if (!policy.server_id || !isOnline) return;
+    setLoadingDetail(true);
+    try {
+      const [polRes, membersRes, paymentsRes, receiptsRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/policies/${policy.server_id}`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/policies/${policy.server_id}/members`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/policies/${policy.server_id}/payments`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/policies/${policy.server_id}/receipts`, { credentials: "include" }),
+      ]);
+      let detail: PolicyDetail | null = null as PolicyDetail | null;
+      if (polRes.status === "fulfilled" && polRes.value.ok) {
+        detail = await polRes.value.json();
+      }
+      if (detail) {
+        if (membersRes.status === "fulfilled" && membersRes.value.ok) {
+          detail.members = await membersRes.value.json();
+        }
+        if (paymentsRes.status === "fulfilled" && paymentsRes.value.ok) {
+          detail.payments = await paymentsRes.value.json();
+        }
+        if (receiptsRes.status === "fulfilled" && receiptsRes.value.ok) {
+          detail.receipts = await receiptsRes.value.json();
+        }
+        setSelectedPolicy({ local: policy, detail });
+      }
+    } catch {}
+    finally { setLoadingDetail(false); }
+  }, [isOnline]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     if (isOnline) { try { await fullSync(); } catch {} }
@@ -139,7 +194,7 @@ export default function PoliciesScreen({ navigation }: any) {
           </View>
         }
         renderItem={({ item }) => (
-          <View style={styles.policyCard}>
+          <TouchableOpacity style={styles.policyCard} onPress={() => fetchPolicyDetail(item)} activeOpacity={0.75}>
             <View style={styles.policyTop}>
               <Text style={styles.policyNumber}>
                 {item.policy_number || "Pending…"}
@@ -164,7 +219,7 @@ export default function PoliciesScreen({ navigation }: any) {
               <TouchableOpacity
                 style={styles.viewDocBtn}
                 onPress={() => WebBrowser.openBrowserAsync(
-                  `${API_BASE}/api/policies/${item.server_id}/document`,
+                  policyDocumentUrl(item.server_id!),
                   { presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET, toolbarColor: colors.primary, controlsColor: "#fff" }
                 )}
               >
@@ -178,9 +233,173 @@ export default function PoliciesScreen({ navigation }: any) {
                 </Text>
               </View>
             )}
-          </View>
+          </TouchableOpacity>
         )}
       />
+
+      {/* ── Policy Detail Modal ── */}
+      {selectedPolicy && (
+        <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSelectedPolicy(null)}>
+          <SafeAreaView style={styles.detailContainer} edges={["top"]}>
+            <View style={styles.detailHeader}>
+              <TouchableOpacity onPress={() => setSelectedPolicy(null)}>
+                <Text style={styles.backText}>← Back</Text>
+              </TouchableOpacity>
+              <Text style={styles.detailTitle} numberOfLines={1}>
+                {selectedPolicy.local.policy_number || "Pending Policy"}
+              </Text>
+              <View style={{ width: 60 }} />
+            </View>
+
+            {loadingDetail && !selectedPolicy.detail ? (
+              <View style={styles.detailLoading}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={styles.detailLoadingText}>Loading details…</Text>
+              </View>
+            ) : (
+              <ScrollView style={{ flex: 1 }}>
+                {/* Summary card */}
+                <View style={styles.detailSection}>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Status</Text>
+                    <View style={[styles.statusBadge, { backgroundColor: statusColor(selectedPolicy.local.status) + "20" }]}>
+                      <Text style={[styles.statusText, { color: statusColor(selectedPolicy.local.status) }]}>
+                        {selectedPolicy.local.status.toUpperCase()}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Client</Text>
+                    <Text style={styles.detailValue}>{selectedPolicy.local.client_name}</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Product</Text>
+                    <Text style={styles.detailValue}>{selectedPolicy.local.product_name || "—"}</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Premium</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedPolicy.local.currency} {selectedPolicy.local.premium_amount || "0"} / {selectedPolicy.local.payment_schedule}
+                    </Text>
+                  </View>
+                  {!!selectedPolicy.local.effective_date && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Effective Date</Text>
+                      <Text style={styles.detailValue}>{selectedPolicy.local.effective_date}</Text>
+                    </View>
+                  )}
+                  {selectedPolicy.detail?.inceptionDate && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Inception Date</Text>
+                      <Text style={styles.detailValue}>{selectedPolicy.detail.inceptionDate.split("T")[0]}</Text>
+                    </View>
+                  )}
+                  {selectedPolicy.detail?.waitingPeriodEndDate && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Waiting Period End</Text>
+                      <Text style={styles.detailValue}>{selectedPolicy.detail.waitingPeriodEndDate.split("T")[0]}</Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Beneficiary */}
+                {selectedPolicy.detail?.beneficiaryFirstName && (
+                  <View style={styles.detailSection}>
+                    <Text style={styles.sectionHeading}>Beneficiary</Text>
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Name</Text>
+                      <Text style={styles.detailValue}>
+                        {selectedPolicy.detail.beneficiaryFirstName} {selectedPolicy.detail.beneficiaryLastName}
+                      </Text>
+                    </View>
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Relationship</Text>
+                      <Text style={styles.detailValue}>{selectedPolicy.detail.beneficiaryRelationship || "—"}</Text>
+                    </View>
+                    {!!selectedPolicy.detail.beneficiaryNationalId && (
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>National ID</Text>
+                        <Text style={styles.detailValue}>{selectedPolicy.detail.beneficiaryNationalId}</Text>
+                      </View>
+                    )}
+                    {!!selectedPolicy.detail.beneficiaryPhone && (
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Phone</Text>
+                        <Text style={styles.detailValue}>{selectedPolicy.detail.beneficiaryPhone}</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {/* Members */}
+                {(selectedPolicy.detail?.members?.length ?? 0) > 0 && (
+                  <View style={styles.detailSection}>
+                    <Text style={styles.sectionHeading}>Policy Members</Text>
+                    {selectedPolicy.detail!.members!.map(m => (
+                      <View key={m.id} style={styles.memberRow}>
+                        <Text style={styles.memberName}>{m.firstName} {m.lastName}</Text>
+                        <Text style={styles.memberMeta}>{m.role}{m.memberNumber ? ` · ${m.memberNumber}` : ""}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Payments */}
+                {(selectedPolicy.detail?.payments?.length ?? 0) > 0 && (
+                  <View style={styles.detailSection}>
+                    <Text style={styles.sectionHeading}>Payment History</Text>
+                    {selectedPolicy.detail!.payments!.map(p => (
+                      <View key={p.id} style={styles.paymentRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.paymentAmount}>{p.currency} {p.amount}</Text>
+                          <Text style={styles.paymentMeta}>{p.paymentMethod} · {p.status}</Text>
+                        </View>
+                        <Text style={styles.paymentDate}>{new Date(p.receivedAt).toLocaleDateString()}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Receipts */}
+                {(selectedPolicy.detail?.receipts?.length ?? 0) > 0 && (
+                  <View style={styles.detailSection}>
+                    <Text style={styles.sectionHeading}>Receipts</Text>
+                    {selectedPolicy.detail!.receipts!.map(r => (
+                      <View key={r.id} style={styles.paymentRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.paymentAmount}>{r.receiptNumber}</Text>
+                          <Text style={styles.paymentMeta}>{r.paymentChannel} · {r.amount}</Text>
+                        </View>
+                        <Text style={styles.paymentDate}>{new Date(r.createdAt).toLocaleDateString()}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Document */}
+                {selectedPolicy.local.server_id && isOnline && (
+                  <TouchableOpacity
+                    style={styles.docBtn}
+                    onPress={() => WebBrowser.openBrowserAsync(
+                      policyDocumentUrl(selectedPolicy.local.server_id!, "en"),
+                      { toolbarColor: colors.primary, controlsColor: "#fff" }
+                    )}
+                  >
+                    <Text style={styles.docBtnText}>📄 View Policy Document</Text>
+                  </TouchableOpacity>
+                )}
+
+                {!selectedPolicy.local.synced && (
+                  <View style={[styles.syncNote, { margin: spacing.md }]}>
+                    <Text style={styles.syncNoteText}>Pending sync — policy number will be assigned on sync</Text>
+                  </View>
+                )}
+                <View style={{ height: 40 }} />
+              </ScrollView>
+            )}
+          </SafeAreaView>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -224,4 +443,45 @@ const styles = StyleSheet.create({
     backgroundColor: "#fef3c7", borderRadius: 6, padding: spacing.sm, marginTop: spacing.sm,
   },
   syncNoteText: { fontSize: fontSize.xs, color: "#92400e" },
+  // Detail modal
+  detailContainer: { flex: 1, backgroundColor: colors.background },
+  detailHeader: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  backText: { fontSize: fontSize.md, color: colors.accent, fontWeight: "600", minWidth: 60 },
+  detailTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.text, flex: 1, textAlign: "center" },
+  detailLoading: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.md },
+  detailLoadingText: { fontSize: fontSize.md, color: colors.textSecondary },
+  detailSection: {
+    backgroundColor: colors.surface, margin: spacing.md, borderRadius: 12,
+    padding: spacing.md, borderWidth: 1, borderColor: colors.border,
+  },
+  sectionHeading: {
+    fontSize: fontSize.md, fontWeight: "700", color: colors.primary,
+    marginBottom: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
+    paddingBottom: spacing.xs,
+  },
+  detailRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingVertical: spacing.xs, borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+  },
+  detailLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1 },
+  detailValue: { fontSize: fontSize.sm, fontWeight: "600", color: colors.text, flex: 2, textAlign: "right" },
+  memberRow: { paddingVertical: spacing.xs, borderBottomWidth: 1, borderBottomColor: colors.borderLight },
+  memberName: { fontSize: fontSize.sm, fontWeight: "600", color: colors.text },
+  memberMeta: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 1, textTransform: "capitalize" },
+  paymentRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingVertical: spacing.xs, borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+  },
+  paymentAmount: { fontSize: fontSize.sm, fontWeight: "700", color: colors.text },
+  paymentMeta: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 1, textTransform: "capitalize" },
+  paymentDate: { fontSize: fontSize.xs, color: colors.textMuted },
+  docBtn: {
+    backgroundColor: "#eff6ff", borderRadius: 10, margin: spacing.md,
+    padding: spacing.md, alignItems: "center", borderWidth: 1, borderColor: "#bfdbfe",
+  },
+  docBtnText: { fontSize: fontSize.md, fontWeight: "700", color: colors.primary },
 });

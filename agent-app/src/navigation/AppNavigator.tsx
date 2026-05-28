@@ -27,6 +27,16 @@ const MoreStack = createNativeStackNavigator();
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
+function LogoHeader() {
+  return (
+    <Image
+      source={require("../../assets/logo.png")}
+      style={{ width: 120, height: 32 }}
+      resizeMode="contain"
+    />
+  );
+}
+
 function TabIcon({ label, focused }: { label: string; focused: boolean }) {
   const icons: Record<string, { active: IoniconName; inactive: IoniconName }> = {
     Home:     { active: "home",          inactive: "home-outline" },
@@ -171,14 +181,26 @@ export default function AppNavigator() {
           tabBarIcon: ({ focused }) => <TabIcon label={route.name} focused={focused} />,
         })}
       >
-        <Tab.Screen name="Home" component={DashboardScreen} options={{ title: "Dashboard" }} />
-        <Tab.Screen name="Clients" component={ClientsScreen} />
+        <Tab.Screen
+          name="Home"
+          component={DashboardScreen}
+          options={{ headerTitle: () => <LogoHeader /> }}
+        />
+        <Tab.Screen
+          name="Clients"
+          component={ClientsScreen}
+          options={{ headerTitle: () => <LogoHeader /> }}
+        />
         <Tab.Screen
           name="Policies"
           component={PoliciesStackScreen}
           options={{ headerShown: false }}
         />
-        <Tab.Screen name="Leads" component={LeadsScreen} options={{ title: "Quotations" }} />
+        <Tab.Screen
+          name="Leads"
+          component={LeadsScreen}
+          options={{ headerTitle: () => <LogoHeader />, title: "Quotations" }}
+        />
         <Tab.Screen name="More" component={MoreStackScreen} options={{ headerShown: false }} />
       </Tab.Navigator>
     </View>

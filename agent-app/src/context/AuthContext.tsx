@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import * as SecureStore from "expo-secure-store";
 import { API_BASE } from "../config";
-import { fetchCsrfToken, clearCsrfToken } from "../api";
+import { fetchCsrfToken, clearCsrfToken, setOrgId } from "../api";
 
 interface User {
   id: string;
@@ -51,8 +51,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const stored = await SecureStore.getItemAsync("auth_token");
         const storedUser = await SecureStore.getItemAsync("auth_user");
         if (stored && storedUser) {
+          const parsedUser = JSON.parse(storedUser);
           setToken(stored);
-          setUser(JSON.parse(storedUser));
+          setUser(parsedUser);
+          if (parsedUser.organizationId) setOrgId(parsedUser.organizationId);
         }
       } catch {
         // ignore
@@ -95,6 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await SecureStore.setItemAsync("auth_user", JSON.stringify(userData));
       setToken(authToken);
       setUser(userData);
+      if (userData.organizationId) setOrgId(userData.organizationId);
       // Fetch CSRF token for subsequent mutating API calls
       await fetchCsrfToken();
     } catch (e: any) {
