@@ -559,8 +559,18 @@ export default function StaffPolicies() {
           dateOfBirth: data.newClient.dateOfBirth || undefined,
           gender: data.newClient.gender ? toUpper(data.newClient.gender) : undefined,
         });
-        const newClient = await clientRes.json();
-        clientId = newClient.id;
+        const clientData = await clientRes.json();
+        // Handle existing client returned instead of new creation
+        if (clientData.code === "EXISTING_CLIENT" && clientData.existingClient) {
+          const ec = clientData.existingClient;
+          clientId = ec.id;
+          toast({
+            title: "Existing client found",
+            description: `Using ${ec.firstName} ${ec.lastName} (${ec.nationalId || "—"}, ${ec.phone || "—"})`,
+          });
+        } else {
+          clientId = clientData.id;
+        }
       }
 
       const members = (data.beneficiaryDependentIds || []).map((dependentId: string) => ({ dependentId, role: "dependent" }));

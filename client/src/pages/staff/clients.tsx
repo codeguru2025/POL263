@@ -278,16 +278,9 @@ export default function StaffClients() {
       try {
         const jsonStr = err.message.replace(/^\d+:\s*/, "");
         const body = JSON.parse(jsonStr);
-        if (body.code === "DUPLICATE_CLIENT" && body.existingClient) {
-          const ec = body.existingClient;
-          toast({
-            title: "Duplicate Client Found",
-            description: `${ec.firstName} ${ec.lastName} (ID: ${ec.nationalId || "—"}, Phone: ${ec.phone || "—"}) already exists. Request admin approval to create another policy for this client.`,
-            variant: "destructive",
-            duration: 12000,
-          });
-          return;
-        }
+        // Note: DUPLICATE_CLIENT now returns 200 with EXISTING_CLIENT code
+        // This error block only handles actual errors, not duplicate detection
+        // The policies.tsx createMutation handles existing client flow during policy creation
       } catch {
         // not JSON — fall through to generic toast
       }

@@ -1212,9 +1212,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.body.nationalId && String(req.body.nationalId).trim()) {
       const existing = await storage.getClientByNationalId(user.organizationId, String(req.body.nationalId).trim());
       if (existing) {
-        return res.status(409).json({
-          message: "A client with this ID number already exists. Request admin approval to create another policy for this client.",
-          code: "DUPLICATE_CLIENT",
+        // Return existing client for auto-population instead of blocking
+        return res.status(200).json({
+          message: "Client found - existing client data returned",
+          code: "EXISTING_CLIENT",
           existingClient: {
             id: existing.id,
             firstName: existing.firstName,
@@ -1222,6 +1223,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             nationalId: existing.nationalId,
             phone: existing.phone,
             email: existing.email,
+            dateOfBirth: existing.dateOfBirth,
+            gender: existing.gender,
+            address: existing.address,
           },
         });
       }
@@ -1466,6 +1470,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } as any);
     await auditLog(req, "UPSERT_CLIENT_PAYMENT_METHOD", "ClientPaymentMethod", saved.id, null, saved);
     return res.json(saved);
+  });
+
+  // ─── Client Policies ─────────────────────────────────────────
+
+  app.get("/api/clients/:clientId/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+    const clientPolicies = await storage.getPoliciesByClient(req.params.clientId as string, user.organizationId);
+    return res.json(clientPolicies);
   });
 
   // ─── Products ───────────────────────────────────────────────
