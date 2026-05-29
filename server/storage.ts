@@ -4,6 +4,7 @@ import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
+import { normalizeNationalId } from "../shared/validation";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
@@ -925,12 +926,12 @@ export class DatabaseStorage implements IStorage {
     return client;
   }
   async getClientByNationalId(orgId: string, nationalId: string): Promise<Client | undefined> {
-    const trimmed = String(nationalId).trim();
-    if (!trimmed) return undefined;
+    const normalized = normalizeNationalId(nationalId);
+    if (!normalized) return undefined;
     const tdb = await getDbForOrg(orgId);
     const [client] = await tdb.select().from(clients).where(and(
       eq(clients.organizationId, orgId),
-      eq(clients.nationalId, trimmed)
+      ilike(clients.nationalId, normalized)
     ));
     return client;
   }
