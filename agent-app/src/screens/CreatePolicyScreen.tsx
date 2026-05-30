@@ -148,6 +148,14 @@ export default function CreatePolicyScreen({ navigation }: any) {
       Alert.alert("Beneficiary Required", "Please select a relationship for the beneficiary");
       return;
     }
+    if (!beneficiary.nationalId.trim()) {
+      Alert.alert("Beneficiary National ID Required", "Please enter the beneficiary's National ID (e.g. 08833089H38)");
+      return;
+    }
+    if (!beneficiary.phone.trim()) {
+      Alert.alert("Beneficiary Phone Required", "Please enter the beneficiary's phone number");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -250,7 +258,14 @@ export default function CreatePolicyScreen({ navigation }: any) {
         ]);
       }
     } catch (e: any) {
-      Alert.alert("Error Saving Policy", e.message || "Please check your details and try again.");
+      const msg = e.message || "";
+      if (msg.includes("Duplicate policy") || msg.includes("already has an active policy")) {
+        Alert.alert("Duplicate Policy", "This client already has an active policy for this product. Cancel the existing policy first if you need to create a new one.");
+      } else if (msg.includes("Beneficiary")) {
+        Alert.alert("Beneficiary Error", msg);
+      } else {
+        Alert.alert("Error Saving Policy", msg || "Please check your details and try again.");
+      }
     } finally {
       setSaving(false);
     }

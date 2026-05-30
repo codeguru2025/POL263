@@ -357,7 +357,7 @@ export async function pushToServer(): Promise<{ synced: number; errors: string[]
 
 /**
  * When server says "Duplicate policy" (client already has this product),
- * fetch the agent's policies and find the matching one to link locally.
+ * fetch the client's policies and find the matching one to link locally.
  */
 async function resolveDuplicatePolicy(
   db: any,
@@ -366,19 +366,33 @@ async function resolveDuplicatePolicy(
   productVersionId: string
 ): Promise<boolean> {
   try {
-    const serverPolicies = await apiGet<any[]>("/api/policies?limit=500");
+    // First try: fetch policies specifically for this client (more efficient)
+    let serverPolicies: any[] = [];
+    try {
+      serverPolicies = await apiGet<any[]>(`/api/clients/${clientServerId}/policies`);
+    } catch (clientErr) {
+      console.log(`Client-specific policies fetch failed, falling back to general endpoint`, clientErr);
+      // Fallback: fetch agent's policies
+      serverPolicies = await apiGet<any[]>("/api/policies?limit=1000");
+    }
+
+    // Find matching policy (same client + product version + not cancelled)
     const match = serverPolicies.find(
       (p: any) => p.clientId === clientServerId && p.productVersionId === productVersionId && p.status !== "cancelled"
     );
+
     if (match) {
       await db.runAsync(
         "UPDATE policies SET server_id = ?, policy_number = ?, status = ?, client_server_id = ?, synced = 1, updated_at = datetime('now') WHERE local_id = ?",
         match.id, match.policyNumber, match.status, clientServerId, localId
       );
+      console.log(`Policy ${localId}: resolved duplicate → linked to server policy ${match.id} (${match.policyNumber})`);
       return true;
+    } else {
+      console.warn(`Policy ${localId}: duplicate detected but no matching server policy found for client ${clientServerId}, product ${productVersionId}`);
     }
-  } catch {
-    // Could not resolve
+  } catch (err) {
+    console.error(`Policy ${localId}: failed to resolve duplicate`, err);
   }
   return false;
 }
