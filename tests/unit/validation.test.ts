@@ -71,7 +71,7 @@ describe("Currency validation", () => {
 
     it("handles string amounts", () => {
       expect(formatAmount("0", "USD")).toMatch(/^\$0\.00$/);
-      expect(formatAmount("invalid", "USD")).toMatch(/^\$0\.00$/);
+      expect(formatAmount("invalid", "USD")).toBe("—");
     });
   });
 

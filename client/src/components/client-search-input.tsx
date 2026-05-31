@@ -34,6 +34,7 @@ export function ClientSearchInput({
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const searchSeq = useRef(0);
 
   // When value is cleared externally, clear label
   useEffect(() => {
@@ -47,25 +48,29 @@ export function ClientSearchInput({
       return;
     }
     const t = setTimeout(async () => {
+      const seq = ++searchSeq.current;
       setLoading(true);
       try {
         const res = await fetch(
           getApiBase() + `/api/clients?q=${encodeURIComponent(query.trim())}&limit=20`,
           { credentials: "include" }
         );
+        if (seq !== searchSeq.current) return;
         if (!res.ok) {
           setResults([]);
           setOpen(true);
           return;
         }
         const data = await res.json();
+        if (seq !== searchSeq.current) return;
         setResults(Array.isArray(data) ? data : []);
         setOpen(true);
       } catch {
+        if (seq !== searchSeq.current) return;
         setResults([]);
         setOpen(true);
       } finally {
-        setLoading(false);
+        if (seq === searchSeq.current) setLoading(false);
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(t);

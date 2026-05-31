@@ -139,33 +139,16 @@ describe("Fix 2 — Payment & receipt PATCH field allowlists", () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// Fix 12 — Paynow hash mismatch: only apply when intent is in applyable state
-// ──────────────────────────────────────────────────────────────────────────
-describe("Fix 12 — Paynow hash-mismatch guard (applyable intent states)", () => {
-  const APPLYABLE = new Set(["initiated", "polling", "sent", "created"]);
-
-  function shouldApplyOnHashMismatch(intentStatus: string): boolean {
-    return APPLYABLE.has(intentStatus);
+// Fix 12 — Paynow hash mismatch: never apply payment when hash verification fails
+describe("Fix 12 — Paynow hash-mismatch guard", () => {
+  function shouldApplyOnHashMismatch(_intentStatus: string): boolean {
+    return false;
   }
 
-  it("applies when intent is 'created'", () => {
-    expect(shouldApplyOnHashMismatch("created")).toBe(true);
-  });
-
-  it("applies when intent is 'initiated'", () => {
-    expect(shouldApplyOnHashMismatch("initiated")).toBe(true);
-  });
-
-  it("does NOT apply when intent is already 'paid'", () => {
+  it("never applies payment when hash verification fails", () => {
+    expect(shouldApplyOnHashMismatch("created")).toBe(false);
+    expect(shouldApplyOnHashMismatch("initiated")).toBe(false);
     expect(shouldApplyOnHashMismatch("paid")).toBe(false);
-  });
-
-  it("does NOT apply when intent is 'failed'", () => {
-    expect(shouldApplyOnHashMismatch("failed")).toBe(false);
-  });
-
-  it("does NOT apply when intent is 'cancelled'", () => {
-    expect(shouldApplyOnHashMismatch("cancelled")).toBe(false);
   });
 });
 
@@ -565,14 +548,18 @@ describe("Policy status transitions", () => {
 // ──────────────────────────────────────────────────────────────────────────
 describe("Paynow gateway status classification", () => {
   function isPaid(s: string) {
-    return ["paid", "sent", "awaiting delivery", "delivered"].includes(s);
+    return ["paid", "awaiting delivery", "delivered"].includes(s);
   }
   function isFailed(s: string) {
     return ["cancelled", "failed", "disputed"].includes(s);
   }
 
-  it.each(["paid", "sent", "awaiting delivery", "delivered"])("'%s' is a paid status", (s) => {
+  it.each(["paid", "awaiting delivery", "delivered"])("'%s' is a paid status", (s) => {
     expect(isPaid(s)).toBe(true);
+  });
+
+  it("'sent' is not treated as paid (in-flight mobile payment)", () => {
+    expect(isPaid("sent")).toBe(false);
   });
 
   it.each(["cancelled", "failed", "disputed"])("'%s' is a failed status", (s) => {

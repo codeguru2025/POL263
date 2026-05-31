@@ -75,11 +75,14 @@ export async function tenantResolverMiddleware(
   next: NextFunction
 ) {
   try {
-    // 1. Explicit header (mobile app / internal service calls)
+    // 1. Explicit header — only for authenticated staff (platform owner or matching org)
     const headerTenantId = req.headers["x-tenant-id"] as string | undefined;
     if (headerTenantId) {
-      (req as any).tenantId = headerTenantId;
-      return next();
+      const user = (req as any).user;
+      if (user?.isPlatformOwner || user?.organizationId === headerTenantId) {
+        (req as any).tenantId = headerTenantId;
+        return next();
+      }
     }
 
     const host = req.hostname?.toLowerCase();

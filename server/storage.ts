@@ -589,14 +589,14 @@ export class DatabaseStorage implements IStorage {
   }
   async getRole(id: string, organizationId: string): Promise<Role | undefined> {
     const tdb = await getDbForOrg(organizationId);
-    const [role] = await tdb.select().from(roles).where(eq(roles.id, id));
+    const [role] = await tdb.select().from(roles).where(and(eq(roles.id, id), eq(roles.organizationId, organizationId)));
     return role;
   }
   /** Batch fetch roles by ids (avoids N+1 when resolving many role ids). */
   async getRolesByIds(roleIds: string[], organizationId: string): Promise<Role[]> {
     if (!roleIds?.length) return [];
     const tdb = await getDbForOrg(organizationId);
-    return tdb.select().from(roles).where(inArray(roles.id, roleIds));
+    return tdb.select().from(roles).where(and(inArray(roles.id, roleIds), eq(roles.organizationId, organizationId)));
   }
   async getRolesByOrg(organizationId: string): Promise<Role[]> {
     const tdb = await getDbForOrg(organizationId);
@@ -633,7 +633,7 @@ export class DatabaseStorage implements IStorage {
   }
   async addRolePermission(roleId: string, permissionId: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+    const [role] = await tdb.select().from(roles).where(and(eq(roles.id, roleId), eq(roles.organizationId, orgId))).limit(1);
     if (!role) throw new Error("Role not found in organization");
     // Mirror the permission row into the target DB so the FK constraint is satisfied.
     // For shared-DB tenants this is a no-op; for dedicated-DB tenants it copies the row.
@@ -675,7 +675,7 @@ export class DatabaseStorage implements IStorage {
   }
   async addUserRole(userId: string, roleId: string, orgId: string, branchId?: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+    const [role] = await tdb.select().from(roles).where(and(eq(roles.id, roleId), eq(roles.organizationId, orgId))).limit(1);
     if (!role) throw new Error("Role not found in organization");
     await tdb.insert(userRoles).values({ userId, roleId, branchId: branchId ?? null });
   }
@@ -906,7 +906,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getClient(id: string, orgId: string): Promise<Client | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [client] = await tdb.select().from(clients).where(eq(clients.id, id));
+    const [client] = await tdb.select().from(clients).where(and(eq(clients.id, id), eq(clients.organizationId, orgId)));
     return client;
   }
   async getClientByActivationCode(code: string, orgId: string): Promise<Client | undefined> {
@@ -1797,14 +1797,14 @@ export class DatabaseStorage implements IStorage {
   }
   async getPolicy(id: string, orgId: string): Promise<Policy | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [policy] = await tdb.select().from(policies).where(eq(policies.id, id));
+    const [policy] = await tdb.select().from(policies).where(and(eq(policies.id, id), eq(policies.organizationId, orgId)));
     return policy;
   }
   /** Batch fetch policies by ids (avoids N+1 when resolving many policy ids). */
   async getPoliciesByIds(ids: string[], orgId: string): Promise<Policy[]> {
     if (!ids?.length) return [];
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(policies).where(inArray(policies.id, ids));
+    return tdb.select().from(policies).where(and(inArray(policies.id, ids), eq(policies.organizationId, orgId)));
   }
   async getPolicyByNumber(policyNumber: string, orgId: string): Promise<Policy | undefined> {
     const tdb = await getDbForOrg(orgId);
@@ -1836,6 +1836,19 @@ export class DatabaseStorage implements IStorage {
         reason: data.statusHistory.reason,
         changedBy: data.statusHistory.changedBy ?? undefined,
       });
+      // Keep sequence ahead of existing member numbers (can drift after data migration)
+      await tx.execute(sql`
+        INSERT INTO org_member_sequences (organization_id, member_next) VALUES (${orgId}, 1)
+        ON CONFLICT (organization_id) DO UPDATE SET member_next = GREATEST(
+          org_member_sequences.member_next,
+          COALESCE((
+            SELECT MAX(CAST(SUBSTRING(member_number FROM 5) AS INTEGER))
+            FROM policy_members
+            WHERE organization_id = ${orgId}
+              AND member_number ~ '^MEM-[0-9]+$'
+          ), 0) + 1
+        )
+      `);
       const membersOut: PolicyMember[] = [];
       for (const m of data.members) {
         const seqResult = await tx.execute(sql`

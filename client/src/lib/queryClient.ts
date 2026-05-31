@@ -14,6 +14,18 @@ export function getCsrfToken(): string | null {
   }
 }
 
+/** Fetch with credentials and CSRF token on mutating requests. */
+export async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const fullUrl = url.startsWith("http") ? url : getApiBase() + url;
+  const headers = new Headers(init.headers);
+  const method = (init.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    const csrf = getCsrfToken();
+    if (csrf) headers.set("X-XSRF-TOKEN", csrf);
+  }
+  return fetch(fullUrl, { ...init, headers, credentials: "include" });
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -61,7 +73,7 @@ export const getQueryFn: <T>(options: {
   /** When true, 403 is also treated as "unauthenticated" and returns null instead of throwing (for auth/me and client-auth/me). */
   on403ReturnNull?: boolean;
 }) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior, on403ReturnNull = true }) =>
+  ({ on401: unauthorizedBehavior, on403ReturnNull = false }) =>
   async ({ queryKey }) => {
     const path = queryKey.join("/") as string;
     const fullUrl = path.startsWith("http") ? path : getApiBase() + path;
@@ -83,7 +95,7 @@ export const getQueryFn: <T>(options: {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      queryFn: getQueryFn({ on401: "returnNull", on403ReturnNull: true }),
+      queryFn: getQueryFn({ on401: "returnNull", on403ReturnNull: false }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
       staleTime: 5 * 60 * 1000,

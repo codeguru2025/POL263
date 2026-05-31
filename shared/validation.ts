@@ -35,14 +35,16 @@ export function currencySymbol(currency: string | null | undefined): string {
 }
 
 export function formatAmount(amount: number | string, currency?: string | null): string {
-  const num = typeof amount === "string" ? parseFloat(amount) || 0 : amount;
+  const num = typeof amount === "string" ? parseFloat(amount) : amount;
+  if (!Number.isFinite(num)) return "—";
   const c = normalizeCurrency(currency);
   const { symbol } = CURRENCY_CONFIG[c];
   return `${symbol}${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function formatAmountWithCode(amount: number | string, currency?: string | null): string {
-  const num = typeof amount === "string" ? parseFloat(amount) || 0 : amount;
+  const num = typeof amount === "string" ? parseFloat(amount) : amount;
+  if (!Number.isFinite(num)) return "—";
   const c = normalizeCurrency(currency);
   return `${c} ${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }

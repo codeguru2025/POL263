@@ -918,7 +918,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Branches ───────────────────────────────────────────────
 
-  app.get("/api/branches", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/branches", requireAuth, requireTenantScope, requirePermission("read:branch"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getBranchesByOrg(user.organizationId));
   });
@@ -948,7 +948,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(usersWithRoles);
   });
 
-  app.get("/api/agents", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/agents", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
     const user = req.user as any;
     const usersList = await storage.getUsersByOrg(user.organizationId, 500, 0);
     const rolesByUser = await storage.getUserRolesBatch(usersList.map(u => u.id), user.organizationId);
@@ -962,9 +962,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/users/:id", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
-    const targetUser = await storage.getUser(req.params.id as string);
-    if (!targetUser) return res.status(404).json({ message: "User not found" });
     const currentUser = req.user as any;
+    const targetUser = await storage.getUser(req.params.id as string, currentUser.organizationId);
+    if (!targetUser) return res.status(404).json({ message: "User not found" });
     if (targetUser.organizationId !== currentUser.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     const userRoles = await storage.getUserRoles(targetUser.id, currentUser.organizationId);
     return res.json({
@@ -1012,6 +1012,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
 
     if (roleIds && Array.isArray(roleIds)) {
+      const roles = await storage.getRolesByIds(roleIds, currentUser.organizationId);
+      if (roles.length !== roleIds.length) {
+        return res.status(400).json({ message: "One or more roles are invalid for this organization" });
+      }
       for (const roleId of roleIds) {
         await storage.addUserRole(newUser.id, roleId, currentUser.organizationId);
       }
@@ -1024,7 +1028,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/users/:id", requireAuth, requireTenantScope, requirePermission("write:user"), async (req, res) => {
     const currentUser = req.user as any;
-    const targetUser = await storage.getUser(req.params.id as string);
+    const targetUser = await storage.getUser(req.params.id as string, currentUser.organizationId);
     if (!targetUser || targetUser.organizationId !== currentUser.organizationId) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -1059,6 +1063,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = await storage.updateUser(req.params.id as string, updates);
 
     if (roleIds && Array.isArray(roleIds)) {
+      const roles = await storage.getRolesByIds(roleIds, currentUser.organizationId);
+      if (roles.length !== roleIds.length) {
+        return res.status(400).json({ message: "One or more roles are invalid for this organization" });
+      }
       await storage.clearUserRoles(req.params.id as string);
       for (const roleId of roleIds) {
         await storage.addUserRole(req.params.id as string, roleId, currentUser.organizationId);
@@ -1072,7 +1080,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/users/:id", requireAuth, requireTenantScope, requirePermission("delete:user"), async (req, res) => {
     const currentUser = req.user as any;
-    const targetUser = await storage.getUser(req.params.id as string);
+    const targetUser = await storage.getUser(req.params.id as string, currentUser.organizationId);
     if (!targetUser || targetUser.organizationId !== currentUser.organizationId) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -1086,7 +1094,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/users/:id/agent-policies", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
     const user = req.user as any;
-    const target = await storage.getUser(req.params.id as string);
+    const target = await storage.getUser(req.params.id as string, user.organizationId);
     if (!target || target.organizationId !== user.organizationId) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -1097,12 +1105,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/users/:id/reassign-policies", requireAuth, requireTenantScope, requirePermission("delete:user"), async (req, res) => {
     const user = req.user as any;
     const { toAgentId } = req.body;
-    const target = await storage.getUser(req.params.id as string);
+    const target = await storage.getUser(req.params.id as string, user.organizationId);
     if (!target || target.organizationId !== user.organizationId) {
       return res.status(404).json({ message: "User not found" });
     }
     if (toAgentId) {
-      const toAgent = await storage.getUser(toAgentId as string);
+      const toAgent = await storage.getUser(toAgentId as string, user.organizationId);
       if (!toAgent || toAgent.organizationId !== user.organizationId) {
         return res.status(404).json({ message: "Target agent not found" });
       }
@@ -1162,7 +1170,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Dashboard Stats ───────────────────────────────────────
 
-  app.get("/api/dashboard/stats", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/stats", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
     const filters: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string } = {};
@@ -1260,6 +1268,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     const userRolesForCreate = await storage.getUserRoles(user.id, user.organizationId);
     const creatorIsAgent = userRolesForCreate.some((r: { name?: string }) => r?.name === "agent");
+    if (creatorIsAgent) {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id, user.branchId || undefined);
+    }
     const parsed = insertClientSchema.parse({
       ...req.body,
       firstName: firstName!,
@@ -1855,10 +1866,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       beneficiaryDependentId: beneficiary?.dependentId || null,
     });
 
+    const clientRow = await storage.getClient(parsed.clientId, user.organizationId);
+    if (!clientRow) {
+      return res.status(400).json({
+        message: "The selected client was not found in this organization. Refresh the page and select the client again.",
+      });
+    }
+    const productVersion = await storage.getProductVersion(parsed.productVersionId, user.organizationId);
+    if (!productVersion) {
+      return res.status(400).json({
+        message: "The selected product is no longer available. Please refresh and choose a product again.",
+      });
+    }
+    const resolvedAgentId = await resolveUserIdForOrgDatabase(parsed.agentId, user.organizationId);
+    let resolvedBranchId = parsed.branchId ?? null;
+    if (resolvedBranchId) {
+      const branchRow = await storage.getBranch(resolvedBranchId, user.organizationId);
+      if (!branchRow) resolvedBranchId = null;
+    }
+    const changedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+    const policyInsert = {
+      ...parsed,
+      agentId: resolvedAgentId,
+      branchId: resolvedBranchId,
+    };
+
     // Prevent duplicate policies: same client + same product version (unless existing is cancelled)
-    const existingForClient = await storage.getPoliciesByClient(parsed.clientId, user.organizationId);
+    const existingForClient = await storage.getPoliciesByClient(policyInsert.clientId, user.organizationId);
     const duplicate = existingForClient.find(
-      (p) => p.productVersionId === parsed.productVersionId && p.status !== "cancelled"
+      (p) => p.productVersionId === policyInsert.productVersionId && p.status !== "cancelled"
     );
     if (duplicate) {
       return res.status(400).json({
@@ -1868,12 +1904,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     let dependentsToAdd = members;
-    if (dependentsToAdd.length === 0 && parsed.clientId) {
-      const clientDeps = cachedClientDependents ?? await storage.getDependentsByClient(parsed.clientId, user.organizationId);
+    if (dependentsToAdd.length === 0 && policyInsert.clientId) {
+      const clientDeps = cachedClientDependents ?? await storage.getDependentsByClient(policyInsert.clientId, user.organizationId);
       dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
     }
     const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
-      { clientId: parsed.clientId, role: "policy_holder" },
+      { clientId: policyInsert.clientId, role: "policy_holder" },
     ];
     for (const m of dependentsToAdd) {
       if (m.clientId || m.dependentId) {
@@ -1888,12 +1924,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const allAddOnIds = uniqueAddOnIds.length > 0 ? uniqueAddOnIds : addOnIds;
 
     const { policy } = await storage.createPolicyWithInitialSetup(user.organizationId, {
-      policy: parsed,
+      policy: policyInsert,
       statusHistory: {
         fromStatus: null,
         toStatus: "inactive",
         reason: "Policy created",
-        changedBy: user.id,
+        changedBy,
       },
       members: memberRows,
       addOnIds: allAddOnIds,
@@ -2061,13 +2097,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/policies/:id/transition", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     try {
-    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    
-    // Enforce agent access control using helper function
-    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
+    const policy = accessCheck.policy;
 
     const { toStatus, reason } = req.body;
     const allowed = VALID_POLICY_TRANSITIONS[policy.status];
@@ -2104,13 +2138,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Hard-delete a policy and all related records (RBAC-gated) ──
   app.delete("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("delete:policy"), async (req, res) => {
     const user = req.user as any;
-    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    
-    // Enforce agent access control using helper function
-    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
+    const policy = accessCheck.policy;
     await storage.deletePolicy(policy.id, user.organizationId);
     await auditLog(req, "DELETE_POLICY", "Policy", policy.id, policy, null);
     structuredLog("warn", "Hard-deleted policy", { userId: user.id, email: user.email, policyId: policy.id, policyNumber: policy.policyNumber });
@@ -2123,9 +2155,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getPaymentTransaction(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const PAYMENT_EDIT_FIELDS = new Set(["notes", "postedDate", "valueDate", "reference", "paymentMethod", "amount", "currency", "status", "branchId"]);
+    const FINANCIAL_FIELDS = new Set(["amount", "currency", "status"]);
     const body: Record<string, any> = {};
     for (const [key, value] of Object.entries(req.body)) {
       if (PAYMENT_EDIT_FIELDS.has(key)) body[key] = value;
+    }
+    if (before.status === "cleared") {
+      for (const key of Object.keys(body)) {
+        if (FINANCIAL_FIELDS.has(key)) {
+          return res.status(400).json({ message: "Cannot edit amount, currency, or status on cleared payments" });
+        }
+      }
     }
     const updated = await storage.updatePaymentTransaction(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_PAYMENT", "PaymentTransaction", req.params.id as string, before, updated);
@@ -2138,6 +2178,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const tx = await storage.getPaymentTransaction(req.params.id as string, user.organizationId);
     if (!tx || tx.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    if (tx.status === "cleared") {
+      return res.status(400).json({ message: "Cannot delete cleared payments. Create a reversal instead." });
+    }
     await storage.deletePaymentTransaction(tx.id, user.organizationId);
     await auditLog(req, "DELETE_PAYMENT", "PaymentTransaction", tx.id, tx, null);
     structuredLog("warn", "Hard-deleted payment transaction", { userId: user.id, email: user.email, transactionId: tx.id });
@@ -2150,9 +2193,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const RECEIPT_EDIT_FIELDS = new Set(["notes", "status", "amount", "currency", "paymentChannel", "printFormat", "branchId"]);
+    const FINANCIAL_RECEIPT_FIELDS = new Set(["amount", "currency", "status"]);
     const body: Record<string, any> = {};
     for (const [key, value] of Object.entries(req.body)) {
       if (RECEIPT_EDIT_FIELDS.has(key)) body[key] = value;
+    }
+    if (before.status === "issued") {
+      for (const key of Object.keys(body)) {
+        if (FINANCIAL_RECEIPT_FIELDS.has(key)) {
+          return res.status(400).json({ message: "Cannot edit amount, currency, or status on issued receipts" });
+        }
+      }
     }
     const updated = await storage.updatePaymentReceipt(req.params.id as string, body, user.organizationId);
     await auditLog(req, "UPDATE_RECEIPT", "PaymentReceipt", req.params.id as string, before, updated);
@@ -2165,6 +2216,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const receipt = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
     if (!receipt || receipt.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    if (receipt.status === "issued") {
+      return res.status(400).json({ message: "Cannot delete issued receipts. Create a reversal instead." });
+    }
     await storage.deletePaymentReceipt(receipt.id, user.organizationId);
     await auditLog(req, "DELETE_RECEIPT", "PaymentReceipt", receipt.id, receipt, null);
     structuredLog("warn", "Hard-deleted receipt", { userId: user.id, email: user.email, receiptId: receipt.id, receiptNumber: receipt.receiptNumber });
@@ -2173,13 +2227,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
-    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    
-    // Enforce agent access control using helper function
-    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
+    const policy = accessCheck.policy;
     const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
     const today = new Date().toISOString().split("T")[0];
     const todayDate = new Date();
@@ -2281,13 +2333,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
-    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    
-    // Enforce agent access control using helper function
-    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
+    const policy = accessCheck.policy;
 
     const { dependentId, clientId, role } = req.body;
     if (!dependentId && !clientId) return res.status(400).json({ message: "dependentId or clientId is required" });
@@ -2319,13 +2369,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/policies/:id/sync-members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
-    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
-    
-    // Enforce agent access control using helper function
-    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
+    const policy = accessCheck.policy;
 
     const existingMembers = await storage.getPolicyMembers(policy.id, user.organizationId);
     const existingDepIds = new Set(existingMembers.filter((m: any) => m.dependentId).map((m: any) => m.dependentId));
@@ -2367,19 +2415,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const policyId = req.params.id as string;
     const orgId = user.organizationId;
-    
-    // Enforce agent access control using helper function
-    const policy = await storage.getPolicy(policyId, orgId);
-    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(policyId, orgId));
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
-    
-    const intents = await storage.getPaymentIntentsByPolicy(policyId, orgId);
-    const paidForPolicy = intents.filter((i: any) => i.status === "paid");
-    for (const intent of paidForPolicy) {
-      await applyPaymentToPolicy(intent.id, "system", null);
-    }
+
     return res.json(await storage.getPaymentsByPolicy(policyId, orgId));
   });
 
@@ -2527,14 +2568,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const policyId = req.params.id as string;
     const orgId = user.organizationId;
-    
-    // Enforce agent access control using helper function
-    const policy = await storage.getPolicy(policyId, orgId);
-    const accessCheck = await enforceAgentPolicyAccess(req, policy);
+
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(policyId, orgId));
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
-    
+
     return res.json(await storage.getPaymentReceiptsByPolicy(policyId, orgId));
   });
 
@@ -2569,10 +2608,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Staff-side Paynow: create intent, initiate, submit OTP
   app.post("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const { policyId, clientId, amount, currency, purpose } = req.body;
+    const { policyId, clientId, amount, currency, purpose, idempotencyKey: clientKey } = req.body;
     if (!policyId || !clientId || !amount) return res.status(400).json({ message: "policyId, clientId, and amount are required" });
     try {
-      const idempotencyKey = `staff-${user.id}-${policyId}-${Date.now()}`;
+      const policy = await storage.getPolicy(policyId, user.organizationId);
+      if (!policy || policy.clientId !== clientId) {
+        return res.status(400).json({ message: "clientId does not match policy owner" });
+      }
+      const idempotencyKey = clientKey || `staff-${user.id}-${policyId}-${String(amount)}-${purpose || "premium"}`;
       const result = await createPaymentIntent({
         organizationId: user.organizationId,
         clientId,
@@ -2640,12 +2683,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/receipts/:id/download", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/receipts/:id/download", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const receipt = user.organizationId
-      ? await storage.getPaymentReceiptById(id, user.organizationId)
-      : await findPaymentReceiptById(id);
+    if (!user.organizationId) {
+      return res.status(400).json({ message: "Select a tenant before downloading receipts" });
+    }
+    const receipt = await storage.getPaymentReceiptById(id, user.organizationId);
     if (!receipt) {
       structuredLog("warn", "Receipt download: receipt not found in DB", { receiptId: id, orgId: user.organizationId });
       return res.status(404).json({ message: "Not found" });
@@ -2831,6 +2875,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!policy) continue;
       const premium = parseFloat(String(policy.premiumAmount || 0));
       if (amount >= premium) {
+        const merKey = `MER-${runNumber}-${policyNumber}`;
+        const existingMer = await storage.getPaymentTransactionByIdempotencyKey(merKey, user.organizationId);
+        if (existingMer) {
+          receipted++;
+          continue;
+        }
         await withOrgTransaction(user.organizationId, async (txDb) => {
           // Lock the policy row to prevent concurrent status changes
           await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
@@ -2844,6 +2894,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             paymentMethod: "bank",
             status: "cleared",
             reference: `MER-${runNumber}-${policyNumber}`,
+            idempotencyKey: merKey,
             receivedAt: new Date(),
             postedDate: today,
             valueDate: today,
@@ -3000,22 +3051,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Group PayNow (create intent, initiate, poll) ───
   app.post("/api/group-payment-intents", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const { groupId, policyIds, totalAmount, currency } = req.body;
+    const { groupId, policyIds, totalAmount, currency, idempotencyKey: clientKey } = req.body;
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
     }
     const policies = await storage.getPoliciesByIds(policyIds, user.organizationId);
-    const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
+    const valid = policies.filter((p) => p.groupId === groupId);
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      return res.status(400).json({ message: "totalAmount must be greater than zero" });
+    }
     const cur = currency || "USD";
-    const idempotencyKey = `grp-${groupId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const idempotencyKey = clientKey || `grp-${groupId}-${amountNum.toFixed(2)}-${valid.map((p) => p.id).sort().join(",")}`;
+    const existing = await storage.getGroupPaymentIntentByOrgAndIdempotencyKey(user.organizationId, idempotencyKey);
+    if (existing) return res.json(existing);
     const org = await storage.getOrganization(user.organizationId);
     const orgCode = (org?.name ?? "ORG").replace(/\s+/g, "").slice(0, 8).toUpperCase();
     const merchantReference = generateGroupMerchantReference(orgCode, groupId);
-    const existing = await storage.getGroupPaymentIntentByOrgAndIdempotencyKey(user.organizationId, idempotencyKey);
-    if (existing) return res.json(existing);
     const initiatedByResolved = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const intent = await storage.createGroupPaymentIntent({
       organizationId: user.organizationId,
@@ -3032,6 +3086,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
       return { groupPaymentIntentId: intent.id, policyId: p.id, amount, currency: cur };
     });
+    const allocSum = allocations.reduce((s, a) => s + parseFloat(a.amount), 0);
+    const remainder = Math.round((amountNum - allocSum) * 100) / 100;
+    if (allocations.length > 0 && Math.abs(remainder) >= 0.01) {
+      const last = allocations[allocations.length - 1];
+      last.amount = (parseFloat(last.amount) + remainder).toFixed(2);
+    }
     await storage.createGroupPaymentAllocations(user.organizationId, allocations);
     return res.status(201).json(intent);
   });
@@ -3625,16 +3685,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Security Questions (for client auth) ───────────────────
 
-  app.get("/api/security-questions", requireAuth, async (req, res) => {
-    const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
-    if (orgIdParam) {
-      return res.json(await storage.getSecurityQuestions(orgIdParam));
-    }
-    const orgs = await storage.getOrganizations();
-    if (orgs.length > 0) {
-      return res.json(await storage.getSecurityQuestions(orgs[0].id));
-    }
-    return res.json([]);
+  app.get("/api/security-questions", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getSecurityQuestions(user.organizationId));
   });
 
   // ─── Agent Referral Links ─────────────────────────────────

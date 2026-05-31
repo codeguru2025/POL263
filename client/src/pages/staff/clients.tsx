@@ -13,7 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { apiRequest, getApiBase, apiFetch } from "@/lib/queryClient";
+import { isValidNationalId } from "@shared/validation";
 import {
   Plus,
   Search,
@@ -357,9 +358,8 @@ export default function StaffClients() {
       formData.append("file", file);
       formData.append("documentType", documentType);
       formData.append("label", label || file.name);
-      const res = await fetch(getApiBase() + `/api/clients/${clientId}/documents`, {
+      const res = await apiFetch(`/api/clients/${clientId}/documents`, {
         method: "POST",
-        credentials: "include",
         body: formData,
       });
       if (!res.ok) throw new Error(await res.text());
@@ -445,6 +445,26 @@ export default function StaffClients() {
   const handleCreate = () => {
     if (!formData.firstName || !formData.lastName) {
       toast({ title: "Validation", description: "First name and last name are required.", variant: "destructive" });
+      return;
+    }
+    if (!formData.nationalId?.trim()) {
+      toast({ title: "Validation", description: "National ID is required.", variant: "destructive" });
+      return;
+    }
+    if (!isValidNationalId(formData.nationalId)) {
+      toast({ title: "Validation", description: "National ID format is invalid (e.g. 08833089H38).", variant: "destructive" });
+      return;
+    }
+    if (!formData.phone?.trim()) {
+      toast({ title: "Validation", description: "Phone is required.", variant: "destructive" });
+      return;
+    }
+    if (!formData.dateOfBirth) {
+      toast({ title: "Validation", description: "Date of birth is required.", variant: "destructive" });
+      return;
+    }
+    if (!formData.gender?.trim()) {
+      toast({ title: "Validation", description: "Gender is required.", variant: "destructive" });
       return;
     }
     createMutation.mutate(formData);

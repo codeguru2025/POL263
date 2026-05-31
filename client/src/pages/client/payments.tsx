@@ -50,12 +50,13 @@ export default function ClientPayments() {
   const returnedFromPaynow = params.get("returned") === "1";
 
   useEffect(() => {
-    if (returnedFromPaynow) {
-      toast({ title: "Returned from payment", description: "If you completed payment, status will update below. You can also download your receipt when ready." });
-      qc.invalidateQueries({ queryKey: ["/api/client-auth/payment-intents"] });
-      qc.invalidateQueries({ queryKey: ["/api/client-auth/receipts"] });
-      qc.invalidateQueries({ queryKey: ["/api/client-auth/policies"] });
-    }
+    if (!returnedFromPaynow) return;
+    if (sessionStorage.getItem("paynow_return_handled") === "1") return;
+    sessionStorage.setItem("paynow_return_handled", "1");
+    toast({ title: "Returned from payment", description: "If you completed payment, status will update below. You can also download your receipt when ready." });
+    qc.invalidateQueries({ queryKey: ["/api/client-auth/payment-intents"] });
+    qc.invalidateQueries({ queryKey: ["/api/client-auth/receipts"] });
+    qc.invalidateQueries({ queryKey: ["/api/client-auth/policies"] });
   }, [returnedFromPaynow, toast, qc]);
 
   // On mobile: when return URL loads in system browser, redirect back into the app
@@ -228,7 +229,7 @@ export default function ClientPayments() {
   // Effective amount: user input or policy premium when a policy is selected
   const amountStr = typeof amount === "string" ? amount.trim() : "";
   const amountNum = amountStr !== "" ? parseFloat(amount) : (policy?.premiumAmount != null && policy.premiumAmount !== "" ? parseFloat(String(policy.premiumAmount)) : NaN);
-  const hasValidAmount = !!policy && Number.isFinite(amountNum) && amountNum >= 0;
+  const hasValidAmount = !!policy && Number.isFinite(amountNum) && amountNum > 0;
 
   // Default amount to policy premium when policy selection changes
   useEffect(() => {

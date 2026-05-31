@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getApiBase, getCsrfToken } from "@/lib/queryClient";
+import { isValidNationalId } from "@shared/validation";
 import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AppChrome } from "@/components/layout/app-chrome";
@@ -48,6 +49,7 @@ export default function JoinRegisterPage() {
     phone: "",
     dateOfBirth: "",
     nationalId: "",
+    gender: "",
     productId: "",
     productVersionId: "",
     branchId: "",
@@ -126,6 +128,11 @@ export default function JoinRegisterPage() {
     if (!form.firstName.trim()) missing.push("First name");
     if (!form.lastName.trim()) missing.push("Last name");
     if (!form.productVersionId) missing.push("Product");
+    if (!form.phone.trim()) missing.push("Phone");
+    if (!form.dateOfBirth) missing.push("Date of birth");
+    if (!form.nationalId.trim()) missing.push("National ID");
+    else if (!isValidNationalId(form.nationalId)) missing.push("Valid national ID (e.g. 08833089H38)");
+    if (!form.gender.trim()) missing.push("Gender");
     if (missing.length > 0) {
       toast({ title: "Missing fields", description: `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required.`, variant: "destructive" });
       return;
@@ -140,6 +147,7 @@ export default function JoinRegisterPage() {
         phone: form.phone.trim() || undefined,
         dateOfBirth: form.dateOfBirth || undefined,
         nationalId: form.nationalId.trim() || undefined,
+        gender: form.gender.trim() || undefined,
         productVersionId: form.productVersionId,
         branchId: form.branchId || undefined,
         premiumAmount: form.premiumAmount ? String(form.premiumAmount) : undefined,
@@ -168,7 +176,8 @@ export default function JoinRegisterPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast({ title: "Registration failed", description: (data as { error?: string }).error || "Please try again.", variant: "destructive" });
+        const msg = (data as { message?: string; error?: string }).message ?? (data as { error?: string }).error;
+        toast({ title: "Registration failed", description: msg || "Please try again.", variant: "destructive" });
         return;
       }
       setResult({ policyNumber: data.policyNumber, activationCode: data.activationCode });
@@ -313,7 +322,7 @@ export default function JoinRegisterPage() {
               />
             </div>
             <div>
-              <Label htmlFor="phone">Phone</Label>
+              <Label htmlFor="phone">Phone *</Label>
               <Input
                 id="phone"
                 value={form.phone}
@@ -324,7 +333,7 @@ export default function JoinRegisterPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="dateOfBirth">Date of birth</Label>
+                <Label htmlFor="dateOfBirth">Date of birth *</Label>
                 <Input
                   id="dateOfBirth"
                   type="date"
@@ -334,7 +343,7 @@ export default function JoinRegisterPage() {
                 />
               </div>
               <div>
-                <Label htmlFor="nationalId">National ID</Label>
+                <Label htmlFor="nationalId">National ID *</Label>
                 <Input
                   id="nationalId"
                   value={form.nationalId}
@@ -342,6 +351,21 @@ export default function JoinRegisterPage() {
                   data-testid="input-national-id"
                 />
               </div>
+            </div>
+            <div>
+              <Label htmlFor="gender">Gender *</Label>
+              <select
+                id="gender"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={form.gender}
+                onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))}
+                required
+                data-testid="select-gender"
+              >
+                <option value="">Select gender</option>
+                <option value="MALE">Male</option>
+                <option value="FEMALE">Female</option>
+              </select>
             </div>
             <div>
               <Label>Product *</Label>

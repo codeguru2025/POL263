@@ -23,7 +23,7 @@ const REINSTATEMENT_PURPOSE = "reinstatement";
 const GROUP_PAYMENT_STATUS_PAID = "paid";
 
 function isPaynowPaidStatus(status: string): boolean {
-  return status === "paid" || status === "sent" || status === "awaiting delivery" || status === "delivered";
+  return status === "paid" || status === "awaiting delivery" || status === "delivered";
 }
 function isPaynowFailedStatus(status: string): boolean {
   return status === "cancelled" || status === "failed" || status === "disputed";
@@ -71,12 +71,14 @@ export function generateGroupMerchantReference(orgCode: string, groupId: string)
   return `GRP-${orgCode}-${groupId.slice(0, 8)}-${date}-${time}-${rand}`.slice(0, 255);
 }
 
-/** Validate policy is payable: allow all statuses; only reject when there is no policy number
- * (e.g. captured clients who don't have an issued policy yet; only self-capture via agent links get a policy number immediately). */
-function validatePolicyPayable(policy: Policy, purpose: string): { ok: boolean; message?: string } {
+/** Validate policy is payable. */
+function validatePolicyPayable(policy: Policy | undefined | null, purpose: string): { ok: boolean; message?: string } {
   if (!policy) return { ok: false, message: "Policy not found" };
   const hasPolicyNumber = policy.policyNumber != null && String(policy.policyNumber).trim() !== "";
   if (!hasPolicyNumber) return { ok: false, message: "Policy has no policy number yet" };
+  if (policy.status === "cancelled") {
+    return { ok: false, message: "Policy is cancelled. Contact your insurer to reinstate." };
+  }
   return { ok: true };
 }
 
@@ -90,20 +92,28 @@ export async function createPaymentIntent(input: CreateIntentInput): Promise<{
   const currency = input.currency ?? "USD";
   const purpose = input.purpose ?? "premium";
 
+  const amountNum = parseFloat(String(amount));
+  if (!Number.isFinite(amountNum) || amountNum <= 0) {
+    return { intent: null as any, created: false, error: "Amount must be greater than zero" };
+  }
+
   const existing = await storage.getPaymentIntentByOrgAndIdempotencyKey(organizationId, idempotencyKey);
   if (existing) {
     return { intent: existing, created: false };
   }
 
   const policy = await storage.getPolicy(policyId, organizationId);
-  const validation = validatePolicyPayable(policy!, purpose);
+  if (!policy || policy.organizationId !== organizationId) {
+    return { intent: null as any, created: false, error: "Policy not found" };
+  }
+  const validation = validatePolicyPayable(policy, purpose);
   if (!validation.ok) {
     return { intent: null as any, created: false, error: validation.message };
   }
 
   const org = await storage.getOrganization(organizationId);
   const orgCode = (org?.name ?? "ORG").replace(/\s+/g, "").slice(0, 8).toUpperCase();
-  const merchantReference = generateMerchantReference(orgCode, policy!.policyNumber);
+  const merchantReference = generateMerchantReference(orgCode, policy.policyNumber!);
 
   const intentData: InsertPaymentIntent = {
     organizationId,
@@ -518,19 +528,6 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
         paynowStatus: status,
         keys: Array.from(parsed.keys()).filter((k) => k.toLowerCase() !== "hash").join(","),
       });
-      if (isPaynowPaidStatus(status)) {
-        // Only apply on hash-mismatch if the intent is in a state we can confidently advance
-        const applyableStates = ["initiated", "polling", "sent", "created"];
-        if (!applyableStates.includes(intent.status)) {
-          structuredLog("warn", "Paynow poll hash mismatch: intent not in applyable state, skipping", { intentId: intent.id, intentStatus: intent.status, paynowStatus: status });
-          return { status: intent.status, error: "Verifying payment with gateway...", paynowStatus: status };
-        }
-        structuredLog("warn", "Paynow poll hash mismatch but status is PAID — applying payment", { intentId: intent.id, paynowStatus: status });
-        const applied = await applyPaymentToPolicy(intent.id, "system", null);
-        if (applied.ok) return { status: "paid", paid: true, paynowStatus: status };
-        structuredLog("error", "applyPaymentToPolicy failed after hash-mismatch paid", { intentId: intent.id, error: applied.error });
-        return { status: "paid_pending_apply", paid: false, error: applied.error || "Payment detected but recording failed — will retry", paynowStatus: status };
-      }
       return { status: intent.status, error: "Verifying payment with gateway...", paynowStatus: status };
     }
     await storage.createPaymentEvent({
@@ -713,6 +710,13 @@ export async function applyGroupPaymentToPolicies(
   const allocations = await storage.getGroupPaymentAllocations(groupIntentId, orgId);
   if (allocations.length === 0) return { ok: false, error: "No allocations" };
 
+  for (const alloc of allocations) {
+    const policy = await storage.getPolicy(alloc.policyId, orgId);
+    if (!policy) return { ok: false, error: `Policy ${alloc.policyId} not found for group payment` };
+    const payable = validatePolicyPayable(policy, "premium");
+    if (!payable.ok) return { ok: false, error: payable.message || "Policy not payable" };
+  }
+
   try {
     const today = new Date().toISOString().split("T")[0];
     const refPrefix = groupIntent.merchantReference;
@@ -725,7 +729,10 @@ export async function applyGroupPaymentToPolicies(
       if (existingTx) { successCount++; continue; }
 
       const policy = await storage.getPolicy(alloc.policyId, orgId);
-      if (!policy) continue;
+      if (!policy) {
+        structuredLog("error", "Group payment allocation policy missing after pre-check", { groupIntentId, policyId: alloc.policyId });
+        return { ok: false, error: `Policy ${alloc.policyId} not found` };
+      }
 
       const amount = String(alloc.amount);
       const currency = alloc.currency || groupIntent.currency || "USD";
@@ -800,6 +807,11 @@ export async function applyGroupPaymentToPolicies(
           status: "sent",
         });
       }
+    }
+
+    if (successCount !== allocations.length) {
+      structuredLog("error", "Group payment incomplete allocations", { groupIntentId, successCount, expected: allocations.length });
+      return { ok: false, error: `Only ${successCount} of ${allocations.length} allocations were applied` };
     }
 
     await storage.updateGroupPaymentIntent(groupIntentId, { status: GROUP_PAYMENT_STATUS_PAID }, orgId);

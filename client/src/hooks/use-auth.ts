@@ -26,7 +26,8 @@ async function fetchAuthSession(): Promise<AuthSession | null> {
     const url = getApiBase() + "/api/auth/me";
     const res = await fetch(url, { credentials: "include" });
     if (res.status === 401 || res.status === 403) return null;
-    if (!res.ok) return null;
+    if (res.status >= 500) throw new Error("Server unavailable. Please try again.");
+    if (!res.ok) throw new Error("Auth check failed");
     return await res.json();
   } catch {
     return null;

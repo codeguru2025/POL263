@@ -276,12 +276,9 @@ export function setupAuth(app: Express) {
           ? req.query.returnTo
           : undefined;
 
-      const origin =
-        typeof req.query.origin === "string" && /^https?:\/\//.test(req.query.origin)
-          ? req.query.origin.replace(/\/$/, "")
-          : (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+      const origin = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
 
-      if (returnTo && (origin || returnTo.startsWith("/"))) {
+      if (returnTo) {
         (req.session as any).authReturnTo = origin ? `${origin}${returnTo}` : returnTo;
       }
 

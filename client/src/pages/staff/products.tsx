@@ -959,12 +959,16 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const parseLimit = (v: string, fallback: number) => {
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) ? n : fallback;
+    };
     onSubmit({
       name,
       description: description || null,
-      maxAdults: parseInt(maxAdults),
-      maxChildren: parseInt(maxChildren),
-      maxExtendedMembers: parseInt(maxExtended),
+      maxAdults: parseLimit(maxAdults, 1),
+      maxChildren: parseLimit(maxChildren, 0),
+      maxExtendedMembers: parseLimit(maxExtended, 0),
       casketType: casketType || null,
       casketImageUrl: casketImageUrl || null,
       coverAmount: coverAmount || null,
@@ -1690,7 +1694,13 @@ function CreateAgeBandDialog({ open, onClose, onSubmit, isPending }: {
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent>
         <DialogHeader><DialogTitle>Create Age Band</DialogTitle></DialogHeader>
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit({ name, minAge: parseInt(minAge), maxAge: parseInt(maxAge), effectiveFrom: effectiveFrom || undefined }); }} className="space-y-4">
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          const min = parseInt(minAge, 10);
+          const max = parseInt(maxAge, 10);
+          if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return;
+          onSubmit({ name, minAge: min, maxAge: max, effectiveFrom: effectiveFrom || undefined });
+        }} className="space-y-4">
           <div className="space-y-2"><Label>Band Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Child (0-17)" data-testid="input-ageband-name" /></div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Min Age</Label><Input type="number" min="0" value={minAge} onChange={(e) => setMinAge(e.target.value)} data-testid="input-ageband-min" /></div>

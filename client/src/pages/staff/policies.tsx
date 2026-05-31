@@ -299,10 +299,11 @@ export default function StaffPolicies() {
   });
 
   useEffect(() => {
-    if (dependents && dependents.length > 0) {
+    if (!createForm.clientId) return;
+    if (dependents && dependents.length > 0 && createForm.beneficiaryDependentIds.length === 0) {
       setCreateForm((f) => ({ ...f, beneficiaryDependentIds: dependents.map((d: any) => d.id) }));
     }
-  }, [dependents]);
+  }, [createForm.clientId, dependents]);
 
   const [showAddDep, setShowAddDep] = useState(false);
   const [newDep, setNewDep] = useState({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
@@ -366,6 +367,17 @@ export default function StaffPolicies() {
     },
     enabled: !!createForm.selectedProductId,
   });
+
+  useEffect(() => {
+    if (createStep !== 2 || createForm.productVersionId) return;
+    const activeVersion = productVersions?.find((v: any) => v.isActive);
+    if (activeVersion) {
+      setCreateForm((f) => ({ ...f, productVersionId: activeVersion.id }));
+    }
+  }, [createStep, productVersions, createForm.productVersionId]);
+
+  const activeProductVersion = productVersions?.find((v: any) => v.isActive);
+
   const { data: upgradeProductVersions } = useQuery<any[]>({
     queryKey: ["/api/products", upgradeForm.selectedProductId, "versions", "upgrade"],
     queryFn: async () => {
@@ -540,6 +552,7 @@ export default function StaffPolicies() {
   const createMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
       let clientId = data.clientId;
+      let clientSavedThisAttempt = false;
 
       if (clientMode === "new" && !clientId) {
         if (!data.newClient.firstName || !data.newClient.lastName) {
@@ -570,7 +583,12 @@ export default function StaffPolicies() {
           });
         } else {
           clientId = clientData.id;
+          clientSavedThisAttempt = true;
         }
+      }
+
+      if (!clientId) {
+        throw new Error("No client selected. Choose an existing lead or complete the new client details.");
       }
 
       const members = (data.beneficiaryDependentIds || []).map((dependentId: string) => ({ dependentId, role: "dependent" }));
@@ -611,20 +629,29 @@ export default function StaffPolicies() {
         };
       }
 
-      const res = await apiRequest("POST", "/api/policies", {
-        clientId,
-        agentId: data.agentId || undefined,
-        productVersionId: data.productVersionId,
-        premiumAmount: data.premiumAmount,
-        currency: data.currency,
-        paymentSchedule: data.paymentSchedule,
-        effectiveDate: data.effectiveDate || undefined,
-        paymentMethod: data.paymentMethod,
-        members,
-        memberAddOns,
-        beneficiary,
-      });
-      return res.json();
+      try {
+        const res = await apiRequest("POST", "/api/policies", {
+          clientId,
+          agentId: data.agentId || undefined,
+          productVersionId: data.productVersionId,
+          premiumAmount: data.premiumAmount,
+          currency: data.currency,
+          paymentSchedule: data.paymentSchedule,
+          effectiveDate: data.effectiveDate || undefined,
+          paymentMethod: data.paymentMethod,
+          members,
+          memberAddOns,
+          beneficiary,
+        });
+        return res.json();
+      } catch (err) {
+        if (clientSavedThisAttempt && clientId) {
+          const e = err instanceof Error ? err : new Error(String(err));
+          (e as Error & { clientSavedId?: string }).clientSavedId = clientId;
+          throw e;
+        }
+        throw err;
+      }
     },
     onSuccess: (policy: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
@@ -655,7 +682,17 @@ export default function StaffPolicies() {
       });
       toast({ title: "Policy created", description: `Policy ${policy.policyNumber} has been created in inactive status.` });
     },
-    onError: (err: Error) => {
+    onError: (err: Error & { clientSavedId?: string }) => {
+      if (err.clientSavedId) {
+        setCreateForm((f) => ({ ...f, clientId: err.clientSavedId! }));
+        setClientMode("search");
+        toast({
+          title: "Client saved — policy not created",
+          description: `${err.message} The client is selected under "Existing lead". Complete the remaining steps and submit again.`,
+          variant: "destructive",
+        });
+        return;
+      }
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
@@ -897,32 +934,33 @@ export default function StaffPolicies() {
       });
       const intent = await intentRes.json();
       if (intent.message) throw new Error(intent.message);
-      setPnIntentId(intent.id);
       const initRes = await apiRequest("POST", `/api/payment-intents/${intent.id}/initiate`, {
         method: inPolicyReceiptMethod,
         payerPhone: ["ecocash", "onemoney", "innbucks", "omari"].includes(inPolicyReceiptMethod) ? inPolicyReceiptRef : undefined,
         payerEmail: inPolicyReceiptMethod === "visa_mastercard" ? inPolicyReceiptRef : undefined,
       });
-      return initRes.json() as Promise<{
+      return { intentId: intent.id as string, initData: await initRes.json() as {
         redirectUrl?: string; pollUrl?: string; message?: string;
         innbucksCode?: string; innbucksExpiry?: string;
         omariOtpReference?: string; needsOtp?: boolean;
-      }>;
+      } };
     },
     onSuccess: (data) => {
-      if (data.message) { toast({ title: "Error", description: data.message, variant: "destructive" }); return; }
+      setPnIntentId(data.intentId);
+      const initData = data.initData;
+      if (initData.message) { toast({ title: "Error", description: initData.message, variant: "destructive" }); return; }
       setPnPhase("waiting");
       setPnPollStartTime(Date.now());
       setPnPollError(null);
-      if (inPolicyReceiptMethod === "innbucks" && data.innbucksCode) {
-        setPnInnbucksCode(data.innbucksCode); setPnInnbucksExpiry(data.innbucksExpiry || ""); setPnPolling(true);
+      if (inPolicyReceiptMethod === "innbucks" && initData.innbucksCode) {
+        setPnInnbucksCode(initData.innbucksCode); setPnInnbucksExpiry(initData.innbucksExpiry || ""); setPnPolling(true);
         toast({ title: "InnBucks code ready" }); return;
       }
-      if (inPolicyReceiptMethod === "omari" && data.needsOtp) {
-        setPnNeedsOtp(true); setPnOtpRef(data.omariOtpReference || "");
+      if (inPolicyReceiptMethod === "omari" && initData.needsOtp) {
+        setPnNeedsOtp(true); setPnOtpRef(initData.omariOtpReference || "");
         toast({ title: "OTP sent", description: "Ask the client for the OTP." }); return;
       }
-      if (data.redirectUrl) { window.open(data.redirectUrl, "_blank"); setPnPolling(true); toast({ title: "Card payment page opened" }); return; }
+      if (initData.redirectUrl) { window.open(initData.redirectUrl, "_blank"); setPnPolling(true); toast({ title: "Card payment page opened" }); return; }
       setPnPolling(true);
       toast({ title: "USSD sent", description: "Client should receive a prompt on their phone." });
     },
@@ -3136,13 +3174,8 @@ export default function StaffPolicies() {
                 )}
               </>
             )}
-            {createStep === 2 && (() => {
-              const activeVersion = productVersions?.find((v: any) => v.isActive);
-              if (activeVersion && !createForm.productVersionId) {
-                setTimeout(() => setCreateForm((f) => ({ ...f, productVersionId: activeVersion.id })), 0);
-              }
-              return (
-                <>
+            {createStep === 2 && (
+              <>
                   <div>
                     <Label>Product</Label>
                     <Select
@@ -3162,13 +3195,13 @@ export default function StaffPolicies() {
                   {createForm.selectedProductId && (
                     <div>
                       <Label>Product version</Label>
-                      {activeVersion ? (
+                      {activeProductVersion ? (
                         <>
                           <Input
                             readOnly
                             disabled
                             className="bg-muted"
-                            value={`Version ${activeVersion.version ?? activeVersion.versionNumber ?? ""}${activeVersion.effectiveFrom ? ` (from ${activeVersion.effectiveFrom})` : ""} — Active`}
+                            value={`Version ${activeProductVersion.version ?? activeProductVersion.versionNumber ?? ""}${activeProductVersion.effectiveFrom ? ` (from ${activeProductVersion.effectiveFrom})` : ""} — Active`}
                             data-testid="select-product-version"
                           />
                           <p className="text-xs text-muted-foreground mt-1">Only the active version can be used for new policies.</p>
@@ -3196,8 +3229,7 @@ export default function StaffPolicies() {
                     </div>
                   )}
                 </>
-              );
-            })()}
+            )}
             {createStep === 3 && (() => {
               const activeAddOns = addOns?.filter((a: any) => a.isActive !== false) || [];
               const policyMembers: { ref: string; label: string }[] = [];

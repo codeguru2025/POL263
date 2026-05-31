@@ -49,6 +49,7 @@
     "test:watch": "vitest",
     "test:testsprite": "npm run dev",
     "simulate:payments": "tsx script/simulate-payment-receipt.ts",
+    "simulate:issue-policy": "tsx script/simulate-issue-policy.ts",
     "precommit": "npm run build && npm run test",
     "prepare": "husky",
     "lockfile:check": "node script/lockfile-check.cjs",

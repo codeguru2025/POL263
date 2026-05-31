@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase, apiFetch } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
 import { PageHeader, PageShell, CardSection } from "@/components/ds";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,6 @@ import {
   UserCheck,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { getApiBase } from "@/lib/queryClient";
 import { Switch } from "@/components/ui/switch";
 
 function ClientNotificationSettings() {
@@ -100,10 +99,9 @@ function ClientChangePassword() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const changeMutation = useMutation({
     mutationFn: async (body: { currentPassword: string; newPassword: string }) => {
-      const res = await fetch(getApiBase() + "/api/client-auth/change-password", {
+      const res = await apiFetch("/api/client-auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -875,10 +873,9 @@ function DependentsSection({ clientId }: { clientId: string }) {
 
   const addMutation = useMutation({
     mutationFn: async (body: typeof form) => {
-      const res = await fetch(getApiBase() + "/api/client-auth/dependents", {
+      const res = await apiFetch("/api/client-auth/dependents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -898,10 +895,7 @@ function DependentsSection({ clientId }: { clientId: string }) {
 
   const removeMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(getApiBase() + `/api/client-auth/dependents/${id}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
+      const res = await apiFetch(`/api/client-auth/dependents/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to remove dependent");
     },
     onSuccess: () => {
@@ -1023,10 +1017,9 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
 
   const setBeneficiaryMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
-      const res = await fetch(getApiBase() + `/api/client-auth/policies/${policy.id}/beneficiary`, {
+      const res = await apiFetch(`/api/client-auth/policies/${policy.id}/beneficiary`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -1046,10 +1039,7 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
 
   const removeBeneficiaryMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(getApiBase() + `/api/client-auth/policies/${policy.id}/beneficiary`, {
-        method: "DELETE",
-        credentials: "include",
-      });
+      const res = await apiFetch(`/api/client-auth/policies/${policy.id}/beneficiary`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to remove beneficiary");
     },
     onSuccess: () => {

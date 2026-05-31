@@ -34,6 +34,18 @@ async function verifySecret(input: string, storedHash: string) {
   return argon2.verify(storedHash, input);
 }
 
+const LOOKED_UP_CLIENT_TTL_MS = 10 * 60 * 1000;
+
+function clientCanAccessPaymentIntent(session: any, intent: { clientId: string }, loggedInClientId: string): boolean {
+  if (intent.clientId === loggedInClientId) return true;
+  const lookedUp = session?.lookedUpClientId;
+  const lookedUpAt = session?.lookedUpClientIdAt;
+  if (lookedUp === intent.clientId && lookedUpAt && Date.now() - lookedUpAt < LOOKED_UP_CLIENT_TTL_MS) {
+    return true;
+  }
+  return false;
+}
+
 export function setupClientAuth(app: Express) {
   app.post("/api/client-auth/claim", async (req: Request, res: Response) => {
     const { activationCode, policyNumber } = req.body;
@@ -186,6 +198,11 @@ export function setupClientAuth(app: Express) {
       }
 
       await storage.updateClient(client.id, { failedLoginAttempts: 0, lockedUntil: null }, client.organizationId);
+
+      if (isLegacySha256Hash(client.passwordHash)) {
+        const newHash = await hashSecret(password);
+        await storage.updateClient(client.id, { passwordHash: newHash }, client.organizationId);
+      }
 
       (req.session as any).clientId = client.id;
       (req.session as any).clientOrgId = client.organizationId;
@@ -588,6 +605,10 @@ export function setupClientAuth(app: Express) {
     if (!policyId || amount == null || !idempotencyKey) {
       return res.status(400).json({ message: "policyId, amount, and idempotencyKey are required" });
     }
+    const amountNum = parseFloat(String(amount));
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      return res.status(400).json({ message: "Amount must be greater than zero" });
+    }
     try {
       const policy = await storage.getPolicy(policyId, clientOrgId);
       if (!policy || policy.organizationId !== clientOrgId) {
@@ -597,8 +618,7 @@ export function setupClientAuth(app: Express) {
       if (policy.clientId !== clientId) {
         const lookedUp = (req.session as any)?.lookedUpClientId;
         const lookedUpAt = (req.session as any)?.lookedUpClientIdAt;
-        const fiveMin = 5 * 60 * 1000;
-        if (lookedUp === policy.clientId && lookedUpAt && Date.now() - lookedUpAt < fiveMin) {
+        if (lookedUp === policy.clientId && lookedUpAt && Date.now() - lookedUpAt < LOOKED_UP_CLIENT_TTL_MS) {
           allowedClientId = policy.clientId;
         } else {
           return res.status(403).json({ message: "Access denied. Look up the client by phone first to pay for their policy." });
@@ -633,7 +653,7 @@ export function setupClientAuth(app: Express) {
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     try {
       const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
-      if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+      if (!intent || !clientCanAccessPaymentIntent(req.session, intent, clientId)) return res.status(404).json({ message: "Not found" });
       const { method, payerPhone, payerEmail } = req.body;
       const result = await initiatePaynowPayment({
         intentId: intent.id,
@@ -671,7 +691,7 @@ export function setupClientAuth(app: Express) {
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     try {
       const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
-      if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+      if (!intent || !clientCanAccessPaymentIntent(req.session, intent, clientId)) return res.status(404).json({ message: "Not found" });
       const { otp } = req.body;
       if (!otp || typeof otp !== "string" || otp.trim().length < 4) {
         return res.status(400).json({ message: "Please enter a valid OTP" });
@@ -697,7 +717,7 @@ export function setupClientAuth(app: Express) {
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     try {
       const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
-      if (!intent || intent.clientId !== clientId) return res.status(404).json({ message: "Not found" });
+      if (!intent || !clientCanAccessPaymentIntent(req.session, intent, clientId)) return res.status(404).json({ message: "Not found" });
       const result = await pollPaynowStatus(intent.id, clientOrgId);
       return res.json({ status: result.status, paid: result.paid, error: result.error });
     } catch (err) {
@@ -897,25 +917,19 @@ export function setupClientAuth(app: Express) {
       if (selected.length === 0) return res.status(400).json({ message: "No valid policies selected" });
       const perPolicy = (parseFloat(totalAmount) / selected.length).toFixed(2);
       for (const policy of selected) {
-        const tx = await storage.createPaymentTransaction({
+        await storage.createPaymentTransaction({
           organizationId: clientOrgId,
           policyId: policy.id,
           clientId: policy.clientId,
           amount: perPolicy,
           currency: currency || "USD",
           paymentMethod: "cash",
-          status: "cleared",
+          status: "pending",
           reference: `GRP-${group.name.slice(0, 6)}-${Date.now().toString(36)}`,
-        });
-        await storage.createPlatformReceivable({
-          organizationId: clientOrgId,
-          sourceTransactionId: tx.id,
-          amount: perPolicy,
-          currency: currency || "USD",
-          isSettled: false,
+          notes: "Client-submitted group receipt — pending staff approval",
         });
       }
-      return res.status(201).json({ message: "Group receipt processed", count: selected.length });
+      return res.status(201).json({ message: "Group receipt submitted for staff approval", count: selected.length });
     } catch (err: any) {
       return res.status(500).json({ message: err.message || "Failed to process group receipt" });
     }

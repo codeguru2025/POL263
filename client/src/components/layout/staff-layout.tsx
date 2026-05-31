@@ -134,12 +134,18 @@ function StaffNavDropdown({
 
 function ReferralLinkBox({ referralCode }: { referralCode: string }) {
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const referralUrl = `${window.location.origin}/join?ref=${referralCode}`;
+
+  useEffect(() => () => {
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+  }, []);
 
   const copyLink = () => {
     navigator.clipboard.writeText(referralUrl);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (
