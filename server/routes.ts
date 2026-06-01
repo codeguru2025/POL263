@@ -1903,10 +1903,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     }
 
+    const authorizedDeps = cachedClientDependents ?? await storage.getDependentsByClient(policyInsert.clientId, user.organizationId);
+    const authorizedDepIds = new Set(authorizedDeps.map((d: any) => d.id));
+
     let dependentsToAdd = members;
-    if (dependentsToAdd.length === 0 && policyInsert.clientId) {
-      const clientDeps = cachedClientDependents ?? await storage.getDependentsByClient(policyInsert.clientId, user.organizationId);
-      dependentsToAdd = clientDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
+    if (dependentsToAdd.length === 0) {
+      dependentsToAdd = authorizedDeps.map((d: any) => ({ dependentId: d.id, role: "dependent" }));
+    } else {
+      const illegalDep = dependentsToAdd.find((m: any) => m.dependentId && !authorizedDepIds.has(m.dependentId));
+      if (illegalDep) {
+        return res.status(400).json({ message: "One or more selected dependents do not belong to this client." });
+      }
     }
     const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
       { clientId: policyInsert.clientId, role: "policy_holder" },

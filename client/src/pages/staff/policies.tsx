@@ -2867,7 +2867,7 @@ export default function StaffPolicies() {
                         variant={clientMode === "new" ? "default" : "outline"}
                         size="sm"
                         className="h-7 text-xs"
-                        onClick={() => { setClientMode("new"); setCreateForm((f) => ({ ...f, clientId: "" })); }}
+                        onClick={() => { setClientMode("new"); setCreateForm((f) => ({ ...f, clientId: "", beneficiaryDependentIds: [], beneficiaryId: "" })); }}
                       >
                         New Client
                       </Button>
@@ -3422,7 +3422,6 @@ export default function StaffPolicies() {
                     !createForm.newClient.dateOfBirth ||
                     !createForm.newClient.gender
                   )) ||
-                  !createForm.paymentMethod.mobileNumber?.trim() ||
                   !createForm.productVersionId ||
                   !calculatedPremium
                 }

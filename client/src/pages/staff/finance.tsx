@@ -821,7 +821,7 @@ export default function StaffFinance() {
                         const client = p.clientId ? getClient(p.clientId) : null;
                         return (
                           <TableRow key={p.id} className="hover:bg-muted/40" data-testid={`row-payment-${p.id}`}>
-                            <TableCell className="font-mono text-sm tabular-nums">{p.policyId ? getPolicyNumber(p.policyId) : "—"}</TableCell>
+                            <TableCell className="font-mono text-sm tabular-nums">{p.policyNumber || (p.policyId ? getPolicyNumber(p.policyId) : "—")}</TableCell>
                             <TableCell>{client ? `${client.firstName} ${client.lastName}` : "—"}</TableCell>
                             <TableCell className="font-semibold text-right tabular-nums">{p.currency} {parseFloat(p.amount || "0").toFixed(2)}</TableCell>
                             <TableCell><Badge variant="outline">{p.paymentMethod}</Badge></TableCell>
@@ -874,7 +874,7 @@ export default function StaffFinance() {
                     <TableBody>
                       {paymentIntents.map((pi: any) => (
                         <TableRow key={pi.id} className="hover:bg-muted/40">
-                          <TableCell className="font-mono text-sm tabular-nums">{getPolicyNumber(pi.policyId)}</TableCell>
+                          <TableCell className="font-mono text-sm tabular-nums">{pi.policyNumber || getPolicyNumber(pi.policyId)}</TableCell>
                           <TableCell className="text-right tabular-nums font-medium">{pi.currency} {parseFloat(pi.amount || "0").toFixed(2)}</TableCell>
                           <TableCell>
                             <Badge variant={pi.status === "paid" ? "default" : pi.status === "failed" ? "destructive" : "secondary"}>{pi.status}</Badge>

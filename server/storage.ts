@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, exists, type SQL } from "drizzle-orm";
+import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
@@ -344,7 +344,7 @@ export interface IStorage {
   addPolicyAddOns(policyId: string, addOnIds: string[], orgId: string): Promise<void>;
   createPaymentTransaction(tx: InsertPaymentTransaction): Promise<PaymentTransaction>;
   getPaymentsByPolicy(policyId: string, orgId: string): Promise<PaymentTransaction[]>;
-  getPaymentsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters, agentId?: string): Promise<PaymentTransaction[]>;
+  getPaymentsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters, agentId?: string): Promise<(PaymentTransaction & { policyNumber: string | null })[]>;
   getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined>;
   /** True if a platform receivable already exists for this payment transaction (idempotent outbox retries). */
   hasPlatformReceivableForTransaction(orgId: string, transactionId: string): Promise<boolean>;
@@ -358,7 +358,7 @@ export interface IStorage {
   getPaymentIntentById(id: string, orgId: string): Promise<PaymentIntent | undefined>;
   getPaymentIntentByOrgAndIdempotencyKey(orgId: string, idempotencyKey: string): Promise<PaymentIntent | undefined>;
   getPaymentIntentByMerchantReference(orgId: string, merchantReference: string): Promise<PaymentIntent | undefined>;
-  getPaymentIntentsByOrg(orgId: string, limit?: number, agentId?: string): Promise<PaymentIntent[]>;
+  getPaymentIntentsByOrg(orgId: string, limit?: number, agentId?: string): Promise<(PaymentIntent & { policyNumber: string | null })[]>;
   getPaymentIntentsByClient(clientId: string, orgId: string): Promise<PaymentIntent[]>;
   getPaymentIntentsByPolicy(policyId: string, orgId: string): Promise<PaymentIntent[]>;
   createPaymentIntent(intent: InsertPaymentIntent): Promise<PaymentIntent>;
@@ -2113,7 +2113,7 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(paymentTransactions).where(eq(paymentTransactions.policyId, policyId))
       .orderBy(desc(paymentTransactions.receivedAt));
   }
-  async getPaymentsByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters, agentId?: string): Promise<PaymentTransaction[]> {
+  async getPaymentsByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters, agentId?: string): Promise<(PaymentTransaction & { policyNumber: string | null })[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions: SQL[] = [eq(paymentTransactions.organizationId, orgId)];
     const dateCol = paymentTransactions.receivedAt;
@@ -2127,7 +2127,13 @@ export class DatabaseStorage implements IStorage {
         )
       );
     }
-    return tdb.select().from(paymentTransactions).where(and(...conditions))
+    // Join the policy so the policy number travels with each row — the client list is
+    // paginated and can't reliably resolve policyId -> policyNumber on its own.
+    return tdb
+      .select({ ...getTableColumns(paymentTransactions), policyNumber: policies.policyNumber })
+      .from(paymentTransactions)
+      .leftJoin(policies, eq(policies.id, paymentTransactions.policyId))
+      .where(and(...conditions))
       .orderBy(desc(paymentTransactions.receivedAt)).limit(limit).offset(offset);
   }
   async getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined> {
@@ -2459,7 +2465,7 @@ export class DatabaseStorage implements IStorage {
     const [row] = await tdb.select().from(paymentIntents).where(and(eq(paymentIntents.organizationId, orgId), eq(paymentIntents.merchantReference, merchantReference)));
     return row;
   }
-  async getPaymentIntentsByOrg(orgId: string, limit = 100, agentId?: string): Promise<PaymentIntent[]> {
+  async getPaymentIntentsByOrg(orgId: string, limit = 100, agentId?: string): Promise<(PaymentIntent & { policyNumber: string | null })[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions: SQL[] = [eq(paymentIntents.organizationId, orgId)];
     if (agentId) {
@@ -2470,7 +2476,13 @@ export class DatabaseStorage implements IStorage {
         )
       );
     }
-    return tdb.select().from(paymentIntents).where(and(...conditions))
+    // Join the policy so the policy number travels with each intent — the client list is
+    // paginated and can't reliably resolve policyId -> policyNumber on its own.
+    return tdb
+      .select({ ...getTableColumns(paymentIntents), policyNumber: policies.policyNumber })
+      .from(paymentIntents)
+      .leftJoin(policies, eq(policies.id, paymentIntents.policyId))
+      .where(and(...conditions))
       .orderBy(desc(paymentIntents.createdAt)).limit(limit);
   }
   async getPaymentIntentsByClient(clientId: string, orgId: string): Promise<PaymentIntent[]> {
