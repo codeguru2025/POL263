@@ -3294,7 +3294,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       submittedBy: user.id,
     });
     const claim = await storage.createClaim(parsed);
-    await storage.createClaimStatusHistory(claim.id, null, "submitted", "Claim submitted", user.id);
+    await storage.createClaimStatusHistory(claim.id, null, "submitted", "Claim submitted", user.id, claim.organizationId);
     await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
     return res.status(201).json(claim);
   });
@@ -3323,7 +3323,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (toStatus === "approved") updateData.approvedBy = user.id;
 
     const updated = await storage.updateClaim(claim.id, updateData, claim.organizationId);
-    await storage.createClaimStatusHistory(claim.id, claim.status, toStatus, reason, user.id);
+    await storage.createClaimStatusHistory(claim.id, claim.status, toStatus, reason, user.id, claim.organizationId);
     await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, updated);
     return res.json(updated);
   });

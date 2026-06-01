@@ -30,10 +30,16 @@ export function verifyPaynowHash(postedFields: Record<string, string>): boolean 
   };
   const upperReceived = receivedHash.toUpperCase();
 
+  // Constant-time hash comparison to avoid leaking match progress via timing.
+  const matches = (computed: string) => {
+    if (computed.length !== upperReceived.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(upperReceived));
+  };
+
   // Paynow uses order-of-appearance for hashing; try insertion order first, then alphabetical as fallback
-  if (computeHash(allKeys) === upperReceived) return true;
+  if (matches(computeHash(allKeys))) return true;
   const sorted = [...allKeys].sort();
-  return computeHash(sorted) === upperReceived;
+  return matches(computeHash(sorted));
 }
 
 /**

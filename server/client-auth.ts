@@ -204,6 +204,10 @@ export function setupClientAuth(app: Express) {
         await storage.updateClient(client.id, { passwordHash: newHash }, client.organizationId);
       }
 
+      // Regenerate the session id on successful login to prevent session fixation.
+      await new Promise<void>((resolve, reject) =>
+        req.session.regenerate((err) => (err ? reject(err) : resolve()))
+      );
       (req.session as any).clientId = client.id;
       (req.session as any).clientOrgId = client.organizationId;
 
@@ -459,7 +463,7 @@ export function setupClientAuth(app: Express) {
         causeOfDeath: causeOfDeath || null,
       });
       const claim = await storage.createClaim(parsed);
-      await storage.createClaimStatusHistory(claim.id, null, "submitted", "Submitted via client portal");
+      await storage.createClaimStatusHistory(claim.id, null, "submitted", "Submitted via client portal", undefined, claim.organizationId);
       return res.status(201).json(claim);
     } catch (err) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors?.[0]?.message || "Validation failed" });
@@ -591,9 +595,14 @@ export function setupClientAuth(app: Express) {
   });
 
   app.post("/api/client-auth/logout", (req: Request, res: Response) => {
-    (req.session as any).clientId = null;
-    (req.session as any).clientOrgId = null;
-    res.json({ message: "Logged out" });
+    req.session.destroy((err) => {
+      if (err) {
+        structuredLog("warn", "Client session destroy failed on logout", { error: (err as Error).message });
+        return res.status(500).json({ message: "Logout failed" });
+      }
+      res.clearCookie("connect.sid");
+      res.json({ message: "Logged out" });
+    });
   });
 
   // ─── Client payment intents (Paynow) ────────────────────────

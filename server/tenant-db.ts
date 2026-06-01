@@ -36,6 +36,9 @@ const MAX_TENANT_POOLS = parseInt(process.env.MAX_TENANT_POOLS || "50", 10);
 const poolCache = new Map<string, pg.Pool>();
 const dbCache = new Map<string, OrgDataDb>();
 const poolLastAccess = new Map<string, number>();
+// In-flight pool creations, keyed by orgId. Concurrent cache-misses for the same org
+// share a single creation promise so we never construct (and orphan) duplicate pools.
+const poolCreationInFlight = new Map<string, Promise<pg.Pool>>();
 
 const max = (process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10)) || 25;
 const idleTimeoutMillis =
@@ -44,18 +47,22 @@ const connectionTimeoutMillis =
   (process.env.DB_CONNECTION_TIMEOUT_MS && parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10)) || 5_000;
 
 async function evictLeastRecentPool() {
-  const tenantEntries = Array.from(poolLastAccess.entries())
-    .filter(([id]) => poolCache.get(id) !== defaultPool);
-  if (tenantEntries.length < MAX_TENANT_POOLS) return;
-  tenantEntries.sort((a, b) => a[1] - b[1]);
-  const [evictId] = tenantEntries[0];
-  const pool = poolCache.get(evictId);
-  poolCache.delete(evictId);
-  dbCache.delete(evictId);
-  poolLastAccess.delete(evictId);
-  if (pool && pool !== defaultPool) {
-    try { await pool.end(); } catch {}
-    structuredLog("info", "Evicted tenant pool", { orgId: evictId, activePools: poolCache.size });
+  // Evict least-recently-used tenant pools until there is room for one more
+  // (i.e. count stays below MAX_TENANT_POOLS after the caller adds its pool).
+  while (true) {
+    const tenantEntries = Array.from(poolLastAccess.entries())
+      .filter(([id]) => poolCache.get(id) !== defaultPool);
+    if (tenantEntries.length < MAX_TENANT_POOLS) return;
+    tenantEntries.sort((a, b) => a[1] - b[1]);
+    const [evictId] = tenantEntries[0];
+    const pool = poolCache.get(evictId);
+    poolCache.delete(evictId);
+    dbCache.delete(evictId);
+    poolLastAccess.delete(evictId);
+    if (pool && pool !== defaultPool) {
+      try { await pool.end(); } catch {}
+      structuredLog("info", "Evicted tenant pool", { orgId: evictId, activePools: poolCache.size });
+    }
   }
 }
 
@@ -91,43 +98,57 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
     return cached;
   }
 
-  // Read routing config from the control plane (authoritative source).
-  // Falls back to the shared DB organizations table during the migration window.
-  let url: string | undefined;
-  try {
-    const [row] = await cpDb
-      .select({ databaseUrl: tenantDatabases.databaseUrl })
-      .from(tenantDatabases)
-      .where(eq(tenantDatabases.tenantId, orgId));
-    url = row?.databaseUrl?.trim() || undefined;
-  } catch {
-    // Control plane unreachable — fall back to shared DB lookup so the app
-    // keeps working during a control plane outage or before migration runs.
-    structuredLog("warn", "Control plane lookup failed, falling back to shared DB", { orgId });
-    const { db } = await import("./db");
-    const [org] = await db
-      .select({ databaseUrl: organizations.databaseUrl })
-      .from(organizations)
-      .where(eq(organizations.id, orgId));
-    url = org?.databaseUrl?.trim() || undefined;
-  }
-  if (!url) {
-    poolCache.set(orgId, defaultPool);
-    poolLastAccess.set(orgId, Date.now());
-    return defaultPool;
-  }
+  // Coalesce concurrent cache-misses onto a single creation so we don't build
+  // (and then orphan) more than one pool for the same org under load.
+  const inFlight = poolCreationInFlight.get(orgId);
+  if (inFlight) return inFlight;
 
-  await evictLeastRecentPool();
-  // Mask credentials in logs: keep host only
-  const urlHost = (() => { try { return new URL(url).host; } catch { return "<invalid-url>"; } })();
-  structuredLog("info", "Creating dedicated tenant pool", { orgId, host: urlHost });
-  const tenantPool = new pg.Pool(buildPoolConfig(url, { forTenant: true }));
-  tenantPool.on("error", (err) => {
-    structuredLog("warn", "Tenant pool error", { orgId, host: urlHost, error: err.message });
-  });
-  poolCache.set(orgId, tenantPool);
-  poolLastAccess.set(orgId, Date.now());
-  return tenantPool;
+  const creation = (async (): Promise<pg.Pool> => {
+    // Read routing config from the control plane (authoritative source).
+    // Falls back to the shared DB organizations table during the migration window.
+    let url: string | undefined;
+    try {
+      const [row] = await cpDb
+        .select({ databaseUrl: tenantDatabases.databaseUrl })
+        .from(tenantDatabases)
+        .where(eq(tenantDatabases.tenantId, orgId));
+      url = row?.databaseUrl?.trim() || undefined;
+    } catch {
+      // Control plane unreachable — fall back to shared DB lookup so the app
+      // keeps working during a control plane outage or before migration runs.
+      structuredLog("warn", "Control plane lookup failed, falling back to shared DB", { orgId });
+      const { db } = await import("./db");
+      const [org] = await db
+        .select({ databaseUrl: organizations.databaseUrl })
+        .from(organizations)
+        .where(eq(organizations.id, orgId));
+      url = org?.databaseUrl?.trim() || undefined;
+    }
+    if (!url) {
+      poolCache.set(orgId, defaultPool);
+      poolLastAccess.set(orgId, Date.now());
+      return defaultPool;
+    }
+
+    await evictLeastRecentPool();
+    // Mask credentials in logs: keep host only
+    const urlHost = (() => { try { return new URL(url!).host; } catch { return "<invalid-url>"; } })();
+    structuredLog("info", "Creating dedicated tenant pool", { orgId, host: urlHost });
+    const tenantPool = new pg.Pool(buildPoolConfig(url, { forTenant: true }));
+    tenantPool.on("error", (err) => {
+      structuredLog("warn", "Tenant pool error", { orgId, host: urlHost, error: err.message });
+    });
+    poolCache.set(orgId, tenantPool);
+    poolLastAccess.set(orgId, Date.now());
+    return tenantPool;
+  })();
+
+  poolCreationInFlight.set(orgId, creation);
+  try {
+    return await creation;
+  } finally {
+    poolCreationInFlight.delete(orgId);
+  }
 }
 
 /** True when this org’s app data lives on a dedicated pool (not the shared registry DATABASE_URL). */

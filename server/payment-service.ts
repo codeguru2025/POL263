@@ -29,6 +29,20 @@ function isPaynowFailedStatus(status: string): boolean {
   return status === "cancelled" || status === "failed" || status === "disputed";
 }
 
+/**
+ * Verify the amount the gateway reports as paid matches what we expected to charge.
+ * Prevents a `paid` status for a lesser amount from activating a policy in full.
+ * Returns true when the amount is within a 1-cent tolerance, or when the gateway
+ * did not report an amount (cannot verify — logged by the caller).
+ */
+function paynowAmountMatches(postedAmount: string | null | undefined, expectedAmount: string | number): boolean {
+  if (postedAmount == null || String(postedAmount).trim() === "") return true; // nothing to compare
+  const posted = parseFloat(String(postedAmount));
+  const expected = parseFloat(String(expectedAmount));
+  if (!Number.isFinite(posted) || !Number.isFinite(expected)) return false;
+  return Math.abs(posted - expected) <= 0.01;
+}
+
 /** actor_id in payment_events references users.id; clients are not in users. Use null when actor is client. */
 function eventActorId(actorType: string, actorId: string | null | undefined): string | null {
   return actorType === "client" ? null : (actorId ?? null);
@@ -449,6 +463,23 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
     }
 
     if (isPaynowPaidStatus(status)) {
+      if (!paynowAmountMatches(postedFields.amount, intent.amount)) {
+        structuredLog("error", "Paynow result amount mismatch — not applying payment", {
+          intentId: intent.id,
+          expected: String(intent.amount),
+          posted: postedFields.amount,
+          status,
+        });
+        await storage.createPaymentEvent({
+          paymentIntentId: intent.id,
+          organizationId: intent.organizationId,
+          type: "amount_mismatch_hold",
+          payloadJson: { expected: String(intent.amount), posted: postedFields.amount, status },
+          actorType: "system",
+          actorId: null,
+        });
+        return { ok: false, reason: "Amount mismatch" };
+      }
       if (intent.status === "failed") {
         structuredLog("warn", "Paynow webhook recovering failed intent", { intentId: intent.id, paynowStatus: status });
       }
@@ -487,6 +518,15 @@ export async function handlePaynowResult(postedFields: Record<string, string>): 
   }
   if (groupIntent.status === GROUP_PAYMENT_STATUS_PAID) return { ok: true };
   if (isPaynowPaidStatus(status)) {
+    if (!paynowAmountMatches(postedFields.amount, groupIntent.totalAmount)) {
+      structuredLog("error", "Paynow result amount mismatch — not applying group payment", {
+        groupIntentId: groupIntent.id,
+        expected: String(groupIntent.totalAmount),
+        posted: postedFields.amount,
+        status,
+      });
+      return { ok: false, reason: "Amount mismatch" };
+    }
     if (groupIntent.status === "failed") {
       structuredLog("warn", "Paynow webhook recovering failed group intent", { groupIntentId: groupIntent.id, paynowStatus: status });
     }
@@ -539,6 +579,23 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
       actorId: null,
     });
     if (isPaynowPaidStatus(status)) {
+      if (!paynowAmountMatches(parsed.get("amount"), intent.amount)) {
+        structuredLog("error", "Paynow poll amount mismatch — not applying payment", {
+          intentId: intent.id,
+          expected: String(intent.amount),
+          posted: parsed.get("amount"),
+          status,
+        });
+        await storage.createPaymentEvent({
+          paymentIntentId: intent.id,
+          organizationId: intent.organizationId,
+          type: "amount_mismatch_hold",
+          payloadJson: { expected: String(intent.amount), posted: parsed.get("amount"), status },
+          actorType: "system",
+          actorId: null,
+        });
+        return { status: intent.status, error: "Payment amount mismatch — contact support", paynowStatus: status };
+      }
       const applied = await applyPaymentToPolicy(intent.id, "system", null);
       if (!applied.ok) {
         structuredLog("error", "applyPaymentToPolicy failed", { intentId: intent.id, error: applied.error });

@@ -4,6 +4,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import argon2 from "argon2";
+import crypto from "crypto";
 import { pool } from "./db";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
@@ -21,7 +22,7 @@ export function setupAuth(app: Express) {
     structuredLog("warn", "SESSION_SECRET is not set. Using a weak default; set SESSION_SECRET in your environment for better security.");
   }
 
-  const sessionSecret = rawSessionSecret || "pol263-session-secret-change-in-dev-only";
+  const sessionSecret = rawSessionSecret || crypto.randomBytes(32).toString("hex");
 
   if (process.env.NODE_ENV === "production") {
     app.set("trust proxy", 1);

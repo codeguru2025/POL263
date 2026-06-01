@@ -17,6 +17,37 @@ import { tenants as cpTenants } from "@shared/control-plane-schema";
 
 const PgSession = connectPgSimple(session);
 
+// Per-account lockout for agent (email/password) login. Complements the IP-based
+// authLimiter in index.ts. In-memory only (per-process) — acceptable as defence in
+// depth on top of the network rate limiter; the `users` table has no lockout columns.
+const AGENT_LOCKOUT_THRESHOLD = 5;
+const AGENT_LOCKOUT_DURATION_MS = 15 * 60 * 1000;
+const agentLoginAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
+function agentLockKey(email: string): string {
+  return email.toLowerCase().trim();
+}
+/** Returns ms remaining if the account is currently locked, else 0. */
+function agentLockRemaining(email: string): number {
+  const rec = agentLoginAttempts.get(agentLockKey(email));
+  if (!rec || !rec.lockedUntil) return 0;
+  const remaining = rec.lockedUntil - Date.now();
+  return remaining > 0 ? remaining : 0;
+}
+function recordAgentLoginFailure(email: string): void {
+  const key = agentLockKey(email);
+  const rec = agentLoginAttempts.get(key) ?? { count: 0, lockedUntil: 0 };
+  rec.count += 1;
+  if (rec.count >= AGENT_LOCKOUT_THRESHOLD) {
+    rec.lockedUntil = Date.now() + AGENT_LOCKOUT_DURATION_MS;
+    rec.count = 0;
+  }
+  agentLoginAttempts.set(key, rec);
+}
+function clearAgentLoginFailures(email: string): void {
+  agentLoginAttempts.delete(agentLockKey(email));
+}
+
 function isPlatformOwnerEmail(email?: string | null) {
   if (!email) return false;
   return email.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
@@ -167,6 +198,14 @@ export function setupAuth(app: Express) {
               return done(new Error("No email provided by Google"), undefined);
             }
 
+            // Only trust an email-based account match if Google asserts the email is verified.
+            // (A direct googleId match is always trustworthy regardless.)
+            const emailVerified =
+              profile.emails?.[0]?.verified === true ||
+              profile.emails?.[0]?.verified === "true" ||
+              profile._json?.email_verified === true ||
+              profile._json?.email_verified === "true";
+
             const owner = isPlatformOwnerEmail(email);
             // authTenantId is set by /api/auth/google when the request came from a tenant subdomain.
             // Platform owner always resolves from the shared DB regardless.
@@ -184,7 +223,7 @@ export function setupAuth(app: Express) {
                 .where(eq(users.googleId, profile.id))
                 .limit(1);
               user = byGoogleId;
-              if (!user) {
+              if (!user && emailVerified) {
                 const [byEmail] = await tenantDb
                   .select()
                   .from(users)
@@ -194,7 +233,7 @@ export function setupAuth(app: Express) {
               }
             } else {
               user = await storage.getUserByGoogleId(profile.id);
-              if (!user) user = await storage.getUserByEmail(email);
+              if (!user && emailVerified) user = await storage.getUserByEmail(email);
             }
 
             if (!user && owner) {
@@ -469,6 +508,13 @@ export function setupAuth(app: Express) {
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
     }
+    const lockRemainingMs = agentLockRemaining(email);
+    if (lockRemainingMs > 0) {
+      return res.status(429).json({
+        message: "Too many failed attempts. Please try again later.",
+        retryAfterSeconds: Math.ceil(lockRemainingMs / 1000),
+      });
+    }
     try {
       // Resolve tenant: subdomain middleware (production) takes priority,
       // body orgId is the fallback for local dev or direct URL access.
@@ -517,6 +563,7 @@ export function setupAuth(app: Express) {
       }
       if (!user) {
         structuredLog("info", "Agent login: user not found", { email: email.toLowerCase().trim() });
+        recordAgentLoginFailure(email);
         return res.status(401).json({ message: "Invalid email or password" });
       }
       if (!user.isActive) {
@@ -525,6 +572,7 @@ export function setupAuth(app: Express) {
       }
       if (!user.passwordHash) {
         structuredLog("info", "Agent login: no password hash", { userId: user.id });
+        recordAgentLoginFailure(email);
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
@@ -543,9 +591,11 @@ export function setupAuth(app: Express) {
       const valid = await argon2.verify(user.passwordHash, password);
       structuredLog("info", "Agent login password check", { userId: user.id, valid });
       if (!valid) {
+        recordAgentLoginFailure(email);
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
+      clearAgentLoginFailures(email);
       req.login(user, (err) => {
         if (err) {
           return res.status(500).json({ message: "Login failed" });

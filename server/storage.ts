@@ -1,7 +1,7 @@
 import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, exists, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
-import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase } from "./tenant-db";
+import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
 import { normalizeNationalId } from "../shared/validation";
@@ -385,9 +385,9 @@ export interface IStorage {
   getClaim(id: string, orgId: string): Promise<Claim | undefined>;
   createClaim(claim: InsertClaim): Promise<Claim>;
   updateClaim(id: string, data: Partial<InsertClaim>, orgId: string): Promise<Claim | undefined>;
-  createClaimStatusHistory(claimId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string): Promise<void>;
+  createClaimStatusHistory(claimId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, orgId?: string): Promise<void>;
   getClaimDocuments(claimId: string, orgId: string): Promise<ClaimDocument[]>;
-  createClaimDocument(doc: InsertClaimDocument): Promise<ClaimDocument>;
+  createClaimDocument(doc: InsertClaimDocument, orgId: string): Promise<ClaimDocument>;
   getFeedbackByClient(clientId: string, orgId: string): Promise<ClientFeedback[]>;
   createFeedback(feedback: InsertClientFeedback): Promise<ClientFeedback>;
   getFeedbackByOrg(orgId: string, limit?: number, offset?: number, filters?: { search?: string; status?: string; type?: string }): Promise<{ rows: ClientFeedback[]; total: number }>;
@@ -1008,27 +1008,23 @@ export class DatabaseStorage implements IStorage {
     return dep;
   }
   async createDependent(dep: InsertDependent): Promise<Dependent> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const client = await this.getClient(dep.clientId, org.id);
-      if (client) {
-        const tdb = await getDbForOrg(org.id);
-        const memberNumber = await this.getNextMemberNumber(org.id);
-        const [created] = await tdb.insert(dependents).values({ ...dep, memberNumber }).returning();
-        return created;
-      }
-    }
-    const [created] = await db.insert(dependents).values(dep).returning();
+    const tdb = await getDbForOrg(dep.organizationId);
+    const memberNumber = await this.getNextMemberNumber(dep.organizationId);
+    const [created] = await tdb.insert(dependents).values({ ...dep, memberNumber }).returning();
     return created;
   }
   async updateDependent(id: string, data: Partial<InsertDependent>, orgId: string): Promise<Dependent | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(dependents).set(data).where(eq(dependents.id, id)).returning();
+    const [updated] = await tdb
+      .update(dependents)
+      .set(data)
+      .where(and(eq(dependents.id, id), eq(dependents.organizationId, orgId)))
+      .returning();
     return updated;
   }
   async deleteDependent(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    await tdb.delete(dependents).where(eq(dependents.id, id));
+    await tdb.delete(dependents).where(and(eq(dependents.id, id), eq(dependents.organizationId, orgId)));
   }
 
   // ─── Products ──────────────────────────────────────────────
@@ -2648,7 +2644,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getClaim(id: string, orgId: string): Promise<Claim | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [claim] = await tdb.select().from(claims).where(eq(claims.id, id));
+    const [claim] = await tdb.select().from(claims).where(and(eq(claims.id, id), eq(claims.organizationId, orgId)));
     return claim;
   }
   async createClaim(claim: InsertClaim): Promise<Claim> {
@@ -2658,36 +2654,46 @@ export class DatabaseStorage implements IStorage {
   }
   async updateClaim(id: string, data: Partial<InsertClaim>, orgId: string): Promise<Claim | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(claims).set(data).where(eq(claims.id, id)).returning();
+    const [updated] = await tdb
+      .update(claims)
+      .set(data)
+      .where(and(eq(claims.id, id), eq(claims.organizationId, orgId)))
+      .returning();
     return updated;
   }
-  async createClaimStatusHistory(claimId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string): Promise<void> {
+  /** Resolve the tenant DB that owns a claim. Prefers the supplied orgId; falls back to scanning orgs. */
+  private async resolveClaimOrgDb(claimId: string, orgId?: string): Promise<OrgDataDb | undefined> {
+    if (orgId) {
+      const tdb = await getDbForOrg(orgId);
+      const [c] = await tdb
+        .select({ id: claims.id })
+        .from(claims)
+        .where(and(eq(claims.id, claimId), eq(claims.organizationId, orgId)))
+        .limit(1);
+      return c ? tdb : undefined;
+    }
     const orgs = await db.select({ id: organizations.id }).from(organizations);
     for (const org of orgs) {
       const tdb = await getDbForOrg(org.id);
-      const [c] = await tdb.select().from(claims).where(eq(claims.id, claimId)).limit(1);
-      if (c) {
-        await tdb.insert(claimStatusHistory).values({ claimId, fromStatus, toStatus, reason, changedBy });
-        return;
-      }
+      const [c] = await tdb.select({ id: claims.id }).from(claims).where(eq(claims.id, claimId)).limit(1);
+      if (c) return tdb;
     }
-    await db.insert(claimStatusHistory).values({ claimId, fromStatus, toStatus, reason, changedBy });
+    return undefined;
+  }
+  async createClaimStatusHistory(claimId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, orgId?: string): Promise<void> {
+    const tdb = (await this.resolveClaimOrgDb(claimId, orgId)) ?? db;
+    await tdb.insert(claimStatusHistory).values({ claimId, fromStatus, toStatus, reason, changedBy });
   }
   async getClaimDocuments(claimId: string, orgId: string): Promise<ClaimDocument[]> {
-    const tdb = await getDbForOrg(orgId);
+    // claim_documents has no organization_id column, so isolate via the parent claim.
+    const tdb = await this.resolveClaimOrgDb(claimId, orgId);
+    if (!tdb) return [];
     return tdb.select().from(claimDocuments).where(eq(claimDocuments.claimId, claimId));
   }
-  async createClaimDocument(doc: InsertClaimDocument): Promise<ClaimDocument> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
-      const [c] = await tdb.select().from(claims).where(eq(claims.id, doc.claimId)).limit(1);
-      if (c) {
-        const [created] = await tdb.insert(claimDocuments).values(doc).returning();
-        return created;
-      }
-    }
-    const [created] = await db.insert(claimDocuments).values(doc).returning();
+  async createClaimDocument(doc: InsertClaimDocument, orgId: string): Promise<ClaimDocument> {
+    const tdb = await this.resolveClaimOrgDb(doc.claimId, orgId);
+    if (!tdb) throw new Error("Claim not found for organization");
+    const [created] = await tdb.insert(claimDocuments).values(doc).returning();
     return created;
   }
 
