@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { shareDocument } from "@/lib/share-document";
@@ -597,6 +597,46 @@ function CaseFormDialog({
   const setSel = (k: keyof CaseForm) => (v: string) =>
     setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
 
+  // Policy claim lookup state
+  const [policySearch, setPolicySearch] = useState(initial?.policyId ? "linked" : "");
+  const [policyLookupLoading, setPolicyLookupLoading] = useState(false);
+  const [foundPolicy, setFoundPolicy] = useState<any>(null);
+  const [policyMembers, setPolicyMembers] = useState<any[]>([]);
+  const [policyLookupError, setPolicyLookupError] = useState("");
+  const policySearchRef = useRef<HTMLInputElement>(null);
+
+  const lookupPolicy = async (search: string) => {
+    if (!search.trim()) return;
+    setPolicyLookupLoading(true);
+    setPolicyLookupError("");
+    setFoundPolicy(null);
+    setPolicyMembers([]);
+    try {
+      const res = await fetch(`${getApiBase()}/api/policies?q=${encodeURIComponent(search.trim())}&limit=5`, { credentials: "include" });
+      const data = await res.json();
+      const policies: any[] = Array.isArray(data) ? data : [];
+      const exact = policies.find((p: any) =>
+        p.policyNumber?.toLowerCase() === search.trim().toLowerCase()
+      ) || policies[0];
+      if (!exact) {
+        setPolicyLookupError("No policy found with that number.");
+        return;
+      }
+      setFoundPolicy(exact);
+      setForm((f) => ({ ...f, policyId: exact.id }));
+      // Fetch members
+      const mRes = await fetch(`${getApiBase()}/api/policies/${exact.id}/members`, { credentials: "include" });
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        setPolicyMembers(Array.isArray(mData) ? mData : []);
+      }
+    } catch {
+      setPolicyLookupError("Failed to look up policy.");
+    } finally {
+      setPolicyLookupLoading(false);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const data: Partial<CaseForm> = {};
@@ -679,7 +719,10 @@ function CaseFormDialog({
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Service Details</p>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Service Type">
-                <Select value={form.serviceType || "__none__"} onValueChange={setSel("serviceType")}>
+                <Select value={form.serviceType || "__none__"} onValueChange={(v) => {
+                  setSel("serviceType")(v);
+                  if (v !== "claim") { setFoundPolicy(null); setPolicyMembers([]); setPolicySearch(""); setPolicyLookupError(""); setForm((f) => ({ ...f, policyId: "" })); }
+                }}>
                   <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">— Not set —</SelectItem>
@@ -696,6 +739,61 @@ function CaseFormDialog({
                   <Input value={form.funeralLocation} onChange={set("funeralLocation")} placeholder="Cemetery or burial site" data-testid="input-funeral-location" />
                 </Field>
               </div>
+
+              {/* Policy Claim lookup — shown only when serviceType = claim */}
+              {form.serviceType === "claim" && (
+                <div className="col-span-2 border rounded-md p-3 space-y-3 bg-muted/20">
+                  <p className="text-xs font-semibold text-primary">Policy Claim — enter the policy number to link the claim and select the deceased member</p>
+                  <div className="flex gap-2">
+                    <Input
+                      ref={policySearchRef}
+                      placeholder="Policy number, e.g. FLK00123"
+                      value={policySearch === "linked" ? (foundPolicy?.policyNumber || "") : policySearch}
+                      onChange={(e) => setPolicySearch(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookupPolicy(policySearch); } }}
+                      className="flex-1"
+                    />
+                    <Button type="button" size="sm" onClick={() => lookupPolicy(policySearch)} disabled={policyLookupLoading || !policySearch.trim()}>
+                      {policyLookupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
+                    </Button>
+                  </div>
+                  {policyLookupError && <p className="text-xs text-destructive">{policyLookupError}</p>}
+                  {foundPolicy && (
+                    <div className="space-y-2 text-xs border-t pt-2">
+                      <p className="text-muted-foreground">
+                        Found: <strong className="text-foreground">{foundPolicy.policyNumber}</strong> · {foundPolicy.status?.toUpperCase()} · {foundPolicy.currency} {Number(foundPolicy.premiumAmount || 0).toFixed(2)}/mo
+                      </p>
+                      {policyMembers.length > 0 && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Select Deceased Member</Label>
+                          <Select
+                            value={form.deceasedName || "__none__"}
+                            onValueChange={(v) => {
+                              if (v === "__none__") return;
+                              setForm((f) => ({ ...f, deceasedName: v }));
+                            }}
+                          >
+                            <SelectTrigger><SelectValue placeholder="Select deceased…" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">— Select member —</SelectItem>
+                              {policyMembers.map((m: any) => {
+                                const name = m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim() || m.clientName || m.dependentName || "Member";
+                                const role = m.role || "member";
+                                return (
+                                  <SelectItem key={m.id || name} value={name}>
+                                    {name} ({role.replace("_", " ")})
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-[10px] text-muted-foreground">Selecting a member auto-fills the deceased name above.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

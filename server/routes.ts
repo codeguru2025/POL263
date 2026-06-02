@@ -2725,34 +2725,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!user.organizationId) {
       return res.status(400).json({ message: "Select a tenant before downloading receipts" });
     }
-    const receipt = await storage.getPaymentReceiptById(id, user.organizationId);
-    if (!receipt) {
-      structuredLog("warn", "Receipt download: receipt not found in DB", { receiptId: id, orgId: user.organizationId });
-      return res.status(404).json({ message: "Not found" });
-    }
-    if (user.organizationId && receipt.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
-    structuredLog("info", "Receipt download: fetching PDF", { receiptId: id, pdfStorageKey: receipt.pdfStorageKey });
-    let result = await getReceiptPdfPath(receipt.pdfStorageKey);
-    // Auto-generate PDF on demand if missing (handles migrated receipts or failed outbox)
-    if (!result) {
-      structuredLog("info", "Receipt download: PDF missing, regenerating on demand", { receiptId: id });
-      const { generateReceiptPdf } = await import("./receipt-pdf");
-      const newKey = await generateReceiptPdf(id);
-      if (newKey) {
-        await storage.updatePaymentReceipt(id, { pdfStorageKey: newKey }, receipt.organizationId);
-        result = await getReceiptPdfPath(newKey);
-      }
-    }
-    if (!result) {
-      structuredLog("warn", "Receipt download: PDF not available after regeneration attempt", { receiptId: id, pdfStorageKey: receipt.pdfStorageKey });
-      return res.status(404).json({ message: "Receipt PDF not available" });
-    }
-    if (Buffer.isBuffer(result)) {
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="receipt-${receipt.receiptNumber}.pdf"`);
-      return res.send(result);
-    }
-    return res.download(result, `receipt-${receipt.receiptNumber}.pdf`);
+    // Stream a fresh A4 PDF directly — always correct format, no stale cache issues.
+    // ?inline=1 opens in browser (e.g. iframe preview); default is attachment download.
+    const inline = req.query.inline === "1" || req.query.view === "1";
+    const { streamReceiptToResponse } = await import("./receipt-pdf");
+    return streamReceiptToResponse(id, user.organizationId, res, { attachment: !inline });
+  });
+
+  // Alias for view-only (iframe embeds)
+  app.get("/api/receipts/:id/view", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!user.organizationId) return res.status(400).json({ message: "Select a tenant" });
+    const { streamReceiptToResponse } = await import("./receipt-pdf");
+    return streamReceiptToResponse(id, user.organizationId, res, { attachment: false });
   });
 
   app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {

@@ -1742,7 +1742,8 @@ export default function StaffPolicies() {
                   </TableHeader>
                   <TableBody>
                     {(policyReceipts ?? []).map((r: any) => {
-                      const receiptUrl = getApiBase() + `/api/receipts/${r.id}/download`;
+                      const receiptViewUrl = getApiBase() + `/api/receipts/${r.id}/view`;
+                      const receiptDownloadUrl = getApiBase() + `/api/receipts/${r.id}/download`;
                       const displayNum = /^\d+$/.test(String(r.receiptNumber).trim())
                         ? `RCP-${String(r.receiptNumber).padStart(5, "0")}`
                         : r.receiptNumber;
@@ -1751,16 +1752,13 @@ export default function StaffPolicies() {
                           <TableCell className="pl-6 font-mono font-medium">{displayNum}</TableCell>
                           <TableCell>{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
                           <TableCell className="capitalize">{r.paymentChannel}</TableCell>
-                          <TableCell>{new Date(r.issuedAt).toLocaleDateString()}</TableCell>
+                          <TableCell>{new Date(r.issuedAt).toLocaleDateString("en-GB")}</TableCell>
                           <TableCell className="text-right pr-6">
                             <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" title="View receipt" onClick={() => {
-                                setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum });
-                                setShowReceiptSuccess(true);
-                              }}><Eye className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Download receipt" onClick={() => window.open(receiptUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Print receipt" onClick={() => printDocument(receiptUrl)}><Printer className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Share receipt" onClick={() => shareDocument(receiptUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="View receipt" onClick={() => window.open(receiptViewUrl, "_blank", "noopener")}><Eye className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Download receipt" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Print receipt" onClick={() => printDocument(receiptViewUrl)}><Printer className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Share receipt" onClick={() => shareDocument(receiptDownloadUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
                               {canEditReceipt && (
                                 <Button variant="ghost" size="icon" title="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
                                   setEditReceiptId(r.id);
@@ -1972,26 +1970,27 @@ export default function StaffPolicies() {
                     {receiptSuccessData.paynow ? "Paynow payment processed. Receipt will appear shortly." : "No receipt ID available."}
                   </div>
                 );
-                const receiptUrl = getApiBase() + `/api/receipts/${receiptId}/download`;
+                const receiptViewUrl = getApiBase() + `/api/receipts/${receiptId}/view`;
+                const receiptDownloadUrl = getApiBase() + `/api/receipts/${receiptId}/download`;
                 return (
                   <div className="space-y-4">
                     <div className="border rounded-md overflow-hidden bg-muted/30">
                       <iframe
                         title="Receipt Preview"
-                        src={receiptUrl + "?inline=1"}
+                        src={receiptViewUrl}
                         className="w-full h-[400px]"
                       />
                     </div>
                     <div className="flex justify-end gap-2">
-                      <Button variant="outline" className="gap-2" onClick={() => window.open(receiptUrl, "_blank", "noopener")}>
+                      <Button variant="outline" className="gap-2" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}>
                         <Download className="h-4 w-4" /> Download
                       </Button>
-                      <Button variant="outline" className="gap-2" onClick={() => printDocument(receiptUrl)}>
+                      <Button variant="outline" className="gap-2" onClick={() => printDocument(receiptViewUrl)}>
                         <Printer className="h-4 w-4" /> Print
                       </Button>
                       <Button variant="outline" className="gap-2" onClick={() => {
                         const num = receiptSuccessData.receipt?.receiptNumber || receiptSuccessData.receiptNumber || "";
-                        shareDocument(receiptUrl, `Receipt-${num}`);
+                        shareDocument(receiptDownloadUrl, `Receipt-${num}`);
                       }}>
                         <Share2 className="h-4 w-4" /> Share
                       </Button>
