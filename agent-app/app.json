@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1e3a5f"
+      "backgroundColor": "#0f766e"
     },
     "ios": {
       "supportsTablet": true,
@@ -18,7 +18,7 @@
     "android": {
       "package": "com.pol263.agent",
       "adaptiveIcon": {
-        "backgroundColor": "#1e3a5f",
+        "backgroundColor": "#0f766e",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -40,7 +40,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#1e3a5f",
+          "backgroundColor": "#0f766e",
           "image": "./assets/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain"
