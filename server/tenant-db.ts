@@ -328,7 +328,17 @@ export async function withOrgTransaction<T>(
     await client.query("COMMIT");
     return result;
   } catch (err) {
-    await client.query("ROLLBACK");
+    // Roll back, but never let a failed ROLLBACK mask the original error —
+    // that original error is what callers and logs need to see.
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackErr) {
+      structuredLog("error", "Transaction ROLLBACK failed", {
+        orgId,
+        rollbackError: (rollbackErr as Error)?.message,
+        originalError: (err as Error)?.message,
+      });
+    }
     throw err;
   } finally {
     client.release();

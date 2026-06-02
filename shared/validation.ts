@@ -49,6 +49,23 @@ export function formatAmountWithCode(amount: number | string, currency?: string 
   return `${c} ${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/**
+ * Parse and validate a monetary amount from untrusted input (request body).
+ * Returns a number rounded to 2 decimals when the value is a positive, finite
+ * amount within a sane ceiling; otherwise returns null so callers can reject.
+ * Guards against negatives, zero, NaN, Infinity, non-numeric strings and
+ * absurdly large values (overflow / fat-finger).
+ */
+export const MAX_TRANSACTION_AMOUNT = 100_000_000; // 100M — well above any real premium/claim
+
+export function parsePositiveAmount(value: unknown): number | null {
+  const num = typeof value === "string" ? parseFloat(value) : typeof value === "number" ? value : NaN;
+  if (!Number.isFinite(num)) return null;
+  if (num <= 0) return null;
+  if (num > MAX_TRANSACTION_AMOUNT) return null;
+  return Math.round(num * 100) / 100;
+}
+
 export function normalizeNationalId(value: string | null | undefined): string | null {
   if (value == null || typeof value !== "string") return null;
   const trimmed = value.trim().toUpperCase();

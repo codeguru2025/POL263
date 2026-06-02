@@ -27,7 +27,7 @@ import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
-import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, SUPPORTED_CURRENCIES } from "../shared/validation";
+import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount } from "../shared/validation";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -2645,18 +2645,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     const { policyId, clientId, amount, currency, purpose, idempotencyKey: clientKey } = req.body;
-    if (!policyId || !clientId || !amount) return res.status(400).json({ message: "policyId, clientId, and amount are required" });
+    if (!policyId || !clientId || amount == null) return res.status(400).json({ message: "policyId, clientId, and amount are required" });
+    const parsedAmount = parsePositiveAmount(amount);
+    if (parsedAmount == null) return res.status(400).json({ message: "Amount must be a positive number." });
     try {
       const policy = await storage.getPolicy(policyId, user.organizationId);
       if (!policy || policy.clientId !== clientId) {
         return res.status(400).json({ message: "clientId does not match policy owner" });
       }
-      const idempotencyKey = clientKey || `staff-${user.id}-${policyId}-${String(amount)}-${purpose || "premium"}`;
+      const idempotencyKey = clientKey || `staff-${user.id}-${policyId}-${String(parsedAmount)}-${purpose || "premium"}`;
       const result = await createPaymentIntent({
         organizationId: user.organizationId,
         clientId,
         policyId,
-        amount: String(amount),
+        amount: String(parsedAmount),
         currency: currency || "USD",
         purpose: purpose || "premium",
         idempotencyKey,
@@ -2757,6 +2759,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const { policyId, amount, currency, notes, receivedAt, idempotencyKey } = req.body;
     if (!policyId || amount == null) return res.status(400).json({ message: "policyId and amount required" });
+    const parsedAmount = parsePositiveAmount(amount);
+    if (parsedAmount == null) {
+      return res.status(400).json({ message: "Amount must be a positive number." });
+    }
 
     // Idempotency: reject if a cleared transaction for this policy with the same idempotency key exists
     if (idempotencyKey) {
@@ -2780,7 +2786,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         organizationId: user.organizationId,
         policyId,
         clientId: policy.clientId,
-        amount: String(amount),
+        amount: String(parsedAmount),
         currency: currency || policy.currency,
         paymentMethod: "cash",
         status: "cleared",
@@ -2801,7 +2807,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         paymentIntentId: undefined,
         policyId,
         clientId: policy.clientId,
-        amount: String(amount),
+        amount: String(parsedAmount),
         currency: currency || policy.currency,
         paymentChannel: "cash",
         issuedByUserId: recordedByForLedger ?? undefined,

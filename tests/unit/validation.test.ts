@@ -9,6 +9,8 @@ import {
   normalizeNationalId,
   isValidNationalId,
   toUpperTrim,
+  parsePositiveAmount,
+  MAX_TRANSACTION_AMOUNT,
 } from "@shared/validation";
 
 describe("Currency validation", () => {
@@ -115,6 +117,33 @@ describe("National ID validation", () => {
       expect(isValidNationalId("")).toBe(false);
       expect(isValidNationalId(null)).toBe(false);
     });
+  });
+});
+
+describe("parsePositiveAmount", () => {
+  it("accepts positive numbers and numeric strings, rounding to 2dp", () => {
+    expect(parsePositiveAmount(12)).toBe(12);
+    expect(parsePositiveAmount("12.5")).toBe(12.5);
+    expect(parsePositiveAmount("12.005")).toBe(12.01);
+    expect(parsePositiveAmount(0.01)).toBe(0.01);
+  });
+
+  it("rejects zero, negatives, NaN, Infinity and non-numeric", () => {
+    expect(parsePositiveAmount(0)).toBeNull();
+    expect(parsePositiveAmount(-5)).toBeNull();
+    expect(parsePositiveAmount("-5")).toBeNull();
+    expect(parsePositiveAmount("abc")).toBeNull();
+    expect(parsePositiveAmount("")).toBeNull();
+    expect(parsePositiveAmount(NaN)).toBeNull();
+    expect(parsePositiveAmount(Infinity)).toBeNull();
+    expect(parsePositiveAmount(null)).toBeNull();
+    expect(parsePositiveAmount(undefined)).toBeNull();
+    expect(parsePositiveAmount({})).toBeNull();
+  });
+
+  it("rejects absurdly large amounts above the ceiling", () => {
+    expect(parsePositiveAmount(MAX_TRANSACTION_AMOUNT + 1)).toBeNull();
+    expect(parsePositiveAmount(MAX_TRANSACTION_AMOUNT)).toBe(MAX_TRANSACTION_AMOUNT);
   });
 });
 
