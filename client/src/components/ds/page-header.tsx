@@ -19,7 +19,7 @@ export function PageHeader({ title, description, breadcrumbs, actions, className
             {breadcrumbs}
           </nav>
         ) : null}
-        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground" data-testid={titleDataTestId}>{title}</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground" data-testid={titleDataTestId}>{title}</h1>
         {description ? (
           <p className="text-muted-foreground text-sm sm:text-base max-w-2xl leading-relaxed">{description}</p>
         ) : null}

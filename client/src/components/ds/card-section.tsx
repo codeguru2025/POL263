@@ -31,10 +31,10 @@ export function CardSection({
         className,
       )}
     >
-      <CardHeader className="border-b border-border/50 bg-muted/15 pb-4 space-y-0">
+      <CardHeader className="border-b border-border/60 bg-muted/30 pb-3 pt-3 space-y-0">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-1">
-            <CardTitle className="text-base font-semibold tracking-tight flex items-center gap-2">
+            <CardTitle className="text-[13px] font-semibold uppercase tracking-[0.06em] text-foreground/90 flex items-center gap-2">
               {Icon ? <Icon className="h-4 w-4 text-primary shrink-0" aria-hidden /> : null}
               {title}
             </CardTitle>

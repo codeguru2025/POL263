@@ -179,7 +179,6 @@ export default function StaffPolicies() {
       provider: "ecocash",
       mobileNumber: "",
     },
-    selectedAddOns: [] as string[],
     memberAddOns: {} as Record<string, string[]>,
     newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
   });
@@ -680,7 +679,6 @@ export default function StaffPolicies() {
           provider: "ecocash",
           mobileNumber: "",
         },
-        selectedAddOns: [],
         memberAddOns: {},
         newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
       });

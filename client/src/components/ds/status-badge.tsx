@@ -72,7 +72,7 @@ export function StatusBadge({ status, variant = "policy", label, className }: St
     <span
       role="status"
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 text-xs font-medium tabular-nums",
+        "inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.04em] tabular-nums",
         "focus-within:outline-none",
         cfg.className,
         className,
