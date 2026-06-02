@@ -594,7 +594,9 @@ export default function StaffPolicies() {
       const members = (data.beneficiaryDependentIds || []).map((dependentId: string) => ({ dependentId, role: "dependent" }));
 
       const memberAddOns: { memberRef: string; addOnId: string }[] = [];
+      const validMemberRefs = new Set(["holder", ...(data.beneficiaryDependentIds || [])]);
       for (const [memberRef, aoIds] of Object.entries(data.memberAddOns || {})) {
+        if (!validMemberRefs.has(memberRef)) continue;
         for (const addOnId of aoIds) {
           memberAddOns.push({ memberRef, addOnId });
         }
@@ -602,17 +604,16 @@ export default function StaffPolicies() {
 
       let beneficiary: any = undefined;
       if (data.beneficiaryId) {
-        const dep = dependents?.find((d: any) => d.id === data.beneficiaryId);
-        if (dep) {
-          beneficiary = {
-            dependentId: dep.id,
-            firstName: dep.firstName,
-            lastName: dep.lastName,
-            relationship: dep.relationship,
-            nationalId: dep.nationalId || "",
-            phone: "",
-          };
-        }
+        const dep = (dependents || []).find((d: any) => d.id === data.beneficiaryId);
+        if (!dep) throw new Error("The selected beneficiary was not found. Please re-select a beneficiary or enter one manually.");
+        beneficiary = {
+          dependentId: dep.id,
+          firstName: dep.firstName,
+          lastName: dep.lastName,
+          relationship: dep.relationship,
+          nationalId: dep.nationalId || "",
+          phone: dep.phone || "",
+        };
       } else if (data.beneficiaryManual.firstName && data.beneficiaryManual.lastName) {
         if (!data.beneficiaryManual.relationship?.trim() || !data.beneficiaryManual.nationalId?.trim() || !data.beneficiaryManual.phone?.trim()) {
           throw new Error("Beneficiary: all fields are required (first name, last name, relationship, national ID, phone).");
@@ -2877,7 +2878,7 @@ export default function StaffPolicies() {
                     <>
                       <ClientSearchInput
                         value={createForm.clientId}
-                        onChange={(id) => setCreateForm({ ...createForm, clientId: id, beneficiaryDependentIds: [] })}
+                        onChange={(id) => setCreateForm({ ...createForm, clientId: id, beneficiaryDependentIds: [], beneficiaryId: "" })}
                         placeholder="Search lead by name, email, or phone..."
                         data-testid="select-client"
                       />
@@ -3397,6 +3398,7 @@ export default function StaffPolicies() {
                       !createForm.beneficiaryManual.lastName?.trim() ||
                       !createForm.beneficiaryManual.relationship?.trim() ||
                       !createForm.beneficiaryManual.nationalId?.trim() ||
+                      !isValidNationalId(createForm.beneficiaryManual.nationalId) ||
                       !createForm.beneficiaryManual.phone?.trim()
                     ))
                   )) ||

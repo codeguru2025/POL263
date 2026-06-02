@@ -1839,12 +1839,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const benLast = toUpperTrim(beneficiary.lastName, false);
       const benRel = toUpperTrim(beneficiary.relationship, false);
       const benNationalId = beneficiary.nationalId ? normalizeNationalId(beneficiary.nationalId) : null;
-      const benPhone = toUpperTrim(beneficiary.phone, false);
-      if (!benFirst || !benLast) return res.status(400).json({ message: "Beneficiary first and last name are required." });
-      if (!benRel) return res.status(400).json({ message: "Beneficiary relationship is required." });
-      if (!benNationalId) return res.status(400).json({ message: "Beneficiary national ID is required." });
-      if (!isValidNationalId(beneficiary.nationalId)) return res.status(400).json({ message: "Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
-      if (!benPhone) return res.status(400).json({ message: "Beneficiary phone is required." });
+      const benPhone = toUpperTrim(beneficiary.phone, false) || null;
+      // Dependent-linked beneficiary (dependentId is set) — phone and nationalId are optional because
+      // the dependent record is the authoritative source; the policy row just caches them for convenience.
+      const isDepLinked = !!beneficiary.dependentId;
+      if (!benFirst || !benLast) {
+        structuredLog("warn", "POST /api/policies 400", { reason: "beneficiary name missing", userId: user?.id, orgId: user?.organizationId });
+        return res.status(400).json({ message: "Beneficiary first and last name are required." });
+      }
+      if (!benRel) {
+        structuredLog("warn", "POST /api/policies 400", { reason: "beneficiary relationship missing", userId: user?.id, orgId: user?.organizationId });
+        return res.status(400).json({ message: "Beneficiary relationship is required." });
+      }
+      if (!isDepLinked) {
+        if (!benNationalId) {
+          structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary national ID missing", userId: user?.id, orgId: user?.organizationId });
+          return res.status(400).json({ message: "Beneficiary national ID is required." });
+        }
+        if (!isValidNationalId(beneficiary.nationalId)) {
+          structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary national ID invalid", userId: user?.id, orgId: user?.organizationId });
+          return res.status(400).json({ message: "Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+        }
+        if (!benPhone) {
+          structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary phone missing", userId: user?.id, orgId: user?.organizationId });
+          return res.status(400).json({ message: "Beneficiary phone is required." });
+        }
+      } else if (benNationalId && !isValidNationalId(beneficiary.nationalId)) {
+        structuredLog("warn", "POST /api/policies 400", { reason: "dep-linked beneficiary national ID invalid format", userId: user?.id, orgId: user?.organizationId });
+        return res.status(400).json({ message: "Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+      }
       beneficiary.firstName = benFirst;
       beneficiary.lastName = benLast;
       beneficiary.relationship = benRel;
@@ -1868,12 +1891,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const clientRow = await storage.getClient(parsed.clientId, user.organizationId);
     if (!clientRow) {
+      structuredLog("warn", "POST /api/policies 400", { reason: "client not found", clientId: parsed.clientId, userId: user?.id, orgId: user?.organizationId });
       return res.status(400).json({
         message: "The selected client was not found in this organization. Refresh the page and select the client again.",
       });
     }
     const productVersion = await storage.getProductVersion(parsed.productVersionId, user.organizationId);
     if (!productVersion) {
+      structuredLog("warn", "POST /api/policies 400", { reason: "product version not found", productVersionId: parsed.productVersionId, userId: user?.id, orgId: user?.organizationId });
       return res.status(400).json({
         message: "The selected product is no longer available. Please refresh and choose a product again.",
       });
@@ -1897,6 +1922,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       (p) => p.productVersionId === policyInsert.productVersionId && p.status !== "cancelled"
     );
     if (duplicate) {
+      structuredLog("warn", "POST /api/policies 400", { reason: "duplicate policy", clientId: policyInsert.clientId, productVersionId: policyInsert.productVersionId, existingPolicyId: duplicate.id, userId: user?.id, orgId: user?.organizationId });
       return res.status(400).json({
         error: "Duplicate policy",
         message: "This client already has an active policy for this product. Cancel the existing policy first if you need to create a new one.",
@@ -1912,6 +1938,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } else {
       const illegalDep = dependentsToAdd.find((m: any) => m.dependentId && !authorizedDepIds.has(m.dependentId));
       if (illegalDep) {
+        structuredLog("warn", "POST /api/policies 400", { reason: "unauthorized dependent", dependentId: illegalDep.dependentId, clientId: policyInsert.clientId, userId: user?.id, orgId: user?.organizationId });
         return res.status(400).json({ message: "One or more selected dependents do not belong to this client." });
       }
     }
