@@ -2722,21 +2722,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/receipts/:id/download", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    if (!user.organizationId) {
-      return res.status(400).json({ message: "Select a tenant before downloading receipts" });
-    }
-    // Stream a fresh A4 PDF directly — always correct format, no stale cache issues.
-    // ?inline=1 opens in browser (e.g. iframe preview); default is attachment download.
+    if (!user.organizationId) return res.status(400).json({ message: "Select a tenant before downloading receipts" });
+    const format = req.query.format as string | undefined; // "thermal" | "a4" (default a4)
     const inline = req.query.inline === "1" || req.query.view === "1";
+    if (format === "thermal") {
+      const { streamThermalReceiptToResponse } = await import("./receipt-pdf");
+      return streamThermalReceiptToResponse(id, user.organizationId, res, { attachment: !inline });
+    }
     const { streamReceiptToResponse } = await import("./receipt-pdf");
     return streamReceiptToResponse(id, user.organizationId, res, { attachment: !inline });
   });
 
-  // Alias for view-only (iframe embeds)
+  // View endpoint — inline by default; ?format=thermal for thermal roll preview
   app.get("/api/receipts/:id/view", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     if (!user.organizationId) return res.status(400).json({ message: "Select a tenant" });
+    const format = req.query.format as string | undefined;
+    if (format === "thermal") {
+      const { streamThermalReceiptToResponse } = await import("./receipt-pdf");
+      return streamThermalReceiptToResponse(id, user.organizationId, res, { attachment: false });
+    }
     const { streamReceiptToResponse } = await import("./receipt-pdf");
     return streamReceiptToResponse(id, user.organizationId, res, { attachment: false });
   });

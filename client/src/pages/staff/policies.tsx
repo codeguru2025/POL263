@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
 import { isAgentScoped } from "@shared/roles";
@@ -1744,6 +1744,7 @@ export default function StaffPolicies() {
                     {(policyReceipts ?? []).map((r: any) => {
                       const receiptViewUrl = getApiBase() + `/api/receipts/${r.id}/view`;
                       const receiptDownloadUrl = getApiBase() + `/api/receipts/${r.id}/download`;
+                      const receiptThermalUrl = getApiBase() + `/api/receipts/${r.id}/view?format=thermal`;
                       const displayNum = /^\d+$/.test(String(r.receiptNumber).trim())
                         ? `RCP-${String(r.receiptNumber).padStart(5, "0")}`
                         : r.receiptNumber;
@@ -1755,10 +1756,11 @@ export default function StaffPolicies() {
                           <TableCell>{new Date(r.issuedAt).toLocaleDateString("en-GB")}</TableCell>
                           <TableCell className="text-right pr-6">
                             <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" title="View receipt" onClick={() => window.open(receiptViewUrl, "_blank", "noopener")}><Eye className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Download receipt" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Print receipt" onClick={() => printDocument(receiptViewUrl)}><Printer className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Share receipt" onClick={() => shareDocument(receiptDownloadUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="View (A4)" onClick={() => window.open(receiptViewUrl, "_blank", "noopener")}><Eye className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Thermal (80mm)" onClick={() => window.open(receiptThermalUrl, "_blank", "noopener")}><ScrollText className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Download (A4)" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Print" onClick={() => printDocument(receiptViewUrl)}><Printer className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Share" onClick={() => shareDocument(receiptDownloadUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
                               {canEditReceipt && (
                                 <Button variant="ghost" size="icon" title="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
                                   setEditReceiptId(r.id);
@@ -1972,6 +1974,7 @@ export default function StaffPolicies() {
                 );
                 const receiptViewUrl = getApiBase() + `/api/receipts/${receiptId}/view`;
                 const receiptDownloadUrl = getApiBase() + `/api/receipts/${receiptId}/download`;
+                const receiptThermalUrl = getApiBase() + `/api/receipts/${receiptId}/view?format=thermal`;
                 return (
                   <div className="space-y-4">
                     <div className="border rounded-md overflow-hidden bg-muted/30">
@@ -1981,7 +1984,10 @@ export default function StaffPolicies() {
                         className="w-full h-[400px]"
                       />
                     </div>
-                    <div className="flex justify-end gap-2">
+                    <div className="flex justify-end gap-2 flex-wrap">
+                      <Button variant="outline" className="gap-2" onClick={() => window.open(receiptThermalUrl, "_blank", "noopener")}>
+                        <ScrollText className="h-4 w-4" /> Thermal
+                      </Button>
                       <Button variant="outline" className="gap-2" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}>
                         <Download className="h-4 w-4" /> Download
                       </Button>
