@@ -34,6 +34,37 @@ async function verifySecret(input: string, storedHash: string) {
   return argon2.verify(storedHash, input);
 }
 
+/**
+ * Find the first non-null result of `lookup` across all orgs, tolerating
+ * per-org failures. Using Promise.allSettled (not Promise.all) means a single
+ * unreachable tenant database can no longer break authentication for clients
+ * in every other (healthy) organization.
+ */
+async function findAcrossOrgs<T>(
+  orgs: { id: string }[],
+  lookup: (orgId: string) => Promise<T | undefined | null>,
+  context: string,
+): Promise<T | null> {
+  const results = await Promise.allSettled(orgs.map((o) => lookup(o.id)));
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "fulfilled" && r.value) return r.value as T;
+    if (r.status === "rejected") {
+      structuredLog("warn", "Cross-org lookup failed for one tenant", {
+        context,
+        orgId: orgs[i]?.id,
+        error: (r.reason as Error)?.message,
+      });
+    }
+  }
+  return null;
+}
+
+/** Normalise a policy number from user input: trim + uppercase (stored uppercase). */
+function normalizePolicyNumber(value: unknown): string {
+  return String(value ?? "").trim().toUpperCase();
+}
+
 const LOOKED_UP_CLIENT_TTL_MS = 10 * 60 * 1000;
 
 function clientCanAccessPaymentIntent(session: any, intent: { clientId: string }, loggedInClientId: string): boolean {
@@ -48,7 +79,8 @@ function clientCanAccessPaymentIntent(session: any, intent: { clientId: string }
 
 export function setupClientAuth(app: Express) {
   app.post("/api/client-auth/claim", async (req: Request, res: Response) => {
-    const { activationCode, policyNumber } = req.body;
+    const { activationCode } = req.body;
+    const policyNumber = normalizePolicyNumber(req.body.policyNumber);
     if (!activationCode || !policyNumber) {
       return constantTimeResponse(res, 400, { message: "Activation code and policy number are required" });
     }
@@ -59,8 +91,7 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "System not configured" });
       }
 
-      const claimResults = await Promise.all(orgs.map((org) => storage.getClientByActivationCode(activationCode, org.id)));
-      const client = claimResults.find(Boolean) ?? null;
+      const client = await findAcrossOrgs(orgs, (orgId) => storage.getClientByActivationCode(activationCode, orgId), "client-claim");
       const matchedOrgId = client?.organizationId ?? null;
       if (!client || !matchedOrgId) {
         return constantTimeResponse(res, 400, { message: "Invalid activation code or policy number" });
@@ -105,8 +136,7 @@ export function setupClientAuth(app: Express) {
 
     try {
       const orgs = await storage.getOrganizations();
-      const enrollResults = await Promise.all(orgs.map((org) => storage.getClient(clientId, org.id)));
-      const client = enrollResults.find(Boolean) ?? null;
+      const client = await findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-enroll");
       if (!client || client.isEnrolled) {
         return res.status(400).json({ message: "Invalid enrollment request" });
       }
@@ -159,7 +189,8 @@ export function setupClientAuth(app: Express) {
   });
 
   app.post("/api/client-auth/login", async (req: Request, res: Response) => {
-    const { policyNumber, password } = req.body;
+    const { password } = req.body;
+    const policyNumber = normalizePolicyNumber(req.body.policyNumber);
     if (!policyNumber || !password) {
       return constantTimeResponse(res, 400, { message: "Policy number and password are required" });
     }
@@ -170,8 +201,7 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid credentials" });
       }
 
-      const loginResults = await Promise.all(orgs.map((org) => storage.getPolicyByNumber(policyNumber, org.id)));
-      const policy = loginResults.find(Boolean) ?? null;
+      const policy = await findAcrossOrgs(orgs, (orgId) => storage.getPolicyByNumber(policyNumber, orgId), "client-login");
       if (!policy) {
         return constantTimeResponse(res, 401, { message: "Invalid credentials" });
       }
@@ -235,7 +265,7 @@ export function setupClientAuth(app: Express) {
     const client = clientOrgId
       ? await storage.getClient(clientId, clientOrgId)
       : await storage.getOrganizations().then((orgs) =>
-          Promise.all(orgs.map((org) => storage.getClient(clientId, org.id))).then((rs) => rs.find(Boolean))
+          findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-me-fallback")
         );
     if (!client) {
       return res.status(401).json({ message: "Not authenticated" });
@@ -324,8 +354,7 @@ export function setupClientAuth(app: Express) {
 
     if (!clientOrgId) {
       const orgs = await storage.getOrganizations();
-      const clientResults = await Promise.all(orgs.map((org) => storage.getClient(clientId, org.id)));
-      const foundClient = clientResults.find(Boolean);
+      const foundClient = await findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-policies-fallback");
       if (foundClient) {
         const rawPolicies = await storage.getPoliciesByClient(clientId, foundClient.organizationId);
         return res.json(await enrichWithBalance(rawPolicies, foundClient.organizationId));
@@ -505,7 +534,8 @@ export function setupClientAuth(app: Express) {
   });
 
   app.post("/api/client-auth/reset-password", async (req: Request, res: Response) => {
-    const { policyNumber, securityAnswer, newPassword } = req.body;
+    const { securityAnswer, newPassword } = req.body;
+    const policyNumber = normalizePolicyNumber(req.body.policyNumber);
     if (!policyNumber || !securityAnswer || !newPassword) {
       return constantTimeResponse(res, 400, { message: "All fields are required" });
     }
@@ -516,8 +546,7 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 
-      const resetResults = await Promise.all(orgs.map((org) => storage.getPolicyByNumber(policyNumber, org.id)));
-      const policy = resetResults.find(Boolean) ?? null;
+      const policy = await findAcrossOrgs(orgs, (orgId) => storage.getPolicyByNumber(policyNumber, orgId), "client-reset");
       if (!policy) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }

@@ -24,7 +24,7 @@ export default function ClientLogin() {
 
   const loginMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/client-auth/login", { policyNumber, password });
+      const res = await apiRequest("POST", "/api/client-auth/login", { policyNumber: policyNumber.trim().toUpperCase(), password });
       return res.json();
     },
     onSuccess: () => {

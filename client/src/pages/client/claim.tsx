@@ -34,7 +34,7 @@ export default function ClientClaim() {
 
   const claimMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/client-auth/claim", { activationCode, policyNumber });
+      const res = await apiRequest("POST", "/api/client-auth/claim", { activationCode: activationCode.trim().toUpperCase(), policyNumber: policyNumber.trim().toUpperCase() });
       return res.json() as Promise<ClaimResponse>;
     },
     onSuccess: (data) => {
