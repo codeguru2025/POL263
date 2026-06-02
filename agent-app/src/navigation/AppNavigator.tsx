@@ -78,35 +78,70 @@ function PoliciesStackScreen() {
   );
 }
 
-const MORE_MENU: { label: string; icon: IoniconName; screen: string; desc: string; color: string }[] = [
-  { label: "Claims",        icon: "medkit-outline",            screen: "Claims",       desc: "Submit and track claims",        color: "#e11d48" },
-  { label: "Funerals",      icon: "flower-outline",            screen: "Funerals",     desc: "Funeral case management",        color: "#6d28d9" },
-  { label: "Commissions",   icon: "cash-outline",              screen: "Commissions",  desc: "View your commission earnings",  color: "#16a34a" },
-  { label: "Payments",      icon: "card-outline",              screen: "Payments",     desc: "Payment records",               color: "#2563eb" },
-  { label: "Reports",       icon: "bar-chart-outline",         screen: "Reports",      desc: "Key metrics and performance",   color: "#7c3aed" },
-  { label: "Groups",        icon: "people-circle-outline",     screen: "Groups",       desc: "Group policy management",       color: "#0891b2" },
-  { label: "Approvals",     icon: "checkmark-circle-outline",  screen: "Approvals",    desc: "Pending approval requests",     color: "#d97706" },
-  { label: "Notifications", icon: "notifications-outline",     screen: "Notifications",desc: "System notifications",          color: "#9333ea" },
-  { label: "Settings",      icon: "settings-outline",          screen: "SettingsDetail",desc: "Sync, profile, and logout",    color: "#475569" },
+type MoreItem = { label: string; icon: IoniconName; screen: string; color: string };
+
+const MORE_SECTIONS: { title: string; items: MoreItem[] }[] = [
+  {
+    title: "My Work",
+    items: [
+      { label: "Claims",    icon: "medkit-outline",           screen: "Claims",    color: "#e11d48" },
+      { label: "Funerals",  icon: "flower-outline",           screen: "Funerals",  color: "#6d28d9" },
+      { label: "Approvals", icon: "checkmark-circle-outline", screen: "Approvals", color: "#d97706" },
+      { label: "Groups",    icon: "people-circle-outline",    screen: "Groups",    color: "#0891b2" },
+    ],
+  },
+  {
+    title: "Money & Insights",
+    items: [
+      { label: "Commissions",   icon: "cash-outline",          screen: "Commissions",   color: "#16a34a" },
+      { label: "Payments",      icon: "card-outline",          screen: "Payments",      color: "#2563eb" },
+      { label: "Reports",       icon: "bar-chart-outline",     screen: "Reports",       color: "#7c3aed" },
+      { label: "Notifications", icon: "notifications-outline", screen: "Notifications", color: "#9333ea" },
+    ],
+  },
 ];
 
 function MoreMenuScreen({ navigation }: any) {
   return (
     <SafeAreaView style={moreStyles.safeArea} edges={["top"]}>
       <Image source={require("../../assets/logo.png")} style={moreStyles.logo} resizeMode="contain" />
-      <ScrollView>
-        {MORE_MENU.map(item => (
-          <TouchableOpacity key={item.screen} style={moreStyles.item} onPress={() => navigation.navigate(item.screen)}>
-            <View style={[moreStyles.iconWrap, { backgroundColor: item.color + "18" }]}>
-              <Ionicons name={item.icon} size={22} color={item.color} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
+        {MORE_SECTIONS.map(section => (
+          <View key={section.title} style={moreStyles.section}>
+            <Text style={moreStyles.sectionTitle}>{section.title}</Text>
+            <View style={moreStyles.grid}>
+              {section.items.map(item => (
+                <TouchableOpacity
+                  key={item.screen}
+                  style={moreStyles.gridCard}
+                  onPress={() => navigation.navigate(item.screen)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[moreStyles.iconWrap, { backgroundColor: item.color + "18" }]}>
+                    <Ionicons name={item.icon} size={24} color={item.color} />
+                  </View>
+                  <Text style={moreStyles.gridLabel}>{item.label}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-            <View style={moreStyles.textCol}>
-              <Text style={moreStyles.label}>{item.label}</Text>
-              <Text style={moreStyles.desc}>{item.desc}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-          </TouchableOpacity>
+          </View>
         ))}
+
+        {/* Settings — single full-width row */}
+        <TouchableOpacity
+          style={moreStyles.settingsRow}
+          onPress={() => navigation.navigate("SettingsDetail")}
+          activeOpacity={0.7}
+        >
+          <View style={[moreStyles.iconWrap, { backgroundColor: "#47556918" }]}>
+            <Ionicons name="settings-outline" size={22} color="#475569" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={moreStyles.settingsLabel}>Settings</Text>
+            <Text style={moreStyles.settingsDesc}>Sync, profile, and logout</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -114,16 +149,27 @@ function MoreMenuScreen({ navigation }: any) {
 
 const moreStyles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.background },
-  logo: { width: 140, height: 40, alignSelf: "center", marginBottom: 16, marginTop: 8 },
-  item: {
+  logo: { width: 140, height: 40, alignSelf: "center", marginBottom: 12, marginTop: 8 },
+  section: { marginBottom: 8 },
+  sectionTitle: {
+    fontSize: 12, fontWeight: "700", color: colors.textMuted,
+    letterSpacing: 0.8, textTransform: "uppercase",
+    marginHorizontal: 16, marginTop: 12, marginBottom: 8,
+  },
+  grid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 12 },
+  gridCard: {
+    width: "46%", margin: "2%", backgroundColor: colors.surface, borderRadius: 14,
+    paddingVertical: 18, alignItems: "center", borderWidth: 1, borderColor: colors.border,
+  },
+  iconWrap: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  gridLabel: { fontSize: 14, fontWeight: "600", color: colors.text },
+  settingsRow: {
     flexDirection: "row", alignItems: "center", backgroundColor: colors.surface,
-    marginHorizontal: 16, borderRadius: 12, padding: 14, marginBottom: 8,
+    marginHorizontal: 16, marginTop: 12, borderRadius: 12, padding: 14,
     borderWidth: 1, borderColor: colors.border,
   },
-  iconWrap: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center", marginRight: 12 },
-  textCol: { flex: 1 },
-  label: { fontSize: 15, fontWeight: "600", color: colors.text },
-  desc: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
+  settingsLabel: { fontSize: 15, fontWeight: "600", color: colors.text },
+  settingsDesc: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
 });
 
 const navOpts = { headerStyle: { backgroundColor: colors.surface }, headerTintColor: colors.primary, headerTitleStyle: { fontWeight: "700" as const } };

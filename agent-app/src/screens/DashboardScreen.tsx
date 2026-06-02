@@ -10,7 +10,7 @@ import { getSyncStatus, fullSync, type SyncStatus } from "../sync/engine";
 import { getDb } from "../db/schema";
 import { colors, spacing, fontSize } from "../theme";
 
-export default function DashboardScreen() {
+export default function DashboardScreen({ navigation }: any) {
   const { user } = useAuth();
   const { isOnline } = useNetwork();
   const [refreshing, setRefreshing] = useState(false);
@@ -150,6 +150,35 @@ export default function DashboardScreen() {
         </View>
       )}
 
+      {/* Quick actions */}
+      <Text style={styles.sectionTitle}>Quick Actions</Text>
+      <View style={styles.actionGrid}>
+        <TouchableOpacity
+          style={[styles.actionCard, { backgroundColor: "#eff6ff" }]}
+          onPress={() => navigation.navigate("Policies", { screen: "CreatePolicy" })}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.actionIcon}>📋</Text>
+          <Text style={styles.actionLabel}>Issue Policy</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.actionCard, { backgroundColor: "#f0fdf4" }]}
+          onPress={() => navigation.navigate("Clients")}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.actionIcon}>👤</Text>
+          <Text style={styles.actionLabel}>Add Client</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.actionCard, { backgroundColor: "#fefce8" }]}
+          onPress={() => navigation.navigate("Leads")}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.actionIcon}>📈</Text>
+          <Text style={styles.actionLabel}>New Lead</Text>
+        </TouchableOpacity>
+      </View>
+
       {syncStatus?.lastSync && (
         <Text style={styles.lastSync}>Last sync: {syncStatus.lastSync}</Text>
       )}
@@ -235,4 +264,26 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: spacing.md,
   },
+  sectionTitle: {
+    fontSize: fontSize.md,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  actionGrid: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  actionCard: {
+    flex: 1,
+    borderRadius: 12,
+    padding: spacing.md,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  actionIcon: { fontSize: 26, marginBottom: spacing.xs },
+  actionLabel: { fontSize: fontSize.xs, fontWeight: "700", color: colors.text, textAlign: "center" },
 });

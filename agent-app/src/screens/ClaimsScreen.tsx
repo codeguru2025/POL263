@@ -9,6 +9,7 @@ import { useNetwork } from "../context/NetworkContext";
 import { colors, spacing, fontSize } from "../theme";
 import { getDb } from "../db/schema";
 import { apiGet, apiPost } from "../api";
+import DateField from "../components/DateField";
 
 interface Claim {
   id: string;
@@ -217,10 +218,8 @@ export default function ClaimsScreen() {
                 <TextInput style={styles.input} value={form.deceasedRelationship}
                   onChangeText={v => setForm(f => ({ ...f, deceasedRelationship: v }))} />
 
-                <Text style={styles.label}>Date of Death (YYYY-MM-DD)</Text>
-                <TextInput style={styles.input} value={form.dateOfDeath}
-                  onChangeText={v => setForm(f => ({ ...f, dateOfDeath: v }))}
-                  placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} />
+                <Text style={styles.label}>Date of Death</Text>
+                <DateField value={form.dateOfDeath} onChange={v => setForm(f => ({ ...f, dateOfDeath: v }))} placeholder="Select date" maxYear={new Date().getFullYear()} />
 
                 <Text style={styles.label}>Cause of Death</Text>
                 <TextInput style={[styles.input, { minHeight: 60 }]} value={form.causeOfDeath}

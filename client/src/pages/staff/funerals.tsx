@@ -13,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
+import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User } from "lucide-react";
@@ -655,236 +657,214 @@ function CaseFormDialog({
   );
 
   const userOptions = users.filter((u: any) => u.isActive !== false);
+  const vehicleOptions: SearchableOption[] = vehicles.map((v) => ({
+    value: v.id,
+    label: `${v.registration}${v.make ? ` — ${v.make} ${v.model || ""}`.trim() : ""}`,
+    hint: v.vehicleType || undefined,
+  }));
+  const driverOptions: SearchableOption[] = userOptions.map((u: any) => ({
+    value: u.id,
+    label: u.displayName || u.email,
+    hint: u.phone || undefined,
+  }));
+  const agentOptions: SearchableOption[] = userOptions.map((u: any) => ({
+    value: u.id,
+    label: u.displayName || u.email,
+    hint: [u.gender, u.phone].filter(Boolean).join(" · ") || undefined,
+  }));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>Complete all applicable sections. Starred fields are required.</DialogDescription>
+          <DialogDescription>Only the deceased name is required. Expand the sections you need.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-5 pt-1">
+        <form onSubmit={handleSubmit} className="space-y-4 pt-1">
 
-          {/* Deceased */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Deceased Details</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <Field label="Full Name" required>
-                  <Input value={form.deceasedName} onChange={set("deceasedName")} placeholder="Full name of deceased" required data-testid="input-deceased-name" />
-                </Field>
-              </div>
-              <Field label="Date of Death">
-                <Input type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} data-testid="input-date-of-death" />
-              </Field>
-              <Field label="Cause of Death">
-                <Input value={form.causeOfDeath} onChange={set("causeOfDeath")} placeholder="e.g. Natural causes" />
-              </Field>
-              <div className="col-span-2">
-                <Field label="Place of Death">
-                  <Input value={form.placeOfDeath} onChange={set("placeOfDeath")} placeholder="Hospital, home address, etc." />
-                </Field>
-              </div>
-            </div>
-          </div>
+          {/* Deceased name is always visible (the only required field) */}
+          <Field label="Deceased Full Name" required>
+            <Input value={form.deceasedName} onChange={set("deceasedName")} placeholder="Full name of deceased" required data-testid="input-deceased-name" />
+          </Field>
 
-          {/* Informant */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Informant (Next of Kin)</p>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Name">
-                <Input value={form.informantName} onChange={set("informantName")} placeholder="Full name" />
-              </Field>
-              <Field label="Phone">
-                <Input value={form.informantPhone} onChange={set("informantPhone")} placeholder="+263 77 …" />
-              </Field>
-              <div className="col-span-2">
-                <Field label="Relationship to Deceased">
-                  <Select value={form.informantRelationship || "__none__"} onValueChange={setSel("informantRelationship")}>
-                    <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">— None —</SelectItem>
-                      {["Spouse", "Son", "Daughter", "Father", "Mother", "Brother", "Sister", "Grandparent", "Grandchild", "Other"].map((r) => (
-                        <SelectItem key={r} value={r}>{r}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-            </div>
-          </div>
-
-          {/* Service */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Service Details</p>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Service Type">
-                <Select value={form.serviceType || "__none__"} onValueChange={(v) => {
-                  setSel("serviceType")(v);
-                  if (v !== "claim") { setFoundPolicy(null); setPolicyMembers([]); setPolicySearch(""); setPolicyLookupError(""); setForm((f) => ({ ...f, policyId: "" })); }
-                }}>
-                  <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">— Not set —</SelectItem>
-                    <SelectItem value="cash">Cash Service</SelectItem>
-                    <SelectItem value="claim">Policy Claim</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Date of Burial">
-                <Input type="date" value={form.funeralDate} onChange={set("funeralDate")} data-testid="input-funeral-date" />
-              </Field>
-              <div className="col-span-2">
-                <Field label="Place of Burial">
-                  <Input value={form.funeralLocation} onChange={set("funeralLocation")} placeholder="Cemetery or burial site" data-testid="input-funeral-location" />
-                </Field>
-              </div>
-
-              {/* Policy Claim lookup — shown only when serviceType = claim */}
-              {form.serviceType === "claim" && (
-                <div className="col-span-2 border rounded-md p-3 space-y-3 bg-muted/20">
-                  <p className="text-xs font-semibold text-primary">Policy Claim — enter the policy number to link the claim and select the deceased member</p>
-                  <div className="flex gap-2">
-                    <Input
-                      ref={policySearchRef}
-                      placeholder="Policy number, e.g. FLK00123"
-                      value={policySearch === "linked" ? (foundPolicy?.policyNumber || "") : policySearch}
-                      onChange={(e) => setPolicySearch(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookupPolicy(policySearch); } }}
-                      className="flex-1"
-                    />
-                    <Button type="button" size="sm" onClick={() => lookupPolicy(policySearch)} disabled={policyLookupLoading || !policySearch.trim()}>
-                      {policyLookupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
-                    </Button>
+          <Accordion type="multiple" defaultValue={["deceased", "service"]} className="border rounded-md px-3">
+            {/* Deceased & Informant */}
+            <AccordionItem value="deceased">
+              <AccordionTrigger>Deceased &amp; Informant Details</AccordionTrigger>
+              <AccordionContent>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Date of Death">
+                    <Input type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} data-testid="input-date-of-death" />
+                  </Field>
+                  <Field label="Cause of Death">
+                    <Input value={form.causeOfDeath} onChange={set("causeOfDeath")} placeholder="e.g. Natural causes" />
+                  </Field>
+                  <div className="col-span-2">
+                    <Field label="Place of Death">
+                      <Input value={form.placeOfDeath} onChange={set("placeOfDeath")} placeholder="Hospital, home address, etc." />
+                    </Field>
                   </div>
-                  {policyLookupError && <p className="text-xs text-destructive">{policyLookupError}</p>}
-                  {foundPolicy && (
-                    <div className="space-y-2 text-xs border-t pt-2">
-                      <p className="text-muted-foreground">
-                        Found: <strong className="text-foreground">{foundPolicy.policyNumber}</strong> · {foundPolicy.status?.toUpperCase()} · {foundPolicy.currency} {Number(foundPolicy.premiumAmount || 0).toFixed(2)}/mo
-                      </p>
-                      {policyMembers.length > 0 && (
-                        <div className="space-y-1.5">
-                          <Label className="text-xs">Select Deceased Member</Label>
-                          <Select
-                            value={form.deceasedName || "__none__"}
-                            onValueChange={(v) => {
-                              if (v === "__none__") return;
-                              setForm((f) => ({ ...f, deceasedName: v }));
-                            }}
-                          >
-                            <SelectTrigger><SelectValue placeholder="Select deceased…" /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">— Select member —</SelectItem>
-                              {policyMembers.map((m: any) => {
-                                const name = m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim() || m.clientName || m.dependentName || "Member";
-                                const role = m.role || "member";
-                                return (
-                                  <SelectItem key={m.id || name} value={name}>
-                                    {name} ({role.replace("_", " ")})
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectContent>
-                          </Select>
-                          <p className="text-[10px] text-muted-foreground">Selecting a member auto-fills the deceased name above.</p>
+                  <Field label="Informant Name">
+                    <Input value={form.informantName} onChange={set("informantName")} placeholder="Next of kin name" />
+                  </Field>
+                  <Field label="Informant Phone">
+                    <Input value={form.informantPhone} onChange={set("informantPhone")} placeholder="+263 77 …" />
+                  </Field>
+                  <div className="col-span-2">
+                    <Field label="Relationship to Deceased">
+                      <Select value={form.informantRelationship || "__none__"} onValueChange={setSel("informantRelationship")}>
+                        <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          {["Spouse", "Son", "Daughter", "Father", "Mother", "Brother", "Sister", "Grandparent", "Grandchild", "Other"].map((r) => (
+                            <SelectItem key={r} value={r}>{r}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </div>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Service Details */}
+            <AccordionItem value="service">
+              <AccordionTrigger>Service Details</AccordionTrigger>
+              <AccordionContent>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Service Type">
+                    <Select value={form.serviceType || "__none__"} onValueChange={(v) => {
+                      setSel("serviceType")(v);
+                      if (v !== "claim") { setFoundPolicy(null); setPolicyMembers([]); setPolicySearch(""); setPolicyLookupError(""); setForm((f) => ({ ...f, policyId: "" })); }
+                    }}>
+                      <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">— Not set —</SelectItem>
+                        <SelectItem value="cash">Cash Service</SelectItem>
+                        <SelectItem value="claim">Policy Claim</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Date of Burial">
+                    <Input type="date" value={form.funeralDate} onChange={set("funeralDate")} data-testid="input-funeral-date" />
+                  </Field>
+                  <div className="col-span-2">
+                    <Field label="Place of Burial">
+                      <Input value={form.funeralLocation} onChange={set("funeralLocation")} placeholder="Cemetery or burial site" data-testid="input-funeral-location" />
+                    </Field>
+                  </div>
+
+                  {/* Policy Claim lookup — shown only when serviceType = claim */}
+                  {form.serviceType === "claim" && (
+                    <div className="col-span-2 border rounded-md p-3 space-y-3 bg-muted/20">
+                      <p className="text-xs font-semibold text-primary">Policy Claim — enter the policy number to link the claim and select the deceased member</p>
+                      <div className="flex gap-2">
+                        <Input
+                          ref={policySearchRef}
+                          placeholder="Policy number, e.g. FLK00123"
+                          value={policySearch === "linked" ? (foundPolicy?.policyNumber || "") : policySearch}
+                          onChange={(e) => setPolicySearch(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookupPolicy(policySearch); } }}
+                          className="flex-1"
+                        />
+                        <Button type="button" size="sm" onClick={() => lookupPolicy(policySearch)} disabled={policyLookupLoading || !policySearch.trim()}>
+                          {policyLookupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
+                        </Button>
+                      </div>
+                      {policyLookupError && <p className="text-xs text-destructive">{policyLookupError}</p>}
+                      {foundPolicy && (
+                        <div className="space-y-2 text-xs border-t pt-2">
+                          <p className="text-muted-foreground">
+                            Found: <strong className="text-foreground">{foundPolicy.policyNumber}</strong> · {foundPolicy.status?.toUpperCase()} · {foundPolicy.currency} {Number(foundPolicy.premiumAmount || 0).toFixed(2)}/mo
+                          </p>
+                          {policyMembers.length > 0 && (
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Select Deceased Member</Label>
+                              <Select
+                                value={form.deceasedName || "__none__"}
+                                onValueChange={(v) => {
+                                  if (v === "__none__") return;
+                                  setForm((f) => ({ ...f, deceasedName: v }));
+                                }}
+                              >
+                                <SelectTrigger><SelectValue placeholder="Select deceased…" /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__none__">— Select member —</SelectItem>
+                                  {policyMembers.map((m: any) => {
+                                    const name = m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim() || m.clientName || m.dependentName || "Member";
+                                    const role = m.role || "member";
+                                    return (
+                                      <SelectItem key={m.id || name} value={name}>
+                                        {name} ({role.replace("_", " ")})
+                                      </SelectItem>
+                                    );
+                                  })}
+                                </SelectContent>
+                              </Select>
+                              <p className="text-[10px] text-muted-foreground">Selecting a member auto-fills the deceased name above.</p>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
-          </div>
+              </AccordionContent>
+            </AccordionItem>
 
-          {/* Body Removal */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Body Removal</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <Field label="Removal Location">
-                  <Input value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where the body is being collected from" />
+            {/* Logistics — removal + burial + agent */}
+            <AccordionItem value="logistics">
+              <AccordionTrigger>Logistics &amp; Attending Agent</AccordionTrigger>
+              <AccordionContent>
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Body Removal</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="col-span-2">
+                        <Field label="Removal Location">
+                          <Input value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where the body is being collected from" />
+                        </Field>
+                      </div>
+                      <Field label="Removal Vehicle">
+                        <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setSel("removalVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
+                      </Field>
+                      <Field label="Removal Driver">
+                        <SearchableSelect options={driverOptions} value={form.removalDriverId} onChange={setSel("removalDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" />
+                      </Field>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Burial Logistics</p>
+                    <p className="text-xs text-muted-foreground mb-2">Can be the same or different vehicle/driver as removal.</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Burial Vehicle">
+                        <SearchableSelect options={vehicleOptions} value={form.burialVehicleId} onChange={setSel("burialVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
+                      </Field>
+                      <Field label="Burial Driver">
+                        <SearchableSelect options={driverOptions} value={form.burialDriverId} onChange={setSel("burialDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" />
+                      </Field>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Attending Agent</p>
+                    <Field label="Staff member attending the funeral">
+                      <SearchableSelect options={agentOptions} value={form.attendingAgentId} onChange={setSel("attendingAgentId")} placeholder="Select agent…" searchPlaceholder="Search staff…" />
+                    </Field>
+                  </div>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Notes */}
+            <AccordionItem value="notes">
+              <AccordionTrigger>Notes</AccordionTrigger>
+              <AccordionContent>
+                <Field label="Additional Notes">
+                  <Textarea value={form.notes} onChange={set("notes")} rows={3} placeholder="Any additional information…" data-testid="input-case-notes" />
                 </Field>
-              </div>
-              <Field label="Removal Vehicle">
-                <Select value={form.removalVehicleId || "__none__"} onValueChange={setSel("removalVehicleId")}>
-                  <SelectTrigger><SelectValue placeholder="Select vehicle…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">— None —</SelectItem>
-                    {vehicles.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>{v.registration}{v.make ? ` — ${v.make} ${v.model || ""}`.trim() : ""}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Removal Driver">
-                <Select value={form.removalDriverId || "__none__"} onValueChange={setSel("removalDriverId")}>
-                  <SelectTrigger><SelectValue placeholder="Select driver…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">— None —</SelectItem>
-                    {userOptions.map((u: any) => (
-                      <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}{u.phone ? ` · ${u.phone}` : ""}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            </div>
-          </div>
-
-          {/* Burial logistics */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Burial Logistics</p>
-            <p className="text-xs text-muted-foreground mb-3">Can be the same or different vehicle/driver as removal.</p>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Burial Vehicle">
-                <Select value={form.burialVehicleId || "__none__"} onValueChange={setSel("burialVehicleId")}>
-                  <SelectTrigger><SelectValue placeholder="Select vehicle…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">— None —</SelectItem>
-                    {vehicles.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>{v.registration}{v.make ? ` — ${v.make} ${v.model || ""}`.trim() : ""}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Burial Driver">
-                <Select value={form.burialDriverId || "__none__"} onValueChange={setSel("burialDriverId")}>
-                  <SelectTrigger><SelectValue placeholder="Select driver…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">— None —</SelectItem>
-                    {userOptions.map((u: any) => (
-                      <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}{u.phone ? ` · ${u.phone}` : ""}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            </div>
-          </div>
-
-          {/* Attending agent */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Attending Agent</p>
-            <Field label="Staff member attending the funeral">
-              <Select value={form.attendingAgentId || "__none__"} onValueChange={setSel("attendingAgentId")}>
-                <SelectTrigger><SelectValue placeholder="Select agent…" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">— None —</SelectItem>
-                  {userOptions.map((u: any) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.displayName || u.email}
-                      {u.gender ? ` · ${u.gender}` : ""}
-                      {u.phone ? ` · ${u.phone}` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
-
-          {/* Notes */}
-          <Field label="Notes">
-            <Textarea value={form.notes} onChange={set("notes")} rows={3} placeholder="Any additional information…" data-testid="input-case-notes" />
-          </Field>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>

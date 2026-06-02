@@ -782,14 +782,14 @@ export default function StaffFinance() {
 
         <Tabs defaultValue={commissionOnly ? "commissions" : "payments"}>
           <TabsList>
-            {!commissionOnly && <TabsTrigger value="payments" data-testid="tab-payments">Payments & Receipts</TabsTrigger>}
-            {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow">Paynow & Cash</TabsTrigger>}
-            {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups">Cashups</TabsTrigger>}
-            {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="expenditures" data-testid="tab-expenditures">Expenditures</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform">POL263</TabsTrigger>}
-            {canWriteFinance && !isAgent && <TabsTrigger value="month-end" data-testid="tab-month-end">Month-end run</TabsTrigger>}
-            {canWriteFinance && !isAgent && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt">Group receipt</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="payments" data-testid="tab-payments" title="All receipted payments linked to policies and clients">Payments &amp; Receipts</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow" title="Mobile money (Paynow) and cash payment collection">Mobile &amp; Cash</TabsTrigger>}
+            {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups" title="Daily cash reconciliation — count cash collected against receipts issued">Cash-up Reconciliation</TabsTrigger>}
+            {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions" title="Agent commission earnings and payout status">Commissions</TabsTrigger>}
+            {!commissionOnly && !isAgent && <TabsTrigger value="expenditures" data-testid="tab-expenditures" title="Operating expenses and outgoing payments">Expenditures</TabsTrigger>}
+            {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform" title="Platform revenue owed to POL263 (subscription and per-policy fees)">Platform Fees</TabsTrigger>}
+            {canWriteFinance && !isAgent && <TabsTrigger value="month-end" data-testid="tab-month-end" title="Run the month-end close: batch premium collection for overdue policies">Month-End Close</TabsTrigger>}
+            {canWriteFinance && !isAgent && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt" title="Receipt a single payment across multiple policies in a group">Group Receipt</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="payments">

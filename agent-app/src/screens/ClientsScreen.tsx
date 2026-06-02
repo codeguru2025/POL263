@@ -11,6 +11,7 @@ import { fullSync, refreshCache } from "../sync/engine";
 import { API_BASE } from "../config";
 import { apiPost } from "../api";
 import { colors, spacing, fontSize } from "../theme";
+import DateField from "../components/DateField";
 
 interface Client {
   local_id: string;
@@ -82,12 +83,13 @@ const EMPTY_FORM = {
   objectionsFaced: "", responseToObjections: "", clientFeedback: "",
 };
 
-export default function ClientsScreen() {
+export default function ClientsScreen({ navigation }: any) {
   const { isOnline } = useNetwork();
   const [clients, setClients] = useState<Client[]>([]);
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [offlineSavedBanner, setOfflineSavedBanner] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [form, setForm] = useState({ ...EMPTY_FORM });
 
@@ -211,7 +213,7 @@ export default function ClientsScreen() {
       return;
     }
     if (!form.dateOfBirth.trim()) {
-      Alert.alert("Validation Error", "Date of birth is required (YYYY-MM-DD).");
+      Alert.alert("Validation Error", "Date of birth is required.");
       return;
     }
     if (!form.gender) {
@@ -283,7 +285,13 @@ export default function ClientsScreen() {
       setForm({ ...EMPTY_FORM });
       setShowCreate(false);
       await loadClients();
-      if (isOnline) { try { await refreshCache("clients"); await loadClients(); } catch {} }
+      if (isOnline) {
+        try { await refreshCache("clients"); await loadClients(); } catch {}
+      } else {
+        // Surface a clear, persistent confirmation that the record is queued
+        setOfflineSavedBanner(true);
+        setTimeout(() => setOfflineSavedBanner(false), 6000);
+      }
     } catch (e: any) {
       // Duplicate national ID: server responds 409 with existingClient
       if (e.message?.includes("409") || e.message?.toLowerCase().includes("duplicate") || e.message?.toLowerCase().includes("already exists")) {
@@ -382,6 +390,11 @@ export default function ClientsScreen() {
 
   return (
     <View style={styles.container}>
+      {offlineSavedBanner && (
+        <View style={styles.savedBanner}>
+          <Text style={styles.savedBannerText}>✓ Saved offline — will sync when you reconnect</Text>
+        </View>
+      )}
       <View style={styles.header}>
         <TextInput
           style={styles.search}
@@ -463,7 +476,7 @@ export default function ClientsScreen() {
             <TextInput style={styles.input} value={form.email} onChangeText={(v) => setForm(f => ({ ...f, email: v }))} keyboardType="email-address" autoCapitalize="none" />
 
             <Text style={styles.label}>Date of Birth</Text>
-            <TextInput style={styles.input} value={form.dateOfBirth} onChangeText={(v) => setForm(f => ({ ...f, dateOfBirth: v }))} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} />
+            <DateField value={form.dateOfBirth} onChange={(v) => setForm(f => ({ ...f, dateOfBirth: v }))} placeholder="Select date of birth" maxYear={new Date().getFullYear()} />
 
             <Text style={styles.label}>Gender</Text>
             <View style={styles.genderRow}>
@@ -552,7 +565,22 @@ export default function ClientsScreen() {
               <Text style={styles.modalTitle} numberOfLines={1}>
                 {selectedClient.first_name} {selectedClient.last_name}
               </Text>
-              <View style={{ width: 60 }} />
+              {selectedClient.server_id ? (
+                <TouchableOpacity
+                  style={styles.issuePolicyBtn}
+                  onPress={() => {
+                    setSelectedClient(null);
+                    navigation.navigate("Policies", {
+                      screen: "CreatePolicy",
+                      params: { preselectedClientId: selectedClient.server_id, preselectedClientName: `${selectedClient.first_name} ${selectedClient.last_name}` },
+                    });
+                  }}
+                >
+                  <Text style={styles.issuePolicyBtnText}>📋 Issue</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={{ width: 60 }} />
+              )}
             </View>
             <ScrollView style={styles.modalBody}>
               {/* Client Info */}
@@ -760,6 +788,8 @@ export default function ClientsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  savedBanner: { backgroundColor: "#dcfce7", paddingVertical: spacing.sm, paddingHorizontal: spacing.md, alignItems: "center" },
+  savedBannerText: { fontSize: fontSize.sm, color: "#166534", fontWeight: "600" },
   header: { flexDirection: "row", padding: spacing.md, gap: spacing.sm },
   search: {
     flex: 1, backgroundColor: colors.surface, borderRadius: 10,
@@ -799,6 +829,8 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.text, flex: 1, textAlign: "center" },
   cancelText: { fontSize: fontSize.md, color: colors.danger },
   saveText: { fontSize: fontSize.md, color: colors.accent, fontWeight: "700" },
+  issuePolicyBtn: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  issuePolicyBtnText: { color: "#fff", fontSize: fontSize.xs, fontWeight: "700" },
   modalBody: { padding: spacing.md },
   label: { fontSize: fontSize.sm, fontWeight: "600", color: colors.text, marginTop: spacing.md, marginBottom: spacing.xs },
   input: {

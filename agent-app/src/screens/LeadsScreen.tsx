@@ -235,21 +235,38 @@ export default function LeadsScreen() {
             <Text style={styles.emptySubtext}>Create quotations to start your pipeline</Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.card} onPress={() => setSelectedLead(item)} activeOpacity={0.75}>
-            <View style={styles.cardTop}>
-              <Text style={styles.name}>{item.firstName} {item.lastName}</Text>
-              <View style={[styles.stageBadge, { backgroundColor: stageColor(item.stage) + "22" }]}>
-                <Text style={[styles.stageText, { color: stageColor(item.stage) }]}>
-                  {STAGE_LABELS[item.stage] || item.stage}
-                </Text>
+        renderItem={({ item }) => {
+          const next = nextStage(item.stage);
+          const showAdvance = next && item.stage !== "lost" && item.stage !== "activated";
+          return (
+            <TouchableOpacity style={styles.card} onPress={() => setSelectedLead(item)} activeOpacity={0.75}>
+              <View style={styles.cardTop}>
+                <Text style={styles.name}>{item.firstName} {item.lastName}</Text>
+                <View style={[styles.stageBadge, { backgroundColor: stageColor(item.stage) + "22" }]}>
+                  <Text style={[styles.stageText, { color: stageColor(item.stage) }]}>
+                    {STAGE_LABELS[item.stage] || item.stage}
+                  </Text>
+                </View>
               </View>
-            </View>
-            {item.phone && <Text style={styles.detail}>📞 {item.phone}</Text>}
-            {item.email && <Text style={styles.detail}>✉️ {item.email}</Text>}
-            {item.source && <Text style={styles.sourcePill}>{SOURCES.find(s => s.value === item.source)?.label || item.source}</Text>}
-          </TouchableOpacity>
-        )}
+              {item.phone && <Text style={styles.detail}>📞 {item.phone}</Text>}
+              {item.email && <Text style={styles.detail}>✉️ {item.email}</Text>}
+              <View style={styles.cardFooter}>
+                {item.source && <Text style={styles.sourcePill}>{SOURCES.find(s => s.value === item.source)?.label || item.source}</Text>}
+                {showAdvance && isOnline && (
+                  <TouchableOpacity
+                    style={[styles.advanceChip, { borderColor: stageColor(next!) }]}
+                    onPress={() => handleAdvanceStage(item)}
+                    disabled={advancing}
+                  >
+                    <Text style={[styles.advanceChipText, { color: stageColor(next!) }]} numberOfLines={1}>
+                      → {STAGE_LABELS[next!] || next}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </TouchableOpacity>
+          );
+        }}
       />
 
       {/* ── Lead Detail Modal ── */}
@@ -402,7 +419,13 @@ const styles = StyleSheet.create({
   stageBadge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: 6, marginLeft: spacing.sm },
   stageText: { fontSize: fontSize.xs, fontWeight: "700" },
   detail: { fontSize: fontSize.sm, color: colors.textSecondary, marginTop: 2 },
-  sourcePill: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 4, fontStyle: "italic" },
+  cardFooter: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.xs },
+  sourcePill: { fontSize: fontSize.xs, color: colors.textMuted, fontStyle: "italic", flex: 1 },
+  advanceChip: {
+    borderWidth: 1.5, borderRadius: 16, paddingHorizontal: spacing.sm, paddingVertical: 4,
+    backgroundColor: colors.surface, maxWidth: 160,
+  },
+  advanceChipText: { fontSize: fontSize.xs, fontWeight: "700" },
   // Detail modal
   modalContainer: { flex: 1, backgroundColor: colors.background },
   modalHeader: {

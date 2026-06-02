@@ -11,6 +11,7 @@ import { colors, spacing, fontSize } from "../theme";
 import { API_BASE } from "../config";
 import { apiGet, apiPost, apiPatch } from "../api";
 import { getDb } from "../db/schema";
+import DateField from "../components/DateField";
 
 interface FuneralCase {
   id: string;
@@ -439,7 +440,7 @@ function CaseFormModal({
             <View style={fStyles.row2}>
               <View style={{ flex: 1 }}>
                 <Field label="Date of Death">
-                  <TextInput style={fStyles.input} value={form.dateOfDeath} onChangeText={set("dateOfDeath")} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} />
+                  <DateField value={form.dateOfDeath} onChange={set("dateOfDeath")} placeholder="Select date" maxYear={new Date().getFullYear()} />
                 </Field>
               </View>
               <View style={{ flex: 1 }}>
@@ -535,7 +536,7 @@ function CaseFormModal({
             <View style={fStyles.row2}>
               <View style={{ flex: 1 }}>
                 <Field label="Date of Burial">
-                  <TextInput style={fStyles.input} value={form.funeralDate} onChangeText={set("funeralDate")} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} />
+                  <DateField value={form.funeralDate} onChange={set("funeralDate")} placeholder="Select date" />
                 </Field>
               </View>
               <View style={{ flex: 1 }}>

@@ -10,6 +10,7 @@ import { useNetwork } from "../context/NetworkContext";
 import { fullSync, refreshCache } from "../sync/engine";
 import { apiPost } from "../api";
 import { colors, spacing, fontSize } from "../theme";
+import DateField from "../components/DateField";
 
 const RELATIONSHIPS = ["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","In-law","Other"];
 
@@ -46,10 +47,11 @@ interface AddOn {
   priceMonthly?: string;
 }
 
-export default function CreatePolicyScreen({ navigation }: any) {
+export default function CreatePolicyScreen({ navigation, route }: any) {
   const { isOnline } = useNetwork();
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const preselectedClientId = route?.params?.preselectedClientId as string | undefined;
 
   // Client selection
   const [clients, setClients] = useState<LocalClient[]>([]);
@@ -90,9 +92,18 @@ export default function CreatePolicyScreen({ navigation }: any) {
       const cachedClients: LocalClient[] = cached
         .map(c => { const d = JSON.parse(c.data); return { local_id: c.id, server_id: c.id, first_name: d.firstName || "", last_name: d.lastName || "", phone: d.phone, national_id: d.nationalId, synced: 1 }; })
         .filter(c => !localServerIds.has(c.server_id));
-      setClients([...local, ...cachedClients]);
+      const all = [...local, ...cachedClients];
+      setClients(all);
+      // Pre-select a client passed from the Clients screen ("Issue Policy" shortcut)
+      if (preselectedClientId) {
+        const match = all.find(c => c.server_id === preselectedClientId || c.local_id === preselectedClientId);
+        if (match) {
+          setSelectedClient(match);
+          setStep(2);
+        }
+      }
     })();
-  }, []);
+  }, [preselectedClientId]);
 
   // Load products & add-ons from cache
   useEffect(() => {
@@ -437,8 +448,7 @@ export default function CreatePolicyScreen({ navigation }: any) {
               placeholder="+263..." placeholderTextColor={colors.textMuted} keyboardType="phone-pad" />
 
             <Text style={styles.label}>Effective Date</Text>
-            <TextInput style={styles.input} value={effectiveDate} onChangeText={setEffectiveDate}
-              placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} />
+            <DateField value={effectiveDate} onChange={setEffectiveDate} placeholder="Select effective date" />
 
             <View style={styles.navRow}>
               <TouchableOpacity style={styles.backButton} onPress={() => setStep(2)}>
@@ -506,8 +516,7 @@ export default function CreatePolicyScreen({ navigation }: any) {
                 <TextInput style={styles.input} value={newDep.nationalId} onChangeText={v => setNewDep(d => ({ ...d, nationalId: v }))}
                   placeholder="e.g. 08833089H38" placeholderTextColor={colors.textMuted} autoCapitalize="characters" />
                 <Text style={styles.label}>Date of Birth</Text>
-                <TextInput style={styles.input} value={newDep.dateOfBirth} onChangeText={v => setNewDep(d => ({ ...d, dateOfBirth: v }))}
-                  placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} />
+                <DateField value={newDep.dateOfBirth} onChange={v => setNewDep(d => ({ ...d, dateOfBirth: v }))} placeholder="Select date of birth" maxYear={new Date().getFullYear()} />
                 <TouchableOpacity style={[styles.nextButton, { marginTop: spacing.md }]} onPress={addDependent}>
                   <Text style={styles.nextButtonText}>Add Member</Text>
                 </TouchableOpacity>

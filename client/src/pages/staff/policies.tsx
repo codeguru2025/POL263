@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ClientSearchInput } from "@/components/client-search-input";
 import { CurrencySelect } from "@/components/currency-select";
 import { Textarea } from "@/components/ui/textarea";
@@ -1222,6 +1223,16 @@ export default function StaffPolicies() {
             </div>
           </section>
 
+          <Tabs defaultValue="overview" className="space-y-4">
+            <TabsList className="flex flex-wrap h-auto">
+              <TabsTrigger value="overview" data-testid="tab-policy-overview">Overview</TabsTrigger>
+              <TabsTrigger value="members" data-testid="tab-policy-members">Members</TabsTrigger>
+              <TabsTrigger value="financials" data-testid="tab-policy-financials">Financials</TabsTrigger>
+              <TabsTrigger value="payments" data-testid="tab-policy-payments">Payments</TabsTrigger>
+              <TabsTrigger value="documents" data-testid="tab-policy-documents">Documents</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="overview" className="space-y-4 mt-4">
           <CardSection
             title="Policy holder (principal)"
             description="Contact and identity for the main insured person linked to this policy."
@@ -1439,7 +1450,9 @@ export default function StaffPolicies() {
                   </div>
                 </div>
           </CardSection>
+            </TabsContent>
 
+            <TabsContent value="financials" className="space-y-4 mt-4">
           <CardSection title="Financial position" description="Premium schedule, balance, and cumulative receipts." icon={CreditCard}>
               <div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-4 text-sm">
@@ -1493,7 +1506,9 @@ export default function StaffPolicies() {
                 return <p className="text-sm">{(current.provider || "mobile").toUpperCase()} · {current.mobileNumber || "—"}</p>;
               })()}
           </CardSection>
+            </TabsContent>
 
+            <TabsContent value="members" className="space-y-4 mt-4">
           <CardSection
             title="Policy members"
             description="All lives covered (policy holder + dependants). Filter by age band."
@@ -1668,7 +1683,9 @@ export default function StaffPolicies() {
                 </div>
             </CardSection>
           )}
+            </TabsContent>
 
+            <TabsContent value="payments" className="space-y-4 mt-4">
           <CardSection title="Payment history" description="Transactions recorded against this policy." icon={CreditCard} flush>
               {paymentsLoading ? (
                 <div className="p-6 space-y-2">
@@ -1785,6 +1802,9 @@ export default function StaffPolicies() {
               )}
           </CardSection>
 
+            </TabsContent>
+
+            <TabsContent value="documents" className="space-y-4 mt-4">
           <CardSection title="E-Statement" description="Open the preview to review your statement, then download from there if you need a file. Optionally filter by date range first." icon={FileText} contentClassName="space-y-4">
               <div className="flex flex-wrap items-end gap-3">
                 <div className="grid gap-1.5">
@@ -1841,6 +1861,8 @@ export default function StaffPolicies() {
               </div>
               <p className="text-xs text-muted-foreground">Leave dates empty for full payment history. Uses tenant logo and signature from Settings.</p>
           </CardSection>
+            </TabsContent>
+          </Tabs>
 
           <Dialog open={showEstatementViewer} onOpenChange={(open) => { setShowEstatementViewer(open); if (!open) setEstatementViewerUrl(""); }}>
             <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col w-[min(100vw-2rem,56rem)] overflow-x-hidden">
@@ -3394,6 +3416,48 @@ export default function StaffPolicies() {
               </>
             )}
           </div>
+          {createStep === 4 && createMutation.isError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 mb-1" data-testid="text-create-error">
+              <p className="text-xs text-destructive font-medium">
+                {(createMutation.error as Error)?.message || "Could not create the policy. Please review the details and try again."}
+              </p>
+            </div>
+          )}
+          {(() => {
+            // Derive a human-readable reason the Continue/Save button is blocked, shown as a hint.
+            const missing: string[] = [];
+            if (createStep === 1) {
+              if (clientMode === "search" && !createForm.clientId) missing.push("select a client");
+              if (clientMode === "new") {
+                if (!createForm.newClient.firstName?.trim()) missing.push("first name");
+                if (!createForm.newClient.lastName?.trim()) missing.push("last name");
+                if (!createForm.newClient.nationalId?.trim()) missing.push("national ID");
+                if (!createForm.newClient.phone?.trim()) missing.push("phone");
+                if (!createForm.newClient.dateOfBirth) missing.push("date of birth");
+                if (!createForm.newClient.gender) missing.push("gender");
+              }
+              if (!createForm.beneficiaryId) {
+                if (!createForm.beneficiaryManual.firstName?.trim()) missing.push("beneficiary first name");
+                if (!createForm.beneficiaryManual.lastName?.trim()) missing.push("beneficiary last name");
+                if (!createForm.beneficiaryManual.relationship?.trim()) missing.push("beneficiary relationship");
+                if (!createForm.beneficiaryManual.nationalId?.trim()) missing.push("beneficiary national ID");
+                else if (!isValidNationalId(createForm.beneficiaryManual.nationalId)) missing.push("a valid beneficiary national ID (e.g. 08833089H38)");
+                if (!createForm.beneficiaryManual.phone?.trim()) missing.push("beneficiary phone");
+              }
+            } else if (createStep === 2) {
+              if (!createForm.selectedProductId) missing.push("a product");
+              else if (!createForm.productVersionId) missing.push("a product version");
+            } else if (createStep === 4) {
+              if (!createForm.productVersionId) missing.push("a product version");
+              if (!calculatedPremium) missing.push("a calculated premium (check product & add-ons)");
+            }
+            if (missing.length === 0) return null;
+            return (
+              <p className="text-xs text-amber-600 mb-1" data-testid="text-step-hint">
+                To continue, provide: {missing.join(", ")}.
+              </p>
+            );
+          })()}
           <DialogFooter>
             {createStep > 1 ? (
               <Button variant="outline" onClick={() => setCreateStep((s) => s - 1)}>Back</Button>
