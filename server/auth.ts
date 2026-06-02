@@ -12,6 +12,7 @@ import { getDbForOrg } from "./tenant-db";
 import { users } from "@shared/schema";
 import { structuredLog } from "./logger";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
+import { isAgentScoped } from "@shared/roles";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants } from "@shared/control-plane-schema";
 
@@ -257,8 +258,9 @@ export function setupAuth(app: Express) {
             // ✅ Only check roles if tenant-scoped (never pass "" as uuid)
             if (user.organizationId) {
               const roles = await storage.getUserRoles(user.id, user.organizationId);
-              const isAgent = roles.some((r) => r.name === "agent");
-              if (isAgent) {
+              // Block agent-only users from Google OAuth; users with a superior role
+              // (administrator, manager, superuser) alongside agent may use Google login.
+              if (isAgentScoped(roles)) {
                 return done(null, false, {
                   message: "Agents must use the agent login page with email and password.",
                 });

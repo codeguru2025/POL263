@@ -1097,9 +1097,28 @@ export const funeralCases = pgTable(
     claimId: uuid("claim_id").references(() => claims.id),
     policyId: uuid("policy_id").references(() => policies.id),
     caseNumber: text("case_number").notNull(),
+    // Deceased
     deceasedName: text("deceased_name").notNull(),
-    funeralDate: date("funeral_date"),
-    funeralLocation: text("funeral_location"),
+    dateOfDeath: date("date_of_death"),
+    causeOfDeath: text("cause_of_death"),
+    placeOfDeath: text("place_of_death"),
+    // Informant (person who reported the death)
+    informantName: text("informant_name"),
+    informantPhone: text("informant_phone"),
+    informantRelationship: text("informant_relationship"),
+    // Service
+    serviceType: text("service_type"),   // 'cash' | 'claim'
+    funeralDate: date("funeral_date"),   // date of burial
+    funeralLocation: text("funeral_location"),  // place of burial
+    // Body removal logistics
+    removalLocation: text("removal_location"),
+    removalVehicleId: uuid("removal_vehicle_id").references(() => fleetVehicles.id),
+    removalDriverId: uuid("removal_driver_id").references(() => users.id),
+    // Burial logistics (can be different vehicle/driver)
+    burialVehicleId: uuid("burial_vehicle_id").references(() => fleetVehicles.id),
+    burialDriverId: uuid("burial_driver_id").references(() => users.id),
+    // Attending agent
+    attendingAgentId: uuid("attending_agent_id").references(() => users.id),
     status: text("status").default("open").notNull(),
     assignedTo: uuid("assigned_to").references(() => users.id),
     notes: text("notes"),

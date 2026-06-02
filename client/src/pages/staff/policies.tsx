@@ -18,6 +18,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
+import { isAgentScoped } from "@shared/roles";
 import { useSearch, useLocation } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
@@ -92,7 +93,7 @@ export default function StaffPolicies() {
   const { user, roles, permissions, isPlatformOwner } = useAuth();
   const safeRoles = Array.isArray(roles) ? roles : [];
   const safePermissions = Array.isArray(permissions) ? permissions : [];
-  const isAgent = safeRoles.some((r: any) => r.name === "agent");
+  const isAgent = isAgentScoped(safeRoles);
   const canWritePolicy = safePermissions.includes("write:policy");
   const canWriteFinance = safePermissions.includes("write:finance");
   const canDeletePolicy = safePermissions.includes("delete:policy");

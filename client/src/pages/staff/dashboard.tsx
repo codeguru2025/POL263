@@ -47,6 +47,7 @@ import {
   Pie,
   Legend,
 } from "recharts";
+import { isAgentScoped } from "@shared/roles";
 
 interface DashboardStats {
   totalPolicies: number;
@@ -121,7 +122,7 @@ export default function StaffDashboard() {
   const { toast } = useToast();
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
   const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
-  const isAgent = roles.some((r) => r.name === "agent");
+  const isAgent = isAgentScoped(roles);
   const canReadFinance = permissions.includes("read:finance");
   const canReadClaims = permissions.includes("read:claim");
   const canReadFuneralOps = permissions.includes("read:funeral_ops");

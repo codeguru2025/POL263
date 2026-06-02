@@ -19,6 +19,7 @@ import { PolicySearchInput } from "@/components/policy-search-input";
 import { useAuth } from "@/hooks/use-auth";
 import { CurrencySelect } from "@/components/currency-select";
 import { formatAmount } from "@shared/validation";
+import { isAgentScoped } from "@shared/roles";
 
 function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
@@ -239,7 +240,7 @@ export default function StaffFinance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { roles, permissions, user: authUser } = useAuth();
-  const isAgent = roles.some((r) => r.name === "agent");
+  const isAgent = isAgentScoped(roles);
   const canReadFinance = permissions.includes("read:finance");
   const canWriteFinance = permissions.includes("write:finance");
   const canReadCommission = permissions.includes("read:commission");

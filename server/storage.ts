@@ -400,6 +400,7 @@ export interface IStorage {
   createFuneralTask(task: InsertFuneralTask): Promise<FuneralTask>;
   updateFuneralTask(id: string, data: Partial<InsertFuneralTask>, orgId: string): Promise<FuneralTask | undefined>;
   getFleetVehicles(orgId: string): Promise<FleetVehicle[]>;
+  getFleetVehicleById(id: string, orgId: string): Promise<FleetVehicle | undefined>;
   createFleetVehicle(vehicle: InsertFleetVehicle): Promise<FleetVehicle>;
   updateFleetVehicle(id: string, data: Partial<InsertFleetVehicle>, orgId: string): Promise<FleetVehicle | undefined>;
   getCommissionPlans(orgId: string): Promise<CommissionPlan[]>;
@@ -2798,6 +2799,11 @@ export class DatabaseStorage implements IStorage {
   async getFleetVehicles(orgId: string): Promise<FleetVehicle[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(fleetVehicles).where(eq(fleetVehicles.organizationId, orgId));
+  }
+  async getFleetVehicleById(id: string, orgId: string): Promise<FleetVehicle | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [v] = await tdb.select().from(fleetVehicles).where(and(eq(fleetVehicles.id, id), eq(fleetVehicles.organizationId, orgId)));
+    return v;
   }
   async createFleetVehicle(vehicle: InsertFleetVehicle): Promise<FleetVehicle> {
     const tdb = await getDbForOrg(vehicle.organizationId);

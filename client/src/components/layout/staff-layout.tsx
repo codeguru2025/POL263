@@ -74,6 +74,7 @@ import {
 import AppFooter from "@/components/app-footer";
 import { APP_SHELL_MAX } from "@/components/layout/app-chrome";
 import { cn } from "@/lib/utils";
+import { isAgentScoped } from "@shared/roles";
 
 type StaffNavItem = {
   href: string;
@@ -214,7 +215,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   }, [location]);
 
   const safeRoles = Array.isArray(roles) ? roles : [];
-  const isAgent = safeRoles.some((r: any) => r.name === "agent");
+  const isAgent = isAgentScoped(safeRoles);
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
 
   const [now, setNow] = useState(() => new Date());
