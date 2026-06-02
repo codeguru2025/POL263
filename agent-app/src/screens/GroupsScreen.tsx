@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNetwork } from "../context/NetworkContext";
 import { colors, spacing, fontSize } from "../theme";
-import { API_BASE } from "../config";
+import { apiGet } from "../api";
 
 interface Group {
   id: string;
@@ -43,8 +43,8 @@ export default function GroupsScreen() {
     if (!isOnline) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/groups`, { credentials: "include" });
-      if (res.ok) setGroups(await res.json());
+      const data = await apiGet<Group[]>("/api/groups");
+      setGroups(data);
     } catch {} finally { setLoading(false); }
   }, [isOnline]);
 
@@ -56,8 +56,8 @@ export default function GroupsScreen() {
     setSelectedGroup(group);
     setLoadingPolicies(true);
     try {
-      const res = await fetch(`${API_BASE}/api/groups/${group.id}/policies`, { credentials: "include" });
-      if (res.ok) setGroupPolicies(await res.json());
+      const data = await apiGet<GroupPolicy[]>(`/api/groups/${group.id}/policies`);
+      setGroupPolicies(data);
     } catch {} finally { setLoadingPolicies(false); }
   };
 

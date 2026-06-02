@@ -17,6 +17,7 @@ import NotificationsScreen from "../screens/NotificationsScreen";
 import ReportsScreen from "../screens/ReportsScreen";
 import GroupsScreen from "../screens/GroupsScreen";
 import ApprovalsScreen from "../screens/ApprovalsScreen";
+import FuneralsScreen from "../screens/FuneralsScreen";
 import { colors, fontSize } from "../theme";
 import { useNetwork } from "../context/NetworkContext";
 import AutoSync from "../sync/AutoSync";
@@ -79,6 +80,7 @@ function PoliciesStackScreen() {
 
 const MORE_MENU: { label: string; icon: IoniconName; screen: string; desc: string; color: string }[] = [
   { label: "Claims",        icon: "medkit-outline",            screen: "Claims",       desc: "Submit and track claims",        color: "#e11d48" },
+  { label: "Funerals",      icon: "flower-outline",            screen: "Funerals",     desc: "Funeral case management",        color: "#6d28d9" },
   { label: "Commissions",   icon: "cash-outline",              screen: "Commissions",  desc: "View your commission earnings",  color: "#16a34a" },
   { label: "Payments",      icon: "card-outline",              screen: "Payments",     desc: "Payment records",               color: "#2563eb" },
   { label: "Reports",       icon: "bar-chart-outline",         screen: "Reports",      desc: "Key metrics and performance",   color: "#7c3aed" },
@@ -131,6 +133,7 @@ function MoreStackScreen() {
     <MoreStack.Navigator>
       <MoreStack.Screen name="MoreMenu" component={MoreMenuScreen} options={{ headerShown: false }} />
       <MoreStack.Screen name="Claims" component={ClaimsScreen} options={{ title: "Claims", ...navOpts }} />
+      <MoreStack.Screen name="Funerals" component={FuneralsScreen} options={{ title: "Funeral Operations", ...navOpts }} />
       <MoreStack.Screen name="Commissions" component={CommissionsScreen} options={{ ...navOpts }} />
       <MoreStack.Screen name="Payments" component={PaymentsScreen} options={{ ...navOpts }} />
       <MoreStack.Screen name="Reports" component={ReportsScreen} options={{ title: "Reports & Analytics", ...navOpts }} />

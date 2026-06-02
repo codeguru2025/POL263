@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNetwork } from "../context/NetworkContext";
 import { colors, spacing, fontSize } from "../theme";
-import { API_BASE } from "../config";
+import { apiGet, apiPost } from "../api";
 
 interface Approval {
   id: string;
@@ -38,8 +38,8 @@ export default function ApprovalsScreen() {
     if (!isOnline) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/approvals?status=pending`, { credentials: "include" });
-      if (res.ok) setApprovals(await res.json());
+      const data = await apiGet<Approval[]>("/api/approvals?status=pending");
+      setApprovals(Array.isArray(data) ? data : []);
     } catch {} finally { setLoading(false); }
   }, [isOnline]);
 
@@ -59,14 +59,7 @@ export default function ApprovalsScreen() {
           onPress: async () => {
             setActing(id);
             try {
-              const res = await fetch(`${API_BASE}/api/approvals/${id}/${action}`, {
-                method: "POST", credentials: "include",
-                headers: { "Content-Type": "application/json" },
-              });
-              if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.message || "Failed");
-              }
+              await apiPost(`/api/approvals/${id}/${action}`);
               setApprovals(prev => prev.filter(a => a.id !== id));
               Alert.alert("Done", `Request ${action === "approve" ? "approved" : "rejected"}`);
             } catch (e: any) {

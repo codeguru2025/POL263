@@ -7,8 +7,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNetwork } from "../context/NetworkContext";
 import { colors, spacing, fontSize } from "../theme";
-import { API_BASE } from "../config";
 import { getDb } from "../db/schema";
+import { apiGet, apiPost } from "../api";
 
 interface Claim {
   id: string;
@@ -52,15 +52,12 @@ export default function ClaimsScreen() {
     setLoading(true);
     try {
       if (isOnline) {
-        const res = await fetch(`${API_BASE}/api/claims`, { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          setClaims(data);
-          const db = await getDb();
-          await db.runAsync("DELETE FROM cache_my_claims");
-          for (const c of data) {
-            await db.runAsync("INSERT OR REPLACE INTO cache_my_claims (id, data, updated_at) VALUES (?, ?, datetime('now'))", c.id, JSON.stringify(c));
-          }
+        const data = await apiGet<any[]>("/api/claims");
+        setClaims(data);
+        const db = await getDb();
+        await db.runAsync("DELETE FROM cache_my_claims");
+        for (const c of data) {
+          await db.runAsync("INSERT OR REPLACE INTO cache_my_claims (id, data, updated_at) VALUES (?, ?, datetime('now'))", c.id, JSON.stringify(c));
         }
       } else {
         const db = await getDb();
@@ -73,15 +70,12 @@ export default function ClaimsScreen() {
   const fetchPolicies = useCallback(async () => {
     if (!isOnline) return;
     try {
-      const res = await fetch(`${API_BASE}/api/policies?limit=200`, { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        const list = Array.isArray(data) ? data : (data.policies || []);
-        setPolicies(list.map((p: any) => ({
-          id: p.id, policyNumber: p.policyNumber,
-          clientFirstName: p.clientFirstName || "", clientLastName: p.clientLastName || "",
-        })));
-      }
+      const data = await apiGet<any>("/api/policies?limit=200");
+      const list = Array.isArray(data) ? data : (data.policies || []);
+      setPolicies(list.map((p: any) => ({
+        id: p.id, policyNumber: p.policyNumber,
+        clientFirstName: p.clientFirstName || "", clientLastName: p.clientLastName || "",
+      })));
     } catch {}
   }, [isOnline]);
 
@@ -99,22 +93,14 @@ export default function ClaimsScreen() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/claims`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          policyId: form.policyId,
-          claimType: form.claimType,
-          deceasedName: form.deceasedName || undefined,
-          deceasedRelationship: form.deceasedRelationship || undefined,
-          dateOfDeath: form.dateOfDeath || undefined,
-          causeOfDeath: form.causeOfDeath || undefined,
-        }),
+      await apiPost("/api/claims", {
+        policyId: form.policyId,
+        claimType: form.claimType,
+        deceasedName: form.deceasedName || undefined,
+        deceasedRelationship: form.deceasedRelationship || undefined,
+        dateOfDeath: form.dateOfDeath || undefined,
+        causeOfDeath: form.causeOfDeath || undefined,
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to submit claim");
-      }
       Alert.alert("Success", "Claim submitted successfully");
       setShowCreate(false);
       setForm({ policyId: "", claimType: "", deceasedName: "", deceasedRelationship: "", dateOfDeath: "", causeOfDeath: "" });

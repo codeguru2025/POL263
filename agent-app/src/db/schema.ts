@@ -200,6 +200,11 @@ async function initSchema(db: SQLite.SQLiteDatabase) {
       id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Funeral cases cache
+    CREATE TABLE IF NOT EXISTS cache_my_funeral_cases (
+      id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Last sync timestamps
     CREATE TABLE IF NOT EXISTS sync_meta (
       key TEXT PRIMARY KEY,

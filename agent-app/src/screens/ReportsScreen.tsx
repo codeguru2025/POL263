@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNetwork } from "../context/NetworkContext";
 import { colors, spacing, fontSize } from "../theme";
-import { API_BASE } from "../config";
+import { apiGet } from "../api";
 
 interface DashboardStats {
   totalPolicies: number;
@@ -80,27 +80,20 @@ export default function ReportsScreen() {
     if (!isOnline) return;
     setLoading(true);
     try {
-      const periodQ = `?period=${p}`;
+      const q = `?period=${p}`;
       const [dashRes, commRes, commListRes, agentRes] = await Promise.allSettled([
-        fetch(`${API_BASE}/api/dashboard${periodQ}`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/commissions/summary${periodQ}`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/commissions${periodQ}&limit=20`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/agent-stats${periodQ}`, { credentials: "include" }),
+        apiGet<DashboardStats>(`/api/dashboard${q}`),
+        apiGet<CommissionSummary>(`/api/commissions/summary${q}`),
+        apiGet<any>(`/api/commissions${q}&limit=20`),
+        apiGet<any>(`/api/agent-stats${q}`),
       ]);
-
-      if (dashRes.status === "fulfilled" && dashRes.value.ok) {
-        setStats(await dashRes.value.json());
-      }
-      if (commRes.status === "fulfilled" && commRes.value.ok) {
-        setCommission(await commRes.value.json());
-      }
-      if (commListRes.status === "fulfilled" && commListRes.value.ok) {
-        const data = await commListRes.value.json();
+      if (dashRes.status === "fulfilled") setStats(dashRes.value);
+      if (commRes.status === "fulfilled") setCommission(commRes.value);
+      if (commListRes.status === "fulfilled") {
+        const data = commListRes.value;
         setCommissionList(Array.isArray(data) ? data : (data.commissions ?? []));
       }
-      if (agentRes.status === "fulfilled" && agentRes.value.ok) {
-        setAgentStats(await agentRes.value.json());
-      }
+      if (agentRes.status === "fulfilled") setAgentStats(agentRes.value);
     } catch {} finally { setLoading(false); }
   }, [isOnline, period]);
 

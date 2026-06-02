@@ -6,8 +6,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNetwork } from "../context/NetworkContext";
 import { colors, spacing, fontSize } from "../theme";
-import { API_BASE } from "../config";
 import { getDb } from "../db/schema";
+import { apiGet, apiPatch } from "../api";
 
 interface Notification {
   id: string;
@@ -29,16 +29,13 @@ export default function NotificationsScreen() {
     setLoading(true);
     try {
       if (isOnline) {
-        const res = await fetch(`${API_BASE}/api/notifications`, { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          const items = Array.isArray(data) ? data : (data.notifications ?? []);
-          setNotifs(items);
-          const db = await getDb();
-          await db.runAsync("DELETE FROM cache_my_notifications");
-          for (const n of items) {
-            await db.runAsync("INSERT OR REPLACE INTO cache_my_notifications (id, data, updated_at) VALUES (?, ?, datetime('now'))", n.id, JSON.stringify(n));
-          }
+        const data = await apiGet<any>("/api/notifications");
+        const items: Notification[] = Array.isArray(data) ? data : (data.notifications ?? []);
+        setNotifs(items);
+        const db = await getDb();
+        await db.runAsync("DELETE FROM cache_my_notifications");
+        for (const n of items) {
+          await db.runAsync("INSERT OR REPLACE INTO cache_my_notifications (id, data, updated_at) VALUES (?, ?, datetime('now'))", n.id, JSON.stringify(n));
         }
       } else {
         const db = await getDb();
@@ -54,14 +51,14 @@ export default function NotificationsScreen() {
 
   const markRead = async (id: string) => {
     try {
-      await fetch(`${API_BASE}/api/notifications/${id}/read`, { method: "PATCH", credentials: "include" });
+      await apiPatch(`/api/notifications/${id}/read`);
       setNotifs(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
     } catch {}
   };
 
   const markAllRead = async () => {
     try {
-      await fetch(`${API_BASE}/api/notifications/mark-all-read`, { method: "PATCH", credentials: "include" });
+      await apiPatch("/api/notifications/mark-all-read");
       setNotifs(prev => prev.map(n => ({ ...n, isRead: true })));
     } catch {}
   };

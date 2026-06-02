@@ -511,6 +511,18 @@ export async function pullFromServer(): Promise<void> {
       }
     } catch { /* notifications permission may not exist */ }
 
+    // Cache funeral cases
+    try {
+      const funeralCases = await apiGet<any[]>("/api/funeral-cases?limit=200");
+      await db.runAsync("DELETE FROM cache_my_funeral_cases");
+      for (const fc of funeralCases) {
+        await db.runAsync(
+          "INSERT OR REPLACE INTO cache_my_funeral_cases (id, data, updated_at) VALUES (?, ?, datetime('now'))",
+          fc.id, JSON.stringify(fc)
+        );
+      }
+    } catch { /* funeral_ops permission may not exist */ }
+
     await db.runAsync(
       "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_pull', datetime('now'))"
     );

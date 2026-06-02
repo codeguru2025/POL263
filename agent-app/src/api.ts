@@ -73,30 +73,34 @@ export async function apiGet<T = any>(path: string): Promise<T> {
   return res.json();
 }
 
-export async function apiPost<T = any>(path: string, body?: any): Promise<T> {
+async function mutate<T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: any, isRetry = false): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
+    method,
     headers: getHeaders(true),
     credentials: "include",
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
+    // On 403, the CSRF token may have expired — refresh it and retry once.
+    if (res.status === 403 && !isRetry) {
+      await fetchCsrfToken();
+      return mutate<T>(method, path, body, true);
+    }
     const b = await res.json().catch(() => ({}));
-    throw new Error(b.message || `POST ${path} failed (${res.status})`);
+    throw new Error(b.message || `${method} ${path} failed (${res.status})`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
+export async function apiPost<T = any>(path: string, body?: any): Promise<T> {
+  return mutate<T>("POST", path, body);
+}
+
 export async function apiPatch<T = any>(path: string, body?: any): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "PATCH",
-    headers: getHeaders(true),
-    credentials: "include",
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const b = await res.json().catch(() => ({}));
-    throw new Error(b.message || `PATCH ${path} failed (${res.status})`);
-  }
-  return res.json();
+  return mutate<T>("PATCH", path, body);
+}
+
+export async function apiDelete<T = any>(path: string): Promise<T> {
+  return mutate<T>("DELETE", path);
 }

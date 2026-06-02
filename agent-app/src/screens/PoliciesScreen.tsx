@@ -10,7 +10,7 @@ import { useNetwork } from "../context/NetworkContext";
 import { fullSync } from "../sync/engine";
 import { colors, spacing, fontSize } from "../theme";
 import { API_BASE } from "../config";
-import { policyDocumentUrl } from "../api";
+import { apiGet, policyDocumentUrl } from "../api";
 
 interface PolicyDetail {
   id: string;
@@ -119,25 +119,16 @@ export default function PoliciesScreen({ navigation }: any) {
     setLoadingDetail(true);
     try {
       const [polRes, membersRes, paymentsRes, receiptsRes] = await Promise.allSettled([
-        fetch(`${API_BASE}/api/policies/${policy.server_id}`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/policies/${policy.server_id}/members`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/policies/${policy.server_id}/payments`, { credentials: "include" }),
-        fetch(`${API_BASE}/api/policies/${policy.server_id}/receipts`, { credentials: "include" }),
+        apiGet<PolicyDetail>(`/api/policies/${policy.server_id}`),
+        apiGet<any[]>(`/api/policies/${policy.server_id}/members`),
+        apiGet<any[]>(`/api/policies/${policy.server_id}/payments`),
+        apiGet<any[]>(`/api/policies/${policy.server_id}/receipts`),
       ]);
-      let detail: PolicyDetail | null = null as PolicyDetail | null;
-      if (polRes.status === "fulfilled" && polRes.value.ok) {
-        detail = await polRes.value.json();
-      }
+      let detail: PolicyDetail | null = polRes.status === "fulfilled" ? polRes.value : null;
       if (detail) {
-        if (membersRes.status === "fulfilled" && membersRes.value.ok) {
-          detail.members = await membersRes.value.json();
-        }
-        if (paymentsRes.status === "fulfilled" && paymentsRes.value.ok) {
-          detail.payments = await paymentsRes.value.json();
-        }
-        if (receiptsRes.status === "fulfilled" && receiptsRes.value.ok) {
-          detail.receipts = await receiptsRes.value.json();
-        }
+        if (membersRes.status === "fulfilled") detail.members = membersRes.value;
+        if (paymentsRes.status === "fulfilled") detail.payments = paymentsRes.value;
+        if (receiptsRes.status === "fulfilled") detail.receipts = receiptsRes.value;
         setSelectedPolicy({ local: policy, detail });
       }
     } catch {}
@@ -364,15 +355,31 @@ export default function PoliciesScreen({ navigation }: any) {
                 {(selectedPolicy.detail?.receipts?.length ?? 0) > 0 && (
                   <View style={styles.detailSection}>
                     <Text style={styles.sectionHeading}>Receipts</Text>
-                    {selectedPolicy.detail!.receipts!.map(r => (
-                      <View key={r.id} style={styles.paymentRow}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.paymentAmount}>{r.receiptNumber}</Text>
-                          <Text style={styles.paymentMeta}>{r.paymentChannel} · {r.amount}</Text>
-                        </View>
-                        <Text style={styles.paymentDate}>{new Date(r.createdAt).toLocaleDateString()}</Text>
-                      </View>
-                    ))}
+                    {selectedPolicy.detail!.receipts!.map(r => {
+                      const displayNum = /^\d+$/.test(String(r.receiptNumber).trim())
+                        ? `RCP-${String(r.receiptNumber).padStart(5, "0")}`
+                        : r.receiptNumber;
+                      return (
+                        <TouchableOpacity
+                          key={r.id}
+                          style={[styles.paymentRow, { cursor: "pointer" } as any]}
+                          onPress={() => isOnline && WebBrowser.openBrowserAsync(
+                            `${API_BASE}/api/receipts/${r.id}/view`,
+                            { presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET, toolbarColor: colors.primary, controlsColor: "#fff" }
+                          )}
+                          activeOpacity={isOnline ? 0.65 : 1}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.paymentAmount}>{displayNum}</Text>
+                            <Text style={styles.paymentMeta}>{r.paymentChannel} · {r.amount}</Text>
+                          </View>
+                          <View style={{ alignItems: "flex-end" }}>
+                            <Text style={styles.paymentDate}>{new Date(r.createdAt).toLocaleDateString()}</Text>
+                            {isOnline && <Text style={styles.viewPdfHint}>📄 View</Text>}
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 )}
 
@@ -479,6 +486,7 @@ const styles = StyleSheet.create({
   paymentAmount: { fontSize: fontSize.sm, fontWeight: "700", color: colors.text },
   paymentMeta: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 1, textTransform: "capitalize" },
   paymentDate: { fontSize: fontSize.xs, color: colors.textMuted },
+  viewPdfHint: { fontSize: fontSize.xs, color: colors.primary, fontWeight: "600", marginTop: 2 },
   docBtn: {
     backgroundColor: "#eff6ff", borderRadius: 10, margin: spacing.md,
     padding: spacing.md, alignItems: "center", borderWidth: 1, borderColor: "#bfdbfe",
