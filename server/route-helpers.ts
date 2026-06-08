@@ -1,5 +1,6 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
+import { isAgentScoped } from "@shared/roles";
 
 export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string) {
   const user = req.user as any;
@@ -256,7 +257,9 @@ export async function enforceAgentScope(req: any, filters: any): Promise<any> {
   if (!user) return filters;
   if (user.isPlatformOwner) return filters;
   const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-  const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+  // Use the canonical scope gate so an admin/manager who also holds the agent role
+  // (e.g. for a referral code) is NOT restricted to only their own data.
+  const isAgent = isAgentScoped(userRoles as { name: string }[]);
   if (isAgent) return { ...filters, agentId: user.id };
   return filters;
 }
@@ -284,7 +287,11 @@ export async function enforceAgentPolicyAccess<T extends { organizationId?: stri
   if (user.isPlatformOwner) return { hasAccess: true, policy };
 
   const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-  const isAgent = userRoles.some((r: { name?: string }) => r?.name === "agent");
+  // A user who holds the "agent" role AND a superior role (administrator, manager,
+  // superuser) must NOT be scoped down to only their own policies — isAgentScoped()
+  // is the canonical gate used across routes.ts. The previous naive `r.name === "agent"`
+  // check denied admins who also carried an agent role (e.g. for a referral code).
+  const isAgent = isAgentScoped(userRoles as { name: string }[]);
 
   if (isAgent && policy.agentId !== user.id) {
     return { hasAccess: false, errorResponse: { status: 403, json: { message: "Access denied" } } };
