@@ -3700,33 +3700,35 @@ export class DatabaseStorage implements IStorage {
     return { ...quote, items };
   }
   async upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation> {
-    const tdb = await getDbForOrg(orgId);
     const total = items.reduce((sum, it) => sum + parseFloat(String(it.lineTotal || "0")), 0).toFixed(2);
     const quotationNumber = `QUO-${Date.now().toString(36).toUpperCase()}`;
-    // Atomic upsert keyed on (organizationId, funeralCaseId). The unique index fq_org_case_idx
-    // guarantees one quotation per case even under concurrent submits — no read-then-write race.
-    // On conflict we update currency/total, and only overwrite status/notes when explicitly provided.
-    const [quote] = await tdb.insert(funeralQuotations)
-      .values({
-        organizationId: orgId, funeralCaseId, quotationNumber, currency: data.currency,
-        total, status: data.status ?? "draft", notes: data.notes ?? null, createdBy: data.createdBy ?? null,
-      })
-      .onConflictDoUpdate({
-        target: [funeralQuotations.organizationId, funeralQuotations.funeralCaseId],
-        set: {
-          currency: data.currency,
-          total,
-          ...(data.status !== undefined ? { status: data.status } : {}),
-          ...(data.notes !== undefined ? { notes: data.notes } : {}),
-        },
-      })
-      .returning();
-    // Replace line items for the (possibly pre-existing) quotation.
-    await tdb.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
-    if (items.length > 0) {
-      await tdb.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: quote.id })));
-    }
-    return quote;
+    // Run the upsert + item replacement in ONE transaction so the quotation row and its line
+    // items are always consistent — a failure can't leave a quotation with a stale total but
+    // missing/half-written items. Within the txn, the onConflictDoUpdate takes a row lock on the
+    // (org, case) row, serializing concurrent upserts of the same case so items can't interleave.
+    return withOrgTransaction(orgId, async (tx) => {
+      const [quote] = await tx.insert(funeralQuotations)
+        .values({
+          organizationId: orgId, funeralCaseId, quotationNumber, currency: data.currency,
+          total, status: data.status ?? "draft", notes: data.notes ?? null, createdBy: data.createdBy ?? null,
+        })
+        .onConflictDoUpdate({
+          target: [funeralQuotations.organizationId, funeralQuotations.funeralCaseId],
+          set: {
+            currency: data.currency,
+            total,
+            ...(data.status !== undefined ? { status: data.status } : {}),
+            ...(data.notes !== undefined ? { notes: data.notes } : {}),
+          },
+        })
+        .returning();
+      // Replace line items for the (possibly pre-existing) quotation.
+      await tx.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
+      if (items.length > 0) {
+        await tx.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: quote.id })));
+      }
+      return quote;
+    });
   }
 
   // ── Finance: service receipts (cash-service income) ──
@@ -3746,18 +3748,24 @@ export class DatabaseStorage implements IStorage {
   }
   async createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt> {
     const tdb = await getDbForOrg(receipt.organizationId);
-    // When an idempotency key is supplied, dedupe atomically via the unique index
-    // sr_idempotency_org_idx so a double-submit on the money path can't create two receipts.
-    if (receipt.idempotencyKey) {
-      const [created] = await tdb.insert(serviceReceipts).values(receipt)
-        .onConflictDoNothing({ target: [serviceReceipts.organizationId, serviceReceipts.idempotencyKey] })
-        .returning();
-      if (created) return created;
-      const existing = await this.getServiceReceiptByIdempotencyKey(receipt.organizationId, receipt.idempotencyKey);
-      if (existing) return existing;
+    // No idempotency key → plain insert.
+    if (!receipt.idempotencyKey) {
+      const [created] = await tdb.insert(serviceReceipts).values(receipt).returning();
+      return created;
     }
-    const [created] = await tdb.insert(serviceReceipts).values(receipt).returning();
-    return created;
+    // Idempotent path: dedupe atomically via the unique index sr_idempotency_org_idx so a
+    // double-submit on the money path can't create two receipts.
+    const [created] = await tdb.insert(serviceReceipts).values(receipt)
+      .onConflictDoNothing({ target: [serviceReceipts.organizationId, serviceReceipts.idempotencyKey] })
+      .returning();
+    if (created) return created;
+    // Conflict: a receipt with this key already exists (or is being committed concurrently).
+    const existing = await this.getServiceReceiptByIdempotencyKey(receipt.organizationId, receipt.idempotencyKey);
+    if (existing) return existing;
+    // Conflict reported but the row isn't visible yet (concurrent uncommitted insert). Fail safe
+    // rather than fall through to an unguarded insert that would hit the unique violation — the
+    // caller can retry and will then read back the committed receipt.
+    throw new Error("Service receipt idempotency conflict: a concurrent receipt with the same key is being created");
   }
   async getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]> {
     const tdb = await getDbForOrg(orgId);
