@@ -22,6 +22,10 @@ import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 
 type CaseForm = {
   deceasedName: string;
+  deceasedDob: string;
+  deceasedGender: string;
+  deceasedNationalId: string;
+  deceasedRelationship: string;
   dateOfDeath: string;
   causeOfDeath: string;
   placeOfDeath: string;
@@ -43,7 +47,8 @@ type CaseForm = {
 };
 
 const BLANK_FORM: CaseForm = {
-  deceasedName: "", dateOfDeath: "", causeOfDeath: "", placeOfDeath: "",
+  deceasedName: "", deceasedDob: "", deceasedGender: "", deceasedNationalId: "", deceasedRelationship: "",
+  dateOfDeath: "", causeOfDeath: "", placeOfDeath: "",
   informantName: "", informantPhone: "", informantRelationship: "",
   serviceType: "", funeralDate: "", funeralLocation: "",
   removalLocation: "", removalVehicleId: "", removalDriverId: "",
@@ -79,6 +84,49 @@ export default function StaffFunerals() {
   const { data: caseTasks = [], isLoading: tasksLoading } = useQuery<FuneralTask[]>({
     queryKey: [`/api/funeral-cases/${selectedCaseId}/tasks`],
     enabled: !!selectedCaseId,
+  });
+
+  // Cash-service billing: quotation (what the family is charged) + receipts (payments received).
+  const { data: caseQuotation } = useQuery<any>({
+    queryKey: [`/api/funeral-cases/${selectedCaseId}/quotation`],
+    enabled: !!selectedCaseId,
+  });
+  const { data: caseReceipts = [] } = useQuery<any[]>({
+    queryKey: [`/api/funeral-cases/${selectedCaseId}/receipts`],
+    enabled: !!selectedCaseId,
+  });
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({ amount: "", currency: "USD", paymentChannel: "cash" });
+  const addServiceReceiptMutation = useMutation({
+    mutationFn: async (data: { amount: string; currency: string; paymentChannel: string }) => {
+      const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/receipts`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/receipts`] });
+      setShowPaymentDialog(false);
+      setPaymentForm({ amount: "", currency: "USD", paymentChannel: "cash" });
+      toast({ title: "Payment recorded" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const [showQuotationDialog, setShowQuotationDialog] = useState(false);
+  const [quotationItems, setQuotationItems] = useState<{ description: string; quantity: string; unitPrice: string }[]>([{ description: "", quantity: "1", unitPrice: "" }]);
+  const [quotationCurrency, setQuotationCurrency] = useState("USD");
+  const saveQuotationMutation = useMutation({
+    mutationFn: async () => {
+      const items = quotationItems.filter((i) => i.description && i.unitPrice).map((i) => ({
+        description: i.description, quantity: i.quantity || "1", unitPrice: i.unitPrice,
+      }));
+      const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/quotation`, { currency: quotationCurrency, status: "sent", items });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/quotation`] });
+      setShowQuotationDialog(false);
+      toast({ title: "Quotation saved" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
   const createCaseMutation = useMutation({
@@ -218,6 +266,18 @@ export default function StaffFunerals() {
                   updateCaseMutation.mutate({ id: selectedCase.id, data: patch as any });
                 }}
                 onExport={(download) => handleExport(selectedCase, download)}
+                quotation={caseQuotation}
+                receipts={caseReceipts}
+                onRecordPayment={() => setShowPaymentDialog(true)}
+                onEditQuotation={() => {
+                  if (caseQuotation?.items?.length) {
+                    setQuotationItems(caseQuotation.items.map((i: any) => ({ description: i.description, quantity: String(i.quantity), unitPrice: String(i.unitPrice) })));
+                    setQuotationCurrency(caseQuotation.currency || "USD");
+                  } else {
+                    setQuotationItems([{ description: "", quantity: "1", unitPrice: "" }]);
+                  }
+                  setShowQuotationDialog(true);
+                }}
               />
             ) : (
               <CardSection title="Logistics Board" icon={Box} flush
@@ -376,6 +436,88 @@ export default function StaffFunerals() {
         onSubmit={(data) => createVehicleMutation.mutate(data)}
         isPending={createVehicleMutation.isPending}
       />
+
+      {/* Record cash-service payment */}
+      <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Amount *</Label>
+                <Input type="number" step="0.01" min="0" value={paymentForm.amount} onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })} data-testid="input-payment-amount" />
+              </div>
+              <div>
+                <Label className="text-xs">Currency</Label>
+                <Select value={paymentForm.currency} onValueChange={(v) => setPaymentForm({ ...paymentForm, currency: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="ZAR">ZAR</SelectItem>
+                    <SelectItem value="ZIG">ZiG</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Payment method</Label>
+              <Select value={paymentForm.paymentChannel} onValueChange={(v) => setPaymentForm({ ...paymentForm, paymentChannel: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="paynow_ecocash">EcoCash</SelectItem>
+                  <SelectItem value="paynow_card">Card</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPaymentDialog(false)}>Cancel</Button>
+            <Button onClick={() => addServiceReceiptMutation.mutate(paymentForm)} disabled={addServiceReceiptMutation.isPending || !paymentForm.amount} data-testid="button-submit-payment">
+              {addServiceReceiptMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Record
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quotation builder */}
+      <Dialog open={showQuotationDialog} onOpenChange={setShowQuotationDialog}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Service Quotation</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="w-32">
+              <Label className="text-xs">Currency</Label>
+              <Select value={quotationCurrency} onValueChange={setQuotationCurrency}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="ZAR">ZAR</SelectItem>
+                  <SelectItem value="ZIG">ZiG</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              {quotationItems.map((it, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-6"><Label className="text-[10px]">Description</Label><Input value={it.description} onChange={(e) => setQuotationItems(quotationItems.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))} /></div>
+                  <div className="col-span-2"><Label className="text-[10px]">Qty</Label><Input type="number" value={it.quantity} onChange={(e) => setQuotationItems(quotationItems.map((x, i) => i === idx ? { ...x, quantity: e.target.value } : x))} /></div>
+                  <div className="col-span-3"><Label className="text-[10px]">Unit price</Label><Input type="number" step="0.01" value={it.unitPrice} onChange={(e) => setQuotationItems(quotationItems.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} /></div>
+                  <div className="col-span-1"><Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setQuotationItems(quotationItems.filter((_, i) => i !== idx))}>×</Button></div>
+                </div>
+              ))}
+              <Button variant="outline" size="sm" onClick={() => setQuotationItems([...quotationItems, { description: "", quantity: "1", unitPrice: "" }])}><Plus className="h-3.5 w-3.5 mr-1" /> Add line</Button>
+            </div>
+            <p className="text-sm font-semibold text-right">Total: {quotationCurrency} {quotationItems.reduce((s, i) => s + (parseFloat(i.quantity || "1") * parseFloat(i.unitPrice || "0") || 0), 0).toFixed(2)}</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowQuotationDialog(false)}>Cancel</Button>
+            <Button onClick={() => saveQuotationMutation.mutate()} disabled={saveQuotationMutation.isPending} data-testid="button-save-quotation">
+              {saveQuotationMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Save Quotation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </StaffLayout>
   );
 }
@@ -385,6 +527,7 @@ export default function StaffFunerals() {
 function CaseDetailView({
   funeralCase: fc, tasks, tasksLoading, vehicles, users,
   onBack, onEdit, onAddTask, onToggleTask, onUpdateStatus, onExport,
+  quotation, receipts, onRecordPayment, onEditQuotation,
 }: {
   funeralCase: FuneralCase;
   tasks: FuneralTask[];
@@ -397,6 +540,10 @@ function CaseDetailView({
   onToggleTask: (t: FuneralTask) => void;
   onUpdateStatus: (s: string) => void;
   onExport: (download: boolean) => void;
+  quotation?: any;
+  receipts?: any[];
+  onRecordPayment?: () => void;
+  onEditQuotation?: () => void;
 }) {
   const completed = tasks.filter((t) => t.status === "completed").length;
 
@@ -452,6 +599,10 @@ function CaseDetailView({
         <CardSection title="Deceased" icon={Box}>
           <div className="space-y-0.5">
             <DetailRow label="Full name" value={fc.deceasedName} />
+            <DetailRow label="Date of birth" value={fc.deceasedDob} />
+            <DetailRow label="Gender" value={fc.deceasedGender ? fc.deceasedGender.charAt(0).toUpperCase() + fc.deceasedGender.slice(1) : null} />
+            <DetailRow label="National ID" value={fc.deceasedNationalId} />
+            {fc.serviceType === "claim" && <DetailRow label="Relationship to policyholder" value={fc.deceasedRelationship} />}
             <DetailRow label="Date of death" value={fc.dateOfDeath} />
             <DetailRow label="Cause of death" value={fc.causeOfDeath} />
             <DetailRow label="Place of death" value={fc.placeOfDeath} />
@@ -520,6 +671,49 @@ function CaseDetailView({
         )}
       </div>
 
+      {/* Cash-service billing — quotation + payments received (income) */}
+      <CardSection
+        title="Cash Service Billing"
+        description="Quote the family and capture payments received. Payments feed the income statement and daily cash-ups."
+        icon={CheckCircle2}
+        headerRight={(
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={onEditQuotation} data-testid="button-edit-quotation"><Pencil className="h-3.5 w-3.5" /> Quotation</Button>
+            <Button size="sm" className="gap-1.5" onClick={onRecordPayment} data-testid="button-record-payment"><Plus className="h-3.5 w-3.5" /> Record Payment</Button>
+          </div>
+        )}
+      >
+        {(() => {
+          const cur = quotation?.currency || (receipts && receipts[0]?.currency) || "USD";
+          const quoted = quotation ? Number(quotation.total || 0) : 0;
+          const received = (receipts || []).filter((r: any) => r.status !== "voided").reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+          const outstanding = quoted - received;
+          return (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div><p className="text-xs text-muted-foreground">Quoted</p><p className="text-lg font-bold tabular-nums">{cur} {quoted.toFixed(2)}</p></div>
+                <div><p className="text-xs text-muted-foreground">Received</p><p className="text-lg font-bold tabular-nums text-emerald-600">{cur} {received.toFixed(2)}</p></div>
+                <div><p className="text-xs text-muted-foreground">Outstanding</p><p className={`text-lg font-bold tabular-nums ${outstanding > 0 ? "text-amber-600" : ""}`}>{cur} {outstanding.toFixed(2)}</p></div>
+              </div>
+              {(receipts && receipts.length > 0) ? (
+                <div className="space-y-1">
+                  {receipts.map((r: any) => (
+                    <div key={r.id} className="flex items-center justify-between text-sm border-b border-border/40 py-1.5">
+                      <span className="font-mono text-xs text-muted-foreground">{r.receiptNumber}</span>
+                      <span className="capitalize text-xs">{String(r.paymentChannel || "").replace(/_/g, " ")}</span>
+                      <span className="text-xs text-muted-foreground">{r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : ""}</span>
+                      <span className="font-semibold tabular-nums">{r.currency} {Number(r.amount).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No payments recorded yet.</p>
+              )}
+            </div>
+          );
+        })()}
+      </CardSection>
+
       {/* Task checklist */}
       <CardSection title="Task Checklist" description={`${completed}/${tasks.length} completed`} icon={CheckCircle2}
         headerRight={(
@@ -585,6 +779,10 @@ function CaseFormDialog({
     if (initial) {
       return {
         deceasedName: initial.deceasedName ?? "",
+        deceasedDob: initial.deceasedDob ?? "",
+        deceasedGender: initial.deceasedGender ?? "",
+        deceasedNationalId: initial.deceasedNationalId ?? "",
+        deceasedRelationship: initial.deceasedRelationship ?? "",
         dateOfDeath: initial.dateOfDeath ?? "",
         causeOfDeath: initial.causeOfDeath ?? "",
         placeOfDeath: initial.placeOfDeath ?? "",
@@ -619,6 +817,7 @@ function CaseFormDialog({
   const [foundPolicy, setFoundPolicy] = useState<any>(null);
   const [policyMembers, setPolicyMembers] = useState<any[]>([]);
   const [policyLookupError, setPolicyLookupError] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState("");
   const policySearchRef = useRef<HTMLInputElement>(null);
 
   const lookupPolicy = async (search: string) => {
@@ -663,43 +862,167 @@ function CaseFormDialog({
     onSubmit(data);
   };
 
-  const userOptions = users.filter((u: any) => u.isActive !== false);
+  // Auto-fill the deceased's identity from the selected covered member (claim cases).
+  // The /api/policies/:id/members endpoint returns memberName/dateOfBirth/gender/
+  // nationalId/relationship for each covered life.
+  const selectMember = (memberId: string) => {
+    const m = policyMembers.find((x: any) => String(x.id) === memberId);
+    if (!m) return;
+    setForm((f) => ({
+      ...f,
+      deceasedName: m.memberName || f.deceasedName,
+      deceasedDob: m.dateOfBirth || "",
+      deceasedGender: (m.gender || "").toLowerCase(),
+      deceasedNationalId: m.nationalId || "",
+      // "Policy Holder" members have no relationship-to-policyholder; leave blank for them.
+      deceasedRelationship: m.relationship && m.relationship !== "Policy Holder" ? m.relationship : "",
+    }));
+  };
+
+  const hasRole = (u: any, role: string) =>
+    Array.isArray(u?.roles) && u.roles.some((r: any) => r?.name === role);
+
+  const activeUsers = users.filter((u: any) => u.isActive !== false);
   const vehicleOptions: SearchableOption[] = vehicles.map((v) => ({
     value: v.id,
     label: `${v.registration}${v.make ? ` — ${v.make} ${v.model || ""}`.trim() : ""}`,
     hint: v.vehicleType || undefined,
   }));
-  const driverOptions: SearchableOption[] = userOptions.map((u: any) => ({
-    value: u.id,
-    label: u.displayName || u.email,
-    hint: u.phone || undefined,
-  }));
-  const agentOptions: SearchableOption[] = userOptions.map((u: any) => ({
-    value: u.id,
-    label: u.displayName || u.email,
-    hint: [u.gender, u.phone].filter(Boolean).join(" · ") || undefined,
-  }));
+  // Drivers are staff explicitly assigned the "driver" role; agents are "agent"-role staff.
+  const driverOptions: SearchableOption[] = activeUsers
+    .filter((u: any) => hasRole(u, "driver"))
+    .map((u: any) => ({ value: u.id, label: u.displayName || u.email, hint: u.email || undefined }));
+  const agentOptions: SearchableOption[] = activeUsers
+    .filter((u: any) => hasRole(u, "agent"))
+    .map((u: any) => ({ value: u.id, label: u.displayName || u.email, hint: u.email || undefined }));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>Only the deceased name is required. Expand the sections you need.</DialogDescription>
+          <DialogDescription>Start by choosing the service type. For a policy claim, look up the policy and pick the deceased member — their details fill in automatically.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 pt-1">
 
-          {/* Deceased name is always visible (the only required field) */}
+          {/* Step 1 — service type drives the rest of the flow */}
+          <div className="space-y-1.5">
+            <Label className="text-xs">Service Type *</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { v: "cash", label: "Cash Service", hint: "Private / walk-in funeral" },
+                { v: "claim", label: "Policy Claim", hint: "Against an existing policy" },
+              ].map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => {
+                    setSel("serviceType")(opt.v);
+                    if (opt.v !== "claim") {
+                      setFoundPolicy(null); setPolicyMembers([]); setPolicySearch(""); setPolicyLookupError(""); setSelectedMemberId("");
+                      setForm((f) => ({ ...f, policyId: "" }));
+                    }
+                  }}
+                  className={`rounded-md border p-3 text-left transition-colors ${form.serviceType === opt.v ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50"}`}
+                  data-testid={`button-service-${opt.v}`}
+                >
+                  <p className="text-sm font-medium">{opt.label}</p>
+                  <p className="text-[11px] text-muted-foreground">{opt.hint}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Step 2 (claim only) — find the policy, then pick the deceased covered member */}
+          {form.serviceType === "claim" && (
+            <div className="border rounded-md p-3 space-y-3 bg-muted/20">
+              <p className="text-xs font-semibold text-primary">Find the policy, then select the deceased covered member.</p>
+              <div className="flex gap-2">
+                <Input
+                  ref={policySearchRef}
+                  placeholder="Policy number, e.g. FLK00123"
+                  value={policySearch === "linked" ? (foundPolicy?.policyNumber || "") : policySearch}
+                  onChange={(e) => setPolicySearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookupPolicy(policySearch); } }}
+                  className="flex-1"
+                  data-testid="input-policy-search"
+                />
+                <Button type="button" size="sm" onClick={() => lookupPolicy(policySearch)} disabled={policyLookupLoading || !policySearch.trim()}>
+                  {policyLookupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
+                </Button>
+              </div>
+              {policyLookupError && <p className="text-xs text-destructive">{policyLookupError}</p>}
+              {foundPolicy && (
+                <div className="space-y-2 text-xs border-t pt-2">
+                  <p className="text-muted-foreground">
+                    Found: <strong className="text-foreground">{foundPolicy.policyNumber}</strong> · {foundPolicy.status?.toUpperCase()} · {foundPolicy.currency} {Number(foundPolicy.premiumAmount || 0).toFixed(2)}/mo
+                  </p>
+                  {policyMembers.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Deceased Covered Member *</Label>
+                      <Select
+                        value={selectedMemberId || "__none__"}
+                        onValueChange={(v) => {
+                          if (v === "__none__") { setSelectedMemberId(""); return; }
+                          setSelectedMemberId(v);
+                          selectMember(v);
+                        }}
+                      >
+                        <SelectTrigger data-testid="select-deceased-member"><SelectValue placeholder="Select covered member…" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— Select member —</SelectItem>
+                          {policyMembers.map((m: any) => {
+                            const name = m.memberName || "Member";
+                            const role = (m.role || "member").replace("_", " ");
+                            return (
+                              <SelectItem key={m.id} value={String(m.id)}>
+                                {name} · {role}{m.age != null ? ` · ${m.age}y` : ""}
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground">Fills the deceased name, date of birth, gender, ID and relationship below.</p>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">No covered members found on this policy.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Deceased name — always required; auto-filled for claims */}
           <Field label="Deceased Full Name" required>
             <Input value={form.deceasedName} onChange={set("deceasedName")} placeholder="Full name of deceased" required data-testid="input-deceased-name" />
           </Field>
 
-          <Accordion type="multiple" defaultValue={["deceased", "service"]} className="border rounded-md px-3">
-            {/* Deceased & Informant */}
+          <Accordion type="multiple" defaultValue={["deceased"]} className="border rounded-md px-3">
+            {/* Deceased details */}
             <AccordionItem value="deceased">
-              <AccordionTrigger>Deceased &amp; Informant Details</AccordionTrigger>
+              <AccordionTrigger>Deceased Details</AccordionTrigger>
               <AccordionContent>
                 <div className="grid grid-cols-2 gap-3">
+                  <Field label="Date of Birth">
+                    <Input type="date" value={form.deceasedDob} onChange={set("deceasedDob")} data-testid="input-deceased-dob" />
+                  </Field>
+                  <Field label="Gender">
+                    <Select value={form.deceasedGender || "__none__"} onValueChange={setSel("deceasedGender")}>
+                      <SelectTrigger data-testid="select-deceased-gender"><SelectValue placeholder="Select…" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">— Not set —</SelectItem>
+                        <SelectItem value="male">Male</SelectItem>
+                        <SelectItem value="female">Female</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="National ID">
+                    <Input value={form.deceasedNationalId} onChange={set("deceasedNationalId")} placeholder="e.g. 63-1234567A12" data-testid="input-deceased-national-id" />
+                  </Field>
+                  <Field label="Relationship to Policyholder">
+                    <Input value={form.deceasedRelationship} onChange={set("deceasedRelationship")} placeholder="e.g. Spouse, Son" data-testid="input-deceased-relationship" />
+                  </Field>
                   <Field label="Date of Death">
                     <Input type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} data-testid="input-date-of-death" />
                   </Field>
@@ -711,6 +1034,15 @@ function CaseFormDialog({
                       <Input value={form.placeOfDeath} onChange={set("placeOfDeath")} placeholder="Hospital, home address, etc." />
                     </Field>
                   </div>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Informant */}
+            <AccordionItem value="informant">
+              <AccordionTrigger>Informant (Next of Kin)</AccordionTrigger>
+              <AccordionContent>
+                <div className="grid grid-cols-2 gap-3">
                   <Field label="Informant Name">
                     <Input value={form.informantName} onChange={set("informantName")} placeholder="Next of kin name" />
                   </Field>
@@ -734,24 +1066,11 @@ function CaseFormDialog({
               </AccordionContent>
             </AccordionItem>
 
-            {/* Service Details */}
+            {/* Service & burial */}
             <AccordionItem value="service">
-              <AccordionTrigger>Service Details</AccordionTrigger>
+              <AccordionTrigger>Service &amp; Burial</AccordionTrigger>
               <AccordionContent>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Service Type">
-                    <Select value={form.serviceType || "__none__"} onValueChange={(v) => {
-                      setSel("serviceType")(v);
-                      if (v !== "claim") { setFoundPolicy(null); setPolicyMembers([]); setPolicySearch(""); setPolicyLookupError(""); setForm((f) => ({ ...f, policyId: "" })); }
-                    }}>
-                      <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">— Not set —</SelectItem>
-                        <SelectItem value="cash">Cash Service</SelectItem>
-                        <SelectItem value="claim">Policy Claim</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </Field>
                   <Field label="Date of Burial">
                     <Input type="date" value={form.funeralDate} onChange={set("funeralDate")} data-testid="input-funeral-date" />
                   </Field>
@@ -760,61 +1079,6 @@ function CaseFormDialog({
                       <Input value={form.funeralLocation} onChange={set("funeralLocation")} placeholder="Cemetery or burial site" data-testid="input-funeral-location" />
                     </Field>
                   </div>
-
-                  {/* Policy Claim lookup — shown only when serviceType = claim */}
-                  {form.serviceType === "claim" && (
-                    <div className="col-span-2 border rounded-md p-3 space-y-3 bg-muted/20">
-                      <p className="text-xs font-semibold text-primary">Policy Claim — enter the policy number to link the claim and select the deceased member</p>
-                      <div className="flex gap-2">
-                        <Input
-                          ref={policySearchRef}
-                          placeholder="Policy number, e.g. FLK00123"
-                          value={policySearch === "linked" ? (foundPolicy?.policyNumber || "") : policySearch}
-                          onChange={(e) => setPolicySearch(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookupPolicy(policySearch); } }}
-                          className="flex-1"
-                        />
-                        <Button type="button" size="sm" onClick={() => lookupPolicy(policySearch)} disabled={policyLookupLoading || !policySearch.trim()}>
-                          {policyLookupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
-                        </Button>
-                      </div>
-                      {policyLookupError && <p className="text-xs text-destructive">{policyLookupError}</p>}
-                      {foundPolicy && (
-                        <div className="space-y-2 text-xs border-t pt-2">
-                          <p className="text-muted-foreground">
-                            Found: <strong className="text-foreground">{foundPolicy.policyNumber}</strong> · {foundPolicy.status?.toUpperCase()} · {foundPolicy.currency} {Number(foundPolicy.premiumAmount || 0).toFixed(2)}/mo
-                          </p>
-                          {policyMembers.length > 0 && (
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">Select Deceased Member</Label>
-                              <Select
-                                value={form.deceasedName || "__none__"}
-                                onValueChange={(v) => {
-                                  if (v === "__none__") return;
-                                  setForm((f) => ({ ...f, deceasedName: v }));
-                                }}
-                              >
-                                <SelectTrigger><SelectValue placeholder="Select deceased…" /></SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="__none__">— Select member —</SelectItem>
-                                  {policyMembers.map((m: any) => {
-                                    const name = m.name || `${m.firstName || ""} ${m.lastName || ""}`.trim() || m.clientName || m.dependentName || "Member";
-                                    const role = m.role || "member";
-                                    return (
-                                      <SelectItem key={m.id || name} value={name}>
-                                        {name} ({role.replace("_", " ")})
-                                      </SelectItem>
-                                    );
-                                  })}
-                                </SelectContent>
-                              </Select>
-                              <p className="text-[10px] text-muted-foreground">Selecting a member auto-fills the deceased name above.</p>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               </AccordionContent>
             </AccordionItem>
@@ -824,6 +1088,11 @@ function CaseFormDialog({
               <AccordionTrigger>Logistics &amp; Attending Agent</AccordionTrigger>
               <AccordionContent>
                 <div className="space-y-4">
+                  {driverOptions.length === 0 && (
+                    <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded-md px-2.5 py-1.5">
+                      No staff have the <strong>Driver</strong> role yet. Assign it on the Users page to populate the driver dropdowns.
+                    </p>
+                  )}
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Body Removal</p>
                     <div className="grid grid-cols-2 gap-3">
@@ -836,7 +1105,7 @@ function CaseFormDialog({
                         <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setSel("removalVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
                       </Field>
                       <Field label="Removal Driver">
-                        <SearchableSelect options={driverOptions} value={form.removalDriverId} onChange={setSel("removalDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" />
+                        <SearchableSelect options={driverOptions} value={form.removalDriverId} onChange={setSel("removalDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" emptyText="No staff have the Driver role yet." />
                       </Field>
                     </div>
                   </div>
@@ -848,14 +1117,14 @@ function CaseFormDialog({
                         <SearchableSelect options={vehicleOptions} value={form.burialVehicleId} onChange={setSel("burialVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
                       </Field>
                       <Field label="Burial Driver">
-                        <SearchableSelect options={driverOptions} value={form.burialDriverId} onChange={setSel("burialDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" />
+                        <SearchableSelect options={driverOptions} value={form.burialDriverId} onChange={setSel("burialDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" emptyText="No staff have the Driver role yet." />
                       </Field>
                     </div>
                   </div>
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Attending Agent</p>
-                    <Field label="Staff member attending the funeral">
-                      <SearchableSelect options={agentOptions} value={form.attendingAgentId} onChange={setSel("attendingAgentId")} placeholder="Select agent…" searchPlaceholder="Search staff…" />
+                    <Field label="Agent attending the funeral">
+                      <SearchableSelect options={agentOptions} value={form.attendingAgentId} onChange={setSel("attendingAgentId")} placeholder="Select agent…" searchPlaceholder="Search agents…" emptyText="No staff have the Agent role yet." />
                     </Field>
                   </div>
                 </div>

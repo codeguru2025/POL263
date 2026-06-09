@@ -918,6 +918,37 @@ export const policyCreditBalances = pgTable(
   ]
 );
 
+// ─── PREMIUM CHANGE LEDGER (effective-dated upgrades/downgrades/overrides) ───
+// Audit + source-of-record for each premium-affecting change. The reconciliation
+// amount (delta × periods since the effective date) is posted to the signed
+// policy_credit_balances wallet; this row records why and how much.
+export const policyPremiumChanges = pgTable(
+  "policy_premium_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id),
+    oldPremium: numeric("old_premium", { precision: 12, scale: 2 }).notNull(),
+    newPremium: numeric("new_premium", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    effectiveDate: date("effective_date").notNull(),
+    periods: integer("periods").default(0).notNull(),          // whole billing periods since effectiveDate
+    reconciliation: numeric("reconciliation", { precision: 12, scale: 2 }).default("0").notNull(), // signed: + = arrears charged, - = credit
+    changeType: text("change_type").notNull(),                 // 'upgrade' | 'downgrade' | 'member_add' | 'member_remove' | 'manual'
+    reason: text("reason"),
+    actorId: uuid("actor_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("ppc_org_idx").on(t.organizationId),
+    index("ppc_policy_idx").on(t.policyId),
+  ]
+);
+
 export const creditNotes = pgTable(
   "credit_notes",
   {
@@ -1099,6 +1130,10 @@ export const funeralCases = pgTable(
     caseNumber: text("case_number").notNull(),
     // Deceased
     deceasedName: text("deceased_name").notNull(),
+    deceasedDob: date("deceased_dob"),
+    deceasedGender: text("deceased_gender"),
+    deceasedNationalId: text("deceased_national_id"),
+    deceasedRelationship: text("deceased_relationship"),  // relationship to the policyholder (claim cases)
     dateOfDeath: date("date_of_death"),
     causeOfDeath: text("cause_of_death"),
     placeOfDeath: text("place_of_death"),
@@ -1658,6 +1693,142 @@ export const sessions = pgTable("sessions", {
   expire: timestamp("expire", { precision: 6 }).notNull(),
 });
 
+// ─── FX RATES ───────────────────────────────────────────────
+// USD-base conversion rates for consolidated financial statements.
+// rateToUsd = USD value of 1 unit of `currency` (USD = 1). Consolidated USD = amount * rateToUsd.
+export const fxRates = pgTable(
+  "fx_rates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    currency: text("currency").notNull(),
+    rateToUsd: numeric("rate_to_usd", { precision: 18, scale: 8 }).notNull(),
+    updatedBy: uuid("updated_by").references(() => users.id),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("fx_org_currency_idx").on(t.organizationId, t.currency)]
+);
+
+// ─── REQUISITIONS (expenditure request → approve → pay) ──────
+export const REQUISITION_STATUSES = ["draft", "submitted", "approved", "rejected", "paid"] as const;
+export const requisitions = pgTable(
+  "requisitions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    requisitionNumber: text("requisition_number").notNull(),
+    category: text("category").notNull(),
+    description: text("description").notNull(),
+    payee: text("payee"),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    status: text("status").default("draft").notNull(),
+    requestedBy: uuid("requested_by").notNull().references(() => users.id),
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at"),
+    rejectionReason: text("rejection_reason"),
+    paidBy: uuid("paid_by").references(() => users.id),
+    paidAt: timestamp("paid_at"),
+    paidDate: date("paid_date"),                 // value date used for cash-basis statements
+    paymentMethod: text("payment_method"),
+    reference: text("reference"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("req_org_idx").on(t.organizationId),
+    index("req_status_idx").on(t.status),
+    uniqueIndex("req_number_org_idx").on(t.organizationId, t.requisitionNumber),
+  ]
+);
+
+// ─── FUNERAL QUOTATIONS (cash-service pricing to the family) ──
+export const funeralQuotations = pgTable(
+  "funeral_quotations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    funeralCaseId: uuid("funeral_case_id").notNull().references(() => funeralCases.id),
+    quotationNumber: text("quotation_number").notNull(),
+    currency: text("currency").default("USD").notNull(),
+    total: numeric("total", { precision: 12, scale: 2 }).default("0").notNull(),
+    status: text("status").default("draft").notNull(), // draft | sent | accepted
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("fq_org_idx").on(t.organizationId),
+    // One quotation per funeral case (enables atomic upsert; prevents duplicates under concurrency).
+    uniqueIndex("fq_org_case_idx").on(t.organizationId, t.funeralCaseId),
+    uniqueIndex("fq_number_org_idx").on(t.organizationId, t.quotationNumber),
+  ]
+);
+
+export const funeralQuotationItems = pgTable(
+  "funeral_quotation_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    quotationId: uuid("quotation_id").notNull().references(() => funeralQuotations.id),
+    priceBookItemId: uuid("price_book_item_id").references(() => priceBookItems.id),
+    description: text("description").notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 2 }).default("1").notNull(),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    lineTotal: numeric("line_total", { precision: 12, scale: 2 }).notNull(),
+  },
+  (t) => [index("fqi_quotation_idx").on(t.quotationId)]
+);
+
+// ─── SERVICE RECEIPTS (cash-service income, not tied to a policy) ──
+export const serviceReceipts = pgTable(
+  "service_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    quotationId: uuid("quotation_id").references(() => funeralQuotations.id),
+    receiptNumber: text("receipt_number").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    paymentChannel: text("payment_channel").notNull(), // cash | paynow_ecocash | paynow_card | other
+    issuedByUserId: uuid("issued_by_user_id").references(() => users.id),
+    issuedAt: timestamp("issued_at").defaultNow().notNull(),
+    status: text("status").default("issued").notNull(),  // issued | voided
+    idempotencyKey: text("idempotency_key"),             // optional client key to dedupe double-submits
+    notes: text("notes"),
+    metadataJson: jsonb("metadata_json"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("sr_org_idx").on(t.organizationId),
+    index("sr_case_idx").on(t.funeralCaseId),
+    uniqueIndex("sr_receipt_org_idx").on(t.organizationId, t.receiptNumber),
+    uniqueIndex("sr_idempotency_org_idx").on(t.organizationId, t.idempotencyKey),
+  ]
+);
+
+export const insertFxRateSchema = createInsertSchema(fxRates).omit({ id: true, updatedAt: true });
+export type FxRate = typeof fxRates.$inferSelect;
+export type InsertFxRate = z.infer<typeof insertFxRateSchema>;
+
+export const insertRequisitionSchema = createInsertSchema(requisitions).omit({ id: true, createdAt: true });
+export type Requisition = typeof requisitions.$inferSelect;
+export type InsertRequisition = z.infer<typeof insertRequisitionSchema>;
+
+export const insertFuneralQuotationSchema = createInsertSchema(funeralQuotations).omit({ id: true, createdAt: true });
+export type FuneralQuotation = typeof funeralQuotations.$inferSelect;
+export type InsertFuneralQuotation = z.infer<typeof insertFuneralQuotationSchema>;
+
+export const insertFuneralQuotationItemSchema = createInsertSchema(funeralQuotationItems).omit({ id: true });
+export type FuneralQuotationItem = typeof funeralQuotationItems.$inferSelect;
+export type InsertFuneralQuotationItem = z.infer<typeof insertFuneralQuotationItemSchema>;
+
+export const insertServiceReceiptSchema = createInsertSchema(serviceReceipts).omit({ id: true, createdAt: true });
+export type ServiceReceipt = typeof serviceReceipts.$inferSelect;
+export type InsertServiceReceipt = z.infer<typeof insertServiceReceiptSchema>;
+
 // ─── INSERT SCHEMAS ─────────────────────────────────────────
 
 export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
@@ -1694,6 +1865,7 @@ export const insertOutboxMessageSchema = createInsertSchema(outboxMessages).omit
   lastError: true,
 });
 export const insertPolicyCreditBalanceSchema = createInsertSchema(policyCreditBalances).omit({ id: true });
+export const insertPolicyPremiumChangeSchema = createInsertSchema(policyPremiumChanges).omit({ id: true, createdAt: true });
 export const insertCreditNoteSchema = createInsertSchema(creditNotes).omit({ id: true, createdAt: true });
 export const insertMonthEndRunSchema = createInsertSchema(monthEndRuns).omit({ id: true, createdAt: true });
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
@@ -1772,6 +1944,8 @@ export type OutboxMessage = typeof outboxMessages.$inferSelect;
 export type InsertOutboxMessage = z.infer<typeof insertOutboxMessageSchema>;
 export type PolicyCreditBalance = typeof policyCreditBalances.$inferSelect;
 export type InsertPolicyCreditBalance = z.infer<typeof insertPolicyCreditBalanceSchema>;
+export type PolicyPremiumChange = typeof policyPremiumChanges.$inferSelect;
+export type InsertPolicyPremiumChange = z.infer<typeof insertPolicyPremiumChangeSchema>;
 export type CreditNote = typeof creditNotes.$inferSelect;
 export type InsertCreditNote = z.infer<typeof insertCreditNoteSchema>;
 export type MonthEndRun = typeof monthEndRuns.$inferSelect;

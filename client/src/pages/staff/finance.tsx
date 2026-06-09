@@ -243,6 +243,7 @@ export default function StaffFinance() {
   const isAgent = isAgentScoped(roles);
   const canReadFinance = permissions.includes("read:finance");
   const canWriteFinance = permissions.includes("write:finance");
+  const canApproveFinance = permissions.includes("approve:finance") || (authUser as any)?.isPlatformOwner;
   const canReadCommission = permissions.includes("read:commission");
   const commissionOnly = canReadCommission && !canReadFinance;
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
@@ -312,6 +313,51 @@ export default function StaffFinance() {
   const { data: rawProducts } = useQuery<any[]>({ queryKey: ["/api/products"] });
   const { data: rawCommissionLedger } = useQuery<any[]>({ queryKey: ["/api/commission-ledger"] });
   const { data: rawExpenditures } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
+  const { data: rawRequisitions } = useQuery<any[]>({ queryKey: ["/api/requisitions"], enabled: canReadFinance });
+  const requisitions = Array.isArray(rawRequisitions) ? rawRequisitions : [];
+  const [showRequisitionDialog, setShowRequisitionDialog] = useState(false);
+  const [requisitionForm, setRequisitionForm] = useState({ category: "", description: "", payee: "", amount: "", currency: "USD" });
+  const createRequisitionMutation = useMutation({
+    mutationFn: async (submit: boolean) => {
+      const res = await apiRequest("POST", "/api/requisitions", { ...requisitionForm, submit });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
+      setShowRequisitionDialog(false);
+      setRequisitionForm({ category: "", description: "", payee: "", amount: "", currency: "USD" });
+      toast({ title: "Requisition created" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const requisitionActionMutation = useMutation({
+    mutationFn: async ({ id, action, extra }: { id: string; action: string; extra?: Record<string, any> }) => {
+      const res = await apiRequest("PATCH", `/api/requisitions/${id}`, { action, ...(extra || {}) });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
+      toast({ title: "Requisition updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  // FX rates (USD base) for consolidated statements.
+  const canManageSettings = permissions.includes("manage:settings") || (authUser as any)?.isPlatformOwner;
+  const { data: rawFxRates } = useQuery<any[]>({ queryKey: ["/api/fx-rates"], enabled: canReadFinance });
+  const fxRateMap: Record<string, string> = {};
+  for (const r of (Array.isArray(rawFxRates) ? rawFxRates : [])) fxRateMap[r.currency] = String(r.rateToUsd);
+  const [fxEdits, setFxEdits] = useState<Record<string, string>>({});
+  const saveFxRateMutation = useMutation({
+    mutationFn: async ({ currency, rateToUsd }: { currency: string; rateToUsd: string }) => {
+      const res = await apiRequest("PUT", `/api/fx-rates/${currency}`, { rateToUsd });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/fx-rates"] });
+      toast({ title: "Exchange rate saved" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
   const { data: rawPolicies } = useQuery<any[]>({ queryKey: ["/api/policies"] });
   const { data: rawClients } = useQuery<any[]>({ queryKey: ["/api/clients"] });
   const payments = Array.isArray(rawPayments) ? rawPayments : [];
@@ -786,6 +832,8 @@ export default function StaffFinance() {
             {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow" title="Mobile money (Paynow) and cash payment collection">Mobile &amp; Cash</TabsTrigger>}
             {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups" title="Daily cash reconciliation — count cash collected against receipts issued">Cash-up Reconciliation</TabsTrigger>}
             {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions" title="Agent commission earnings and payout status">Commissions</TabsTrigger>}
+            {!commissionOnly && !isAgent && <TabsTrigger value="requisitions" data-testid="tab-requisitions" title="Expenditure requests: raise, approve, and mark paid">Requisitions</TabsTrigger>}
+            {canManageSettings && !isAgent && <TabsTrigger value="fx-rates" data-testid="tab-fx-rates" title="USD-base exchange rates for consolidated financial statements">FX Rates</TabsTrigger>}
             {!commissionOnly && !isAgent && <TabsTrigger value="expenditures" data-testid="tab-expenditures" title="Operating expenses and outgoing payments">Expenditures</TabsTrigger>}
             {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform" title="Platform revenue owed to POL263 (subscription and per-policy fees)">Platform Fees</TabsTrigger>}
             {canWriteFinance && !isAgent && <TabsTrigger value="month-end" data-testid="tab-month-end" title="Run the month-end close: batch premium collection for overdue policies">Month-End Close</TabsTrigger>}
@@ -1223,6 +1271,104 @@ export default function StaffFinance() {
                   )}
               </CardSection>
             </div>
+          </TabsContent>
+
+          <TabsContent value="fx-rates">
+            <CardSection
+              title="Exchange Rates (USD base)"
+              description="Set how many USD one unit of each currency is worth. Used to compute the consolidated USD total on the Income Statement and Cash Flow. USD is fixed at 1.00."
+              icon={DollarSign}
+              flush
+            >
+              <div className="p-4 space-y-3 max-w-md">
+                <div className="flex items-center gap-3">
+                  <span className="w-16 font-mono font-semibold">USD</span>
+                  <Input value="1.00000000" disabled className="flex-1" />
+                  <span className="text-xs text-muted-foreground w-20">base</span>
+                </div>
+                {["ZAR", "ZIG"].map((cur) => (
+                  <div key={cur} className="flex items-center gap-3">
+                    <span className="w-16 font-mono font-semibold">{cur}</span>
+                    <Input
+                      type="number" step="0.00000001" min="0"
+                      placeholder={`USD per 1 ${cur}`}
+                      value={fxEdits[cur] ?? fxRateMap[cur] ?? ""}
+                      onChange={(e) => setFxEdits({ ...fxEdits, [cur]: e.target.value })}
+                      className="flex-1"
+                      data-testid={`input-fx-${cur}`}
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => saveFxRateMutation.mutate({ currency: cur, rateToUsd: fxEdits[cur] ?? fxRateMap[cur] ?? "0" })}
+                      disabled={saveFxRateMutation.isPending || !(fxEdits[cur] ?? fxRateMap[cur])}
+                      data-testid={`btn-save-fx-${cur}`}
+                    >Save</Button>
+                  </div>
+                ))}
+                <p className="text-[11px] text-muted-foreground">Example: if 1 USD = 28 ZiG, then 1 ZiG = 0.0357 USD — enter 0.0357 for ZIG.</p>
+              </div>
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="requisitions">
+            <CardSection
+              title="Requisitions"
+              description="Raise an expenditure request, route it for approval, then mark it paid. Paid requisitions appear as expenses on the income statement."
+              icon={FileText}
+              flush
+              headerRight={canWriteFinance ? (
+                <Button size="sm" onClick={() => setShowRequisitionDialog(true)} data-testid="button-new-requisition">
+                  <Plus className="h-4 w-4 mr-2" />New Requisition
+                </Button>
+              ) : undefined}
+            >
+              {requisitions.length === 0 ? (
+                <EmptyState title="No requisitions yet" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+                  <TableHeader className={dataTableStickyHeaderClass}>
+                    <TableRow>
+                      <TableHead>Number</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Payee</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {requisitions.map((r: any) => (
+                      <TableRow key={r.id} className="hover:bg-muted/40">
+                        <TableCell className="font-mono text-xs">{r.requisitionNumber}</TableCell>
+                        <TableCell><Badge variant="outline">{r.category}</Badge></TableCell>
+                        <TableCell className="max-w-[220px] truncate" title={r.description}>{r.description}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{r.payee || "—"}</TableCell>
+                        <TableCell className="font-semibold text-right tabular-nums">{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
+                        <TableCell><StatusBadge status={r.status} /></TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1.5">
+                            {r.status === "draft" && canWriteFinance && (
+                              <Button size="sm" variant="outline" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "submit" })} data-testid={`btn-submit-req-${r.id}`}>Submit</Button>
+                            )}
+                            {r.status === "submitted" && canApproveFinance && (
+                              <>
+                                <Button size="sm" variant="outline" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "approve" })} data-testid={`btn-approve-req-${r.id}`}>Approve</Button>
+                                <Button size="sm" variant="ghost" className="text-destructive" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "reject", extra: { rejectionReason: "Rejected" } })}>Reject</Button>
+                              </>
+                            )}
+                            {r.status === "approved" && canWriteFinance && (
+                              <Button size="sm" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "pay" })} data-testid={`btn-pay-req-${r.id}`}>Mark Paid</Button>
+                            )}
+                            {(r.status === "paid" || r.status === "rejected") && <span className="text-xs text-muted-foreground">—</span>}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </DataTable>
+              )}
+            </CardSection>
           </TabsContent>
 
           <TabsContent value="expenditures">
@@ -1689,6 +1835,44 @@ export default function StaffFinance() {
             >
               {cashReceiptMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Record & generate receipt
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showRequisitionDialog} onOpenChange={setShowRequisitionDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New Requisition</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Category *</Label>
+              <Input value={requisitionForm.category} onChange={(e) => setRequisitionForm({ ...requisitionForm, category: e.target.value })} placeholder="e.g. Fuel, Rent, Supplies" data-testid="input-req-category" />
+            </div>
+            <div>
+              <Label className="text-xs">Description *</Label>
+              <Input value={requisitionForm.description} onChange={(e) => setRequisitionForm({ ...requisitionForm, description: e.target.value })} placeholder="What is this for?" data-testid="input-req-description" />
+            </div>
+            <div>
+              <Label className="text-xs">Payee</Label>
+              <Input value={requisitionForm.payee} onChange={(e) => setRequisitionForm({ ...requisitionForm, payee: e.target.value })} placeholder="Who is paid" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Amount *</Label>
+                <Input type="number" step="0.01" min="0" value={requisitionForm.amount} onChange={(e) => setRequisitionForm({ ...requisitionForm, amount: e.target.value })} data-testid="input-req-amount" />
+              </div>
+              <div>
+                <Label className="text-xs">Currency</Label>
+                <CurrencySelect value={requisitionForm.currency} onValueChange={(v) => setRequisitionForm({ ...requisitionForm, currency: v })} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => createRequisitionMutation.mutate(false)} disabled={createRequisitionMutation.isPending || !requisitionForm.category || !requisitionForm.description || !requisitionForm.amount}>Save Draft</Button>
+            <Button onClick={() => createRequisitionMutation.mutate(true)} disabled={createRequisitionMutation.isPending || !requisitionForm.category || !requisitionForm.description || !requisitionForm.amount} data-testid="button-submit-requisition">
+              {createRequisitionMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Submit for Approval
             </Button>
           </DialogFooter>
         </DialogContent>

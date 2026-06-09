@@ -340,12 +340,18 @@ export function setupClientAuth(app: Express) {
             totalDue = periodsElapsed * premium;
           }
         }
-        const balance = totalPaid - totalDue;
+        // Fold in the signed credit-balance wallet (premium-change reconciliations + overpayments):
+        // positive = credit/paid ahead, negative = arrears owed.
+        const wallet = await storage.getPolicyCreditBalance(orgId, p.id);
+        const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
+        const balance = totalPaid + walletBalance - totalDue;
         enriched.push({
           ...p,
           totalPaid: totalPaid.toFixed(2),
           totalDue: totalDue.toFixed(2),
           balance: balance.toFixed(2),
+          outstanding: Math.max(0, -balance).toFixed(2),
+          walletBalance: walletBalance.toFixed(2),
           periodsElapsed,
         });
       }

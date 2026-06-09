@@ -363,6 +363,24 @@ export default function StaffReports() {
     },
     enabled: need("financeReport"),
   });
+  const { data: incomeStatement, isLoading: loadingIncomeStatement } = useQuery<any>({
+    queryKey: ["reports", "income-statement", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/income-statement" + q, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: need("incomeStatement"),
+  });
+  const { data: cashFlow, isLoading: loadingCashFlow } = useQuery<any>({
+    queryKey: ["reports", "cash-flow", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/cash-flow" + q, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: need("cashFlow"),
+  });
   const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number } }>({
     queryKey: ["reports", "underwriter-payable", runKey, ...fk],
     queryFn: async () => {
@@ -634,6 +652,133 @@ export default function StaffReports() {
                     </DataTable>
                   </div>
                 )}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="income-statement">
+            <CardSection
+              title="Income Statement"
+              description="Cash basis — income from issued receipts (premium individual/group + cash services) less paid requisitions and expenditures, for the selected period. Per-currency, with a consolidated USD total."
+              icon={DollarSign}
+              flush
+            >
+              {loadingIncomeStatement ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : !incomeStatement ? (
+                <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (() => {
+                const is = incomeStatement;
+                const curs: string[] = is.currencies?.length ? is.currencies : ["USD"];
+                const money = (m: any, c: string) => Number((m?.[c]) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const cu = is.consolidatedUsd || { income: 0, expenses: 0, net: 0, unconvertible: [] };
+                return (
+                  <div className="space-y-4 p-4">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Total income (USD)</p><p className="text-lg font-bold tabular-nums text-emerald-600">{Number(cu.income).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+                      <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Total expenses (USD)</p><p className="text-lg font-bold tabular-nums text-destructive">{Number(cu.expenses).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+                      <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Net surplus (USD)</p><p className={`text-lg font-bold tabular-nums ${cu.net >= 0 ? "text-emerald-600" : "text-destructive"}`}>{Number(cu.net).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+                    </div>
+                    {cu.unconvertible?.length > 0 && (
+                      <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">No FX rate set for {cu.unconvertible.join(", ")} — excluded from the consolidated USD total. Set rates in Settings → FX Rates.</p>
+                    )}
+                    <div className="overflow-x-auto">
+                      <DataTable containerClassName="border rounded-md min-w-[520px]">
+                        <TableHeader className={dataTableStickyHeaderClass}>
+                          <TableRow><TableHead>Line</TableHead>{curs.map((c) => <TableHead key={c} className="text-right">{c}</TableHead>)}</TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          <TableRow className="bg-muted/30"><TableCell className="font-semibold" colSpan={curs.length + 1}>Income</TableCell></TableRow>
+                          <TableRow><TableCell>Premium — Individual</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.premiumIndividual, c)}</TableCell>)}</TableRow>
+                          <TableRow><TableCell>Premium — Group</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.premiumGroup, c)}</TableCell>)}</TableRow>
+                          <TableRow><TableCell>Cash services</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.cashServices, c)}</TableCell>)}</TableRow>
+                          <TableRow className="font-semibold border-t"><TableCell>Total income</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.total, c)}</TableCell>)}</TableRow>
+                          <TableRow className="bg-muted/30"><TableCell className="font-semibold" colSpan={curs.length + 1}>Expenses</TableCell></TableRow>
+                          {is.expenses.lines.length === 0 && <TableRow><TableCell className="text-muted-foreground text-sm" colSpan={curs.length + 1}>No expenses in period</TableCell></TableRow>}
+                          {is.expenses.lines.map((l: any, i: number) => (
+                            <TableRow key={i}><TableCell>{l.label} <span className="text-[10px] text-muted-foreground">({l.source})</span></TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(l.amounts, c)}</TableCell>)}</TableRow>
+                          ))}
+                          <TableRow className="font-semibold border-t"><TableCell>Total expenses</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.expenses.total, c)}</TableCell>)}</TableRow>
+                          <TableRow className="font-bold border-t-2"><TableCell>Net surplus / (deficit)</TableCell>{curs.map((c) => <TableCell key={c} className={`text-right tabular-nums ${Number(is.net?.[c] || 0) >= 0 ? "text-emerald-600" : "text-destructive"}`}>{money(is.net, c)}</TableCell>)}</TableRow>
+                        </TableBody>
+                      </DataTable>
+                    </div>
+                  </div>
+                );
+              })()}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="cash-flow">
+            <CardSection
+              title="Cash Flow Statement"
+              description="Cash basis — cash received (by method) less cash paid out, for the selected period, reconciled against confirmed daily cash-ups."
+              icon={DollarSign}
+              flush
+            >
+              {loadingCashFlow ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : !cashFlow ? (
+                <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (() => {
+                const cf = cashFlow;
+                const curs: string[] = cf.currencies?.length ? cf.currencies : ["USD"];
+                const money = (m: any, c: string) => Number((m?.[c]) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const cu = cf.consolidatedUsd || { cashIn: 0, cashOut: 0, netCash: 0, unconvertible: [] };
+                const channels = Object.keys(cf.inflowsByChannel || {});
+                return (
+                  <div className="space-y-4 p-4">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Cash in (USD)</p><p className="text-lg font-bold tabular-nums text-emerald-600">{Number(cu.cashIn).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+                      <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Cash out (USD)</p><p className="text-lg font-bold tabular-nums text-destructive">{Number(cu.cashOut).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+                      <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Net cash (USD)</p><p className={`text-lg font-bold tabular-nums ${cu.netCash >= 0 ? "text-emerald-600" : "text-destructive"}`}>{Number(cu.netCash).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+                    </div>
+                    {cu.unconvertible?.length > 0 && (
+                      <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">No FX rate set for {cu.unconvertible.join(", ")} — excluded from the consolidated USD total.</p>
+                    )}
+                    <div className="overflow-x-auto">
+                      <DataTable containerClassName="border rounded-md min-w-[520px]">
+                        <TableHeader className={dataTableStickyHeaderClass}>
+                          <TableRow><TableHead>Line</TableHead>{curs.map((c) => <TableHead key={c} className="text-right">{c}</TableHead>)}</TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          <TableRow className="bg-muted/30"><TableCell className="font-semibold" colSpan={curs.length + 1}>Cash in (by method)</TableCell></TableRow>
+                          {channels.map((ch) => (
+                            <TableRow key={ch}><TableCell className="capitalize">{ch.replace(/_/g, " ")}</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.inflowsByChannel[ch], c)}</TableCell>)}</TableRow>
+                          ))}
+                          <TableRow className="font-semibold border-t"><TableCell>Total cash in</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.cashIn, c)}</TableCell>)}</TableRow>
+                          <TableRow className="bg-muted/30"><TableCell className="font-semibold" colSpan={curs.length + 1}>Cash out</TableCell></TableRow>
+                          <TableRow><TableCell>Requisitions paid</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.outflows.requisitions, c)}</TableCell>)}</TableRow>
+                          <TableRow><TableCell>Expenditures</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.outflows.expenditures, c)}</TableCell>)}</TableRow>
+                          <TableRow className="font-semibold border-t"><TableCell>Total cash out</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.outflows.total, c)}</TableCell>)}</TableRow>
+                          <TableRow className="font-bold border-t-2"><TableCell>Net cash movement</TableCell>{curs.map((c) => <TableCell key={c} className={`text-right tabular-nums ${Number(cf.netCash?.[c] || 0) >= 0 ? "text-emerald-600" : "text-destructive"}`}>{money(cf.netCash, c)}</TableCell>)}</TableRow>
+                        </TableBody>
+                      </DataTable>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold mb-2">Daily cash-up reconciliation</p>
+                      {(!cf.cashups || cf.cashups.length === 0) ? (
+                        <p className="text-sm text-muted-foreground">No cash-ups recorded in this period.</p>
+                      ) : (
+                        <DataTable containerClassName="border rounded-md">
+                          <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Currency</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Expected</TableHead><TableHead className="text-right">Counted</TableHead><TableHead className="text-right">Discrepancy</TableHead></TableRow></TableHeader>
+                          <TableBody>
+                            {cf.cashups.map((cu2: any) => (
+                              <TableRow key={cu2.id}>
+                                <TableCell>{cu2.cashupDate}</TableCell>
+                                <TableCell>{cu2.currency}</TableCell>
+                                <TableCell className="capitalize">{cu2.status}</TableCell>
+                                <TableCell className="text-right tabular-nums">{Number(cu2.totalAmount || 0).toFixed(2)}</TableCell>
+                                <TableCell className="text-right tabular-nums">{cu2.countedTotal != null ? Number(cu2.countedTotal).toFixed(2) : "—"}</TableCell>
+                                <TableCell className="text-right tabular-nums">{cu2.discrepancyAmount != null ? Number(cu2.discrepancyAmount).toFixed(2) : "—"}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </DataTable>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </CardSection>
           </TabsContent>
 

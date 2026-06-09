@@ -137,6 +137,126 @@ export async function computePolicyPremium(
   return total.toFixed(2);
 }
 
+// ─── Billing / arrears helpers ──────────────────────────────────────────────
+
+const PERIOD_DAYS: Record<string, number> = {
+  weekly: 7, biweekly: 14, quarterly: 91.31, annually: 365.25, monthly: 30.44,
+};
+export function periodDaysForSchedule(schedule: string | null | undefined): number {
+  return PERIOD_DAYS[String(schedule || "monthly")] ?? 30.44;
+}
+
+/** Whole billing periods elapsed between two dates for a schedule (floor; non-positive spans ⇒ 0). */
+export function periodsBetween(
+  from: string | Date | null | undefined,
+  to: string | Date,
+  schedule: string | null | undefined,
+): number {
+  if (!from) return 0;
+  const f = new Date(from);
+  const t = new Date(to);
+  if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime())) return 0;
+  const days = (t.getTime() - f.getTime()) / (24 * 60 * 60 * 1000);
+  if (days <= 0) return 0;
+  return Math.floor(days / periodDaysForSchedule(schedule));
+}
+
+export interface OutstandingResult {
+  periodsElapsed: number;
+  totalDue: number;
+  totalPaid: number;
+  walletBalance: number;
+  /** Amount owed right now (>= 0). */
+  outstanding: number;
+  /** Signed account balance: positive = paid ahead / credit, negative = owed. */
+  balance: number;
+}
+
+/**
+ * Single source of truth for a policy's outstanding/arrears figure. Reproduces the
+ * legacy formula (periodsElapsed × current premium − totalPaid) and folds in the
+ * signed credit-balance wallet, which carries premium-change reconciliations
+ * (negative = arrears charged, positive = advance credit) and overpayments.
+ */
+export function computePolicyOutstanding(params: {
+  policy: any;
+  totalPaid: number;
+  walletBalance?: number;
+}): OutstandingResult {
+  const { policy } = params;
+  const totalPaid = Number(params.totalPaid) || 0;
+  const walletBalance = Number(params.walletBalance) || 0;
+  const premium = parseFloat(String(policy?.premiumAmount ?? "0")) || 0;
+  const startDate = policy?.inceptionDate || policy?.effectiveDate;
+
+  let periodsElapsed = 0;
+  let totalDue = 0;
+  if (startDate && premium > 0) {
+    const start = new Date(startDate);
+    const now = new Date();
+    if (!Number.isNaN(start.getTime()) && start <= now) {
+      const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
+      periodsElapsed = Math.ceil(daysElapsed / periodDaysForSchedule(policy?.paymentSchedule));
+      totalDue = periodsElapsed * premium;
+    }
+  }
+
+  const balance = totalPaid + walletBalance - totalDue;
+  const outstanding = Math.max(0, -balance);
+  return { periodsElapsed, totalDue, totalPaid, walletBalance, outstanding, balance };
+}
+
+/**
+ * Reconciles a premium-affecting change. Charges/credits only the DIFFERENCE
+ * (delta × whole periods since the effective date) to the signed credit-balance
+ * wallet — arrears make it negative (owed), advances make it positive (credit) —
+ * and records an audit row. Returns the signed reconciliation amount and periods.
+ * The caller is responsible for persisting the new premiumAmount on the policy.
+ */
+export async function reconcilePremiumChange(params: {
+  orgId: string;
+  policy: any;
+  oldPremium: number | string;
+  newPremium: number | string;
+  effectiveDate: string;
+  changeType: "upgrade" | "downgrade" | "member_add" | "member_remove" | "manual";
+  reason?: string | null;
+  actorId?: string | null;
+}): Promise<{ reconciliation: number; periods: number; direction: "arrears" | "credit" | "none" }> {
+  const { orgId, policy } = params;
+  const oldP = parseFloat(String(params.oldPremium)) || 0;
+  const newP = parseFloat(String(params.newPremium)) || 0;
+  const currency = policy?.currency || "USD";
+  const periods = periodsBetween(params.effectiveDate, new Date(), policy?.paymentSchedule);
+  const R = Number(((newP - oldP) * periods).toFixed(2)); // signed: + = arrears owed, - = overpaid
+
+  if (Math.abs(R) >= 0.01) {
+    // Post the inverse to the wallet: arrears (R>0) ⇒ wallet down (owed); advance (R<0) ⇒ wallet up (credit).
+    await storage.addPolicyCreditBalance(orgId, policy.id, (-R).toFixed(2), currency);
+  }
+
+  try {
+    await storage.createPolicyPremiumChange({
+      organizationId: orgId,
+      policyId: policy.id,
+      oldPremium: oldP.toFixed(2),
+      newPremium: newP.toFixed(2),
+      currency,
+      effectiveDate: params.effectiveDate,
+      periods,
+      reconciliation: R.toFixed(2),
+      changeType: params.changeType,
+      reason: params.reason ?? null,
+      actorId: params.actorId ?? null,
+    });
+  } catch (err) {
+    structuredLog("error", "createPolicyPremiumChange failed", { policyId: policy.id, error: (err as Error).message });
+  }
+
+  const direction = R > 0 ? "arrears" : R < 0 ? "credit" : "none";
+  return { reconciliation: R, periods, direction };
+}
+
 export async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
   if (!policy.agentId) return;
   try {

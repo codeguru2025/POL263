@@ -22,12 +22,17 @@ import {
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
-  policyCreditBalances, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
+  fxRates, requisitions, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
+  type FxRate, type InsertFxRate, type Requisition, type InsertRequisition,
+  type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
+  type ServiceReceipt, type InsertServiceReceipt,
   type GroupPaymentIntent, type InsertGroupPaymentIntent,
   type GroupPaymentAllocation, type InsertGroupPaymentAllocation,
   type PolicyCreditBalance, type CreditNote, type MonthEndRun,
   type InsertPolicyCreditBalance, type InsertCreditNote, type InsertMonthEndRun,
+  type PolicyPremiumChange, type InsertPolicyPremiumChange,
   type Organization, type InsertOrganization,
   type Branch, type InsertBranch,
   type User, type InsertUser,
@@ -467,6 +472,21 @@ export interface IStorage {
   getPolicyCreditBalance(orgId: string, policyId: string): Promise<PolicyCreditBalance | undefined>;
   getPolicyCreditBalancesWithPositiveBalance(orgId: string): Promise<PolicyCreditBalance[]>;
   deductPolicyCreditBalance(orgId: string, policyId: string, amount: string): Promise<PolicyCreditBalance | undefined>;
+  createPolicyPremiumChange(change: InsertPolicyPremiumChange): Promise<PolicyPremiumChange>;
+  getPolicyPremiumChanges(orgId: string, policyId: string): Promise<PolicyPremiumChange[]>;
+  deactivatePolicyMember(memberId: string, policyId: string, orgId: string): Promise<PolicyMember | undefined>;
+  // ── Finance: FX rates, requisitions, funeral quotations, service receipts ──
+  getFxRates(orgId: string): Promise<FxRate[]>;
+  upsertFxRate(orgId: string, currency: string, rateToUsd: string, updatedBy?: string): Promise<FxRate>;
+  getRequisitions(orgId: string, filters?: { status?: string; fromDate?: string; toDate?: string }): Promise<Requisition[]>;
+  getRequisition(id: string, orgId: string): Promise<Requisition | undefined>;
+  createRequisition(req: InsertRequisition): Promise<Requisition>;
+  updateRequisition(id: string, orgId: string, data: Partial<Requisition>): Promise<Requisition | undefined>;
+  getFuneralQuotation(funeralCaseId: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined>;
+  upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation>;
+  getServiceReceipts(orgId: string, opts?: { funeralCaseId?: string; fromDate?: string; toDate?: string }): Promise<ServiceReceipt[]>;
+  getServiceReceiptByIdempotencyKey(orgId: string, idempotencyKey: string): Promise<ServiceReceipt | undefined>;
+  createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt>;
   getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
   addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
   removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void>;
@@ -3598,6 +3618,154 @@ export class DatabaseStorage implements IStorage {
     `);
     const rows = (result as unknown as { rows?: PolicyCreditBalance[] }).rows;
     return rows?.[0];
+  }
+  async createPolicyPremiumChange(change: InsertPolicyPremiumChange): Promise<PolicyPremiumChange> {
+    const tdb = await getDbForOrg(change.organizationId);
+    const [created] = await tdb.insert(policyPremiumChanges).values(change).returning();
+    return created;
+  }
+  async getPolicyPremiumChanges(orgId: string, policyId: string): Promise<PolicyPremiumChange[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(policyPremiumChanges)
+      .where(and(eq(policyPremiumChanges.organizationId, orgId), eq(policyPremiumChanges.policyId, policyId)))
+      .orderBy(desc(policyPremiumChanges.createdAt));
+  }
+  async deactivatePolicyMember(memberId: string, policyId: string, orgId: string): Promise<PolicyMember | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(policyMembers)
+      .set({ isActive: false })
+      .where(and(
+        eq(policyMembers.id, memberId),
+        eq(policyMembers.policyId, policyId),
+        eq(policyMembers.organizationId, orgId),
+      ))
+      .returning();
+    return updated;
+  }
+
+  // ── Finance: FX rates ──
+  async getFxRates(orgId: string): Promise<FxRate[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(fxRates).where(eq(fxRates.organizationId, orgId));
+  }
+  async upsertFxRate(orgId: string, currency: string, rateToUsd: string, updatedBy?: string): Promise<FxRate> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO fx_rates (organization_id, currency, rate_to_usd, updated_by, updated_at)
+      VALUES (${orgId}, ${currency}, ${rateToUsd}::numeric, ${updatedBy ?? null}, now())
+      ON CONFLICT (organization_id, currency) DO UPDATE
+        SET rate_to_usd = ${rateToUsd}::numeric, updated_by = ${updatedBy ?? null}, updated_at = now()
+      RETURNING *
+    `);
+    const rows = (result as unknown as { rows?: FxRate[] }).rows;
+    return rows![0];
+  }
+
+  // ── Finance: requisitions ──
+  async getRequisitions(orgId: string, filters?: { status?: string; fromDate?: string; toDate?: string }): Promise<Requisition[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: any[] = [eq(requisitions.organizationId, orgId)];
+    if (filters?.status) conditions.push(eq(requisitions.status, filters.status));
+    if (filters?.fromDate) conditions.push(gte(requisitions.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(requisitions.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    return tdb.select().from(requisitions).where(and(...conditions)).orderBy(desc(requisitions.createdAt));
+  }
+  async getRequisition(id: string, orgId: string): Promise<Requisition | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(requisitions)
+      .where(and(eq(requisitions.id, id), eq(requisitions.organizationId, orgId)));
+    return row;
+  }
+  async createRequisition(req: InsertRequisition): Promise<Requisition> {
+    const tdb = await getDbForOrg(req.organizationId);
+    const [created] = await tdb.insert(requisitions).values(req).returning();
+    return created;
+  }
+  async updateRequisition(id: string, orgId: string, data: Partial<Requisition>): Promise<Requisition | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(requisitions).set(data)
+      .where(and(eq(requisitions.id, id), eq(requisitions.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+
+  // ── Finance: funeral quotations ──
+  async getFuneralQuotation(funeralCaseId: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [quote] = await tdb.select().from(funeralQuotations)
+      .where(and(eq(funeralQuotations.organizationId, orgId), eq(funeralQuotations.funeralCaseId, funeralCaseId)))
+      .orderBy(desc(funeralQuotations.createdAt));
+    if (!quote) return undefined;
+    const items = await tdb.select().from(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
+    return { ...quote, items };
+  }
+  async upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation> {
+    const total = items.reduce((sum, it) => sum + parseFloat(String(it.lineTotal || "0")), 0).toFixed(2);
+    const quotationNumber = `QUO-${Date.now().toString(36).toUpperCase()}`;
+    // Run the upsert + item replacement in ONE transaction so the quotation row and its line
+    // items are always consistent — a failure can't leave a quotation with a stale total but
+    // missing/half-written items. Within the txn, the onConflictDoUpdate takes a row lock on the
+    // (org, case) row, serializing concurrent upserts of the same case so items can't interleave.
+    return withOrgTransaction(orgId, async (tx) => {
+      const [quote] = await tx.insert(funeralQuotations)
+        .values({
+          organizationId: orgId, funeralCaseId, quotationNumber, currency: data.currency,
+          total, status: data.status ?? "draft", notes: data.notes ?? null, createdBy: data.createdBy ?? null,
+        })
+        .onConflictDoUpdate({
+          target: [funeralQuotations.organizationId, funeralQuotations.funeralCaseId],
+          set: {
+            currency: data.currency,
+            total,
+            ...(data.status !== undefined ? { status: data.status } : {}),
+            ...(data.notes !== undefined ? { notes: data.notes } : {}),
+          },
+        })
+        .returning();
+      // Replace line items for the (possibly pre-existing) quotation.
+      await tx.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
+      if (items.length > 0) {
+        await tx.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: quote.id })));
+      }
+      return quote;
+    });
+  }
+
+  // ── Finance: service receipts (cash-service income) ──
+  async getServiceReceipts(orgId: string, opts?: { funeralCaseId?: string; fromDate?: string; toDate?: string }): Promise<ServiceReceipt[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: any[] = [eq(serviceReceipts.organizationId, orgId)];
+    if (opts?.funeralCaseId) conditions.push(eq(serviceReceipts.funeralCaseId, opts.funeralCaseId));
+    if (opts?.fromDate) conditions.push(gte(serviceReceipts.issuedAt, new Date(opts.fromDate + "T00:00:00.000Z")));
+    if (opts?.toDate) conditions.push(lte(serviceReceipts.issuedAt, new Date(opts.toDate + "T23:59:59.999Z")));
+    return tdb.select().from(serviceReceipts).where(and(...conditions)).orderBy(desc(serviceReceipts.issuedAt));
+  }
+  async getServiceReceiptByIdempotencyKey(orgId: string, idempotencyKey: string): Promise<ServiceReceipt | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(serviceReceipts)
+      .where(and(eq(serviceReceipts.organizationId, orgId), eq(serviceReceipts.idempotencyKey, idempotencyKey)));
+    return row;
+  }
+  async createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt> {
+    const tdb = await getDbForOrg(receipt.organizationId);
+    // No idempotency key → plain insert.
+    if (!receipt.idempotencyKey) {
+      const [created] = await tdb.insert(serviceReceipts).values(receipt).returning();
+      return created;
+    }
+    // Idempotent path: dedupe atomically via the unique index sr_idempotency_org_idx so a
+    // double-submit on the money path can't create two receipts.
+    const [created] = await tdb.insert(serviceReceipts).values(receipt)
+      .onConflictDoNothing({ target: [serviceReceipts.organizationId, serviceReceipts.idempotencyKey] })
+      .returning();
+    if (created) return created;
+    // Conflict: a receipt with this key already exists (or is being committed concurrently).
+    const existing = await this.getServiceReceiptByIdempotencyKey(receipt.organizationId, receipt.idempotencyKey);
+    if (existing) return existing;
+    // Conflict reported but the row isn't visible yet (concurrent uncommitted insert). Fail safe
+    // rather than fall through to an unguarded insert that would hit the unique violation — the
+    // caller can retry and will then read back the committed receipt.
+    throw new Error("Service receipt idempotency conflict: a concurrent receipt with the same key is being created");
   }
   async getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]> {
     const tdb = await getDbForOrg(orgId);

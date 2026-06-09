@@ -97,6 +97,7 @@ export default function StaffPolicies() {
   const isAgent = isAgentScoped(safeRoles);
   const canWritePolicy = safePermissions.includes("write:policy");
   const canWriteFinance = safePermissions.includes("write:finance");
+  const canEditPremium = isPlatformOwner || safePermissions.includes("edit:premium");
   const canDeletePolicy = safePermissions.includes("delete:policy");
   const canEditPayment = safePermissions.includes("edit:payment");
   const canDeletePayment = safePermissions.includes("delete:payment");
@@ -149,6 +150,10 @@ export default function StaffPolicies() {
     selectedProductId: "",
     productVersionId: "",
   });
+  // Effective date + live arrears/credit preview for premium-affecting changes (upgrade / manual premium).
+  const todayISO = new Date().toISOString().split("T")[0];
+  const [changeEffectiveDate, setChangeEffectiveDate] = useState(todayISO);
+  const [changePreview, setChangePreview] = useState<{ oldPremium: string; newPremium: string; currency: string; periods: number; reconciliation: string; direction: string } | null>(null);
   const [editForm, setEditForm] = useState({
     currency: "",
     paymentSchedule: "",
@@ -160,6 +165,9 @@ export default function StaffPolicies() {
     beneficiaryRelationship: "",
     beneficiaryNationalId: "",
     beneficiaryPhone: "",
+    premiumAmount: "",
+    premiumEffectiveDate: "",
+    premiumChangeReason: "",
   });
 
   const [createForm, setCreateForm] = useState({
@@ -754,8 +762,8 @@ export default function StaffPolicies() {
   });
 
   const upgradePolicyMutation = useMutation({
-    mutationFn: async ({ id, productVersionId }: { id: string; productVersionId: string }) => {
-      const res = await apiRequest("POST", `/api/policies/${id}/upgrade`, { productVersionId });
+    mutationFn: async ({ id, productVersionId, effectiveDate }: { id: string; productVersionId: string; effectiveDate?: string }) => {
+      const res = await apiRequest("POST", `/api/policies/${id}/upgrade`, { productVersionId, effectiveDate });
       return res.json();
     },
     onSuccess: (updated: any) => {
@@ -763,13 +771,41 @@ export default function StaffPolicies() {
       queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "detail"] });
       setShowUpgradeDialog(false);
       setUpgradeForm({ selectedProductId: "", productVersionId: "" });
+      const recon = updated?.reconciliation;
+      const reconNote = recon && recon.direction === "arrears"
+        ? ` Arrears of ${updated.currency} ${Math.abs(Number(recon.reconciliation)).toFixed(2)} added to the account.`
+        : recon && recon.direction === "credit"
+        ? ` Credit of ${updated.currency} ${Math.abs(Number(recon.reconciliation)).toFixed(2)} added to the balance.`
+        : "";
       if (showDetailView) setSelectedPolicy(updated);
-      toast({ title: "Policy upgraded", description: "The policy now uses the selected product version." });
+      toast({ title: "Policy product changed", description: `Premium recalculated.${reconNote}` });
     },
     onError: (err: Error) => {
-      toast({ title: "Upgrade failed", description: err.message, variant: "destructive" });
+      toast({ title: "Change failed", description: err.message, variant: "destructive" });
     },
   });
+
+  // Fetch a live arrears/credit preview when the upgrade target version or effective date changes.
+  useEffect(() => {
+    if (!showUpgradeDialog || !selectedPolicy?.id || !upgradeForm.productVersionId) {
+      setChangePreview(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("POST", `/api/policies/${selectedPolicy.id}/preview-change`, {
+          productVersionId: upgradeForm.productVersionId,
+          effectiveDate: changeEffectiveDate,
+        });
+        const data = await res.json();
+        if (!cancelled) setChangePreview(data);
+      } catch {
+        if (!cancelled) setChangePreview(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showUpgradeDialog, selectedPolicy?.id, upgradeForm.productVersionId, changeEffectiveDate]);
 
   const openEditDialog = (policy: any) => {
     setEditForm({
@@ -783,6 +819,9 @@ export default function StaffPolicies() {
       beneficiaryRelationship: policy.beneficiaryRelationship || "",
       beneficiaryNationalId: policy.beneficiaryNationalId || "",
       beneficiaryPhone: policy.beneficiaryPhone || "",
+      premiumAmount: policy.premiumAmount ? parseFloat(policy.premiumAmount).toFixed(2) : "",
+      premiumEffectiveDate: todayISO,
+      premiumChangeReason: "",
     });
     setShowEditDialog(true);
   };
@@ -800,6 +839,16 @@ export default function StaffPolicies() {
     if (editForm.beneficiaryRelationship !== (displayPolicy.beneficiaryRelationship || "")) data.beneficiaryRelationship = editForm.beneficiaryRelationship || null;
     if (editForm.beneficiaryNationalId !== (displayPolicy.beneficiaryNationalId || "")) data.beneficiaryNationalId = editForm.beneficiaryNationalId || null;
     if (editForm.beneficiaryPhone !== (displayPolicy.beneficiaryPhone || "")) data.beneficiaryPhone = editForm.beneficiaryPhone || null;
+    // Manual premium override (gated to edit:premium roles). Sends the reconciliation effective date.
+    if (canEditPremium && editForm.premiumAmount !== "") {
+      const current = parseFloat(String(displayPolicy.premiumAmount ?? "0"));
+      const next = parseFloat(editForm.premiumAmount);
+      if (Number.isFinite(next) && next >= 0 && Math.abs(next - current) >= 0.01) {
+        data.premiumAmount = next.toFixed(2);
+        data.premiumEffectiveDate = editForm.premiumEffectiveDate || todayISO;
+        if (editForm.premiumChangeReason) data.premiumChangeReason = editForm.premiumChangeReason;
+      }
+    }
     if (Object.keys(data).length === 0) {
       setShowEditDialog(false);
       return;
@@ -1475,6 +1524,15 @@ export default function StaffPolicies() {
                       <p className="text-muted-foreground text-xs">Total paid</p>
                       <p className="text-lg font-bold tabular-nums">{displayPolicy.currency} {Number(displayPolicy.totalPaid).toFixed(2)}</p>
                       <p className="text-xs text-muted-foreground">{displayPolicy.periodsElapsed ?? 0} period{(displayPolicy.periodsElapsed ?? 0) !== 1 ? "s" : ""} elapsed</p>
+                    </div>
+                  )}
+                  {displayPolicy.walletBalance != null && Math.abs(Number(displayPolicy.walletBalance)) >= 0.01 && (
+                    <div>
+                      <p className="text-muted-foreground text-xs">Credit wallet</p>
+                      <p className={`text-lg font-bold tabular-nums ${Number(displayPolicy.walletBalance) >= 0 ? "text-emerald-600" : "text-destructive"}`} data-testid="text-wallet-balance">
+                        {displayPolicy.currency} {Number(displayPolicy.walletBalance).toFixed(2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{Number(displayPolicy.walletBalance) >= 0 ? "Credit / advance" : "Owed (arrears)"}</p>
                     </div>
                   )}
                 </div>
@@ -2172,8 +2230,37 @@ export default function StaffPolicies() {
                 </div>
               </div>
 
+              {canEditPremium && (
+                <div>
+                  <h4 className="text-sm font-semibold mb-3">Premium override</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-xs">Premium amount ({editForm.currency || displayPolicy?.currency || "USD"})</Label>
+                      <Input
+                        type="number" step="0.01" min="0"
+                        value={editForm.premiumAmount}
+                        onChange={(e) => setEditForm({ ...editForm, premiumAmount: e.target.value })}
+                        data-testid="input-edit-premium"
+                      />
+                      <p className="text-[11px] text-muted-foreground mt-1">Auto-calculated; override only if needed.</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Effective from</Label>
+                      <Input type="date" value={editForm.premiumEffectiveDate} onChange={(e) => setEditForm({ ...editForm, premiumEffectiveDate: e.target.value })} data-testid="input-edit-premium-date" />
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs">Reason (optional)</Label>
+                      <Input value={editForm.premiumChangeReason} onChange={(e) => setEditForm({ ...editForm, premiumChangeReason: e.target.value })} placeholder="e.g. Correction, negotiated rate" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">A past effective date back-charges (arrears) or credits the difference for the elapsed periods.</p>
+                </div>
+              )}
+
               <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
-                <strong>Note:</strong> {isPlatformOwner
+                <strong>Note:</strong> {canEditPremium
+                  ? "Policy number and client cannot be changed. Premium can be overridden above; it otherwise auto-calculates from the product, add-ons, and members."
+                  : isPlatformOwner
                   ? "Premium amount, policy number, and client cannot be changed. Agent can be reassigned above."
                   : "Agent assignment, premium amount, policy number, and client cannot be changed after policy creation."
                 }
@@ -2243,16 +2330,29 @@ export default function StaffPolicies() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label>Effective from</Label>
+                <Input type="date" value={changeEffectiveDate} onChange={(e) => setChangeEffectiveDate(e.target.value)} data-testid="input-upgrade-effective-date" />
+                <p className="text-xs text-muted-foreground">A past date back-charges (or credits) the difference for the periods since then.</p>
+              </div>
+              {changePreview && (
+                <div className={`rounded-md p-3 text-sm border ${changePreview.direction === "arrears" ? "bg-amber-500/10 border-amber-200 text-amber-800" : changePreview.direction === "credit" ? "bg-emerald-500/10 border-emerald-200 text-emerald-800" : "bg-muted/50 text-muted-foreground"}`} data-testid="upgrade-impact-preview">
+                  <p>New premium: <strong>{changePreview.currency} {Number(changePreview.newPremium).toFixed(2)}</strong> (was {changePreview.currency} {Number(changePreview.oldPremium).toFixed(2)})</p>
+                  {changePreview.direction === "arrears" && <p>Arrears to charge: <strong>{changePreview.currency} {Math.abs(Number(changePreview.reconciliation)).toFixed(2)}</strong> over {changePreview.periods} period(s) → added to the account.</p>}
+                  {changePreview.direction === "credit" && <p>Credit to balance: <strong>{changePreview.currency} {Math.abs(Number(changePreview.reconciliation)).toFixed(2)}</strong> over {changePreview.periods} period(s).</p>}
+                  {changePreview.direction === "none" && <p>No arrears or credit for the selected effective date.</p>}
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowUpgradeDialog(false)}>Cancel</Button>
               <Button
-                onClick={() => selectedPolicy && upgradePolicyMutation.mutate({ id: selectedPolicy.id, productVersionId: upgradeForm.productVersionId })}
+                onClick={() => selectedPolicy && upgradePolicyMutation.mutate({ id: selectedPolicy.id, productVersionId: upgradeForm.productVersionId, effectiveDate: changeEffectiveDate })}
                 disabled={!selectedPolicy || !upgradeForm.productVersionId || upgradePolicyMutation.isPending}
                 data-testid="btn-confirm-upgrade-policy"
               >
                 {upgradePolicyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Upgrade Policy
+                Apply Change
               </Button>
             </DialogFooter>
           </DialogContent>

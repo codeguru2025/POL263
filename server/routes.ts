@@ -11,7 +11,8 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope, enforceAgentPolicyAccess } from "./route-helpers";
+import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
+import { buildIncomeStatement, buildCashFlowStatement } from "./financial-statements";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -40,6 +41,7 @@ import {
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertDependentSchema, insertTermsSchema,
+  insertRequisitionSchema, REQUISITION_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases,
 } from "@shared/schema";
@@ -1749,22 +1751,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       .filter((p: any) => p.status === "cleared")
       .reduce((sum: number, p: any) => sum + parseFloat(p.amount || "0"), 0);
 
-    const premium = parseFloat(policy.premiumAmount || "0");
-    const startDate = policy.inceptionDate || policy.effectiveDate;
-    let totalDue = 0;
-    let periodsElapsed = 0;
-    if (startDate && premium > 0) {
-      const start = new Date(startDate);
-      const now = new Date();
-      if (!isNaN(start.getTime()) && start <= now) {
-        const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
-        const schedule = policy.paymentSchedule || "monthly";
-        const periodDays = schedule === "weekly" ? 7 : schedule === "biweekly" ? 14 : schedule === "quarterly" ? 91.31 : schedule === "annually" ? 365.25 : 30.44;
-        periodsElapsed = Math.ceil(daysElapsed / periodDays);
-        totalDue = periodsElapsed * premium;
-      }
-    }
-    const balance = totalPaid - totalDue;
+    const wallet = await storage.getPolicyCreditBalance(user.organizationId, policy.id);
+    const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
+    const { totalDue, balance, outstanding, periodsElapsed } = computePolicyOutstanding({ policy, totalPaid, walletBalance });
 
     return res.json({
       ...policy,
@@ -1778,6 +1767,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       totalPaid: totalPaid.toFixed(2),
       totalDue: totalDue.toFixed(2),
       balance: balance.toFixed(2),
+      outstanding: outstanding.toFixed(2),
+      walletBalance: walletBalance.toFixed(2),
       periodsElapsed,
     });
   });
@@ -2012,8 +2003,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+    // Manual premium override is gated by the dedicated edit:premium permission.
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
+
     const body = { ...req.body };
+    const rawPremium = body.premiumAmount;
+    const premiumEffectiveDate = typeof body.premiumEffectiveDate === "string" && body.premiumEffectiveDate.trim()
+      ? body.premiumEffectiveDate.trim()
+      : new Date().toISOString().split("T")[0];
+    const premiumChangeReason = typeof body.premiumChangeReason === "string" ? body.premiumChangeReason : null;
     delete body.premiumAmount;
+    delete body.premiumEffectiveDate;
+    delete body.premiumChangeReason;
     delete body.organizationId;
     delete body.id;
     delete body.createdAt;
@@ -2035,11 +2037,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       sanitized[key] = value === "" ? null : value;
     }
 
-    if (Object.keys(sanitized).length === 0) {
+    // Resolve a manual premium override (if permitted and actually different).
+    let manualPremium: number | null = null;
+    if (rawPremium != null && rawPremium !== "" && canEditPremium) {
+      const parsed = parseFloat(String(rawPremium));
+      const current = parseFloat(String(before.premiumAmount ?? "0"));
+      if (Number.isFinite(parsed) && parsed >= 0 && Math.abs(parsed - current) >= 0.01) {
+        manualPremium = parsed;
+      }
+    }
+
+    if (Object.keys(sanitized).length === 0 && manualPremium == null) {
       return res.json(before);
     }
 
-    const updated = await storage.updatePolicy(req.params.id as string, sanitized, user.organizationId);
+    let updated = before;
+    if (Object.keys(sanitized).length > 0) {
+      updated = (await storage.updatePolicy(req.params.id as string, sanitized, user.organizationId)) ?? updated;
+    }
+
+    if (manualPremium != null) {
+      await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy: updated,
+        oldPremium: before.premiumAmount,
+        newPremium: manualPremium,
+        effectiveDate: premiumEffectiveDate,
+        changeType: "manual",
+        reason: premiumChangeReason,
+        actorId: user.id,
+      });
+      updated = (await storage.updatePolicy(req.params.id as string, { premiumAmount: manualPremium.toFixed(2) }, user.organizationId)) ?? updated;
+    }
+
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);
     return res.json(updated);
     } catch (err: any) {
@@ -2106,20 +2136,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         dependentDateOfBirths,
       );
 
-      const effectiveDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
+      // "Effective from" date drives arrears/credit reconciliation — it does NOT
+      // change the policy's inception (effectiveDate). Defaults to today.
+      const reconcileFrom = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : undefined;
-      const updates: Record<string, any> = {
+        : new Date().toISOString().split("T")[0];
+
+      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+      const newPremium = parseFloat(String(premiumAmount));
+      const recon = await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy,
+        oldPremium,
+        newPremium,
+        effectiveDate: reconcileFrom,
+        changeType: newPremium >= oldPremium ? "upgrade" : "downgrade",
+        reason: typeof req.body.reason === "string" ? req.body.reason : "Product change",
+        actorId: user.id,
+      });
+
+      const updated = await storage.updatePolicy(policy.id, {
         productVersionId: targetPv.id,
         currency,
         paymentSchedule,
         premiumAmount,
-      };
-      if (effectiveDate) updates.effectiveDate = effectiveDate;
-
-      const updated = await storage.updatePolicy(policy.id, updates, user.organizationId);
-      await auditLog(req, "UPGRADE_POLICY_PRODUCT", "Policy", policy.id, policy, updated);
-      return res.json(updated);
+      }, user.organizationId);
+      await auditLog(req, "UPGRADE_POLICY_PRODUCT", "Policy", policy.id, policy, { ...updated, reconciliation: recon });
+      return res.json({ ...updated, reconciliation: recon });
     } catch (err: any) {
       const dbMsg = err?.message || "";
       if (dbMsg.includes("violates foreign key")) {
@@ -2378,6 +2421,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { dependentId, clientId, role } = req.body;
     if (!dependentId && !clientId) return res.status(400).json({ message: "dependentId or clientId is required" });
 
+    const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
     const member = await storage.createPolicyMember({
       policyId: policy.id,
       organizationId: user.organizationId,
@@ -2385,8 +2429,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       clientId: clientId || null,
       role: role || "dependent",
     });
-    await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
-    await auditLog(req, "ADD_POLICY_MEMBER", "PolicyMember", member.id, null, member);
+    const recalced = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
+    const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+    let reconciliation: any = null;
+    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      const effDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
+        ? req.body.effectiveDate.trim()
+        : new Date().toISOString().split("T")[0];
+      reconciliation = await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy: recalced,
+        oldPremium,
+        newPremium,
+        effectiveDate: effDate,
+        changeType: "member_add",
+        reason: "Member added",
+        actorId: user.id,
+      });
+    }
+    await auditLog(req, "ADD_POLICY_MEMBER", "PolicyMember", member.id, null, { ...member, reconciliation });
 
     if (policy.clientId) {
       enqueueJob("notify:member_added", { policyId: policy.id }, async () => {
@@ -2400,7 +2461,92 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     }
 
-    return res.status(201).json(member);
+    return res.status(201).json({ ...member, reconciliation });
+  });
+
+  app.delete("/api/policies/:id/members/:memberId", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
+    const policy = accessCheck.policy;
+
+    const members = await storage.getPolicyMembers(policy.id, user.organizationId);
+    const target = members.find((m: any) => String(m.id) === String(req.params.memberId));
+    if (!target) return res.status(404).json({ message: "Member not found on this policy" });
+    if (target.role === "policy_holder") {
+      return res.status(400).json({ message: "The policy holder cannot be removed." });
+    }
+
+    const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+    const removed = await storage.deactivatePolicyMember(target.id, policy.id, user.organizationId);
+    const recalced = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
+    const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+    let reconciliation: any = null;
+    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      const effDate = typeof req.body?.effectiveDate === "string" && req.body.effectiveDate.trim()
+        ? req.body.effectiveDate.trim()
+        : new Date().toISOString().split("T")[0];
+      reconciliation = await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy: recalced,
+        oldPremium,
+        newPremium,
+        effectiveDate: effDate,
+        changeType: "member_remove",
+        reason: "Member removed",
+        actorId: user.id,
+      });
+    }
+    await auditLog(req, "REMOVE_POLICY_MEMBER", "PolicyMember", target.id, target, { ...removed, reconciliation });
+    return res.json({ ...removed, reconciliation });
+  });
+
+  // Preview the premium + arrears/credit impact of a prospective change (product
+  // switch or manual premium) before committing. Read-only — persists nothing.
+  app.post("/api/policies/:id/preview-change", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
+    const policy = accessCheck.policy;
+    const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+
+    const currency = typeof req.body.currency === "string" && req.body.currency.trim() ? req.body.currency.trim() : (policy.currency || "USD");
+    const paymentSchedule = typeof req.body.paymentSchedule === "string" && req.body.paymentSchedule.trim() ? req.body.paymentSchedule.trim() : (policy.paymentSchedule || "monthly");
+
+    let newPremium = oldPremium;
+    if (req.body.premiumAmount != null && req.body.premiumAmount !== "") {
+      const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+      const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
+      const parsed = parseFloat(String(req.body.premiumAmount));
+      if (canEditPremium && Number.isFinite(parsed) && parsed >= 0) newPremium = parsed;
+    } else if (typeof req.body.productVersionId === "string" && req.body.productVersionId.trim()) {
+      const dependentDobs = await getActivePolicyDependentDobList(policy, user.organizationId);
+      const addOnIds = await getPolicyAddOnIds(policy.id, user.organizationId);
+      newPremium = parseFloat(String(await computePolicyPremium(
+        user.organizationId, req.body.productVersionId.trim(), currency, paymentSchedule, addOnIds, undefined, undefined, dependentDobs,
+      )));
+    }
+
+    const effectiveDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
+      ? req.body.effectiveDate.trim()
+      : new Date().toISOString().split("T")[0];
+    const periods = periodsBetween(effectiveDate, new Date(), paymentSchedule);
+    const reconciliation = Number(((newPremium - oldPremium) * periods).toFixed(2));
+    const direction = reconciliation > 0 ? "arrears" : reconciliation < 0 ? "credit" : "none";
+
+    return res.json({
+      oldPremium: oldPremium.toFixed(2),
+      newPremium: newPremium.toFixed(2),
+      currency,
+      effectiveDate,
+      periods,
+      reconciliation: reconciliation.toFixed(2),
+      direction,
+    });
   });
 
   app.post("/api/policies/:id/sync-members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -3630,6 +3776,166 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(exp);
   });
 
+  // ─── FX Rates (USD base for consolidated statements) ────────
+
+  app.get("/api/fx-rates", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getFxRates(user.organizationId));
+  });
+
+  app.put("/api/fx-rates/:currency", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const currency = String(req.params.currency).toUpperCase();
+    const rate = parseFloat(String(req.body.rateToUsd));
+    if (!Number.isFinite(rate) || rate <= 0) return res.status(400).json({ message: "rateToUsd must be a positive number" });
+    const saved = await storage.upsertFxRate(user.organizationId, currency, rate.toString(), user.id);
+    await auditLog(req, "UPSERT_FX_RATE", "FxRate", saved.id, null, saved);
+    return res.json(saved);
+  });
+
+  // ─── Requisitions (expenditure request → approve → pay) ─────
+
+  app.get("/api/requisitions", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    return res.json(await storage.getRequisitions(user.organizationId, { status, fromDate, toDate }));
+  });
+
+  app.post("/api/requisitions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const requisitionNumber = `REQ-${Date.now().toString(36).toUpperCase()}`;
+    const submit = req.body.submit === true || req.body.status === "submitted";
+    const parsed = insertRequisitionSchema.parse({
+      ...req.body,
+      organizationId: user.organizationId,
+      requisitionNumber,
+      requestedBy: user.id,
+      status: submit ? "submitted" : "draft",
+      approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
+    });
+    const created = await storage.createRequisition(parsed);
+    await auditLog(req, "CREATE_REQUISITION", "Requisition", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/requisitions/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getRequisition(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Requisition not found" });
+    const action = String(req.body.action || "");
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const canApprove = !!user.isPlatformOwner || effPerms.includes("approve:finance");
+    const today = new Date().toISOString().split("T")[0];
+    const patch: Record<string, any> = {};
+
+    if (action === "submit") {
+      if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be submitted" });
+      patch.status = "submitted";
+    } else if (action === "approve" || action === "reject") {
+      if (!canApprove) return res.status(403).json({ message: "Requires approve:finance" });
+      if (existing.status !== "submitted") return res.status(400).json({ message: "Only submitted requisitions can be approved or rejected" });
+      patch.status = action === "approve" ? "approved" : "rejected";
+      patch.approvedBy = user.id;
+      patch.approvedAt = new Date();
+      if (action === "reject") patch.rejectionReason = typeof req.body.rejectionReason === "string" ? req.body.rejectionReason : "Rejected";
+    } else if (action === "pay") {
+      if (existing.status !== "approved") return res.status(400).json({ message: "Only approved requisitions can be marked paid" });
+      patch.status = "paid";
+      patch.paidBy = user.id;
+      patch.paidAt = new Date();
+      patch.paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : today;
+      if (typeof req.body.paymentMethod === "string") patch.paymentMethod = req.body.paymentMethod;
+      if (typeof req.body.reference === "string") patch.reference = req.body.reference;
+    } else {
+      // Plain edit (only while draft)
+      if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be edited" });
+      for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes"]) {
+        if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
+      }
+    }
+
+    const updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
+    await auditLog(req, "UPDATE_REQUISITION", "Requisition", existing.id, existing, updated);
+    return res.json(updated);
+  });
+
+  // ─── Funeral quotations & cash-service receipts (income) ────
+
+  app.get("/api/funeral-cases/:id/quotation", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getFuneralQuotation(req.params.id as string, user.organizationId) ?? null);
+  });
+
+  app.post("/api/funeral-cases/:id/quotation", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+    if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+    const currency = normalizeCurrency(req.body.currency || "USD");
+    const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
+    const items = rawItems.map((it: any) => {
+      const quantity = parseFloat(String(it.quantity ?? 1)) || 1;
+      const unitPrice = parseFloat(String(it.unitPrice ?? 0)) || 0;
+      return {
+        priceBookItemId: it.priceBookItemId || null,
+        description: String(it.description || "Item"),
+        quantity: quantity.toFixed(2),
+        unitPrice: unitPrice.toFixed(2),
+        lineTotal: (quantity * unitPrice).toFixed(2),
+      };
+    });
+    const quote = await storage.upsertFuneralQuotation(
+      user.organizationId, fc.id,
+      { currency, status: req.body.status, notes: req.body.notes, createdBy: user.id },
+      items,
+    );
+    await auditLog(req, "UPSERT_FUNERAL_QUOTATION", "FuneralQuotation", quote.id, null, quote);
+    return res.json(quote);
+  });
+
+  app.get("/api/funeral-cases/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getServiceReceipts(user.organizationId, { funeralCaseId: req.params.id as string }));
+  });
+
+  app.post("/api/funeral-cases/:id/receipts", requireAuth, requireTenantScope, requireAnyPermission("receipt:cash", "write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+    if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+    const amount = parseFloat(String(req.body.amount));
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: "amount must be a positive number" });
+    const currency = normalizeCurrency(req.body.currency || "USD");
+    const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
+    const idempotencyKey = typeof req.body.idempotencyKey === "string" && req.body.idempotencyKey ? req.body.idempotencyKey : null;
+
+    // Idempotency: a repeated submit with the same key returns the original receipt instead of issuing a new one.
+    if (idempotencyKey) {
+      const existing = await storage.getServiceReceiptByIdempotencyKey(user.organizationId, idempotencyKey);
+      if (existing) return res.status(200).json({ ...existing, duplicate: true });
+    }
+
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    const quote = await storage.getFuneralQuotation(fc.id, user.organizationId);
+    const created = await storage.createServiceReceipt({
+      organizationId: user.organizationId,
+      branchId: fc.branchId ?? null,
+      funeralCaseId: fc.id,
+      quotationId: quote?.id ?? null,
+      receiptNumber,
+      amount: amount.toFixed(2),
+      currency,
+      paymentChannel: channel,
+      issuedByUserId: user.id,
+      issuedAt: new Date(),
+      status: "issued",
+      idempotencyKey,
+      notes: typeof req.body.notes === "string" ? req.body.notes : null,
+    });
+    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
   // ─── Price Book ─────────────────────────────────────────────
 
   app.get("/api/price-book", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -4504,6 +4810,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getCommissionReportByOrg(user.organizationId, filters));
+  });
+
+  const defaultStatementRange = () => {
+    const to = new Date();
+    const from = new Date(to.getFullYear(), to.getMonth(), 1);
+    return { from: from.toISOString().split("T")[0], to: to.toISOString().split("T")[0] };
+  };
+  app.get("/api/reports/income-statement", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    return res.json(await buildIncomeStatement(user.organizationId, { from, to, branchId }));
+  });
+  app.get("/api/reports/cash-flow", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    return res.json(await buildCashFlowStatement(user.organizationId, { from, to, branchId }));
   });
 
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
