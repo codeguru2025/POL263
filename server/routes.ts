@@ -12,6 +12,7 @@ import {
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
+import { buildIncomeStatement, buildCashFlowStatement } from "./financial-statements";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -40,6 +41,7 @@ import {
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertDependentSchema, insertTermsSchema,
+  insertRequisitionSchema, REQUISITION_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases,
 } from "@shared/schema";
@@ -3774,6 +3776,157 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(exp);
   });
 
+  // ─── FX Rates (USD base for consolidated statements) ────────
+
+  app.get("/api/fx-rates", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getFxRates(user.organizationId));
+  });
+
+  app.put("/api/fx-rates/:currency", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const currency = String(req.params.currency).toUpperCase();
+    const rate = parseFloat(String(req.body.rateToUsd));
+    if (!Number.isFinite(rate) || rate <= 0) return res.status(400).json({ message: "rateToUsd must be a positive number" });
+    const saved = await storage.upsertFxRate(user.organizationId, currency, rate.toString(), user.id);
+    await auditLog(req, "UPSERT_FX_RATE", "FxRate", saved.id, null, saved);
+    return res.json(saved);
+  });
+
+  // ─── Requisitions (expenditure request → approve → pay) ─────
+
+  app.get("/api/requisitions", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    return res.json(await storage.getRequisitions(user.organizationId, { status, fromDate, toDate }));
+  });
+
+  app.post("/api/requisitions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const requisitionNumber = `REQ-${Date.now().toString(36).toUpperCase()}`;
+    const submit = req.body.submit === true || req.body.status === "submitted";
+    const parsed = insertRequisitionSchema.parse({
+      ...req.body,
+      organizationId: user.organizationId,
+      requisitionNumber,
+      requestedBy: user.id,
+      status: submit ? "submitted" : "draft",
+      approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
+    });
+    const created = await storage.createRequisition(parsed);
+    await auditLog(req, "CREATE_REQUISITION", "Requisition", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/requisitions/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getRequisition(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Requisition not found" });
+    const action = String(req.body.action || "");
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const canApprove = !!user.isPlatformOwner || effPerms.includes("approve:finance");
+    const today = new Date().toISOString().split("T")[0];
+    const patch: Record<string, any> = {};
+
+    if (action === "submit") {
+      if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be submitted" });
+      patch.status = "submitted";
+    } else if (action === "approve" || action === "reject") {
+      if (!canApprove) return res.status(403).json({ message: "Requires approve:finance" });
+      if (existing.status !== "submitted") return res.status(400).json({ message: "Only submitted requisitions can be approved or rejected" });
+      patch.status = action === "approve" ? "approved" : "rejected";
+      patch.approvedBy = user.id;
+      patch.approvedAt = new Date();
+      if (action === "reject") patch.rejectionReason = typeof req.body.rejectionReason === "string" ? req.body.rejectionReason : "Rejected";
+    } else if (action === "pay") {
+      if (existing.status !== "approved") return res.status(400).json({ message: "Only approved requisitions can be marked paid" });
+      patch.status = "paid";
+      patch.paidBy = user.id;
+      patch.paidAt = new Date();
+      patch.paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : today;
+      if (typeof req.body.paymentMethod === "string") patch.paymentMethod = req.body.paymentMethod;
+      if (typeof req.body.reference === "string") patch.reference = req.body.reference;
+    } else {
+      // Plain edit (only while draft)
+      if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be edited" });
+      for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes"]) {
+        if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
+      }
+    }
+
+    const updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
+    await auditLog(req, "UPDATE_REQUISITION", "Requisition", existing.id, existing, updated);
+    return res.json(updated);
+  });
+
+  // ─── Funeral quotations & cash-service receipts (income) ────
+
+  app.get("/api/funeral-cases/:id/quotation", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getFuneralQuotation(req.params.id as string, user.organizationId) ?? null);
+  });
+
+  app.post("/api/funeral-cases/:id/quotation", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+    if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+    const currency = normalizeCurrency(req.body.currency || "USD");
+    const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
+    const items = rawItems.map((it: any) => {
+      const quantity = parseFloat(String(it.quantity ?? 1)) || 1;
+      const unitPrice = parseFloat(String(it.unitPrice ?? 0)) || 0;
+      return {
+        priceBookItemId: it.priceBookItemId || null,
+        description: String(it.description || "Item"),
+        quantity: quantity.toFixed(2),
+        unitPrice: unitPrice.toFixed(2),
+        lineTotal: (quantity * unitPrice).toFixed(2),
+      };
+    });
+    const quote = await storage.upsertFuneralQuotation(
+      user.organizationId, fc.id,
+      { currency, status: req.body.status, notes: req.body.notes, createdBy: user.id },
+      items,
+    );
+    await auditLog(req, "UPSERT_FUNERAL_QUOTATION", "FuneralQuotation", quote.id, null, quote);
+    return res.json(quote);
+  });
+
+  app.get("/api/funeral-cases/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getServiceReceipts(user.organizationId, { funeralCaseId: req.params.id as string }));
+  });
+
+  app.post("/api/funeral-cases/:id/receipts", requireAuth, requireTenantScope, requireAnyPermission("receipt:cash", "write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+    if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+    const amount = parseFloat(String(req.body.amount));
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: "amount must be a positive number" });
+    const currency = normalizeCurrency(req.body.currency || "USD");
+    const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    const quote = await storage.getFuneralQuotation(fc.id, user.organizationId);
+    const created = await storage.createServiceReceipt({
+      organizationId: user.organizationId,
+      branchId: fc.branchId ?? null,
+      funeralCaseId: fc.id,
+      quotationId: quote?.id ?? null,
+      receiptNumber,
+      amount: amount.toFixed(2),
+      currency,
+      paymentChannel: channel,
+      issuedByUserId: user.id,
+      issuedAt: new Date(),
+      status: "issued",
+      notes: typeof req.body.notes === "string" ? req.body.notes : null,
+    });
+    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
   // ─── Price Book ─────────────────────────────────────────────
 
   app.get("/api/price-book", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -4648,6 +4801,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getCommissionReportByOrg(user.organizationId, filters));
+  });
+
+  const defaultStatementRange = () => {
+    const to = new Date();
+    const from = new Date(to.getFullYear(), to.getMonth(), 1);
+    return { from: from.toISOString().split("T")[0], to: to.toISOString().split("T")[0] };
+  };
+  app.get("/api/reports/income-statement", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    return res.json(await buildIncomeStatement(user.organizationId, { from, to, branchId }));
+  });
+  app.get("/api/reports/cash-flow", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    return res.json(await buildCashFlowStatement(user.organizationId, { from, to, branchId }));
   });
 
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {

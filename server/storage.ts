@@ -22,8 +22,12 @@ import {
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
+  fxRates, requisitions, funeralQuotations, funeralQuotationItems, serviceReceipts,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
+  type FxRate, type InsertFxRate, type Requisition, type InsertRequisition,
+  type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
+  type ServiceReceipt, type InsertServiceReceipt,
   type GroupPaymentIntent, type InsertGroupPaymentIntent,
   type GroupPaymentAllocation, type InsertGroupPaymentAllocation,
   type PolicyCreditBalance, type CreditNote, type MonthEndRun,
@@ -471,6 +475,17 @@ export interface IStorage {
   createPolicyPremiumChange(change: InsertPolicyPremiumChange): Promise<PolicyPremiumChange>;
   getPolicyPremiumChanges(orgId: string, policyId: string): Promise<PolicyPremiumChange[]>;
   deactivatePolicyMember(memberId: string, policyId: string, orgId: string): Promise<PolicyMember | undefined>;
+  // ── Finance: FX rates, requisitions, funeral quotations, service receipts ──
+  getFxRates(orgId: string): Promise<FxRate[]>;
+  upsertFxRate(orgId: string, currency: string, rateToUsd: string, updatedBy?: string): Promise<FxRate>;
+  getRequisitions(orgId: string, filters?: { status?: string; fromDate?: string; toDate?: string }): Promise<Requisition[]>;
+  getRequisition(id: string, orgId: string): Promise<Requisition | undefined>;
+  createRequisition(req: InsertRequisition): Promise<Requisition>;
+  updateRequisition(id: string, orgId: string, data: Partial<Requisition>): Promise<Requisition | undefined>;
+  getFuneralQuotation(funeralCaseId: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined>;
+  upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation>;
+  getServiceReceipts(orgId: string, opts?: { funeralCaseId?: string; fromDate?: string; toDate?: string }): Promise<ServiceReceipt[]>;
+  createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt>;
   getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
   addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
   removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void>;
@@ -3625,6 +3640,102 @@ export class DatabaseStorage implements IStorage {
       ))
       .returning();
     return updated;
+  }
+
+  // ── Finance: FX rates ──
+  async getFxRates(orgId: string): Promise<FxRate[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(fxRates).where(eq(fxRates.organizationId, orgId));
+  }
+  async upsertFxRate(orgId: string, currency: string, rateToUsd: string, updatedBy?: string): Promise<FxRate> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO fx_rates (organization_id, currency, rate_to_usd, updated_by, updated_at)
+      VALUES (${orgId}, ${currency}, ${rateToUsd}::numeric, ${updatedBy ?? null}, now())
+      ON CONFLICT (organization_id, currency) DO UPDATE
+        SET rate_to_usd = ${rateToUsd}::numeric, updated_by = ${updatedBy ?? null}, updated_at = now()
+      RETURNING *
+    `);
+    const rows = (result as unknown as { rows?: FxRate[] }).rows;
+    return rows![0];
+  }
+
+  // ── Finance: requisitions ──
+  async getRequisitions(orgId: string, filters?: { status?: string; fromDate?: string; toDate?: string }): Promise<Requisition[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: any[] = [eq(requisitions.organizationId, orgId)];
+    if (filters?.status) conditions.push(eq(requisitions.status, filters.status));
+    if (filters?.fromDate) conditions.push(gte(requisitions.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(requisitions.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    return tdb.select().from(requisitions).where(and(...conditions)).orderBy(desc(requisitions.createdAt));
+  }
+  async getRequisition(id: string, orgId: string): Promise<Requisition | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(requisitions)
+      .where(and(eq(requisitions.id, id), eq(requisitions.organizationId, orgId)));
+    return row;
+  }
+  async createRequisition(req: InsertRequisition): Promise<Requisition> {
+    const tdb = await getDbForOrg(req.organizationId);
+    const [created] = await tdb.insert(requisitions).values(req).returning();
+    return created;
+  }
+  async updateRequisition(id: string, orgId: string, data: Partial<Requisition>): Promise<Requisition | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(requisitions).set(data)
+      .where(and(eq(requisitions.id, id), eq(requisitions.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+
+  // ── Finance: funeral quotations ──
+  async getFuneralQuotation(funeralCaseId: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [quote] = await tdb.select().from(funeralQuotations)
+      .where(and(eq(funeralQuotations.organizationId, orgId), eq(funeralQuotations.funeralCaseId, funeralCaseId)))
+      .orderBy(desc(funeralQuotations.createdAt));
+    if (!quote) return undefined;
+    const items = await tdb.select().from(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
+    return { ...quote, items };
+  }
+  async upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation> {
+    const tdb = await getDbForOrg(orgId);
+    const total = items.reduce((sum, it) => sum + parseFloat(String(it.lineTotal || "0")), 0).toFixed(2);
+    const existing = await this.getFuneralQuotation(funeralCaseId, orgId);
+    let quote: FuneralQuotation;
+    if (existing) {
+      const [updated] = await tdb.update(funeralQuotations)
+        .set({ currency: data.currency, total, status: data.status ?? existing.status, notes: data.notes ?? existing.notes })
+        .where(eq(funeralQuotations.id, existing.id)).returning();
+      quote = updated;
+      await tdb.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, existing.id));
+    } else {
+      const quotationNumber = `QUO-${Date.now().toString(36).toUpperCase()}`;
+      const [created] = await tdb.insert(funeralQuotations).values({
+        organizationId: orgId, funeralCaseId, quotationNumber, currency: data.currency,
+        total, status: data.status ?? "draft", notes: data.notes ?? null, createdBy: data.createdBy ?? null,
+      }).returning();
+      quote = created;
+    }
+    if (items.length > 0) {
+      await tdb.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: quote.id })));
+    }
+    return quote;
+  }
+
+  // ── Finance: service receipts (cash-service income) ──
+  async getServiceReceipts(orgId: string, opts?: { funeralCaseId?: string; fromDate?: string; toDate?: string }): Promise<ServiceReceipt[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: any[] = [eq(serviceReceipts.organizationId, orgId)];
+    if (opts?.funeralCaseId) conditions.push(eq(serviceReceipts.funeralCaseId, opts.funeralCaseId));
+    if (opts?.fromDate) conditions.push(gte(serviceReceipts.issuedAt, new Date(opts.fromDate + "T00:00:00.000Z")));
+    if (opts?.toDate) conditions.push(lte(serviceReceipts.issuedAt, new Date(opts.toDate + "T23:59:59.999Z")));
+    return tdb.select().from(serviceReceipts).where(and(...conditions)).orderBy(desc(serviceReceipts.issuedAt));
+  }
+  async createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt> {
+    const tdb = await getDbForOrg(receipt.organizationId);
+    const [created] = await tdb.insert(serviceReceipts).values(receipt).returning();
+    return created;
   }
   async getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]> {
     const tdb = await getDbForOrg(orgId);
