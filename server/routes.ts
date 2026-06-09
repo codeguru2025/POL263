@@ -3907,6 +3907,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: "amount must be a positive number" });
     const currency = normalizeCurrency(req.body.currency || "USD");
     const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
+    const idempotencyKey = typeof req.body.idempotencyKey === "string" && req.body.idempotencyKey ? req.body.idempotencyKey : null;
+
+    // Idempotency: a repeated submit with the same key returns the original receipt instead of issuing a new one.
+    if (idempotencyKey) {
+      const existing = await storage.getServiceReceiptByIdempotencyKey(user.organizationId, idempotencyKey);
+      if (existing) return res.status(200).json({ ...existing, duplicate: true });
+    }
+
     const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
     const quote = await storage.getFuneralQuotation(fc.id, user.organizationId);
     const created = await storage.createServiceReceipt({
@@ -3921,6 +3929,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       issuedByUserId: user.id,
       issuedAt: new Date(),
       status: "issued",
+      idempotencyKey,
       notes: typeof req.body.notes === "string" ? req.body.notes : null,
     });
     await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", created.id, null, created);

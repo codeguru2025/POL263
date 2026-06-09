@@ -1760,7 +1760,8 @@ export const funeralQuotations = pgTable(
   },
   (t) => [
     index("fq_org_idx").on(t.organizationId),
-    index("fq_case_idx").on(t.funeralCaseId),
+    // One quotation per funeral case (enables atomic upsert; prevents duplicates under concurrency).
+    uniqueIndex("fq_org_case_idx").on(t.organizationId, t.funeralCaseId),
     uniqueIndex("fq_number_org_idx").on(t.organizationId, t.quotationNumber),
   ]
 );
@@ -1795,6 +1796,7 @@ export const serviceReceipts = pgTable(
     issuedByUserId: uuid("issued_by_user_id").references(() => users.id),
     issuedAt: timestamp("issued_at").defaultNow().notNull(),
     status: text("status").default("issued").notNull(),  // issued | voided
+    idempotencyKey: text("idempotency_key"),             // optional client key to dedupe double-submits
     notes: text("notes"),
     metadataJson: jsonb("metadata_json"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1803,6 +1805,7 @@ export const serviceReceipts = pgTable(
     index("sr_org_idx").on(t.organizationId),
     index("sr_case_idx").on(t.funeralCaseId),
     uniqueIndex("sr_receipt_org_idx").on(t.organizationId, t.receiptNumber),
+    uniqueIndex("sr_idempotency_org_idx").on(t.organizationId, t.idempotencyKey),
   ]
 );
 
