@@ -11,7 +11,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope, enforceAgentPolicyAccess } from "./route-helpers";
+import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -1749,22 +1749,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       .filter((p: any) => p.status === "cleared")
       .reduce((sum: number, p: any) => sum + parseFloat(p.amount || "0"), 0);
 
-    const premium = parseFloat(policy.premiumAmount || "0");
-    const startDate = policy.inceptionDate || policy.effectiveDate;
-    let totalDue = 0;
-    let periodsElapsed = 0;
-    if (startDate && premium > 0) {
-      const start = new Date(startDate);
-      const now = new Date();
-      if (!isNaN(start.getTime()) && start <= now) {
-        const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
-        const schedule = policy.paymentSchedule || "monthly";
-        const periodDays = schedule === "weekly" ? 7 : schedule === "biweekly" ? 14 : schedule === "quarterly" ? 91.31 : schedule === "annually" ? 365.25 : 30.44;
-        periodsElapsed = Math.ceil(daysElapsed / periodDays);
-        totalDue = periodsElapsed * premium;
-      }
-    }
-    const balance = totalPaid - totalDue;
+    const wallet = await storage.getPolicyCreditBalance(user.organizationId, policy.id);
+    const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
+    const { totalDue, balance, outstanding, periodsElapsed } = computePolicyOutstanding({ policy, totalPaid, walletBalance });
 
     return res.json({
       ...policy,
@@ -1778,6 +1765,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       totalPaid: totalPaid.toFixed(2),
       totalDue: totalDue.toFixed(2),
       balance: balance.toFixed(2),
+      outstanding: outstanding.toFixed(2),
+      walletBalance: walletBalance.toFixed(2),
       periodsElapsed,
     });
   });
@@ -2012,8 +2001,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+    // Manual premium override is gated by the dedicated edit:premium permission.
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
+
     const body = { ...req.body };
+    const rawPremium = body.premiumAmount;
+    const premiumEffectiveDate = typeof body.premiumEffectiveDate === "string" && body.premiumEffectiveDate.trim()
+      ? body.premiumEffectiveDate.trim()
+      : new Date().toISOString().split("T")[0];
+    const premiumChangeReason = typeof body.premiumChangeReason === "string" ? body.premiumChangeReason : null;
     delete body.premiumAmount;
+    delete body.premiumEffectiveDate;
+    delete body.premiumChangeReason;
     delete body.organizationId;
     delete body.id;
     delete body.createdAt;
@@ -2035,11 +2035,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       sanitized[key] = value === "" ? null : value;
     }
 
-    if (Object.keys(sanitized).length === 0) {
+    // Resolve a manual premium override (if permitted and actually different).
+    let manualPremium: number | null = null;
+    if (rawPremium != null && rawPremium !== "" && canEditPremium) {
+      const parsed = parseFloat(String(rawPremium));
+      const current = parseFloat(String(before.premiumAmount ?? "0"));
+      if (Number.isFinite(parsed) && parsed >= 0 && Math.abs(parsed - current) >= 0.01) {
+        manualPremium = parsed;
+      }
+    }
+
+    if (Object.keys(sanitized).length === 0 && manualPremium == null) {
       return res.json(before);
     }
 
-    const updated = await storage.updatePolicy(req.params.id as string, sanitized, user.organizationId);
+    let updated = before;
+    if (Object.keys(sanitized).length > 0) {
+      updated = (await storage.updatePolicy(req.params.id as string, sanitized, user.organizationId)) ?? updated;
+    }
+
+    if (manualPremium != null) {
+      await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy: updated,
+        oldPremium: before.premiumAmount,
+        newPremium: manualPremium,
+        effectiveDate: premiumEffectiveDate,
+        changeType: "manual",
+        reason: premiumChangeReason,
+        actorId: user.id,
+      });
+      updated = (await storage.updatePolicy(req.params.id as string, { premiumAmount: manualPremium.toFixed(2) }, user.organizationId)) ?? updated;
+    }
+
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);
     return res.json(updated);
     } catch (err: any) {
@@ -2106,20 +2134,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         dependentDateOfBirths,
       );
 
-      const effectiveDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
+      // "Effective from" date drives arrears/credit reconciliation — it does NOT
+      // change the policy's inception (effectiveDate). Defaults to today.
+      const reconcileFrom = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : undefined;
-      const updates: Record<string, any> = {
+        : new Date().toISOString().split("T")[0];
+
+      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+      const newPremium = parseFloat(String(premiumAmount));
+      const recon = await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy,
+        oldPremium,
+        newPremium,
+        effectiveDate: reconcileFrom,
+        changeType: newPremium >= oldPremium ? "upgrade" : "downgrade",
+        reason: typeof req.body.reason === "string" ? req.body.reason : "Product change",
+        actorId: user.id,
+      });
+
+      const updated = await storage.updatePolicy(policy.id, {
         productVersionId: targetPv.id,
         currency,
         paymentSchedule,
         premiumAmount,
-      };
-      if (effectiveDate) updates.effectiveDate = effectiveDate;
-
-      const updated = await storage.updatePolicy(policy.id, updates, user.organizationId);
-      await auditLog(req, "UPGRADE_POLICY_PRODUCT", "Policy", policy.id, policy, updated);
-      return res.json(updated);
+      }, user.organizationId);
+      await auditLog(req, "UPGRADE_POLICY_PRODUCT", "Policy", policy.id, policy, { ...updated, reconciliation: recon });
+      return res.json({ ...updated, reconciliation: recon });
     } catch (err: any) {
       const dbMsg = err?.message || "";
       if (dbMsg.includes("violates foreign key")) {
@@ -2378,6 +2419,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { dependentId, clientId, role } = req.body;
     if (!dependentId && !clientId) return res.status(400).json({ message: "dependentId or clientId is required" });
 
+    const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
     const member = await storage.createPolicyMember({
       policyId: policy.id,
       organizationId: user.organizationId,
@@ -2385,8 +2427,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       clientId: clientId || null,
       role: role || "dependent",
     });
-    await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
-    await auditLog(req, "ADD_POLICY_MEMBER", "PolicyMember", member.id, null, member);
+    const recalced = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
+    const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+    let reconciliation: any = null;
+    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      const effDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
+        ? req.body.effectiveDate.trim()
+        : new Date().toISOString().split("T")[0];
+      reconciliation = await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy: recalced,
+        oldPremium,
+        newPremium,
+        effectiveDate: effDate,
+        changeType: "member_add",
+        reason: "Member added",
+        actorId: user.id,
+      });
+    }
+    await auditLog(req, "ADD_POLICY_MEMBER", "PolicyMember", member.id, null, { ...member, reconciliation });
 
     if (policy.clientId) {
       enqueueJob("notify:member_added", { policyId: policy.id }, async () => {
@@ -2400,7 +2459,92 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     }
 
-    return res.status(201).json(member);
+    return res.status(201).json({ ...member, reconciliation });
+  });
+
+  app.delete("/api/policies/:id/members/:memberId", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
+    const policy = accessCheck.policy;
+
+    const members = await storage.getPolicyMembers(policy.id, user.organizationId);
+    const target = members.find((m: any) => String(m.id) === String(req.params.memberId));
+    if (!target) return res.status(404).json({ message: "Member not found on this policy" });
+    if (target.role === "policy_holder") {
+      return res.status(400).json({ message: "The policy holder cannot be removed." });
+    }
+
+    const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+    const removed = await storage.deactivatePolicyMember(target.id, policy.id, user.organizationId);
+    const recalced = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
+    const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+    let reconciliation: any = null;
+    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      const effDate = typeof req.body?.effectiveDate === "string" && req.body.effectiveDate.trim()
+        ? req.body.effectiveDate.trim()
+        : new Date().toISOString().split("T")[0];
+      reconciliation = await reconcilePremiumChange({
+        orgId: user.organizationId,
+        policy: recalced,
+        oldPremium,
+        newPremium,
+        effectiveDate: effDate,
+        changeType: "member_remove",
+        reason: "Member removed",
+        actorId: user.id,
+      });
+    }
+    await auditLog(req, "REMOVE_POLICY_MEMBER", "PolicyMember", target.id, target, { ...removed, reconciliation });
+    return res.json({ ...removed, reconciliation });
+  });
+
+  // Preview the premium + arrears/credit impact of a prospective change (product
+  // switch or manual premium) before committing. Read-only — persists nothing.
+  app.post("/api/policies/:id/preview-change", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    }
+    const policy = accessCheck.policy;
+    const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+
+    const currency = typeof req.body.currency === "string" && req.body.currency.trim() ? req.body.currency.trim() : (policy.currency || "USD");
+    const paymentSchedule = typeof req.body.paymentSchedule === "string" && req.body.paymentSchedule.trim() ? req.body.paymentSchedule.trim() : (policy.paymentSchedule || "monthly");
+
+    let newPremium = oldPremium;
+    if (req.body.premiumAmount != null && req.body.premiumAmount !== "") {
+      const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+      const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
+      const parsed = parseFloat(String(req.body.premiumAmount));
+      if (canEditPremium && Number.isFinite(parsed) && parsed >= 0) newPremium = parsed;
+    } else if (typeof req.body.productVersionId === "string" && req.body.productVersionId.trim()) {
+      const dependentDobs = await getActivePolicyDependentDobList(policy, user.organizationId);
+      const addOnIds = await getPolicyAddOnIds(policy.id, user.organizationId);
+      newPremium = parseFloat(String(await computePolicyPremium(
+        user.organizationId, req.body.productVersionId.trim(), currency, paymentSchedule, addOnIds, undefined, undefined, dependentDobs,
+      )));
+    }
+
+    const effectiveDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
+      ? req.body.effectiveDate.trim()
+      : new Date().toISOString().split("T")[0];
+    const periods = periodsBetween(effectiveDate, new Date(), paymentSchedule);
+    const reconciliation = Number(((newPremium - oldPremium) * periods).toFixed(2));
+    const direction = reconciliation > 0 ? "arrears" : reconciliation < 0 ? "credit" : "none";
+
+    return res.json({
+      oldPremium: oldPremium.toFixed(2),
+      newPremium: newPremium.toFixed(2),
+      currency,
+      effectiveDate,
+      periods,
+      reconciliation: reconciliation.toFixed(2),
+      direction,
+    });
   });
 
   app.post("/api/policies/:id/sync-members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {

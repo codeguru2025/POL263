@@ -918,6 +918,37 @@ export const policyCreditBalances = pgTable(
   ]
 );
 
+// ─── PREMIUM CHANGE LEDGER (effective-dated upgrades/downgrades/overrides) ───
+// Audit + source-of-record for each premium-affecting change. The reconciliation
+// amount (delta × periods since the effective date) is posted to the signed
+// policy_credit_balances wallet; this row records why and how much.
+export const policyPremiumChanges = pgTable(
+  "policy_premium_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    policyId: uuid("policy_id")
+      .notNull()
+      .references(() => policies.id),
+    oldPremium: numeric("old_premium", { precision: 12, scale: 2 }).notNull(),
+    newPremium: numeric("new_premium", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    effectiveDate: date("effective_date").notNull(),
+    periods: integer("periods").default(0).notNull(),          // whole billing periods since effectiveDate
+    reconciliation: numeric("reconciliation", { precision: 12, scale: 2 }).default("0").notNull(), // signed: + = arrears charged, - = credit
+    changeType: text("change_type").notNull(),                 // 'upgrade' | 'downgrade' | 'member_add' | 'member_remove' | 'manual'
+    reason: text("reason"),
+    actorId: uuid("actor_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("ppc_org_idx").on(t.organizationId),
+    index("ppc_policy_idx").on(t.policyId),
+  ]
+);
+
 export const creditNotes = pgTable(
   "credit_notes",
   {
@@ -1099,6 +1130,10 @@ export const funeralCases = pgTable(
     caseNumber: text("case_number").notNull(),
     // Deceased
     deceasedName: text("deceased_name").notNull(),
+    deceasedDob: date("deceased_dob"),
+    deceasedGender: text("deceased_gender"),
+    deceasedNationalId: text("deceased_national_id"),
+    deceasedRelationship: text("deceased_relationship"),  // relationship to the policyholder (claim cases)
     dateOfDeath: date("date_of_death"),
     causeOfDeath: text("cause_of_death"),
     placeOfDeath: text("place_of_death"),
@@ -1694,6 +1729,7 @@ export const insertOutboxMessageSchema = createInsertSchema(outboxMessages).omit
   lastError: true,
 });
 export const insertPolicyCreditBalanceSchema = createInsertSchema(policyCreditBalances).omit({ id: true });
+export const insertPolicyPremiumChangeSchema = createInsertSchema(policyPremiumChanges).omit({ id: true, createdAt: true });
 export const insertCreditNoteSchema = createInsertSchema(creditNotes).omit({ id: true, createdAt: true });
 export const insertMonthEndRunSchema = createInsertSchema(monthEndRuns).omit({ id: true, createdAt: true });
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
@@ -1772,6 +1808,8 @@ export type OutboxMessage = typeof outboxMessages.$inferSelect;
 export type InsertOutboxMessage = z.infer<typeof insertOutboxMessageSchema>;
 export type PolicyCreditBalance = typeof policyCreditBalances.$inferSelect;
 export type InsertPolicyCreditBalance = z.infer<typeof insertPolicyCreditBalanceSchema>;
+export type PolicyPremiumChange = typeof policyPremiumChanges.$inferSelect;
+export type InsertPolicyPremiumChange = z.infer<typeof insertPolicyPremiumChangeSchema>;
 export type CreditNote = typeof creditNotes.$inferSelect;
 export type InsertCreditNote = z.infer<typeof insertCreditNoteSchema>;
 export type MonthEndRun = typeof monthEndRuns.$inferSelect;

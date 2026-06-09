@@ -170,7 +170,16 @@ export async function streamFuneralDocumentToResponse(
 
   // ── 1. Deceased ─────────────────────────────────────────────
   sectionHeader("1. Deceased Details");
-  twoRows("Full Name", fmt(fc.deceasedName), "Date of Death", fmtDate(fc.dateOfDeath));
+  const deceasedGenderLabel = fc.deceasedGender
+    ? fc.deceasedGender.charAt(0).toUpperCase() + fc.deceasedGender.slice(1)
+    : "";
+  twoRows("Full Name", fmt(fc.deceasedName), "Date of Birth", fmtDate(fc.deceasedDob));
+  twoRows("Gender", fmt(deceasedGenderLabel), "National ID", fmt(fc.deceasedNationalId));
+  if (fc.serviceType === "claim") {
+    twoRows("Relationship to Policyholder", fmt(fc.deceasedRelationship), "Date of Death", fmtDate(fc.dateOfDeath));
+  } else {
+    row("Date of Death", fmtDate(fc.dateOfDeath));
+  }
   twoRows("Cause of Death", fmt(fc.causeOfDeath), "Place of Death", fmt(fc.placeOfDeath));
   gap();
 

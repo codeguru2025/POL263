@@ -643,7 +643,10 @@ export function registerPolicyDocumentRoute(app: Express) {
         totalDue = periodsElapsed * premium;
       }
     }
-    const accountBalance = allCleared - totalDue;
+    // Fold in the signed credit-balance wallet (premium-change reconciliations + overpayments).
+    const walletRow = await storage.getPolicyCreditBalance(policy.organizationId, policy.id);
+    const walletBalance = parseFloat(String(walletRow?.balance ?? "0")) || 0;
+    const accountBalance = allCleared + walletBalance - totalDue;
 
     doc.font("Helvetica-Bold").text(`Total paid in period:`, 50, y, { continued: true, width: 150 });
     doc.font("Helvetica").text(`  ${policy.currency} ${totalPaid.toFixed(2)}`, { width: 200 });

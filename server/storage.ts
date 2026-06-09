@@ -22,12 +22,13 @@ import {
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
-  policyCreditBalances, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
+  policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   type GroupPaymentIntent, type InsertGroupPaymentIntent,
   type GroupPaymentAllocation, type InsertGroupPaymentAllocation,
   type PolicyCreditBalance, type CreditNote, type MonthEndRun,
   type InsertPolicyCreditBalance, type InsertCreditNote, type InsertMonthEndRun,
+  type PolicyPremiumChange, type InsertPolicyPremiumChange,
   type Organization, type InsertOrganization,
   type Branch, type InsertBranch,
   type User, type InsertUser,
@@ -467,6 +468,9 @@ export interface IStorage {
   getPolicyCreditBalance(orgId: string, policyId: string): Promise<PolicyCreditBalance | undefined>;
   getPolicyCreditBalancesWithPositiveBalance(orgId: string): Promise<PolicyCreditBalance[]>;
   deductPolicyCreditBalance(orgId: string, policyId: string, amount: string): Promise<PolicyCreditBalance | undefined>;
+  createPolicyPremiumChange(change: InsertPolicyPremiumChange): Promise<PolicyPremiumChange>;
+  getPolicyPremiumChanges(orgId: string, policyId: string): Promise<PolicyPremiumChange[]>;
+  deactivatePolicyMember(memberId: string, policyId: string, orgId: string): Promise<PolicyMember | undefined>;
   getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
   addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
   removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void>;
@@ -3598,6 +3602,29 @@ export class DatabaseStorage implements IStorage {
     `);
     const rows = (result as unknown as { rows?: PolicyCreditBalance[] }).rows;
     return rows?.[0];
+  }
+  async createPolicyPremiumChange(change: InsertPolicyPremiumChange): Promise<PolicyPremiumChange> {
+    const tdb = await getDbForOrg(change.organizationId);
+    const [created] = await tdb.insert(policyPremiumChanges).values(change).returning();
+    return created;
+  }
+  async getPolicyPremiumChanges(orgId: string, policyId: string): Promise<PolicyPremiumChange[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(policyPremiumChanges)
+      .where(and(eq(policyPremiumChanges.organizationId, orgId), eq(policyPremiumChanges.policyId, policyId)))
+      .orderBy(desc(policyPremiumChanges.createdAt));
+  }
+  async deactivatePolicyMember(memberId: string, policyId: string, orgId: string): Promise<PolicyMember | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(policyMembers)
+      .set({ isActive: false })
+      .where(and(
+        eq(policyMembers.id, memberId),
+        eq(policyMembers.policyId, policyId),
+        eq(policyMembers.organizationId, orgId),
+      ))
+      .returning();
+    return updated;
   }
   async getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]> {
     const tdb = await getDbForOrg(orgId);

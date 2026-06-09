@@ -38,6 +38,7 @@ export const SYSTEM_PERMISSIONS = [
   { name: "read:audit_log", description: "View audit logs", category: "audit" },
   { name: "read:policy", description: "View policies", category: "policy" },
   { name: "write:policy", description: "Create/edit policies", category: "policy" },
+  { name: "edit:premium", description: "Manually override the auto-calculated premium", category: "policy" },
   { name: "delete:policy", description: "Permanently delete policies", category: "policy" },
   { name: "read:claim", description: "View claims", category: "claims" },
   { name: "write:claim", description: "Create/adjudicate claims", category: "claims" },
@@ -90,7 +91,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   ],
   manager: [
     "read:organization", "read:branch", "write:branch", "read:user", "write:user",
-    "read:role", "read:audit_log", "read:policy", "write:policy", "read:claim",
+    "read:role", "read:audit_log", "read:policy", "write:policy", "edit:premium", "read:claim",
     "write:claim", "approve:claim", "read:client", "write:client", "read:product",
     "write:product", "manage:settings",
     "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
@@ -102,7 +103,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   administrator: [
     "read:organization", "write:organization", "read:branch", "write:branch",
     "read:user", "write:user", "delete:user", "read:role", "write:role",
-    "manage:permissions", "read:audit_log", "read:policy", "write:policy",
+    "manage:permissions", "read:audit_log", "read:policy", "write:policy", "edit:premium",
     "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
     "read:product", "write:product", "manage:settings", "read:funeral_ops",
     "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
@@ -134,6 +135,11 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   ],
   fleet_ops: [
     "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
+  ],
+  driver: [
+    // Drivers are assigned to funeral removals/burials. They need to see the cases
+    // and the fleet they are dispatched with, but not edit them.
+    "read:funeral_ops", "read:fleet",
   ],
   staff: [
     "read:organization", "read:branch", "read:policy", "read:claim",
