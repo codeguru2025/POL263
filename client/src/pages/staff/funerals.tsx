@@ -555,6 +555,20 @@ function CaseDetailView({
 
 // ─── Case Form Dialog (create + edit) ────────────────────────────────────────
 
+/**
+ * Module-scoped so its component identity is stable across renders. Defining this
+ * inside CaseFormDialog made React remount every wrapped <Input> on each keystroke,
+ * which stole focus after every letter typed.
+ */
+function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs">{label}{required && " *"}</Label>
+      {children}
+    </div>
+  );
+}
+
 function CaseFormDialog({
   open, onOpenChange, title, vehicles, users, initial, onSubmit, isPending,
 }: {
@@ -648,13 +662,6 @@ function CaseFormDialog({
     });
     onSubmit(data);
   };
-
-  const Field = ({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) => (
-    <div className="space-y-1.5">
-      <Label className="text-xs">{label}{required && " *"}</Label>
-      {children}
-    </div>
-  );
 
   const userOptions = users.filter((u: any) => u.isActive !== false);
   const vehicleOptions: SearchableOption[] = vehicles.map((v) => ({
