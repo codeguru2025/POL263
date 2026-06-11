@@ -1,10 +1,9 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, KpiStatCard, CardSection, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -55,6 +54,78 @@ export default function StaffApprovals() {
       rejectionReason: resolveAction === "reject" ? rejectionReason : undefined,
     });
   };
+
+  const approvalColumns: EdtColumn<any>[] = [
+    {
+      id: "type",
+      header: "Type",
+      accessor: (a) => a.requestType,
+      cell: (a) => <span className="font-medium">{a.requestType}</span>,
+    },
+    {
+      id: "entity",
+      header: "Entity",
+      accessor: (a) => `${a.entityType ?? ""} ${a.entityId ?? ""}`,
+      cell: (a) => (
+        <div>
+          <span className="text-xs text-muted-foreground">{a.entityType}</span>
+          <br />
+          <span className="text-xs font-mono">{a.entityId?.slice(0, 8)}...</span>
+        </div>
+      ),
+    },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (a) => a.status,
+      cell: (a) => statusBadge(a.status),
+    },
+    {
+      id: "created",
+      header: "Created",
+      accessor: (a) => (a.createdAt ? new Date(a.createdAt).getTime() : 0),
+      cell: (a) => (
+        <span className="text-sm text-muted-foreground">
+          {a.createdAt ? new Date(a.createdAt).toLocaleDateString() : "—"}
+        </span>
+      ),
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      align: "right",
+      exportable: false,
+      cell: (approval) => (
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setSelectedApproval(approval)} data-testid={`btn-view-${approval.id}`}>
+            <Eye className="h-4 w-4 mr-1" /> View
+          </Button>
+          {approval.status === "pending" && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                onClick={() => { setSelectedApproval(approval); setResolveAction("approve"); }}
+                data-testid={`btn-approve-${approval.id}`}
+              >
+                <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-red-600 border-red-200 hover:bg-red-50"
+                onClick={() => { setSelectedApproval(approval); setResolveAction("reject"); }}
+                data-testid={`btn-reject-${approval.id}`}
+              >
+                <XCircle className="h-4 w-4 mr-1" /> Reject
+              </Button>
+            </>
+          )}
+        </div>
+      ),
+    },
+  ];
 
   const statusBadge = (status: string) => {
     switch (status) {
@@ -120,84 +191,17 @@ export default function StaffApprovals() {
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
-              ) : filteredApprovals.length === 0 ? (
-                <EmptyState
-                  title={`No ${activeTab} approval requests`}
-                  description="Nothing to review at the moment."
-                  className="border-0 rounded-none bg-transparent py-10"
-                />
               ) : (
-                <div className="border rounded-md overflow-hidden">
-                  <Table>
-                    <TableHeader className="bg-muted/50">
-                      <TableRow>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Entity</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Created</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredApprovals.map((approval: any) => (
-                        <TableRow key={approval.id} data-testid={`row-approval-${approval.id}`}>
-                          <TableCell>
-                            <span className="font-medium">{approval.requestType}</span>
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-xs text-muted-foreground">{approval.entityType}</span>
-                            <br />
-                            <span className="text-xs font-mono">{approval.entityId?.slice(0, 8)}...</span>
-                          </TableCell>
-                          <TableCell>{statusBadge(approval.status)}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {approval.createdAt ? new Date(approval.createdAt).toLocaleDateString() : "—"}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setSelectedApproval(approval)}
-                                data-testid={`btn-view-${approval.id}`}
-                              >
-                                <Eye className="h-4 w-4 mr-1" /> View
-                              </Button>
-                              {approval.status === "pending" && (
-                                <>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
-                                    onClick={() => {
-                                      setSelectedApproval(approval);
-                                      setResolveAction("approve");
-                                    }}
-                                    data-testid={`btn-approve-${approval.id}`}
-                                  >
-                                    <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="text-red-600 border-red-200 hover:bg-red-50"
-                                    onClick={() => {
-                                      setSelectedApproval(approval);
-                                      setResolveAction("reject");
-                                    }}
-                                    data-testid={`btn-reject-${approval.id}`}
-                                  >
-                                    <XCircle className="h-4 w-4 mr-1" /> Reject
-                                  </Button>
-                                </>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                <EnhancedDataTable
+                  columns={approvalColumns}
+                  rows={filteredApprovals}
+                  getRowKey={(a) => a.id}
+                  rowTestId={(a) => `row-approval-${a.id}`}
+                  searchPlaceholder="Search approvals…"
+                  exportFilename={`approvals-${activeTab}`}
+                  storageKey="approvals"
+                  emptyMessage={`No ${activeTab} approval requests`}
+                />
               )}
             </CardSection>
           </TabsContent>

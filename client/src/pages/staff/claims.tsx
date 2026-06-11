@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
@@ -35,7 +36,13 @@ export default function StaffClaims() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showCreateDialog, setShowCreateDialog] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("create") === "1",
+  );
+  const createSearch = useSearch();
+  useEffect(() => {
+    if (new URLSearchParams(createSearch).get("create") === "1") setShowCreateDialog(true);
+  }, [createSearch]);
   const [showTransitionDialog, setShowTransitionDialog] = useState(false);
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);

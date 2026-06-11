@@ -1,4 +1,5 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useSearch } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
 import { Button } from "@/components/ui/button";
@@ -197,9 +198,18 @@ export default function StaffClients() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  // Deep-link support: /staff/clients?openClient=<id> (used by global command palette)
+  const initialOpenClient =
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("openClient") : null;
+  const [viewMode, setViewMode] = useState<ViewMode>(initialOpenClient ? "detail" : "list");
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(initialOpenClient);
+  const [showCreateDialog, setShowCreateDialog] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("create") === "1",
+  );
+  const createSearch = useSearch();
+  useEffect(() => {
+    if (new URLSearchParams(createSearch).get("create") === "1") setShowCreateDialog(true);
+  }, [createSearch]);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [formData, setFormData] = useState<ClientFormData>(emptyForm);
 

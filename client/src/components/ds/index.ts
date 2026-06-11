@@ -3,6 +3,7 @@ export { PageHeader, type PageHeaderProps } from "./page-header";
 export { PageShell, type PageShellProps } from "./page-shell";
 export { CardSection, type CardSectionProps } from "./card-section";
 export { DataTable, dataTableStickyHeaderClass, type DataTableProps } from "./data-table";
+export { EnhancedDataTable, type EnhancedDataTableProps, type EdtColumn } from "./enhanced-data-table";
 export { FilterBar, type FilterBarProps } from "./filter-bar";
 export { StatusBadge, type StatusBadgeProps, type StatusBadgeVariant } from "./status-badge";
 export { FormSection, type FormSectionProps } from "./form-section";

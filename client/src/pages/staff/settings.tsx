@@ -27,6 +27,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { FeatureFlagsCard } from "@/components/feature-flags-card";
 import {
   Check,
   Loader2,
@@ -1139,6 +1140,10 @@ export default function StaffSettings() {
                 </Button>
               </div>
             </CardSection>
+
+            <div className="mt-6">
+              <FeatureFlagsCard />
+            </div>
           </TabsContent>
 
           {/* Terms */}

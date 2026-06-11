@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useSearch, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, KpiStatCard } from "@/components/ds";
@@ -246,6 +247,29 @@ export default function StaffFinance() {
   const canApproveFinance = permissions.includes("approve:finance") || (authUser as any)?.isPlatformOwner;
   const canReadCommission = permissions.includes("read:commission");
   const commissionOnly = canReadCommission && !canReadFinance;
+
+  // Deep-linkable tabs: keep nav links like /staff/finance?tab=requisitions in sync
+  // with the active tab so Finance sub-sections are reachable from the menu.
+  const FINANCE_TABS = [
+    "payments", "paynow", "cashups", "commissions", "requisitions",
+    "fx-rates", "expenditures", "platform", "month-end", "group-receipt",
+  ];
+  const search = useSearch();
+  const [, setLocation] = useLocation();
+  const resolveTab = (raw: string | null) => {
+    if (commissionOnly) return "commissions";
+    return raw && FINANCE_TABS.includes(raw) ? raw : "payments";
+  };
+  const [activeTab, setActiveTab] = useState(() =>
+    resolveTab(typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null),
+  );
+  useEffect(() => {
+    setActiveTab(resolveTab(new URLSearchParams(search).get("tab")));
+  }, [search, commissionOnly]);
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    setLocation(value === (commissionOnly ? "commissions" : "payments") ? "/staff/finance" : `/staff/finance?tab=${value}`);
+  };
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
   const [policySearch, setPolicySearch] = useState("");
@@ -826,7 +850,7 @@ export default function StaffFinance() {
         </div>
         )}
 
-        <Tabs defaultValue={commissionOnly ? "commissions" : "payments"}>
+        <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList>
             {!commissionOnly && <TabsTrigger value="payments" data-testid="tab-payments" title="All receipted payments linked to policies and clients">Payments &amp; Receipts</TabsTrigger>}
             {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow" title="Mobile money (Paynow) and cash payment collection">Mobile &amp; Cash</TabsTrigger>}

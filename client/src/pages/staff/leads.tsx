@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { PageHeader, PageShell } from "@/components/ds";
 import { Plus, Loader2, ArrowRight, FileText } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { cn } from "@/lib/utils";
 
 /**
@@ -56,8 +56,14 @@ export default function StaffLeads() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
-  const [showDialog, setShowDialog] = useState(false);
+  const [showDialog, setShowDialog] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("create") === "1",
+  );
   const [createSource, setCreateSource] = useState("walk_in");
+  const createSearch = useSearch();
+  useEffect(() => {
+    if (new URLSearchParams(createSearch).get("create") === "1") setShowDialog(true);
+  }, [createSearch]);
 
   const { data: leads = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/leads"] });
 
