@@ -27,7 +27,12 @@ features:
   - buildpack-stack=ubuntu-22
 services:
   - name: pol263
-    run_command: npm run start:with-migrate
+    # Run the web server directly. Do NOT chain `db:migrate` here: a migration that fails
+    # or hangs (e.g. an unreachable/drifted tenant DB) stops the server from ever calling
+    # listen(), which surfaces as "deploy readiness probe failed. No further logs available."
+    # Run migrations deliberately instead — `npm run db:migrate` before deploy, or as a DO
+    # PRE_DEPLOY job — so a migrate issue can't take down the web service.
+    run_command: npm run start
     build_command: npm run build:do
     environment_slug: node-js
     http_port: 5000
