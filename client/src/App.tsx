@@ -63,6 +63,8 @@ const StaffReminders = lazy(() => retryLazy(() => import("@/pages/staff/reminder
 const StaffOrderServices = lazy(() => retryLazy(() => import("@/pages/staff/order-services")));
 const StaffAssetsRegister = lazy(() => retryLazy(() => import("@/pages/staff/assets-register")));
 const StaffComingSoon = lazy(() => retryLazy(() => import("@/pages/staff/coming-soon")));
+const StaffBranchAdmin = lazy(() => retryLazy(() => import("@/pages/staff/admin/branches")));
+const StaffDebitOrders = lazy(() => retryLazy(() => import("@/pages/staff/transactions/debit-orders")));
 const StaffEmployeeReports = lazy(() => retryLazy(() => import("@/pages/staff/employee-reports")));
 
 const ClientLogin = lazy(() => retryLazy(() => import("@/pages/client/login")));
@@ -176,7 +178,7 @@ function Router() {
       <SafeRoute path="/staff/transactions/invoices" component={StaffComingSoon} />
       <SafeRoute path="/staff/transactions/petty-cash" component={StaffComingSoon} />
       <SafeRoute path="/staff/transactions/bank-deposits" component={StaffComingSoon} />
-      <SafeRoute path="/staff/transactions/debit-orders" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/debit-orders" component={StaffDebitOrders} />
       <SafeRoute path="/staff/transactions/fax" component={StaffComingSoon} />
       <SafeRoute path="/staff/reports/dynamic-generic" component={StaffComingSoon} />
       <SafeRoute path="/staff/tools/easypay" component={StaffComingSoon} />
@@ -193,7 +195,7 @@ function Router() {
       <SafeRoute path="/staff/admin/brokers" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/member-cards" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/terminals" component={StaffComingSoon} />
-      <SafeRoute path="/staff/admin/branches" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/branches" component={StaffBranchAdmin} />
       <SafeRoute path="/staff/admin/sub-groups" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/underwriters" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/undertakers" component={StaffComingSoon} />

@@ -42,6 +42,7 @@ import {
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertDependentSchema, insertTermsSchema,
   insertRequisitionSchema, REQUISITION_STATUSES,
+  insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases,
 } from "@shared/schema";
@@ -3858,6 +3859,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
     await auditLog(req, "UPDATE_REQUISITION", "Requisition", existing.id, existing, updated);
+    return res.json(updated);
+  });
+
+  // ─── Debit Orders (recurring premium-collection mandates) ────
+  app.get("/api/debit-orders", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
+    const policyId = typeof req.query.policyId === "string" && req.query.policyId ? req.query.policyId : undefined;
+    return res.json(await storage.getDebitOrders(user.organizationId, { status, policyId }));
+  });
+
+  app.post("/api/debit-orders", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const mandateReference = typeof req.body.mandateReference === "string" && req.body.mandateReference.trim()
+      ? req.body.mandateReference.trim()
+      : `DO-${Date.now().toString(36).toUpperCase()}`;
+    const parsed = insertDebitOrderSchema.parse({
+      ...req.body,
+      organizationId: user.organizationId,
+      mandateReference,
+      status: "active",
+      createdBy: user.id,
+    });
+    const created = await storage.createDebitOrder(parsed);
+    await auditLog(req, "CREATE_DEBIT_ORDER", "DebitOrder", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/debit-orders/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getDebitOrder(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Debit order not found" });
+    const patch: Record<string, any> = {};
+    if (typeof req.body.status === "string") {
+      if (!DEBIT_ORDER_STATUSES.includes(req.body.status)) return res.status(400).json({ message: "Invalid status" });
+      patch.status = req.body.status;
+    }
+    for (const k of ["accountName", "bankName", "accountNumber", "branchCode", "amount", "currency", "frequency", "dayOfMonth", "startDate", "nextRunDate", "notes", "policyId", "clientId", "branchId"]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
+    }
+    const updated = await storage.updateDebitOrder(req.params.id as string, user.organizationId, patch);
+    await auditLog(req, "UPDATE_DEBIT_ORDER", "DebitOrder", existing.id, existing, updated);
     return res.json(updated);
   });
 

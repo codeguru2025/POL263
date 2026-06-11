@@ -22,10 +22,11 @@ import {
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
-  fxRates, requisitions, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  fxRates, requisitions, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   type FxRate, type InsertFxRate, type Requisition, type InsertRequisition,
+  type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
   type ServiceReceipt, type InsertServiceReceipt,
   type GroupPaymentIntent, type InsertGroupPaymentIntent,
@@ -482,6 +483,10 @@ export interface IStorage {
   getRequisition(id: string, orgId: string): Promise<Requisition | undefined>;
   createRequisition(req: InsertRequisition): Promise<Requisition>;
   updateRequisition(id: string, orgId: string, data: Partial<Requisition>): Promise<Requisition | undefined>;
+  getDebitOrders(orgId: string, filters?: { status?: string; policyId?: string }): Promise<DebitOrder[]>;
+  getDebitOrder(id: string, orgId: string): Promise<DebitOrder | undefined>;
+  createDebitOrder(order: InsertDebitOrder): Promise<DebitOrder>;
+  updateDebitOrder(id: string, orgId: string, data: Partial<DebitOrder>): Promise<DebitOrder | undefined>;
   getFuneralQuotation(funeralCaseId: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined>;
   upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation>;
   getServiceReceipts(orgId: string, opts?: { funeralCaseId?: string; fromDate?: string; toDate?: string }): Promise<ServiceReceipt[]>;
@@ -3685,6 +3690,33 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(requisitions).set(data)
       .where(and(eq(requisitions.id, id), eq(requisitions.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+
+  // ── Finance: debit orders (recurring premium-collection mandates) ──
+  async getDebitOrders(orgId: string, filters?: { status?: string; policyId?: string }): Promise<DebitOrder[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: any[] = [eq(debitOrders.organizationId, orgId)];
+    if (filters?.status) conditions.push(eq(debitOrders.status, filters.status));
+    if (filters?.policyId) conditions.push(eq(debitOrders.policyId, filters.policyId));
+    return tdb.select().from(debitOrders).where(and(...conditions)).orderBy(desc(debitOrders.createdAt));
+  }
+  async getDebitOrder(id: string, orgId: string): Promise<DebitOrder | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(debitOrders)
+      .where(and(eq(debitOrders.id, id), eq(debitOrders.organizationId, orgId)));
+    return row;
+  }
+  async createDebitOrder(order: InsertDebitOrder): Promise<DebitOrder> {
+    const tdb = await getDbForOrg(order.organizationId);
+    const [created] = await tdb.insert(debitOrders).values(order).returning();
+    return created;
+  }
+  async updateDebitOrder(id: string, orgId: string, data: Partial<DebitOrder>): Promise<DebitOrder | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(debitOrders).set(data)
+      .where(and(eq(debitOrders.id, id), eq(debitOrders.organizationId, orgId)))
       .returning();
     return updated;
   }

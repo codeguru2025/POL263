@@ -48,6 +48,8 @@ import {
   Legend,
 } from "recharts";
 import { isAgentScoped } from "@shared/roles";
+import { useFlag } from "@/lib/flags";
+import { CommandCenter } from "@/components/command-center";
 
 interface DashboardStats {
   totalPolicies: number;
@@ -123,6 +125,7 @@ export default function StaffDashboard() {
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
   const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
   const isAgent = isAgentScoped(roles);
+  const commandCenters = useFlag("commandCenters");
   const canReadFinance = permissions.includes("read:finance");
   const canReadClaims = permissions.includes("read:claim");
   const canReadFuneralOps = permissions.includes("read:funeral_ops");
@@ -427,7 +430,9 @@ export default function StaffDashboard() {
           titleDataTestId="text-dashboard-title"
         />
 
-        {!isAgent && (
+        {commandCenters && <CommandCenter />}
+
+        {!isAgent && !commandCenters && (
         <CardSection title="Quick access" icon={LayoutDashboard}>
             <div className="grid gap-3 sm:grid-cols-3 sm:gap-4">
               <Link href="/staff/notifications" className="rounded-lg border bg-card px-4 py-3 shadow-sm hover:shadow-md transition-shadow flex items-center gap-3">

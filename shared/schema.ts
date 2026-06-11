@@ -1817,6 +1817,46 @@ export const insertRequisitionSchema = createInsertSchema(requisitions).omit({ i
 export type Requisition = typeof requisitions.$inferSelect;
 export type InsertRequisition = z.infer<typeof insertRequisitionSchema>;
 
+// ── Debit Orders: recurring bank-debit mandates for premium collection ──
+export const DEBIT_ORDER_STATUSES = ["active", "paused", "cancelled"] as const;
+export const DEBIT_ORDER_FREQUENCIES = ["weekly", "biweekly", "monthly", "quarterly"] as const;
+
+export const debitOrders = pgTable(
+  "debit_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    clientId: uuid("client_id").references(() => clients.id),
+    policyId: uuid("policy_id").references(() => policies.id),
+    mandateReference: text("mandate_reference").notNull(),
+    accountName: text("account_name").notNull(),
+    bankName: text("bank_name").notNull(),
+    accountNumber: text("account_number").notNull(),
+    branchCode: text("branch_code"),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    frequency: text("frequency").default("monthly").notNull(),
+    dayOfMonth: integer("day_of_month"),
+    startDate: date("start_date"),
+    nextRunDate: date("next_run_date"),
+    status: text("status").default("active").notNull(),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("debit_order_org_idx").on(t.organizationId),
+    index("debit_order_status_idx").on(t.status),
+    index("debit_order_policy_idx").on(t.policyId),
+    uniqueIndex("debit_order_ref_org_idx").on(t.organizationId, t.mandateReference),
+  ]
+);
+
+export const insertDebitOrderSchema = createInsertSchema(debitOrders).omit({ id: true, createdAt: true });
+export type DebitOrder = typeof debitOrders.$inferSelect;
+export type InsertDebitOrder = z.infer<typeof insertDebitOrderSchema>;
+
 export const insertFuneralQuotationSchema = createInsertSchema(funeralQuotations).omit({ id: true, createdAt: true });
 export type FuneralQuotation = typeof funeralQuotations.$inferSelect;
 export type InsertFuneralQuotation = z.infer<typeof insertFuneralQuotationSchema>;
