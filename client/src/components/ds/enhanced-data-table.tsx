@@ -44,6 +44,7 @@ export interface EnhancedDataTableProps<T> {
   emptyMessage?: string;
   rowTestId?: (row: T) => string;
   toolbarExtra?: React.ReactNode;
+  onRowClick?: (row: T) => void;
 }
 
 interface PersistShape {
@@ -78,6 +79,7 @@ export function EnhancedDataTable<T>({
   emptyMessage = "No records found.",
   rowTestId,
   toolbarExtra,
+  onRowClick,
 }: EnhancedDataTableProps<T>) {
   const persisted = useMemo(() => loadPersist(storageKey), [storageKey]);
   const [query, setQuery] = useState("");
@@ -214,7 +216,12 @@ export function EnhancedDataTable<T>({
           </TableHeader>
           <TableBody>
             {processed.map((row) => (
-              <TableRow key={getRowKey(row)} data-testid={rowTestId?.(row)}>
+              <TableRow
+                key={getRowKey(row)}
+                data-testid={rowTestId?.(row)}
+                className={onRowClick ? "hover:bg-muted/30 transition-colors cursor-pointer" : undefined}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+              >
                 {visibleColumns.map((c) => (
                   <TableCell key={c.id} className={cn(c.align === "right" && "text-right", c.cellClassName)}>
                     {c.cell ? c.cell(row) : toText(c.accessor?.(row))}

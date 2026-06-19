@@ -18,7 +18,9 @@ export type FlagName =
   | "globalSearch"
   | "commandPalette"
   | "quickCreate"
-  | "commandCenters";
+  | "commandCenters"
+  | "receiptDrawer"
+  | "policyWizard";
 
 const DEFAULTS: Record<FlagName, boolean> = {
   newNav: true,
@@ -26,6 +28,8 @@ const DEFAULTS: Record<FlagName, boolean> = {
   commandPalette: true,
   quickCreate: true,
   commandCenters: true,
+  receiptDrawer: true,
+  policyWizard: true,
 };
 
 const STORAGE_KEY = "pol263.flags";

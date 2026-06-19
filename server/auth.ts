@@ -353,15 +353,29 @@ export function setupAuth(app: Express) {
         req.login(user, async (loginErr) => {
           if (loginErr) return next(loginErr);
 
+          // Capture session state before regeneration, then regenerate to prevent session fixation.
           const sessionAny = req.session as any;
-          const returnTo = sessionAny?.authReturnTo;
+          const returnTo = sessionAny?.authReturnTo as string | undefined;
+          const authTenantIdPre = sessionAny?.authTenantId as string | undefined;
+          const passportData = sessionAny.passport;
+          try {
+            await new Promise<void>((resolve, reject) =>
+              req.session.regenerate((e) => (e ? reject(e) : resolve()))
+            );
+            const newSess = req.session as any;
+            newSess.passport = passportData;
+            await new Promise<void>((resolve, reject) =>
+              req.session.save((e) => (e ? reject(e) : resolve()))
+            );
+          } catch (e) {
+            return next(e as Error);
+          }
 
           // Redirect to home with returnTo so the client can redirect after auth is ready (avoids error page on first load).
           const pathFromReturnTo = returnTo
             ? (returnTo.startsWith("http") ? new URL(returnTo).pathname : returnTo)
             : null;
           if (pathFromReturnTo) {
-            delete sessionAny.authReturnTo;
             const baseUrl = baseUrlFromEnv();
             const host = req.get("host");
             const proto =
@@ -383,10 +397,9 @@ export function setupAuth(app: Express) {
           // If the login was initiated from a tenant subdomain (authTenantId saved
           // by /api/auth/google), activate that tenant so the platform owner lands
           // on that tenant's dashboard rather than the control plane.
-          const authTenantId = sessionAny?.authTenantId as string | undefined;
+          const authTenantId = authTenantIdPre;
           if (authTenantId) {
-            delete sessionAny.authTenantId;
-            sessionAny.activeTenantId = authTenantId;
+            (req.session as any).activeTenantId = authTenantId;
             const homeWithReturn = baseUrl
               ? `${baseUrl}/?returnTo=${encodeURIComponent(staffPath)}`
               : `/?returnTo=${encodeURIComponent(staffPath)}`;
@@ -598,8 +611,21 @@ export function setupAuth(app: Express) {
       }
 
       clearAgentLoginFailures(email);
-      req.login(user, (err) => {
+      req.login(user, async (err) => {
         if (err) {
+          return res.status(500).json({ message: "Login failed" });
+        }
+        // Regenerate session ID to prevent session fixation.
+        const passportData = (req.session as any).passport;
+        try {
+          await new Promise<void>((resolve, reject) =>
+            req.session.regenerate((e) => (e ? reject(e) : resolve()))
+          );
+          (req.session as any).passport = passportData;
+          await new Promise<void>((resolve, reject) =>
+            req.session.save((e) => (e ? reject(e) : resolve()))
+          );
+        } catch {
           return res.status(500).json({ message: "Login failed" });
         }
         structuredLog("info", "Agent login successful", { userId: user.id, email: user.email });

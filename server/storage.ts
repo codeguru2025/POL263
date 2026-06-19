@@ -81,6 +81,8 @@ import {
   type Settlement, type InsertSettlement,
   type TermsAndConditions, type InsertTerms,
   type ClientFeedback, type InsertClientFeedback,
+  directoryContacts,
+  type DirectoryContact, type InsertDirectoryContact,
 } from "@shared/schema";
 
 /** Drizzle handle for this org's data database (shared `DATABASE_URL` pool or isolated tenant Postgres). */
@@ -335,7 +337,8 @@ export interface IStorage {
       policy: InsertPolicy;
       statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
       members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
-      addOnIds: string[];
+      // Per-member add-ons. memberRef can be "holder" (→ policy_holder row) or a dependent UUID.
+      memberAddOns?: Array<{ memberRef: string; addOnId: string }>;
     },
   ): Promise<{ policy: Policy; members: PolicyMember[] }>;
   createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, organizationId?: string): Promise<void>;
@@ -347,6 +350,8 @@ export interface IStorage {
   countCoveredLives(orgId: string): Promise<{ coveredLives: number; activePolicyCount: number }>;
   createPolicyMember(member: InsertPolicyMember): Promise<PolicyMember>;
   getPolicyAddOns(policyId: string, orgId: string): Promise<PolicyAddOn[]>;
+  /** Replace all add-ons for a specific policy member (or policy-level when memberId is null). */
+  setMemberAddOns(policyId: string, policyMemberId: string | null, addOnIds: string[], orgId: string): Promise<void>;
   addPolicyAddOns(policyId: string, addOnIds: string[], orgId: string): Promise<void>;
   createPaymentTransaction(tx: InsertPaymentTransaction): Promise<PaymentTransaction>;
   getPaymentsByPolicy(policyId: string, orgId: string): Promise<PaymentTransaction[]>;
@@ -1846,7 +1851,7 @@ export class DatabaseStorage implements IStorage {
       policy: InsertPolicy;
       statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
       members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
-      addOnIds: string[];
+      memberAddOns?: Array<{ memberRef: string; addOnId: string }>;
     },
   ): Promise<{ policy: Policy; members: PolicyMember[] }> {
     return withOrgTransaction(orgId, async (tx) => {
@@ -1893,8 +1898,30 @@ export class DatabaseStorage implements IStorage {
           .returning();
         membersOut.push(createdMember);
       }
-      if (data.addOnIds.length > 0) {
-        await tx.insert(policyAddOns).values(data.addOnIds.map((addOnId) => ({ policyId: policy.id, addOnId })));
+      // Store per-member add-ons. "holder" resolves to the policy_holder member row.
+      const maoList = data.memberAddOns ?? [];
+      if (maoList.length > 0) {
+        const holderMember = membersOut.find((m) => m.role === "policy_holder");
+        const addOnRows = maoList
+          .map((mao) => {
+            const resolvedMember = mao.memberRef === "holder"
+              ? holderMember
+              : membersOut.find((m) => m.dependentId === mao.memberRef);
+            if (!resolvedMember) return null;
+            return { policyId: policy.id, addOnId: mao.addOnId, policyMemberId: resolvedMember.id };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+        // Deduplicate (same member + same add-on)
+        const seen = new Set<string>();
+        const dedupedRows = addOnRows.filter((r) => {
+          const key = `${r.policyMemberId}:${r.addOnId}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        if (dedupedRows.length > 0) {
+          await tx.insert(policyAddOns).values(dedupedRows);
+        }
       }
       return { policy, members: membersOut };
     });
@@ -2117,10 +2144,34 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(policyAddOns).where(eq(policyAddOns.policyId, policyId));
   }
+  async setMemberAddOns(policyId: string, policyMemberId: string | null, addOnIds: string[], orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.transaction(async (tx) => {
+      // Delete existing add-ons for this member scope
+      if (policyMemberId !== null) {
+        await tx.delete(policyAddOns).where(
+          and(eq(policyAddOns.policyId, policyId), eq(policyAddOns.policyMemberId, policyMemberId))
+        );
+      } else {
+        await tx.delete(policyAddOns).where(
+          and(eq(policyAddOns.policyId, policyId), sql`${policyAddOns.policyMemberId} IS NULL`)
+        );
+      }
+      if (addOnIds.length > 0) {
+        const seen = new Set<string>();
+        const rows = addOnIds.filter((id) => {
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        }).map((addOnId) => ({ policyId, addOnId, policyMemberId }));
+        await tx.insert(policyAddOns).values(rows);
+      }
+    });
+  }
   async addPolicyAddOns(policyId: string, addOnIds: string[], orgId: string): Promise<void> {
     if (addOnIds.length === 0) return;
     const tdb = await getDbForOrg(orgId);
-    await tdb.insert(policyAddOns).values(addOnIds.map((addOnId) => ({ policyId, addOnId })));
+    await tdb.insert(policyAddOns).values(addOnIds.map((addOnId) => ({ policyId, addOnId, policyMemberId: null })));
   }
 
   // ─── Payments ──────────────────────────────────────────────
@@ -4053,6 +4104,45 @@ export class DatabaseStorage implements IStorage {
     }
     const [created] = await db.insert(costLineItems).values(data).returning();
     return created;
+  }
+
+  // ─── Directory Contacts ────────────────────────────────────────
+  async getDirectoryContacts(orgId: string, type?: string, search?: string): Promise<DirectoryContact[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: any[] = [eq(directoryContacts.organizationId, orgId)];
+    if (type) conditions.push(eq(directoryContacts.type, type));
+    if (search) {
+      const q = `%${search}%`;
+      conditions.push(
+        or(
+          ilike(directoryContacts.name, q),
+          ilike(directoryContacts.contactPerson, q),
+          ilike(directoryContacts.phone, q),
+          ilike(directoryContacts.city, q),
+        )
+      );
+    }
+    return tdb.select().from(directoryContacts)
+      .where(and(...conditions))
+      .orderBy(directoryContacts.name);
+  }
+  async createDirectoryContact(data: InsertDirectoryContact): Promise<DirectoryContact> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(directoryContacts).values(data).returning();
+    return created;
+  }
+  async updateDirectoryContact(id: string, orgId: string, data: Partial<InsertDirectoryContact>): Promise<DirectoryContact | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(directoryContacts)
+      .set(data)
+      .where(and(eq(directoryContacts.id, id), eq(directoryContacts.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  async deleteDirectoryContact(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(directoryContacts)
+      .where(and(eq(directoryContacts.id, id), eq(directoryContacts.organizationId, orgId)));
   }
 }
 

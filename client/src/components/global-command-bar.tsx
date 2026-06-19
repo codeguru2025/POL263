@@ -22,6 +22,8 @@ import {
   Search, Plus, FileStack, Users, Receipt, FileText, Target, Wallet2,
   LayoutDashboard, ShieldCheck, Truck, ChevronDown,
 } from "lucide-react";
+import { useReceiptDrawer } from "@/components/receipt-drawer";
+import { useFlag } from "@/lib/flags";
 
 const DEBOUNCE_MS = 250;
 const MIN_CHARS = 2;
@@ -73,6 +75,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const [policies, setPolicies] = useState<PolicyHit[]>([]);
   const [clients, setClients] = useState<ClientHit[]>([]);
   const seq = useRef(0);
+  const { openReceiptDrawer } = useReceiptDrawer();
+  const receiptDrawerFlag = useFlag("receiptDrawer");
 
   const canReadPolicy = permissions.includes("read:policy");
   const canReadClient = permissions.includes("read:client");
@@ -154,7 +158,19 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           {createActions.length > 0 && (
             <CommandGroup heading="Create">
               {createActions.map((a) => (
-                <CommandItem key={a.label} value={a.label} onSelect={() => go(a.href)}>
+                <CommandItem
+                  key={a.label}
+                  value={a.label}
+                  onSelect={() => {
+                    if (receiptDrawerFlag && a.label === "Receipt a Payment") {
+                      onOpenChange(false);
+                      setQuery("");
+                      openReceiptDrawer();
+                    } else {
+                      go(a.href);
+                    }
+                  }}
+                >
                   <a.icon className="h-4 w-4 text-muted-foreground" />
                   <span>{a.label}</span>
                 </CommandItem>
@@ -215,6 +231,8 @@ export function GlobalCommandBar() {
 /** Persistent context-aware "+ New" button. */
 export function QuickCreateMenu() {
   const [, setLocation] = useLocation();
+  const { openReceiptDrawer } = useReceiptDrawer();
+  const receiptDrawerFlag = useFlag("receiptDrawer");
   const actions = useAllowedActions().filter((a) => a.group === "Create");
   if (actions.length === 0) return null;
   return (
@@ -228,7 +246,17 @@ export function QuickCreateMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
         {actions.map((a) => (
-          <DropdownMenuItem key={a.label} className="gap-2 cursor-pointer" onClick={() => setLocation(a.href)}>
+          <DropdownMenuItem
+            key={a.label}
+            className="gap-2 cursor-pointer"
+            onClick={() => {
+              if (receiptDrawerFlag && a.label === "Receipt a Payment") {
+                openReceiptDrawer();
+              } else {
+                setLocation(a.href);
+              }
+            }}
+          >
             <a.icon className="h-4 w-4 text-muted-foreground" />
             {a.label}
           </DropdownMenuItem>

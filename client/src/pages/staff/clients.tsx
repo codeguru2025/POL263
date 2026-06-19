@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useSearch } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, EnhancedDataTable } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1020,33 +1020,6 @@ export default function StaffClients() {
           title="Lead & client registry"
           description="Search, filter, and open a record to view full detail."
           icon={Users}
-          headerRight={(
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-                <div className="relative w-full sm:w-64">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search leads & clients..."
-                    className="pl-9 bg-background"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    data-testid="input-search-clients"
-                  />
-                </div>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-full sm:w-40" data-testid="select-status-filter">
-                    <Filter className="h-4 w-4 mr-2 shrink-0" />
-                    <SelectValue placeholder="Filter" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="leads">Leads Only</SelectItem>
-                    <SelectItem value="converted">Converted Only</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-          )}
           flush
         >
             {isLoading ? (
@@ -1074,143 +1047,138 @@ export default function StaffClients() {
                   ))}
                 </TableBody>
               </DataTable>
-            ) : filteredClients.length === 0 ? (
-              <EmptyState
-                dataTestId="text-no-clients"
-                icon={Users}
-                title={searchQuery || statusFilter !== "all" ? "No matching records" : "No clients yet"}
-                description={searchQuery || statusFilter !== "all" ? "No clients match your search criteria." : "No clients found. Add your first client to get started."}
-                className="border-0 rounded-none bg-transparent py-10"
-              />
             ) : (
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead className="pl-6">Client</TableHead>
-                    <TableHead>Contact Info</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>Conversion</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right pr-6">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredClients.map((client) => (
-                    <TableRow
-                      key={client.id}
-                      className="hover:bg-muted/30 transition-colors cursor-pointer"
-                      onClick={() => openDetail(client.id)}
-                      data-testid={`row-client-${client.id}`}
-                    >
-                      <TableCell className="pl-6">
-                        <div className="flex items-center gap-3">
-                          <Avatar className="h-9 w-9">
-                            <AvatarFallback className="bg-primary/10 text-primary font-medium">
-                              {getInitials(client.firstName, client.lastName)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <p className="font-medium" data-testid={`text-client-name-${client.id}`}>
-                              {client.firstName} {client.lastName}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {new Date(client.createdAt).toLocaleDateString()}
-                            </p>
-                          </div>
+              <div className="px-4 pb-4 pt-2 sm:px-6">
+              <EnhancedDataTable
+                columns={[
+                  {
+                    id: "name",
+                    header: "Client",
+                    accessor: (c) => `${c.firstName} ${c.lastName}`,
+                    cell: (c) => (
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-9 w-9">
+                          <AvatarFallback className="bg-primary/10 text-primary font-medium">
+                            {getInitials(c.firstName, c.lastName)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="font-medium" data-testid={`text-client-name-${c.id}`}>
+                            {c.firstName} {c.lastName}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(c.createdAt).toLocaleDateString()}
+                          </p>
                         </div>
-                      </TableCell>
-                      <TableCell>
+                      </div>
+                    ),
+                  },
+                  {
+                    id: "contact",
+                    header: "Contact Info",
+                    accessor: (c) => [c.email, c.phone].filter(Boolean).join(" "),
+                    cell: (c) => (
+                      <div className="space-y-1">
+                        {c.email && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Mail className="h-3 w-3" /> {c.email}</div>}
+                        {c.phone && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Phone className="h-3 w-3" /> {c.phone}</div>}
+                        {!c.email && !c.phone && <span className="text-sm text-muted-foreground">—</span>}
+                      </div>
+                    ),
+                  },
+                  {
+                    id: "nationalId",
+                    header: "National ID",
+                    accessor: (c) => c.nationalId || "",
+                    cell: (c) => <span className="text-sm font-mono" data-testid={`text-client-nid-${c.id}`}>{c.nationalId || "—"}</span>,
+                  },
+                  {
+                    id: "conversion",
+                    header: "Conversion",
+                    accessor: (c) => {
+                      const cp = (allPolicies || []).filter((p: any) => p.clientId === c.id);
+                      return cp.length === 0 ? "Lead" : cp.map((p: any) => p.policyNumber).join(" ");
+                    },
+                    cell: (c) => {
+                      const cp = (allPolicies || []).filter((p: any) => p.clientId === c.id);
+                      if (cp.length === 0) return <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200">Lead</Badge>;
+                      return (
                         <div className="space-y-1">
-                          {client.email && (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <Mail className="h-3 w-3" /> {client.email}
-                            </div>
-                          )}
-                          {client.phone && (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <Phone className="h-3 w-3" /> {client.phone}
-                            </div>
-                          )}
-                          {!client.email && !client.phone && (
-                            <span className="text-sm text-muted-foreground">—</span>
-                          )}
+                          {cp.map((p: any) => (
+                            <Badge key={p.id} variant="outline" className="font-mono text-xs block w-fit bg-emerald-500/10 text-emerald-700 border-emerald-200">{p.policyNumber}</Badge>
+                          ))}
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="text-sm font-mono" data-testid={`text-client-nid-${client.id}`}>
-                          {client.nationalId || "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        {(() => {
-                          const cp = (allPolicies || []).filter((p) => p.clientId === client.id);
-                          if (cp.length === 0) {
-                            return (
-                              <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200">
-                                Lead
-                              </Badge>
-                            );
-                          }
-                          return (
-                            <div className="space-y-1">
-                              {cp.map((p) => (
-                                <Badge key={p.id} variant="outline" className="font-mono text-xs block w-fit bg-emerald-500/10 text-emerald-700 border-emerald-200">
-                                  {p.policyNumber}
-                                </Badge>
-                              ))}
-                            </div>
-                          );
-                        })()}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Badge variant={client.isActive ? "default" : "secondary"}>
-                            {client.isActive ? "Active" : "Inactive"}
-                          </Badge>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right pr-6">
-                        <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => openDetail(client.id)}
-                            data-testid={`btn-view-client-${client.id}`}
-                            title="View details"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          {!clientsWithPolicies.has(client.id) && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => openEdit(client)}
-                                data-testid={`btn-edit-client-${client.id}`}
-                                title="Edit lead"
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-primary"
-                                onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${client.id}`; }}
-                                data-testid={`btn-issue-policy-${client.id}`}
-                                title="Issue policy"
-                              >
-                                <ArrowRight className="h-4 w-4" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
+                      );
+                    },
+                  },
+                  {
+                    id: "status",
+                    header: "Status",
+                    accessor: (c) => c.isActive ? "active" : "inactive",
+                    cell: (c) => <Badge variant={c.isActive ? "default" : "secondary"}>{c.isActive ? "Active" : "Inactive"}</Badge>,
+                  },
+                  {
+                    id: "actions",
+                    header: "Actions",
+                    align: "right",
+                    exportable: false,
+                    sortable: false,
+                    cell: (c) => (
+                      <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openDetail(c.id)} data-testid={`btn-view-client-${c.id}`} title="View details">
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        {!clientsWithPolicies.has(c.id) && (
+                          <>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`btn-edit-client-${c.id}`} title="Edit lead">
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${c.id}`; }} data-testid={`btn-issue-policy-${c.id}`} title="Issue policy">
+                              <ArrowRight className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    ),
+                  },
+                ]}
+                rows={filteredClients}
+                getRowKey={(c) => c.id}
+                searchable={false}
+                exportable
+                exportFilename="clients"
+                storageKey="clients-list"
+                onRowClick={(c) => openDetail(c.id)}
+                rowTestId={(c) => `row-client-${c.id}`}
+                emptyMessage={searchQuery || statusFilter !== "all" ? "No matching records" : "No clients yet"}
+                toolbarExtra={
+                  <>
+                    <div className="relative w-full sm:w-64">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search leads & clients..."
+                        className="pl-9 bg-background h-9"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        data-testid="input-search-clients"
+                      />
+                    </div>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger className="w-full sm:w-40 h-9" data-testid="select-status-filter">
+                        <Filter className="h-4 w-4 mr-2 shrink-0" />
+                        <SelectValue placeholder="Filter" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="leads">Leads Only</SelectItem>
+                        <SelectItem value="converted">Converted Only</SelectItem>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="inactive">Inactive</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </>
+                }
+              />
+              </div>
             )}
         </CardSection>
       </PageShell>

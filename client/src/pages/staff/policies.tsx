@@ -21,6 +21,7 @@ import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
 import { isAgentScoped } from "@shared/roles";
 import { useSearch, useLocation } from "wouter";
+import { useFlag } from "@/lib/flags";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -31,7 +32,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 
 function readEstatementDateRange() {
   const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement | null)?.value;
@@ -103,6 +104,7 @@ export default function StaffPolicies() {
   const canDeletePayment = safePermissions.includes("delete:payment");
   const canEditReceipt = safePermissions.includes("edit:receipt");
   const canDeleteReceipt = safePermissions.includes("delete:receipt");
+  const policyWizardFlag = useFlag("policyWizard");
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
@@ -513,6 +515,34 @@ export default function StaffPolicies() {
       const data = await res.json();
       return Array.isArray(data) ? data : [];
     },
+  });
+
+  const { data: policyMemberAddOns = [], refetch: refetchMemberAddOns } = useQuery<any[]>({
+    queryKey: ["/api/policies", selectedPolicy?.id, "add-ons"],
+    enabled: !!selectedPolicy?.id && showDetailView,
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/add-ons`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const [editAddOnsOpen, setEditAddOnsOpen] = useState(false);
+  const [editAddOnsMemberId, setEditAddOnsMemberId] = useState<string | null>(null);
+  const [editAddOnsSelected, setEditAddOnsSelected] = useState<string[]>([]);
+
+  const setMemberAddOnsMutation = useMutation({
+    mutationFn: async ({ memberId, addOnIds }: { memberId: string; addOnIds: string[] }) => {
+      const res = await apiRequest("PUT", `/api/policies/${selectedPolicy!.id}/members/${memberId}/add-ons`, { addOnIds });
+      if (!res.ok) throw new Error("Failed to save add-ons");
+    },
+    onSuccess: () => {
+      refetchMemberAddOns();
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "detail"] });
+      setEditAddOnsOpen(false);
+      toast({ title: "Add-ons saved" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
   const { data: policyPayments, isLoading: paymentsLoading } = useQuery<any[]>({
@@ -1634,6 +1664,7 @@ export default function StaffPolicies() {
                       <TableHead>Waiting period</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Claimable</TableHead>
+                      <TableHead>Add-ons</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1704,6 +1735,37 @@ export default function StaffPolicies() {
                             {m.claimableReason && <span className="text-[10px] text-muted-foreground leading-tight max-w-[140px]">{m.claimableReason}</span>}
                           </div>
                         </TableCell>
+                        <TableCell>
+                          {(() => {
+                            const memberAoIds = policyMemberAddOns
+                              .filter((ao: any) => ao.policyMemberId === m.id)
+                              .map((ao: any) => ao.addOnId);
+                            const memberAoNames = memberAoIds.map((aoId: string) => {
+                              const ao = addOns.find((a: any) => a.id === aoId);
+                              return ao?.name ?? aoId.slice(0, 6);
+                            });
+                            return (
+                              <div className="flex flex-wrap gap-1 items-center min-w-[120px]">
+                                {memberAoNames.map((name: string) => (
+                                  <Badge key={name} variant="secondary" className="text-xs">{name}</Badge>
+                                ))}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 shrink-0"
+                                  title="Edit add-ons for this member"
+                                  onClick={() => {
+                                    setEditAddOnsMemberId(m.id);
+                                    setEditAddOnsSelected(memberAoIds);
+                                    setEditAddOnsOpen(true);
+                                  }}
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </Button>
+                              </div>
+                            );
+                          })()}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1716,6 +1778,57 @@ export default function StaffPolicies() {
               );
               })()}
           </CardSection>
+
+          {/* Edit add-ons dialog */}
+          <Dialog open={editAddOnsOpen} onOpenChange={setEditAddOnsOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Edit Add-ons</DialogTitle>
+                <DialogDescription>
+                  Select add-ons for this member. Changes recalculate the policy premium.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {(addOns?.filter((a: any) => a.isActive !== false) ?? []).map((ao: any) => {
+                  const checked = editAddOnsSelected.includes(ao.id);
+                  return (
+                    <div key={ao.id} className="flex items-center gap-2">
+                      <Checkbox
+                        id={`edit-ao-${ao.id}`}
+                        checked={checked}
+                        onCheckedChange={(v) =>
+                          setEditAddOnsSelected((prev) =>
+                            v ? [...prev, ao.id] : prev.filter((id) => id !== ao.id)
+                          )
+                        }
+                      />
+                      <label htmlFor={`edit-ao-${ao.id}`} className="text-sm cursor-pointer flex-1">
+                        {ao.name}
+                        {ao.priceMonthly && (
+                          <span className="text-muted-foreground ml-1">— {displayPolicy?.currency ?? "USD"} {ao.priceMonthly}/mo</span>
+                        )}
+                      </label>
+                    </div>
+                  );
+                })}
+                {(!addOns || addOns.length === 0) && (
+                  <p className="text-sm text-muted-foreground">No add-ons configured for this tenant.</p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditAddOnsOpen(false)}>Cancel</Button>
+                <Button
+                  disabled={setMemberAddOnsMutation.isPending}
+                  onClick={() => {
+                    if (editAddOnsMemberId)
+                      setMemberAddOnsMutation.mutate({ memberId: editAddOnsMemberId, addOnIds: editAddOnsSelected });
+                  }}
+                >
+                  {setMemberAddOnsMutation.isPending ? "Saving…" : "Save"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {displayPolicy.beneficiaryFirstName && (
             <CardSection title="Beneficiary" description="Designated beneficiary for this policy." icon={Users}>
@@ -2823,34 +2936,6 @@ export default function StaffPolicies() {
           icon={FileText}
           title="Policy Directory"
           description="Search and filter your book of business, then open a policy to work on it."
-          headerRight={
-            <FilterBar className="w-full lg:w-auto lg:justify-end gap-2">
-              <div className="relative w-full sm:w-72 lg:w-64">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by policy number, name, ID, phone..."
-                  className="pl-9 bg-background"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  data-testid="input-search-policies"
-                />
-              </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full sm:w-40 shrink-0" data-testid="select-status-filter">
-                  <Filter className="h-4 w-4 mr-2 shrink-0" />
-                  <SelectValue placeholder="All Statuses" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="grace">Grace</SelectItem>
-                  <SelectItem value="lapsed">Lapsed</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
-                </SelectContent>
-              </Select>
-            </FilterBar>
-          }
         >
             {policiesLoading ? (
               <Table>
@@ -2879,57 +2964,63 @@ export default function StaffPolicies() {
                   ))}
                 </TableBody>
               </Table>
-            ) : filteredPolicies.length === 0 ? (
-                <EmptyState
-                  dataTestId="text-no-policies"
-                  icon={FileText}
-                  title={policies?.length === 0 ? "No policies yet" : "No matching policies"}
-                  description={
-                    policies?.length === 0
-                      ? "Create your first policy to get started."
-                      : "No policies match your search criteria."
-                  }
-                  className="m-4 sm:m-6"
-                  action={
-                    policies?.length === 0 ? (
-                      <Button className="gap-2" onClick={() => setShowCreateDialog(true)} data-testid="btn-create-policy-empty">
-                        <Plus className="h-4 w-4" /> Issue New Policy
-                      </Button>
-                    ) : undefined
-                  }
-                />
             ) : (
-              <Table>
-                <TableHeader className="bg-muted/50">
-                  <TableRow>
-                    <TableHead className="pl-6">Policy Number</TableHead>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Schedule</TableHead>
-                    <TableHead>Effective Date</TableHead>
-                    <TableHead className="text-right pr-6">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredPolicies.map((policy: any) => (
-                    <TableRow key={policy.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => openDetail(policy)} data-testid={`row-policy-${policy.id}`}>
-                      <TableCell className="font-medium pl-6">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-primary/70" />
-                          {policy.policyNumber}
-                        </div>
-                      </TableCell>
-                      <TableCell data-testid={`text-client-${policy.id}`}>{getClientName(policy.clientId)}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={`font-medium ${getStatusColor(policy.status)}`} data-testid={`badge-status-${policy.id}`}>
-                          {STATUS_LABELS[policy.status] || policy.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{policy.currency} {Number(policy.premiumAmount).toFixed(2)}</TableCell>
-                      <TableCell className="text-muted-foreground capitalize">{policy.paymentSchedule}</TableCell>
-                      <TableCell className="text-muted-foreground">{policy.effectiveDate || "—"}</TableCell>
-                      <TableCell className="text-right pr-6" onClick={(e) => e.stopPropagation()}>
+              <div className="px-4 pb-4 pt-2 sm:px-6">
+              <EnhancedDataTable<any>
+                columns={[
+                  {
+                    id: "policyNumber",
+                    header: "Policy Number",
+                    accessor: (p: any) => p.policyNumber,
+                    cell: (p: any) => (
+                      <div className="flex items-center gap-2 font-medium">
+                        <FileText className="h-4 w-4 text-primary/70 shrink-0" />
+                        {p.policyNumber}
+                      </div>
+                    ),
+                  },
+                  {
+                    id: "client",
+                    header: "Client",
+                    accessor: (p: any) => getClientName(p.clientId),
+                  },
+                  {
+                    id: "status",
+                    header: "Status",
+                    accessor: (p: any) => p.status,
+                    cell: (p: any) => (
+                      <Badge variant="outline" className={`font-medium ${getStatusColor(p.status)}`} data-testid={`badge-status-${p.id}`}>
+                        {STATUS_LABELS[p.status] || p.status}
+                      </Badge>
+                    ),
+                  },
+                  {
+                    id: "premium",
+                    header: "Premium",
+                    accessor: (p: any) => parseFloat(p.premiumAmount) || 0,
+                    cell: (p: any) => `${p.currency} ${Number(p.premiumAmount).toFixed(2)}`,
+                    cellClassName: "tabular-nums",
+                  },
+                  {
+                    id: "schedule",
+                    header: "Schedule",
+                    accessor: (p: any) => p.paymentSchedule,
+                    cellClassName: "text-muted-foreground capitalize",
+                  },
+                  {
+                    id: "effectiveDate",
+                    header: "Effective Date",
+                    accessor: (p: any) => p.effectiveDate || "",
+                    cellClassName: "text-muted-foreground",
+                  },
+                  {
+                    id: "actions",
+                    header: "Actions",
+                    align: "right",
+                    exportable: false,
+                    sortable: false,
+                    cell: (policy: any) => (
+                      <div onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`btn-actions-${policy.id}`}>
@@ -2968,27 +3059,99 @@ export default function StaffPolicies() {
                             )}
                           </DropdownMenuContent>
                         </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                      </div>
+                    ),
+                  },
+                ]}
+                rows={filteredPolicies}
+                getRowKey={(p: any) => p.id}
+                searchable={false}
+                exportable
+                exportFilename="policies"
+                storageKey="policies-list"
+                onRowClick={openDetail}
+                rowTestId={(p: any) => `row-policy-${p.id}`}
+                emptyMessage={policies?.length === 0 ? "No policies yet" : "No matching policies"}
+                toolbarExtra={
+                  <>
+                    <div className="relative w-full sm:w-72 lg:w-64">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search policies..."
+                        className="pl-9 bg-background h-9"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        data-testid="input-search-policies"
+                      />
+                    </div>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger className="w-full sm:w-40 shrink-0 h-9" data-testid="select-status-filter">
+                        <Filter className="h-4 w-4 mr-2 shrink-0" />
+                        <SelectValue placeholder="All Statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Statuses</SelectItem>
+                        <SelectItem value="inactive">Inactive</SelectItem>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="grace">Grace</SelectItem>
+                        <SelectItem value="lapsed">Lapsed</SelectItem>
+                        <SelectItem value="cancelled">Cancelled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </>
+                }
+              />
+              </div>
             )}
         </CardSection>
       </PageShell>
 
       <Dialog open={showCreateDialog} onOpenChange={(open) => { setShowCreateDialog(open); if (!open) setCreateStep(1); }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className={policyWizardFlag ? "sm:max-w-2xl max-h-[92vh] flex flex-col" : "sm:max-w-lg"}>
           <DialogHeader>
-            <DialogTitle>Issue New Policy</DialogTitle>
-            <DialogDescription>
-              {createStep === 1 && "Select an existing lead or create a new client. A client record is auto-created if needed."}
-              {createStep === 2 && "Select product and version for this tenant."}
-              {createStep === 3 && "Select add-ons (optional)."}
-              {createStep === 4 && "Review premium and save. A unique policy number will be generated."}
-            </DialogDescription>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-primary shrink-0" />
+              Issue New Policy
+            </DialogTitle>
+
+            {policyWizardFlag ? (
+              /* Step progress bar */
+              <div className="flex items-center gap-0 mt-3 pb-1">
+                {[
+                  { step: 1, label: "Policy Holder" },
+                  { step: 2, label: "Product" },
+                  { step: 3, label: "Add-ons" },
+                  { step: 4, label: "Review" },
+                ].map((s, i) => (
+                  <div key={s.step} className="flex items-center flex-1 min-w-0">
+                    <div className={"flex items-center gap-1.5 text-xs font-medium " + (createStep === s.step ? "text-primary" : createStep > s.step ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground")}>
+                      <span className={"inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold shrink-0 " + (createStep === s.step ? "bg-primary text-primary-foreground" : createStep > s.step ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" : "bg-muted text-muted-foreground")}>
+                        {createStep > s.step ? "✓" : s.step}
+                      </span>
+                      <span className="hidden sm:inline truncate">{s.label}</span>
+                    </div>
+                    {i < 3 && <div className={"h-px flex-1 mx-1 " + (createStep > s.step ? "bg-emerald-300 dark:bg-emerald-700" : "bg-border")} />}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <DialogDescription>
+                {createStep === 1 && "Select an existing lead or create a new client. A client record is auto-created if needed."}
+                {createStep === 2 && "Select product and version for this tenant."}
+                {createStep === 3 && "Select add-ons (optional)."}
+                {createStep === 4 && "Review premium and save. A unique policy number will be generated."}
+              </DialogDescription>
+            )}
           </DialogHeader>
-          <div className="space-y-4">
+          {policyWizardFlag && (
+            <p className="text-sm text-muted-foreground -mt-1 pb-1 border-b">
+              {createStep === 1 && "Select an existing lead or create a new client."}
+              {createStep === 2 && "Choose the product and version to cover this policy."}
+              {createStep === 3 && "Add optional extras for each member. You can skip this step."}
+              {createStep === 4 && "Confirm the premium, billing schedule, and payment method, then submit."}
+            </p>
+          )}
+          <div className={"space-y-4 " + (policyWizardFlag ? "overflow-y-auto flex-1 pr-1" : "")}>
             {createStep === 1 && (
               <>
                 <div>

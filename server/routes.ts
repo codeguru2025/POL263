@@ -1641,6 +1641,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  // Per-member add-on management on existing policies
+  app.get("/api/policies/:id/add-ons", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const addOns = await storage.getPolicyAddOns(req.params.id as string, user.organizationId);
+    return res.json(addOns);
+  });
+
+  // PUT /api/policies/:id/members/:memberId/add-ons  — replace add-ons for one member
+  app.put("/api/policies/:id/members/:memberId/add-ons", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const { id: policyId, memberId } = req.params as { id: string; memberId: string };
+    const addOnIds: string[] = Array.isArray(req.body.addOnIds) ? req.body.addOnIds : [];
+    // IDOR guard: verify the member belongs to this policy in this org
+    const policyMemberList = await storage.getPolicyMembers(policyId, user.organizationId);
+    if (!policyMemberList.some((m) => m.id === memberId)) {
+      return res.status(404).json({ message: "Member not found on this policy" });
+    }
+    const before = await storage.getPolicyAddOns(policyId, user.organizationId);
+    await storage.setMemberAddOns(policyId, memberId, addOnIds, user.organizationId);
+    await auditLog(req, "UPDATE_MEMBER_ADD_ONS", "Policy", policyId, before, { memberId, addOnIds });
+    // Recalculate premium after add-on change
+    const policy = await storage.getPolicy(policyId, user.organizationId);
+    if (policy) {
+      const updated = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
+      if (updated?.premiumAmount !== policy.premiumAmount) {
+        await storage.updatePolicy(policyId, { premiumAmount: updated.premiumAmount }, user.organizationId);
+      }
+    }
+    return res.json({ ok: true });
+  });
+
   app.get("/api/age-bands", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getAgeBandConfigs(user.organizationId));
@@ -1948,8 +1979,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
     }
-    const uniqueAddOnIds = Array.from(new Set(memberAddOns.map((ma) => ma.addOnId)));
-    const allAddOnIds = uniqueAddOnIds.length > 0 ? uniqueAddOnIds : addOnIds;
+    // Use per-member add-ons if provided; fall back to flat addOnIds mapped to "holder"
+    const resolvedMemberAddOns: { memberRef: string; addOnId: string }[] =
+      memberAddOns.length > 0
+        ? memberAddOns
+        : (addOnIds as string[]).map((id: string) => ({ memberRef: "holder", addOnId: id }));
 
     const { policy } = await storage.createPolicyWithInitialSetup(user.organizationId, {
       policy: policyInsert,
@@ -1960,7 +1994,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         changedBy,
       },
       members: memberRows,
-      addOnIds: allAddOnIds,
+      memberAddOns: resolvedMemberAddOns,
     });
 
     await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
@@ -4322,7 +4356,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           changedBy: null,
         },
         members: memberRows,
-        addOnIds: [],
+        memberAddOns: [],
       });
       if (normalizedPaymentMethod) {
         await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
@@ -4402,6 +4436,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       })
     );
     return res.json(enriched);
+  });
+
+  // ─── Directory Contacts (undertakers, underwriters, transport, general) ──
+
+  app.get("/api/directory-contacts", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
+    const user = req.user as any;
+    const type = typeof req.query.type === "string" ? req.query.type : undefined;
+    const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
+    return res.json(await storage.getDirectoryContacts(user.organizationId, type, search));
+  });
+
+  app.post("/api/directory-contacts", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const data = { ...req.body, organizationId: user.organizationId };
+    if (!data.name || !data.type) return res.status(400).json({ message: "name and type are required" });
+    const created = await storage.createDirectoryContact(data);
+    await auditLog(req, "create", "directory_contact", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/directory-contacts/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const id = req.params.id as string;
+    const updated = await storage.updateDirectoryContact(id, user.organizationId, req.body);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    await auditLog(req, "update", "directory_contact", id, null, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/directory-contacts/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const id = req.params.id as string;
+    await storage.deleteDirectoryContact(id, user.organizationId);
+    await auditLog(req, "delete", "directory_contact", id, null, null);
+    return res.json({ ok: true });
   });
 
   // ─── Platform Revenue Share ──────────────────────────────

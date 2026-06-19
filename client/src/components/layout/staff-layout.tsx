@@ -81,6 +81,7 @@ import { cn } from "@/lib/utils";
 import { isAgentScoped } from "@shared/roles";
 import { useFlag } from "@/lib/flags";
 import { GlobalCommandBar, QuickCreateMenu } from "@/components/global-command-bar";
+import { ReceiptDrawerProvider } from "@/components/receipt-drawer";
 
 type StaffNavItem = {
   href: string;
@@ -582,6 +583,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const dateTimeStr = now.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   return (
+    <ReceiptDrawerProvider>
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <header className="border-b bg-card shrink-0 z-30">
         <div className={cn(APP_SHELL_MAX, "px-3 sm:px-4 py-2.5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between")}>
@@ -887,5 +889,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
       <AppFooter />
     </div>
+    </ReceiptDrawerProvider>
   );
 }

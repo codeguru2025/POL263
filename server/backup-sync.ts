@@ -74,6 +74,7 @@ const TENANT_SYNC_TABLES: SyncTableDef[] = [
   { table: "group_payment_intents", timestampCol: "created_at", primaryKey: "id" },
   { table: "group_payment_allocations", timestampCol: "created_at", primaryKey: "id" },
   { table: "payment_automation_runs", timestampCol: "created_at", primaryKey: "id" },
+  { table: "directory_contacts", timestampCol: "created_at", primaryKey: "id" },
 ];
 
 const TENANT_FULL_SYNC_TABLES: FullSyncTableDef[] = [

@@ -675,11 +675,14 @@ export const policyAddOns = pgTable(
     addOnId: uuid("add_on_id")
       .notNull()
       .references(() => addOns.id, { onDelete: "cascade" }),
+    // Which policy member this add-on belongs to. NULL = applies to the whole policy (legacy / fallback).
+    policyMemberId: uuid("policy_member_id").references(() => policyMembers.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
     index("pao_policy_idx").on(t.policyId),
-    uniqueIndex("policy_add_on_unique_idx").on(t.policyId, t.addOnId),
+    index("pao_member_idx").on(t.policyMemberId),
+    // Uniqueness enforced via partial SQL indexes in the migration script (see script/add-policy-addon-member.ts)
   ]
 );
 
@@ -2224,3 +2227,36 @@ export const appReleases = pgTable(
 export const insertAppReleaseSchema = createInsertSchema(appReleases).omit({ id: true, createdAt: true });
 export type AppRelease = typeof appReleases.$inferSelect;
 export type InsertAppRelease = z.infer<typeof insertAppReleaseSchema>;
+
+// ─── DIRECTORY CONTACTS ────────────────────────────────────────
+// Shared contact directory: undertakers, underwriters, transport companies,
+// general contacts. Differentiated by `type` field.
+
+export const directoryContacts = pgTable(
+  "directory_contacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    type: text("type").notNull(), // "undertaker" | "underwriter" | "transport_company" | "contact" | "emergency" | "supplier"
+    name: text("name").notNull(),
+    contactPerson: text("contact_person"),
+    phone: text("phone"),
+    altPhone: text("alt_phone"),
+    email: text("email"),
+    address: text("address"),
+    city: text("city"),
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("directory_contacts_org_type_idx").on(t.organizationId, t.type),
+    index("directory_contacts_org_idx").on(t.organizationId),
+  ]
+);
+
+export const insertDirectoryContactSchema = createInsertSchema(directoryContacts).omit({ id: true, createdAt: true });
+export type DirectoryContact = typeof directoryContacts.$inferSelect;
+export type InsertDirectoryContact = z.infer<typeof insertDirectoryContactSchema>;

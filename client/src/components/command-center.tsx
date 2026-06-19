@@ -8,6 +8,8 @@ import {
   Receipt, Wallet2, Target, FileStack, FileText, ShieldCheck, AlertTriangle,
   Plus, ArrowRight, TrendingUp, Truck,
 } from "lucide-react";
+import { useReceiptDrawer } from "@/components/receipt-drawer";
+import { useFlag } from "@/lib/flags";
 
 /**
  * Role-based command center shown on Home (behind the `commandCenters` flag).
@@ -67,6 +69,9 @@ export function CommandCenter() {
     { label: isAgent ? "My Pipeline" : "Open Pipeline", value: openPipeline, icon: TrendingUp, href: "/staff/leads", tone: undefined, show: canLeads },
   ].filter((w) => w.show).slice(0, 6);
 
+  const { openReceiptDrawer } = useReceiptDrawer();
+  const receiptDrawerFlag = useFlag("receiptDrawer");
+
   const firstName = (user?.displayName || user?.email || "").split(/[@\s]/)[0];
 
   return (
@@ -79,7 +84,13 @@ export function CommandCenter() {
                 key={a.label}
                 variant="outline"
                 className="h-auto py-4 flex-col gap-2 items-start text-left"
-                onClick={() => setLocation(a.href)}
+                onClick={() => {
+                  if (receiptDrawerFlag && a.label === "Receipt a Payment") {
+                    openReceiptDrawer();
+                  } else {
+                    setLocation(a.href);
+                  }
+                }}
                 data-testid={`cc-action-${a.label.toLowerCase().replace(/\s+/g, "-")}`}
               >
                 <a.icon className="h-5 w-5 text-primary" />
