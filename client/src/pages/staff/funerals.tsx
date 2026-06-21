@@ -41,6 +41,12 @@ type CaseForm = {
   burialVehicleId: string;
   burialDriverId: string;
   attendingAgentId: string;
+  bodyWashTime: string;
+  burialDepartureTime: string;
+  memorialServiceStart: string;
+  memorialServiceEnd: string;
+  bodyIdentifierName: string;
+  bodyIdentifierIdNumber: string;
   notes: string;
   policyId: string;
   claimId: string;
@@ -53,6 +59,8 @@ const BLANK_FORM: CaseForm = {
   serviceType: "", funeralDate: "", funeralLocation: "",
   removalLocation: "", removalVehicleId: "", removalDriverId: "",
   burialVehicleId: "", burialDriverId: "", attendingAgentId: "",
+  bodyWashTime: "", burialDepartureTime: "", memorialServiceStart: "", memorialServiceEnd: "",
+  bodyIdentifierName: "", bodyIdentifierIdNumber: "",
   notes: "", policyId: "", claimId: "",
 };
 
@@ -95,6 +103,31 @@ export default function StaffFunerals() {
     queryKey: [`/api/funeral-cases/${selectedCaseId}/receipts`],
     enabled: !!selectedCaseId,
   });
+  const [showDriverChecklist, setShowDriverChecklist] = useState(false);
+
+  const { data: driverChecklist } = useQuery<any>({
+    queryKey: [`/api/funeral-cases/${selectedCaseId}/driver-checklist`],
+    enabled: !!selectedCaseId,
+  });
+
+  const upsertDriverChecklistMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/driver-checklist`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/driver-checklist`] });
+      setShowDriverChecklist(false);
+      toast({ title: "Driver checklist saved" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const { data: linkedMortuaryIntake } = useQuery<any>({
+    queryKey: [`/api/funeral-cases/${selectedCaseId}/mortuary-intake`],
+    enabled: !!selectedCaseId,
+  });
+
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: "", currency: "USD", paymentChannel: "cash" });
   const addServiceReceiptMutation = useMutation({
@@ -266,6 +299,9 @@ export default function StaffFunerals() {
                   updateCaseMutation.mutate({ id: selectedCase.id, data: patch as any });
                 }}
                 onExport={(download) => handleExport(selectedCase, download)}
+                driverChecklist={driverChecklist}
+                linkedMortuaryIntake={linkedMortuaryIntake}
+                onOpenDriverChecklist={() => setShowDriverChecklist(true)}
                 quotation={caseQuotation}
                 receipts={caseReceipts}
                 onRecordPayment={() => setShowPaymentDialog(true)}
@@ -481,6 +517,19 @@ export default function StaffFunerals() {
         </DialogContent>
       </Dialog>
 
+      {/* Driver Checklist */}
+      {selectedCase && (
+        <DriverChecklistDialog
+          open={showDriverChecklist}
+          onOpenChange={setShowDriverChecklist}
+          funeralCase={selectedCase}
+          existing={driverChecklist}
+          users={users}
+          onSubmit={(data) => upsertDriverChecklistMutation.mutate(data)}
+          isPending={upsertDriverChecklistMutation.isPending}
+        />
+      )}
+
       {/* Quotation builder */}
       <Dialog open={showQuotationDialog} onOpenChange={setShowQuotationDialog}>
         <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
@@ -527,6 +576,7 @@ export default function StaffFunerals() {
 function CaseDetailView({
   funeralCase: fc, tasks, tasksLoading, vehicles, users,
   onBack, onEdit, onAddTask, onToggleTask, onUpdateStatus, onExport,
+  driverChecklist, linkedMortuaryIntake, onOpenDriverChecklist,
   quotation, receipts, onRecordPayment, onEditQuotation,
 }: {
   funeralCase: FuneralCase;
@@ -540,6 +590,9 @@ function CaseDetailView({
   onToggleTask: (t: FuneralTask) => void;
   onUpdateStatus: (s: string) => void;
   onExport: (download: boolean) => void;
+  driverChecklist?: any;
+  linkedMortuaryIntake?: any;
+  onOpenDriverChecklist?: () => void;
   quotation?: any;
   receipts?: any[];
   onRecordPayment?: () => void;
@@ -591,6 +644,7 @@ function CaseDetailView({
           <Button size="sm" variant="outline" className="gap-1.5" onClick={onEdit}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onExport(false)}><Share2 className="h-3.5 w-3.5" /> Share</Button>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onExport(true)}><FileDown className="h-3.5 w-3.5" /> Download PDF</Button>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={onOpenDriverChecklist}><FileDown className="h-3.5 w-3.5" /> Driver Checklist</Button>
         </div>
       </div>
 
@@ -606,6 +660,7 @@ function CaseDetailView({
             <DetailRow label="Date of death" value={fc.dateOfDeath} />
             <DetailRow label="Cause of death" value={fc.causeOfDeath} />
             <DetailRow label="Place of death" value={fc.placeOfDeath} />
+            {(fc as any).bodyIdentifierName && <DetailRow label="Body identified by" value={`${(fc as any).bodyIdentifierName}${(fc as any).bodyIdentifierIdNumber ? ` · ${(fc as any).bodyIdentifierIdNumber}` : ""}`} />}
           </div>
         </CardSection>
 
@@ -654,6 +709,37 @@ function CaseDetailView({
             <DetailRow label="Driver" value={userLabel(fc.burialDriverId)} />
           </div>
         </CardSection>
+
+        {/* Service timing */}
+        <CardSection title="Service Timing" icon={CheckCircle2}>
+          <div className="space-y-0.5">
+            <DetailRow label="Body wash time" value={(fc as any).bodyWashTime ? new Date((fc as any).bodyWashTime).toLocaleString("en-ZA") : undefined} />
+            <DetailRow label="Departure for burial" value={(fc as any).burialDepartureTime ? new Date((fc as any).burialDepartureTime).toLocaleString("en-ZA") : undefined} />
+            <DetailRow label="Memorial service start" value={(fc as any).memorialServiceStart ? new Date((fc as any).memorialServiceStart).toLocaleString("en-ZA") : undefined} />
+            <DetailRow label="Memorial service end" value={(fc as any).memorialServiceEnd ? new Date((fc as any).memorialServiceEnd).toLocaleString("en-ZA") : undefined} />
+          </div>
+        </CardSection>
+
+        {/* Linked mortuary intake */}
+        {linkedMortuaryIntake && (
+          <CardSection title="Mortuary Record" icon={Box}>
+            <div className="space-y-0.5">
+              <DetailRow label="Intake number" value={linkedMortuaryIntake.intakeNumber} />
+              <DetailRow label="Status" value={linkedMortuaryIntake.status?.replace(/_/g, " ").toUpperCase()} />
+              <DetailRow label="Received at" value={linkedMortuaryIntake.receivedAt ? new Date(linkedMortuaryIntake.receivedAt).toLocaleString("en-ZA") : undefined} />
+            </div>
+            <div className="flex gap-2 mt-3">
+              <a href={`/api/mortuary-intakes/${linkedMortuaryIntake.id}/receipt-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+                <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Receipt PDF</Button>
+              </a>
+              {linkedMortuaryIntake.status === "dispatched" && (
+                <a href={`/api/mortuary-intakes/${linkedMortuaryIntake.id}/dispatch-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+                  <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Dispatch PDF</Button>
+                </a>
+              )}
+            </div>
+          </CardSection>
+        )}
 
         {/* Attending agent */}
         <CardSection title="Attending Agent" icon={User}>
@@ -798,6 +884,12 @@ function CaseFormDialog({
         burialVehicleId: initial.burialVehicleId ?? "",
         burialDriverId: initial.burialDriverId ?? "",
         attendingAgentId: initial.attendingAgentId ?? "",
+        bodyWashTime: (initial as any).bodyWashTime ?? "",
+        burialDepartureTime: (initial as any).burialDepartureTime ?? "",
+        memorialServiceStart: (initial as any).memorialServiceStart ?? "",
+        memorialServiceEnd: (initial as any).memorialServiceEnd ?? "",
+        bodyIdentifierName: (initial as any).bodyIdentifierName ?? "",
+        bodyIdentifierIdNumber: (initial as any).bodyIdentifierIdNumber ?? "",
         notes: initial.notes ?? "",
         policyId: initial.policyId ?? "",
         claimId: initial.claimId ?? "",
@@ -1083,6 +1175,42 @@ function CaseFormDialog({
               </AccordionContent>
             </AccordionItem>
 
+            {/* Service timing */}
+            <AccordionItem value="timing">
+              <AccordionTrigger>Service Timing</AccordionTrigger>
+              <AccordionContent>
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <Field label="Time of Body Wash">
+                    <Input type="datetime-local" value={form.bodyWashTime} onChange={set("bodyWashTime")} />
+                  </Field>
+                  <Field label="Departure Time for Burial">
+                    <Input type="datetime-local" value={form.burialDepartureTime} onChange={set("burialDepartureTime")} />
+                  </Field>
+                  <Field label="Memorial / Church Service Start">
+                    <Input type="datetime-local" value={form.memorialServiceStart} onChange={set("memorialServiceStart")} />
+                  </Field>
+                  <Field label="Memorial / Church Service End">
+                    <Input type="datetime-local" value={form.memorialServiceEnd} onChange={set("memorialServiceEnd")} />
+                  </Field>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Body identification */}
+            <AccordionItem value="body-id">
+              <AccordionTrigger>Body Identification</AccordionTrigger>
+              <AccordionContent>
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <Field label="Identifier Full Name">
+                    <Input value={form.bodyIdentifierName} onChange={set("bodyIdentifierName")} placeholder="Person who identified the body" />
+                  </Field>
+                  <Field label="Identifier National ID">
+                    <Input value={form.bodyIdentifierIdNumber} onChange={set("bodyIdentifierIdNumber")} placeholder="ID / Passport number" />
+                  </Field>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
             {/* Logistics — removal + burial + agent */}
             <AccordionItem value="logistics">
               <AccordionTrigger>Logistics &amp; Attending Agent</AccordionTrigger>
@@ -1183,6 +1311,174 @@ function AddTaskDialog({ open, onOpenChange, onSubmit, isPending }: {
           <DialogFooter>
             <Button type="submit" disabled={isPending || !form.taskName} data-testid="button-submit-task">
               {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Add Task
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Driver Checklist Dialog ──────────────────────────────────────────────────
+
+function DriverChecklistDialog({ open, onOpenChange, funeralCase, existing, users, onSubmit, isPending }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  funeralCase: FuneralCase;
+  existing?: any;
+  users: any[];
+  onSubmit: (data: Record<string, any>) => void;
+  isPending: boolean;
+}) {
+  const [form, setForm] = useState({
+    graveTent: false,
+    loweringDevice: false,
+    gloves: false,
+    masks: false,
+    fuelGauge: "",
+    tollGateRequired: false,
+    tollGateAmount: "",
+    driverAllowance: "",
+    burialOrderRef: "",
+    completedAt: "",
+    driverId: "",
+  });
+
+  // Sync from existing when dialog opens
+  const hasSync = useRef(false);
+  if (open && existing && !hasSync.current) {
+    hasSync.current = true;
+    setForm({
+      graveTent: existing.graveTent ?? false,
+      loweringDevice: existing.loweringDevice ?? false,
+      gloves: existing.gloves ?? false,
+      masks: existing.masks ?? false,
+      fuelGauge: existing.fuelGauge ?? "",
+      tollGateRequired: existing.tollGateRequired ?? false,
+      tollGateAmount: existing.tollGateAmount ?? "",
+      driverAllowance: existing.driverAllowance ?? "",
+      burialOrderRef: existing.burialOrderRef ?? "",
+      completedAt: existing.completedAt ? new Date(existing.completedAt).toISOString().slice(0, 16) : "",
+      driverId: existing.driverId ?? funeralCase.burialDriverId ?? "",
+    });
+  }
+  if (!open) hasSync.current = false;
+
+  const apiBase = getApiBase();
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit({
+      graveTent: form.graveTent,
+      loweringDevice: form.loweringDevice,
+      gloves: form.gloves,
+      masks: form.masks,
+      fuelGauge: form.fuelGauge || null,
+      tollGateRequired: form.tollGateRequired,
+      tollGateAmount: form.tollGateAmount || null,
+      driverAllowance: form.driverAllowance || null,
+      burialOrderRef: form.burialOrderRef || null,
+      completedAt: form.completedAt || null,
+      driverId: form.driverId || funeralCase.burialDriverId || null,
+    });
+  };
+
+  const driverOptions: SearchableOption[] = users
+    .filter((u: any) => u.isActive !== false)
+    .map((u: any) => ({ value: u.id, label: u.displayName || u.email, hint: u.phone || undefined }));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Driver Checklist — {funeralCase.caseNumber}</DialogTitle>
+          <DialogDescription>Complete before departure. Download as PDF for driver sign-off.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pre-Departure Checklist</p>
+            {([
+              ["graveTent", "Grave Tent"],
+              ["loweringDevice", "Lowering Device"],
+              ["gloves", "Gloves"],
+              ["masks", "Masks"],
+            ] as [keyof typeof form, string][]).map(([key, label]) => (
+              <div key={key} className="flex items-center gap-3">
+                <Checkbox
+                  id={key}
+                  checked={!!form[key]}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, [key]: !!v }))}
+                />
+                <label htmlFor={key} className="text-sm cursor-pointer">{label}</label>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Fuel Gauge</Label>
+            <Select value={form.fuelGauge || "__none__"} onValueChange={(v) => setForm((f) => ({ ...f, fuelGauge: v === "__none__" ? "" : v }))}>
+              <SelectTrigger><SelectValue placeholder="Select fuel level…" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— Not set —</SelectItem>
+                <SelectItem value="full">Full</SelectItem>
+                <SelectItem value="three_quarter">Three-Quarter (¾)</SelectItem>
+                <SelectItem value="half">Half (½)</SelectItem>
+                <SelectItem value="quarter">Quarter (¼)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <Checkbox
+                id="tollGateRequired"
+                checked={form.tollGateRequired}
+                onCheckedChange={(v) => setForm((f) => ({ ...f, tollGateRequired: !!v }))}
+              />
+              <label htmlFor="tollGateRequired" className="text-sm cursor-pointer">Toll Gate Required</label>
+            </div>
+            {form.tollGateRequired && (
+              <div className="space-y-1.5 pl-7">
+                <Label className="text-xs">Toll Gate Amount ($)</Label>
+                <Input type="number" step="0.01" min="0" value={form.tollGateAmount} onChange={(e) => setForm((f) => ({ ...f, tollGateAmount: e.target.value }))} placeholder="0.00" />
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Driver Allowance ($)</Label>
+              <Input type="number" step="0.01" min="0" value={form.driverAllowance} onChange={(e) => setForm((f) => ({ ...f, driverAllowance: e.target.value }))} placeholder="0.00" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Burial Order Ref</Label>
+              <Input value={form.burialOrderRef} onChange={(e) => setForm((f) => ({ ...f, burialOrderRef: e.target.value }))} placeholder="Order / reference" />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Driver Allocated</Label>
+            <SearchableSelect
+              options={driverOptions}
+              value={form.driverId || funeralCase.burialDriverId || ""}
+              onChange={(v) => setForm((f) => ({ ...f, driverId: v }))}
+              placeholder="Select driver…"
+              searchPlaceholder="Search…"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Checklist Prepared At</Label>
+            <Input type="datetime-local" value={form.completedAt} onChange={(e) => setForm((f) => ({ ...f, completedAt: e.target.value }))} />
+          </div>
+
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <a href={`${apiBase}/api/funeral-cases/${funeralCase.id}/driver-checklist/pdf?download=1`} target="_blank" rel="noopener noreferrer">
+              <Button type="button" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Download PDF</Button>
+            </a>
+            <Button type="submit" disabled={isPending}>
+              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Save Checklist
             </Button>
           </DialogFooter>
         </form>

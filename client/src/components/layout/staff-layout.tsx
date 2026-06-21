@@ -293,6 +293,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     : filterNav([
         { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy", agentOnly: true },
         { href: "/staff/funerals", label: "Funeral Files", icon: Truck, permission: "read:funeral_ops" },
+        { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops" },
+        { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops" },
         { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
         { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
         { href: "/staff/leads", label: "Quotations", icon: Target, permission: "read:lead" },
@@ -433,6 +435,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           items: filterNav([
             { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim" },
             { href: "/staff/funerals", label: "Funeral Cases", icon: Truck, permission: "read:funeral_ops" },
+            { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops" },
+            { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops" },
             { href: "/staff/pricebook", label: "Funeral Pricing", icon: BookOpen, permission: "write:product" },
             { href: "/staff/tools/claims-form", label: "Online Claims Form", icon: ClipboardList, agentHidden: true },
             { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck, agentHidden: true },

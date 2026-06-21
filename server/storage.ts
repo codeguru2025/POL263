@@ -15,6 +15,7 @@ import {
   paymentIntents, paymentEvents, paymentReceipts,
   claims, claimDocuments, claimStatusHistory,
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
+  mortuaryIntakes, mortuaryDispatches, deceasedBelongings, bodyWashRequirements, driverChecklists,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
   payrollEmployees, payrollRuns, payslips,
@@ -23,11 +24,14 @@ import {
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
   fxRates, requisitions, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  quotationGuarantors, quotationCollateral,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   type FxRate, type InsertFxRate, type Requisition, type InsertRequisition,
   type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
+  type QuotationGuarantor, type InsertQuotationGuarantor,
+  type QuotationCollateralItem, type InsertQuotationCollateralItem,
   type ServiceReceipt, type InsertServiceReceipt,
   type GroupPaymentIntent, type InsertGroupPaymentIntent,
   type GroupPaymentAllocation, type InsertGroupPaymentAllocation,
@@ -65,6 +69,11 @@ import {
   type FuneralCase, type InsertFuneralCase,
   type FuneralTask, type InsertFuneralTask,
   type FleetVehicle, type InsertFleetVehicle,
+  type MortuaryIntake, type InsertMortuaryIntake,
+  type MortuaryDispatch, type InsertMortuaryDispatch,
+  type DeceasedBelonging, type InsertDeceasedBelonging,
+  type BodyWashRequirement, type InsertBodyWashRequirement,
+  type DriverChecklist, type InsertDriverChecklist,
   type CommissionPlan, type InsertCommissionPlan,
   type CommissionLedgerEntry, type InsertCommissionLedgerEntry,
   type NotificationTemplate, type InsertNotificationTemplate,
@@ -3773,6 +3782,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Finance: funeral quotations ──
+  async generateQuotationNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, quotation_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET quotation_next = org_policy_sequences.quotation_next + 1
+      RETURNING quotation_next
+    `);
+    const nextVal = (result as unknown as { rows?: { quotation_next: number }[] }).rows?.[0]?.quotation_next ?? 1;
+    return `QUO-${String(nextVal).padStart(6, "0")}`;
+  }
   async getFuneralQuotation(funeralCaseId: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [quote] = await tdb.select().from(funeralQuotations)
@@ -3782,36 +3801,279 @@ export class DatabaseStorage implements IStorage {
     const items = await tdb.select().from(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
     return { ...quote, items };
   }
-  async upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation> {
-    const total = items.reduce((sum, it) => sum + parseFloat(String(it.lineTotal || "0")), 0).toFixed(2);
-    const quotationNumber = `QUO-${Date.now().toString(36).toUpperCase()}`;
-    // Run the upsert + item replacement in ONE transaction so the quotation row and its line
-    // items are always consistent — a failure can't leave a quotation with a stale total but
-    // missing/half-written items. Within the txn, the onConflictDoUpdate takes a row lock on the
-    // (org, case) row, serializing concurrent upserts of the same case so items can't interleave.
+  async getQuotationById(id: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [quote] = await tdb.select().from(funeralQuotations)
+      .where(and(eq(funeralQuotations.id, id), eq(funeralQuotations.organizationId, orgId)));
+    if (!quote) return undefined;
+    const items = await tdb.select().from(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
+    return { ...quote, items };
+  }
+  async getQuotationsByOrg(orgId: string, opts?: { q?: string; status?: string; limit?: number; offset?: number }): Promise<FuneralQuotation[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: any[] = [eq(funeralQuotations.organizationId, orgId)];
+    if (opts?.status && opts.status !== "all") conditions.push(eq(funeralQuotations.conversionStatus, opts.status));
+    if (opts?.q) {
+      const term = `%${opts.q}%`;
+      conditions.push(or(ilike(funeralQuotations.quotationNumber, term), ilike(funeralQuotations.deceasedName, term)));
+    }
+    return tdb.select().from(funeralQuotations)
+      .where(and(...conditions))
+      .orderBy(desc(funeralQuotations.createdAt))
+      .limit(opts?.limit ?? 200)
+      .offset(opts?.offset ?? 0);
+  }
+  private _computeQuotationTotals(items: { lineTotal: string | number }[], vatRate: number, discountAmount: number) {
+    const subtotal = items.reduce((s, it) => s + parseFloat(String(it.lineTotal || "0")), 0);
+    const vatAmount = subtotal * (vatRate / 100);
+    const grandTotal = subtotal + vatAmount - discountAmount;
+    return {
+      subtotal: subtotal.toFixed(2),
+      vatAmount: vatAmount.toFixed(2),
+      grandTotal: grandTotal.toFixed(2),
+      total: grandTotal.toFixed(2),
+    };
+  }
+  async upsertFuneralQuotation(
+    orgId: string,
+    funeralCaseId: string,
+    data: {
+      currency: string; status?: string; notes?: string; createdBy?: string;
+      informantFullNames?: string; informantPhone?: string; informantAddress?: string;
+      deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
+      quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
+    },
+    items: Omit<InsertFuneralQuotationItem, "quotationId">[]
+  ): Promise<FuneralQuotation> {
+    const vatRate = data.vatRate ?? 15;
+    const discountAmount = data.discountAmount ?? 0;
+    const totals = this._computeQuotationTotals(items, vatRate, discountAmount);
     return withOrgTransaction(orgId, async (tx) => {
-      const [quote] = await tx.insert(funeralQuotations)
-        .values({
-          organizationId: orgId, funeralCaseId, quotationNumber, currency: data.currency,
-          total, status: data.status ?? "draft", notes: data.notes ?? null, createdBy: data.createdBy ?? null,
-        })
-        .onConflictDoUpdate({
-          target: [funeralQuotations.organizationId, funeralQuotations.funeralCaseId],
-          set: {
-            currency: data.currency,
-            total,
+      // Find existing quote for this case (partial index allows null funeralCaseId without conflict).
+      const [existing] = await tx.select({ id: funeralQuotations.id })
+        .from(funeralQuotations)
+        .where(and(eq(funeralQuotations.organizationId, orgId), eq(funeralQuotations.funeralCaseId, funeralCaseId)));
+      let quote: FuneralQuotation;
+      if (existing) {
+        const [updated] = await tx.update(funeralQuotations)
+          .set({
+            currency: data.currency, ...totals,
+            vatRate: String(vatRate), discountAmount: String(discountAmount),
             ...(data.status !== undefined ? { status: data.status } : {}),
             ...(data.notes !== undefined ? { notes: data.notes } : {}),
-          },
-        })
-        .returning();
-      // Replace line items for the (possibly pre-existing) quotation.
+            ...(data.informantFullNames !== undefined ? { informantFullNames: data.informantFullNames } : {}),
+            ...(data.informantPhone !== undefined ? { informantPhone: data.informantPhone } : {}),
+            ...(data.informantAddress !== undefined ? { informantAddress: data.informantAddress } : {}),
+            ...(data.deceasedName !== undefined ? { deceasedName: data.deceasedName } : {}),
+            ...(data.deceasedAge !== undefined ? { deceasedAge: data.deceasedAge } : {}),
+            ...(data.deceasedSex !== undefined ? { deceasedSex: data.deceasedSex } : {}),
+            ...(data.casketType !== undefined ? { casketType: data.casketType } : {}),
+            ...(data.quotationDate !== undefined ? { quotationDate: data.quotationDate } : {}),
+            ...(data.paymentType !== undefined ? { paymentType: data.paymentType } : {}),
+          })
+          .where(eq(funeralQuotations.id, existing.id))
+          .returning();
+        quote = updated;
+      } else {
+        const quotationNumber = await this.generateQuotationNumber(orgId);
+        const [inserted] = await tx.insert(funeralQuotations)
+          .values({
+            organizationId: orgId, funeralCaseId, quotationNumber,
+            currency: data.currency, ...totals,
+            vatRate: String(vatRate), discountAmount: String(discountAmount),
+            status: data.status ?? "draft", notes: data.notes ?? null, createdBy: data.createdBy ?? null,
+            informantFullNames: data.informantFullNames ?? null,
+            informantPhone: data.informantPhone ?? null,
+            informantAddress: data.informantAddress ?? null,
+            deceasedName: data.deceasedName ?? null,
+            deceasedAge: data.deceasedAge ?? null,
+            deceasedSex: data.deceasedSex ?? null,
+            casketType: data.casketType ?? null,
+            quotationDate: data.quotationDate ?? null,
+            paymentType: data.paymentType ?? null,
+          })
+          .returning();
+        quote = inserted;
+      }
       await tx.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
       if (items.length > 0) {
         await tx.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: quote.id })));
       }
       return quote;
     });
+  }
+  async createStandaloneQuotation(
+    orgId: string,
+    data: {
+      currency: string; status?: string; notes?: string; createdBy?: string;
+      informantFullNames?: string; informantPhone?: string; informantAddress?: string;
+      deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
+      quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
+    },
+    items: Omit<InsertFuneralQuotationItem, "quotationId">[]
+  ): Promise<FuneralQuotation> {
+    const vatRate = data.vatRate ?? 15;
+    const discountAmount = data.discountAmount ?? 0;
+    const totals = this._computeQuotationTotals(items, vatRate, discountAmount);
+    return withOrgTransaction(orgId, async (tx) => {
+      const quotationNumber = await this.generateQuotationNumber(orgId);
+      const [quote] = await tx.insert(funeralQuotations)
+        .values({
+          organizationId: orgId, funeralCaseId: null, quotationNumber,
+          currency: data.currency, ...totals,
+          vatRate: String(vatRate), discountAmount: String(discountAmount),
+          status: data.status ?? "draft", notes: data.notes ?? null, createdBy: data.createdBy ?? null,
+          informantFullNames: data.informantFullNames ?? null,
+          informantPhone: data.informantPhone ?? null,
+          informantAddress: data.informantAddress ?? null,
+          deceasedName: data.deceasedName ?? null,
+          deceasedAge: data.deceasedAge ?? null,
+          deceasedSex: data.deceasedSex ?? null,
+          casketType: data.casketType ?? null,
+          quotationDate: data.quotationDate ?? null,
+          paymentType: data.paymentType ?? null,
+        })
+        .returning();
+      if (items.length > 0) {
+        await tx.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: quote.id })));
+      }
+      return quote;
+    });
+  }
+  async updateStandaloneQuotation(
+    id: string,
+    orgId: string,
+    data: {
+      currency: string; status?: string; notes?: string;
+      informantFullNames?: string; informantPhone?: string; informantAddress?: string;
+      deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
+      quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
+    },
+    items: Omit<InsertFuneralQuotationItem, "quotationId">[]
+  ): Promise<FuneralQuotation | undefined> {
+    const vatRate = data.vatRate ?? 15;
+    const discountAmount = data.discountAmount ?? 0;
+    const totals = this._computeQuotationTotals(items, vatRate, discountAmount);
+    return withOrgTransaction(orgId, async (tx) => {
+      const [updated] = await tx.update(funeralQuotations)
+        .set({
+          currency: data.currency, ...totals,
+          vatRate: String(vatRate), discountAmount: String(discountAmount),
+          ...(data.status !== undefined ? { status: data.status } : {}),
+          ...(data.notes !== undefined ? { notes: data.notes } : {}),
+          ...(data.informantFullNames !== undefined ? { informantFullNames: data.informantFullNames } : {}),
+          ...(data.informantPhone !== undefined ? { informantPhone: data.informantPhone } : {}),
+          ...(data.informantAddress !== undefined ? { informantAddress: data.informantAddress } : {}),
+          ...(data.deceasedName !== undefined ? { deceasedName: data.deceasedName } : {}),
+          ...(data.deceasedAge !== undefined ? { deceasedAge: data.deceasedAge } : {}),
+          ...(data.deceasedSex !== undefined ? { deceasedSex: data.deceasedSex } : {}),
+          ...(data.casketType !== undefined ? { casketType: data.casketType } : {}),
+          ...(data.quotationDate !== undefined ? { quotationDate: data.quotationDate } : {}),
+          ...(data.paymentType !== undefined ? { paymentType: data.paymentType } : {}),
+        })
+        .where(and(eq(funeralQuotations.id, id), eq(funeralQuotations.organizationId, orgId)))
+        .returning();
+      if (!updated) return undefined;
+      await tx.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, id));
+      if (items.length > 0) {
+        await tx.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: id })));
+      }
+      return updated;
+    });
+  }
+  async updateStandaloneQuotation(
+    id: string,
+    orgId: string,
+    data: {
+      currency: string; status?: string; notes?: string; createdBy?: string;
+      informantFullNames?: string; informantPhone?: string; informantAddress?: string;
+      deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
+      quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
+    },
+    items: Omit<InsertFuneralQuotationItem, "quotationId">[]
+  ): Promise<FuneralQuotation | undefined> {
+    const vatRate = data.vatRate ?? 15;
+    const discountAmount = data.discountAmount ?? 0;
+    const totals = this._computeQuotationTotals(items, vatRate, discountAmount);
+    return withOrgTransaction(orgId, async (tx) => {
+      const [updated] = await tx.update(funeralQuotations)
+        .set({
+          currency: data.currency, ...totals,
+          vatRate: String(vatRate), discountAmount: String(discountAmount),
+          ...(data.status !== undefined ? { status: data.status } : {}),
+          ...(data.notes !== undefined ? { notes: data.notes } : {}),
+          ...(data.informantFullNames !== undefined ? { informantFullNames: data.informantFullNames } : {}),
+          ...(data.informantPhone !== undefined ? { informantPhone: data.informantPhone } : {}),
+          ...(data.informantAddress !== undefined ? { informantAddress: data.informantAddress } : {}),
+          ...(data.deceasedName !== undefined ? { deceasedName: data.deceasedName } : {}),
+          ...(data.deceasedAge !== undefined ? { deceasedAge: data.deceasedAge } : {}),
+          ...(data.deceasedSex !== undefined ? { deceasedSex: data.deceasedSex } : {}),
+          ...(data.casketType !== undefined ? { casketType: data.casketType } : {}),
+          ...(data.quotationDate !== undefined ? { quotationDate: data.quotationDate } : {}),
+          ...(data.paymentType !== undefined ? { paymentType: data.paymentType } : {}),
+        })
+        .where(and(eq(funeralQuotations.id, id), eq(funeralQuotations.organizationId, orgId)))
+        .returning();
+      if (!updated) return undefined;
+      await tx.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, id));
+      if (items.length > 0) {
+        await tx.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: id })));
+      }
+      return updated;
+    });
+  }
+  async linkQuotationToCase(quotationId: string, funeralCaseId: string, orgId: string): Promise<FuneralQuotation | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(funeralQuotations)
+      .set({ funeralCaseId })
+      .where(and(eq(funeralQuotations.id, quotationId), eq(funeralQuotations.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  async markQuotationConverted(quotationId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(funeralQuotations)
+      .set({ conversionStatus: "converted", convertedAt: new Date(), status: "converted" })
+      .where(and(eq(funeralQuotations.id, quotationId), eq(funeralQuotations.organizationId, orgId)));
+  }
+  async markQuotationPartialPayment(quotationId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(funeralQuotations)
+      .set({ conversionStatus: "partial" })
+      .where(and(eq(funeralQuotations.id, quotationId), eq(funeralQuotations.organizationId, orgId)));
+  }
+  async upsertQuotationGuarantor(quotationId: string, orgId: string, data: Omit<InsertQuotationGuarantor, "id" | "quotationId" | "organizationId" | "createdAt">): Promise<QuotationGuarantor> {
+    const tdb = await getDbForOrg(orgId);
+    const [existing] = await tdb.select({ id: quotationGuarantors.id }).from(quotationGuarantors)
+      .where(eq(quotationGuarantors.quotationId, quotationId));
+    if (existing) {
+      const [updated] = await tdb.update(quotationGuarantors).set(data).where(eq(quotationGuarantors.id, existing.id)).returning();
+      return updated;
+    }
+    const [created] = await tdb.insert(quotationGuarantors).values({ ...data, quotationId, organizationId: orgId }).returning();
+    return created;
+  }
+  async getQuotationGuarantor(quotationId: string, orgId: string): Promise<QuotationGuarantor | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(quotationGuarantors)
+      .where(and(eq(quotationGuarantors.quotationId, quotationId), eq(quotationGuarantors.organizationId, orgId)));
+    return row;
+  }
+  async getQuotationCollateral(quotationId: string, orgId: string): Promise<QuotationCollateralItem[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(quotationCollateral)
+      .where(and(eq(quotationCollateral.quotationId, quotationId), eq(quotationCollateral.organizationId, orgId)))
+      .orderBy(quotationCollateral.createdAt);
+  }
+  async addQuotationCollateral(data: InsertQuotationCollateralItem): Promise<QuotationCollateralItem> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(quotationCollateral).values(data).returning();
+    return created;
+  }
+  async deleteQuotationCollateral(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(quotationCollateral)
+      .where(and(eq(quotationCollateral.id, id), eq(quotationCollateral.organizationId, orgId)));
   }
 
   // ── Finance: service receipts (cash-service income) ──
@@ -4143,6 +4405,138 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(directoryContacts)
       .where(and(eq(directoryContacts.id, id), eq(directoryContacts.organizationId, orgId)));
+  }
+
+  // ─── Mortuary Intakes ───────────────────────────────────────
+  async generateIntakeNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, mortuary_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET mortuary_next = org_policy_sequences.mortuary_next + 1
+      RETURNING mortuary_next
+    `);
+    const nextVal = (result as unknown as { rows?: { mortuary_next: number }[] }).rows?.[0]?.mortuary_next ?? 1;
+    return `MTR-${String(nextVal).padStart(6, "0")}`;
+  }
+  async getMortuaryIntakesByOrg(
+    orgId: string,
+    opts?: { funeralCaseId?: string; status?: string; limit?: number; offset?: number }
+  ): Promise<MortuaryIntake[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions = [eq(mortuaryIntakes.organizationId, orgId)];
+    if (opts?.funeralCaseId) conditions.push(eq(mortuaryIntakes.funeralCaseId, opts.funeralCaseId));
+    if (opts?.status) conditions.push(eq(mortuaryIntakes.status, opts.status));
+    return tdb.select().from(mortuaryIntakes)
+      .where(and(...conditions))
+      .orderBy(desc(mortuaryIntakes.createdAt))
+      .limit(opts?.limit ?? 200)
+      .offset(opts?.offset ?? 0);
+  }
+  async getMortuaryIntake(id: string, orgId: string): Promise<MortuaryIntake | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(mortuaryIntakes)
+      .where(and(eq(mortuaryIntakes.id, id), eq(mortuaryIntakes.organizationId, orgId)));
+    return row;
+  }
+  async createMortuaryIntake(data: InsertMortuaryIntake): Promise<MortuaryIntake> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(mortuaryIntakes).values(data).returning();
+    return created;
+  }
+  async updateMortuaryIntake(id: string, data: Partial<InsertMortuaryIntake>, orgId: string): Promise<MortuaryIntake | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(mortuaryIntakes)
+      .set(data)
+      .where(and(eq(mortuaryIntakes.id, id), eq(mortuaryIntakes.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+
+  // ─── Mortuary Dispatches ────────────────────────────────────
+  async getMortuaryDispatch(intakeId: string, orgId: string): Promise<MortuaryDispatch | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(mortuaryDispatches)
+      .where(and(eq(mortuaryDispatches.intakeId, intakeId), eq(mortuaryDispatches.organizationId, orgId)));
+    return row;
+  }
+  async upsertMortuaryDispatch(intakeId: string, orgId: string, data: Omit<InsertMortuaryDispatch, "intakeId" | "organizationId">): Promise<MortuaryDispatch> {
+    const tdb = await getDbForOrg(orgId);
+    const existing = await this.getMortuaryDispatch(intakeId, orgId);
+    if (existing) {
+      const [updated] = await tdb.update(mortuaryDispatches)
+        .set(data)
+        .where(eq(mortuaryDispatches.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await tdb.insert(mortuaryDispatches)
+      .values({ ...data, intakeId, organizationId: orgId })
+      .returning();
+    return created;
+  }
+
+  // ─── Deceased Belongings ────────────────────────────────────
+  async getDeceasedBelongings(intakeId: string, orgId: string): Promise<DeceasedBelonging[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(deceasedBelongings)
+      .where(and(eq(deceasedBelongings.intakeId, intakeId), eq(deceasedBelongings.organizationId, orgId)))
+      .orderBy(deceasedBelongings.createdAt);
+  }
+  async addDeceasedBelonging(data: InsertDeceasedBelonging): Promise<DeceasedBelonging> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(deceasedBelongings).values(data).returning();
+    return created;
+  }
+  async deleteDeceasedBelonging(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(deceasedBelongings)
+      .where(and(eq(deceasedBelongings.id, id), eq(deceasedBelongings.organizationId, orgId)));
+  }
+
+  // ─── Body Wash Requirements ─────────────────────────────────
+  async getBodyWashRequirements(intakeId: string, orgId: string): Promise<BodyWashRequirement | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(bodyWashRequirements)
+      .where(and(eq(bodyWashRequirements.intakeId, intakeId), eq(bodyWashRequirements.organizationId, orgId)));
+    return row;
+  }
+  async upsertBodyWashRequirements(intakeId: string, orgId: string, data: Omit<InsertBodyWashRequirement, "intakeId" | "organizationId">): Promise<BodyWashRequirement> {
+    const tdb = await getDbForOrg(orgId);
+    const existing = await this.getBodyWashRequirements(intakeId, orgId);
+    if (existing) {
+      const [updated] = await tdb.update(bodyWashRequirements)
+        .set(data)
+        .where(eq(bodyWashRequirements.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await tdb.insert(bodyWashRequirements)
+      .values({ ...data, intakeId, organizationId: orgId })
+      .returning();
+    return created;
+  }
+
+  // ─── Driver Checklists ──────────────────────────────────────
+  async getDriverChecklist(funeralCaseId: string, orgId: string): Promise<DriverChecklist | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(driverChecklists)
+      .where(and(eq(driverChecklists.funeralCaseId, funeralCaseId), eq(driverChecklists.organizationId, orgId)));
+    return row;
+  }
+  async upsertDriverChecklist(funeralCaseId: string, orgId: string, data: Omit<InsertDriverChecklist, "funeralCaseId" | "organizationId">): Promise<DriverChecklist> {
+    const tdb = await getDbForOrg(orgId);
+    const existing = await this.getDriverChecklist(funeralCaseId, orgId);
+    if (existing) {
+      const [updated] = await tdb.update(driverChecklists)
+        .set(data)
+        .where(eq(driverChecklists.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await tdb.insert(driverChecklists)
+      .values({ ...data, funeralCaseId, organizationId: orgId })
+      .returning();
+    return created;
   }
 }
 

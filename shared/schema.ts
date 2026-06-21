@@ -68,6 +68,8 @@ export const orgPolicySequences = pgTable("org_policy_sequences", {
   paymentReceiptNext: integer("payment_receipt_next").default(0).notNull(),
   claimNext: integer("claim_next").default(0).notNull(),
   caseNext: integer("case_next").default(0).notNull(),
+  mortuaryNext: integer("mortuary_next").default(0).notNull(),
+  quotationNext: integer("quotation_next").default(0).notNull(),
 });
 
 // ─── IDENTITY ───────────────────────────────────────────────
@@ -1157,6 +1159,14 @@ export const funeralCases = pgTable(
     burialDriverId: uuid("burial_driver_id").references(() => users.id),
     // Attending agent
     attendingAgentId: uuid("attending_agent_id").references(() => users.id),
+    // Service timing
+    bodyWashTime: timestamp("body_wash_time"),
+    burialDepartureTime: timestamp("burial_departure_time"),
+    memorialServiceStart: timestamp("memorial_service_start"),
+    memorialServiceEnd: timestamp("memorial_service_end"),
+    // Body identification
+    bodyIdentifierName: text("body_identifier_name"),
+    bodyIdentifierIdNumber: text("body_identifier_id_number"),
     status: text("status").default("open").notNull(),
     assignedTo: uuid("assigned_to").references(() => users.id),
     notes: text("notes"),
@@ -1186,6 +1196,127 @@ export const funeralTasks = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("ft_case_idx").on(t.funeralCaseId)]
+);
+
+export const mortuaryIntakes = pgTable(
+  "mortuary_intakes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    intakeNumber: text("intake_number").notNull(),
+    serviceScope: text("service_scope").notNull(), // 'full_service' | 'storage_only' | 'removal_only'
+    status: text("status").default("in_storage").notNull(), // 'in_storage' | 'dispatched'
+    // Deceased
+    deceasedName: text("deceased_name").notNull(),
+    deceasedGender: text("deceased_gender"),
+    deceasedAge: integer("deceased_age"),
+    deceasedNationalId: text("deceased_national_id"),
+    dateOfDeath: date("date_of_death"),
+    causeOfDeath: text("cause_of_death"),
+    placeOfDeath: text("place_of_death"),
+    // Referring party
+    clientOrganizationName: text("client_organization_name"),
+    informantName: text("informant_name"),
+    informantPhone: text("informant_phone"),
+    informantRelationship: text("informant_relationship"),
+    // Removal logistics
+    removalLocation: text("removal_location"),
+    removalDateTime: timestamp("removal_date_time"),
+    removalVehicleId: uuid("removal_vehicle_id").references(() => fleetVehicles.id),
+    removalDriverId: uuid("removal_driver_id").references(() => users.id),
+    // Receipt into mortuary
+    receivedByUserId: uuid("received_by_user_id").references(() => users.id),
+    receivedAt: timestamp("received_at"),
+    receiverAcknowledgedName: text("receiver_acknowledged_name"),
+    receiverAcknowledgedIdNumber: text("receiver_acknowledged_id_number"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("mi_org_idx").on(t.organizationId),
+    index("mi_case_idx").on(t.funeralCaseId),
+  ]
+);
+
+export const mortuaryDispatches = pgTable(
+  "mortuary_dispatches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    intakeId: uuid("intake_id").notNull().references(() => mortuaryIntakes.id),
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    dispatchedByUserId: uuid("dispatched_by_user_id").references(() => users.id),
+    dispatchedAt: timestamp("dispatched_at"),
+    collectedByName: text("collected_by_name"),
+    collectedByIdNumber: text("collected_by_id_number"),
+    collectedByOrganization: text("collected_by_organization"),
+    destination: text("destination"),
+    collectorAcknowledgedName: text("collector_acknowledged_name"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("md_intake_idx").on(t.intakeId)]
+);
+
+export const deceasedBelongings = pgTable(
+  "deceased_belongings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    intakeId: uuid("intake_id").references(() => mortuaryIntakes.id),
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    itemDescription: text("item_description").notNull(),
+    quantity: integer("quantity").default(1),
+    submittedByName: text("submitted_by_name"),
+    receivedByUserId: uuid("received_by_user_id").references(() => users.id),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("db_intake_idx").on(t.intakeId)]
+);
+
+export const bodyWashRequirements = pgTable(
+  "body_wash_requirements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    intakeId: uuid("intake_id").notNull().references(() => mortuaryIntakes.id),
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    clothesProvided: boolean("clothes_provided").default(false),
+    blanketProvided: boolean("blanket_provided").default(false),
+    wreathProvided: boolean("wreath_provided").default(false),
+    otherItems: text("other_items"),
+    washedByName: text("washed_by_name"),
+    completedAt: timestamp("completed_at"),
+    completedByUserId: uuid("completed_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("bwr_intake_idx").on(t.intakeId)]
+);
+
+export const driverChecklists = pgTable(
+  "driver_checklists",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    funeralCaseId: uuid("funeral_case_id").notNull().references(() => funeralCases.id).unique(),
+    driverId: uuid("driver_id").references(() => users.id),
+    graveTent: boolean("grave_tent").default(false),
+    loweringDevice: boolean("lowering_device").default(false),
+    gloves: boolean("gloves").default(false),
+    masks: boolean("masks").default(false),
+    fuelGauge: text("fuel_gauge"), // 'full' | 'three_quarter' | 'half' | 'quarter'
+    tollGateRequired: boolean("toll_gate_required").default(false),
+    tollGateAmount: numeric("toll_gate_amount", { precision: 10, scale: 2 }),
+    driverAllowance: numeric("driver_allowance", { precision: 10, scale: 2 }),
+    burialOrderRef: text("burial_order_ref"),
+    preparedByUserId: uuid("prepared_by_user_id").references(() => users.id),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("dc_case_idx").on(t.funeralCaseId)]
 );
 
 // ─── FLEET ──────────────────────────────────────────────────
@@ -1752,21 +1883,72 @@ export const funeralQuotations = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
-    funeralCaseId: uuid("funeral_case_id").notNull().references(() => funeralCases.id),
+    // Nullable: standalone quotes exist before a funeral case is created.
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
     quotationNumber: text("quotation_number").notNull(),
     currency: text("currency").default("USD").notNull(),
+    // Legacy total field kept for backward compat; new code uses grandTotal.
     total: numeric("total", { precision: 12, scale: 2 }).default("0").notNull(),
-    status: text("status").default("draft").notNull(), // draft | sent | accepted
+    status: text("status").default("draft").notNull(), // draft | sent | accepted | converted
     notes: text("notes"),
     createdBy: uuid("created_by").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Extended client / deceased capture
+    informantFullNames: text("informant_full_names"),
+    informantPhone: text("informant_phone"),
+    informantAddress: text("informant_address"),
+    deceasedName: text("deceased_name"),
+    deceasedAge: integer("deceased_age"),
+    deceasedSex: text("deceased_sex"),
+    casketType: text("casket_type"),
+    quotationDate: date("quotation_date"),
+    // Financial breakdown
+    subtotal: numeric("subtotal", { precision: 12, scale: 2 }).default("0"),
+    vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).default("15"),
+    vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).default("0"),
+    discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }).default("0"),
+    grandTotal: numeric("grand_total", { precision: 12, scale: 2 }).default("0"),
+    // Payment terms
+    paymentType: text("payment_type"), // 'full' | 'part'
+    conversionStatus: text("conversion_status").default("pending"), // 'pending' | 'partial' | 'converted'
+    convertedAt: timestamp("converted_at"),
   },
   (t) => [
     index("fq_org_idx").on(t.organizationId),
-    // One quotation per funeral case (enables atomic upsert; prevents duplicates under concurrency).
-    uniqueIndex("fq_org_case_idx").on(t.organizationId, t.funeralCaseId),
+    // Partial uniqueness (one quote per case) is enforced in the migration via a partial index WHERE funeral_case_id IS NOT NULL.
     uniqueIndex("fq_number_org_idx").on(t.organizationId, t.quotationNumber),
   ]
+);
+
+export const quotationGuarantors = pgTable(
+  "quotation_guarantors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    quotationId: uuid("quotation_id").notNull().references(() => funeralQuotations.id).unique(),
+    guarantorName: text("guarantor_name"),
+    guarantorPhone: text("guarantor_phone"),
+    guarantorAddress: text("guarantor_address"),
+    guarantorIdNumber: text("guarantor_id_number"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("qg_quotation_idx").on(t.quotationId)]
+);
+
+export const quotationCollateral = pgTable(
+  "quotation_collateral",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    quotationId: uuid("quotation_id").notNull().references(() => funeralQuotations.id),
+    itemDescription: text("item_description").notNull(),
+    condition: text("condition"), // 'good' | 'fair' | 'poor'
+    value: numeric("value", { precision: 12, scale: 2 }),
+    dueDate: date("due_date"),
+    forfeitureDate: date("forfeiture_date"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("qc_quotation_idx").on(t.quotationId)]
 );
 
 export const funeralQuotationItems = pgTable(
@@ -1868,6 +2050,14 @@ export const insertFuneralQuotationItemSchema = createInsertSchema(funeralQuotat
 export type FuneralQuotationItem = typeof funeralQuotationItems.$inferSelect;
 export type InsertFuneralQuotationItem = z.infer<typeof insertFuneralQuotationItemSchema>;
 
+export const insertQuotationGuarantorSchema = createInsertSchema(quotationGuarantors).omit({ id: true, createdAt: true });
+export type QuotationGuarantor = typeof quotationGuarantors.$inferSelect;
+export type InsertQuotationGuarantor = z.infer<typeof insertQuotationGuarantorSchema>;
+
+export const insertQuotationCollateralSchema = createInsertSchema(quotationCollateral).omit({ id: true, createdAt: true });
+export type QuotationCollateralItem = typeof quotationCollateral.$inferSelect;
+export type InsertQuotationCollateralItem = z.infer<typeof insertQuotationCollateralSchema>;
+
 export const insertServiceReceiptSchema = createInsertSchema(serviceReceipts).omit({ id: true, createdAt: true });
 export type ServiceReceipt = typeof serviceReceipts.$inferSelect;
 export type InsertServiceReceipt = z.infer<typeof insertServiceReceiptSchema>;
@@ -1915,6 +2105,11 @@ export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, cre
 export const insertClaimDocumentSchema = createInsertSchema(claimDocuments).omit({ id: true, uploadedAt: true });
 export const insertFuneralCaseSchema = createInsertSchema(funeralCases).omit({ id: true, createdAt: true });
 export const insertFuneralTaskSchema = createInsertSchema(funeralTasks).omit({ id: true, createdAt: true });
+export const insertMortuaryIntakeSchema = createInsertSchema(mortuaryIntakes).omit({ id: true, createdAt: true });
+export const insertMortuaryDispatchSchema = createInsertSchema(mortuaryDispatches).omit({ id: true, createdAt: true });
+export const insertDeceasedBelongingSchema = createInsertSchema(deceasedBelongings).omit({ id: true, createdAt: true });
+export const insertBodyWashRequirementSchema = createInsertSchema(bodyWashRequirements).omit({ id: true, createdAt: true });
+export const insertDriverChecklistSchema = createInsertSchema(driverChecklists).omit({ id: true, createdAt: true });
 export const insertFleetVehicleSchema = createInsertSchema(fleetVehicles).omit({ id: true, createdAt: true });
 export const insertCommissionPlanSchema = createInsertSchema(commissionPlans).omit({ id: true, createdAt: true });
 export const insertCommissionLedgerEntrySchema = createInsertSchema(commissionLedgerEntries).omit({ id: true, createdAt: true });
@@ -2001,6 +2196,16 @@ export type FuneralCase = typeof funeralCases.$inferSelect;
 export type InsertFuneralCase = z.infer<typeof insertFuneralCaseSchema>;
 export type FuneralTask = typeof funeralTasks.$inferSelect;
 export type InsertFuneralTask = z.infer<typeof insertFuneralTaskSchema>;
+export type MortuaryIntake = typeof mortuaryIntakes.$inferSelect;
+export type InsertMortuaryIntake = z.infer<typeof insertMortuaryIntakeSchema>;
+export type MortuaryDispatch = typeof mortuaryDispatches.$inferSelect;
+export type InsertMortuaryDispatch = z.infer<typeof insertMortuaryDispatchSchema>;
+export type DeceasedBelonging = typeof deceasedBelongings.$inferSelect;
+export type InsertDeceasedBelonging = z.infer<typeof insertDeceasedBelongingSchema>;
+export type BodyWashRequirement = typeof bodyWashRequirements.$inferSelect;
+export type InsertBodyWashRequirement = z.infer<typeof insertBodyWashRequirementSchema>;
+export type DriverChecklist = typeof driverChecklists.$inferSelect;
+export type InsertDriverChecklist = z.infer<typeof insertDriverChecklistSchema>;
 export type FleetVehicle = typeof fleetVehicles.$inferSelect;
 export type InsertFleetVehicle = z.infer<typeof insertFleetVehicleSchema>;
 export type CommissionPlan = typeof commissionPlans.$inferSelect;

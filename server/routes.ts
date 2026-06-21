@@ -33,6 +33,8 @@ import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
   insertClaimSchema, insertFuneralCaseSchema, insertFuneralTaskSchema,
+  insertMortuaryIntakeSchema, insertMortuaryDispatchSchema,
+  insertDeceasedBelongingSchema, insertBodyWashRequirementSchema, insertDriverChecklistSchema,
   insertFleetVehicleSchema, insertCommissionPlanSchema,
   insertNotificationTemplateSchema, insertLeadSchema, insertExpenditureSchema,
   insertPriceBookItemSchema, insertBenefitCatalogItemSchema,
@@ -3621,6 +3623,168 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  // Driver checklist for a funeral case
+  app.get("/api/funeral-cases/:id/driver-checklist", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const cl = await storage.getDriverChecklist(req.params.id as string, user.organizationId);
+    return res.json(cl ?? null);
+  });
+
+  app.post("/api/funeral-cases/:id/driver-checklist", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+    if (!fc) return res.status(404).json({ message: "Funeral case not found" });
+    const parsed = insertDriverChecklistSchema.parse({
+      ...req.body,
+      funeralCaseId: req.params.id as string,
+      organizationId: user.organizationId,
+      preparedByUserId: user.id,
+    });
+    const cl = await storage.upsertDriverChecklist(req.params.id as string, user.organizationId, parsed);
+    await auditLog(req, "UPSERT_DRIVER_CHECKLIST", "DriverChecklist", cl.id, null, cl);
+    return res.json(cl);
+  });
+
+  app.get("/api/funeral-cases/:id/driver-checklist/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { streamDriverChecklistPDF } = await import("./driver-checklist-pdf");
+    await streamDriverChecklistPDF(req.params.id as string, user.organizationId, res, {
+      attachment: req.query.download === "1",
+    });
+  });
+
+  // Linked mortuary intake for a funeral case
+  app.get("/api/funeral-cases/:id/mortuary-intake", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intakes = await storage.getMortuaryIntakesByOrg(user.organizationId, { funeralCaseId: req.params.id as string, limit: 1 });
+    return res.json(intakes[0] ?? null);
+  });
+
+  // ─── Mortuary Register ──────────────────────────────────────
+
+  app.get("/api/mortuary-intakes", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const status = typeof req.query.status === "string" && req.query.status !== "all" ? req.query.status : undefined;
+    return res.json(await storage.getMortuaryIntakesByOrg(user.organizationId, { status, limit, offset }));
+  });
+
+  app.post("/api/mortuary-intakes", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intakeNumber = await storage.generateIntakeNumber(user.organizationId);
+    const parsed = insertMortuaryIntakeSchema.parse({
+      ...req.body,
+      organizationId: user.organizationId,
+      intakeNumber,
+    });
+    const intake = await storage.createMortuaryIntake(parsed);
+    await auditLog(req, "CREATE_MORTUARY_INTAKE", "MortuaryIntake", intake.id, null, intake);
+    return res.status(201).json(intake);
+  });
+
+  app.get("/api/mortuary-intakes/:id", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
+    if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    return res.json(intake);
+  });
+
+  app.patch("/api/mortuary-intakes/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const before = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Mortuary intake not found" });
+    const updated = await storage.updateMortuaryIntake(req.params.id as string, req.body, user.organizationId);
+    await auditLog(req, "UPDATE_MORTUARY_INTAKE", "MortuaryIntake", req.params.id as string, before, updated);
+    return res.json(updated);
+  });
+
+  // Dispatch
+  app.get("/api/mortuary-intakes/:id/dispatch", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const dispatch = await storage.getMortuaryDispatch(req.params.id as string, user.organizationId);
+    return res.json(dispatch ?? null);
+  });
+
+  app.post("/api/mortuary-intakes/:id/dispatch", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
+    if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    const parsed = insertMortuaryDispatchSchema.parse({
+      ...req.body,
+      intakeId: req.params.id as string,
+      organizationId: user.organizationId,
+      dispatchedByUserId: user.id,
+    });
+    const dispatch = await storage.upsertMortuaryDispatch(req.params.id as string, user.organizationId, parsed);
+    // Mark intake as dispatched
+    await storage.updateMortuaryIntake(req.params.id as string, { status: "dispatched" }, user.organizationId);
+    await auditLog(req, "DISPATCH_BODY", "MortuaryDispatch", dispatch.id, null, dispatch);
+    return res.json(dispatch);
+  });
+
+  // Belongings
+  app.get("/api/mortuary-intakes/:id/belongings", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getDeceasedBelongings(req.params.id as string, user.organizationId));
+  });
+
+  app.post("/api/mortuary-intakes/:id/belongings", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
+    if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    const parsed = insertDeceasedBelongingSchema.parse({
+      ...req.body,
+      intakeId: req.params.id as string,
+      organizationId: user.organizationId,
+    });
+    const item = await storage.addDeceasedBelonging(parsed);
+    return res.status(201).json(item);
+  });
+
+  app.delete("/api/belongings/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteDeceasedBelonging(req.params.id as string, user.organizationId);
+    return res.status(204).end();
+  });
+
+  // Body wash requirements
+  app.get("/api/mortuary-intakes/:id/body-wash", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const bw = await storage.getBodyWashRequirements(req.params.id as string, user.organizationId);
+    return res.json(bw ?? null);
+  });
+
+  app.post("/api/mortuary-intakes/:id/body-wash", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
+    if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    const parsed = insertBodyWashRequirementSchema.parse({
+      ...req.body,
+      intakeId: req.params.id as string,
+      organizationId: user.organizationId,
+    });
+    const bw = await storage.upsertBodyWashRequirements(req.params.id as string, user.organizationId, parsed);
+    return res.json(bw);
+  });
+
+  // Printable PDFs
+  app.get("/api/mortuary-intakes/:id/receipt-pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { streamMortuaryReceiptPDF } = await import("./mortuary-document");
+    await streamMortuaryReceiptPDF(req.params.id as string, user.organizationId, res, {
+      attachment: req.query.download === "1",
+    });
+  });
+
+  app.get("/api/mortuary-intakes/:id/dispatch-pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { streamMortuaryDispatchPDF } = await import("./mortuary-document");
+    await streamMortuaryDispatchPDF(req.params.id as string, user.organizationId, res, {
+      attachment: req.query.download === "1",
+    });
+  });
+
   // ─── Fleet ──────────────────────────────────────────────────
 
   app.get("/api/fleet", requireAuth, requireTenantScope, requirePermission("read:fleet"), async (req, res) => {
@@ -3964,7 +4128,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     const quote = await storage.upsertFuneralQuotation(
       user.organizationId, fc.id,
-      { currency, status: req.body.status, notes: req.body.notes, createdBy: user.id },
+      {
+        currency, status: req.body.status, notes: req.body.notes, createdBy: user.id,
+        informantFullNames: req.body.informantFullNames, informantPhone: req.body.informantPhone,
+        informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
+        deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
+        deceasedSex: req.body.deceasedSex, casketType: req.body.casketType,
+        quotationDate: req.body.quotationDate, vatRate: req.body.vatRate ? parseFloat(req.body.vatRate) : undefined,
+        discountAmount: req.body.discountAmount ? parseFloat(req.body.discountAmount) : undefined,
+        paymentType: req.body.paymentType,
+      },
       items,
     );
     await auditLog(req, "UPSERT_FUNERAL_QUOTATION", "FuneralQuotation", quote.id, null, quote);
@@ -3986,7 +4159,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
     const idempotencyKey = typeof req.body.idempotencyKey === "string" && req.body.idempotencyKey ? req.body.idempotencyKey : null;
 
-    // Idempotency: a repeated submit with the same key returns the original receipt instead of issuing a new one.
     if (idempotencyKey) {
       const existing = await storage.getServiceReceiptByIdempotencyKey(user.organizationId, idempotencyKey);
       if (existing) return res.status(200).json({ ...existing, duplicate: true });
@@ -4009,8 +4181,189 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       idempotencyKey,
       notes: typeof req.body.notes === "string" ? req.body.notes : null,
     });
+
+    // Auto-update quotation conversion status
+    if (quote?.id) {
+      const allReceipts = await storage.getServiceReceipts(user.organizationId, { funeralCaseId: fc.id });
+      const totalPaid = allReceipts
+        .filter(r => r.status === "issued")
+        .reduce((s, r) => s + parseFloat(String(r.amount)), 0);
+      const grandTotal = parseFloat(String(quote.grandTotal || quote.total || "0"));
+      if (grandTotal > 0 && totalPaid >= grandTotal) {
+        await storage.markQuotationConverted(quote.id, user.organizationId);
+      } else if (totalPaid > 0) {
+        await storage.markQuotationPartialPayment(quote.id, user.organizationId);
+      }
+    }
+
     await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", created.id, null, created);
     return res.status(201).json(created);
+  });
+
+  // ─── Standalone Quotations ──────────────────────────────────
+
+  app.get("/api/quotations", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const q = typeof req.query.q === "string" ? req.query.q : undefined;
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 200, 500);
+    const offset = parseInt(req.query.offset as string) || 0;
+    return res.json(await storage.getQuotationsByOrg(user.organizationId, { q, status, limit, offset }));
+  });
+
+  app.post("/api/quotations", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const currency = normalizeCurrency(req.body.currency || "USD");
+    const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
+    const items = rawItems.map((it: any) => {
+      const quantity = parseFloat(String(it.quantity ?? 1)) || 1;
+      const unitPrice = parseFloat(String(it.unitPrice ?? 0)) || 0;
+      return {
+        priceBookItemId: it.priceBookItemId || null,
+        description: String(it.description || "Item"),
+        quantity: quantity.toFixed(2),
+        unitPrice: unitPrice.toFixed(2),
+        lineTotal: (quantity * unitPrice).toFixed(2),
+      };
+    });
+    const quote = await storage.createStandaloneQuotation(user.organizationId, {
+      currency, status: req.body.status, notes: req.body.notes, createdBy: user.id,
+      informantFullNames: req.body.informantFullNames, informantPhone: req.body.informantPhone,
+      informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
+      deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
+      deceasedSex: req.body.deceasedSex, casketType: req.body.casketType,
+      quotationDate: req.body.quotationDate || new Date().toISOString().split("T")[0],
+      vatRate: req.body.vatRate ? parseFloat(req.body.vatRate) : 15,
+      discountAmount: req.body.discountAmount ? parseFloat(req.body.discountAmount) : 0,
+      paymentType: req.body.paymentType,
+    }, items);
+    await auditLog(req, "CREATE_QUOTATION", "FuneralQuotation", quote.id, null, quote);
+    return res.status(201).json(quote);
+  });
+
+  app.get("/api/quotations/:id", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const quote = await storage.getQuotationById(req.params.id as string, user.organizationId);
+    if (!quote) return res.status(404).json({ message: "Quotation not found" });
+    const [guarantor, collateral] = await Promise.all([
+      storage.getQuotationGuarantor(quote.id, user.organizationId),
+      storage.getQuotationCollateral(quote.id, user.organizationId),
+    ]);
+    return res.json({ ...quote, guarantor: guarantor ?? null, collateral });
+  });
+
+  app.patch("/api/quotations/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getQuotationById(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Quotation not found" });
+    // Re-use upsertFuneralQuotation if linked to a case, otherwise createStandaloneQuotation update path
+    const currency = normalizeCurrency(req.body.currency || existing.currency || "USD");
+    const rawItems = Array.isArray(req.body.items) ? req.body.items : existing.items;
+    const items = rawItems.map((it: any) => {
+      const quantity = parseFloat(String(it.quantity ?? 1)) || 1;
+      const unitPrice = parseFloat(String(it.unitPrice ?? 0)) || 0;
+      return {
+        priceBookItemId: it.priceBookItemId || null,
+        description: String(it.description || "Item"),
+        quantity: quantity.toFixed(2),
+        unitPrice: unitPrice.toFixed(2),
+        lineTotal: (quantity * unitPrice).toFixed(2),
+      };
+    });
+    const dataPayload = {
+      currency, status: req.body.status, notes: req.body.notes, createdBy: user.id,
+      informantFullNames: req.body.informantFullNames, informantPhone: req.body.informantPhone,
+      informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
+      deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
+      deceasedSex: req.body.deceasedSex, casketType: req.body.casketType,
+      quotationDate: req.body.quotationDate,
+      vatRate: req.body.vatRate ? parseFloat(req.body.vatRate) : undefined,
+      discountAmount: req.body.discountAmount ? parseFloat(req.body.discountAmount) : undefined,
+      paymentType: req.body.paymentType,
+    };
+    let quote: any;
+    if (existing.funeralCaseId) {
+      quote = await storage.upsertFuneralQuotation(user.organizationId, existing.funeralCaseId, dataPayload, items);
+    } else {
+      quote = await storage.updateStandaloneQuotation(existing.id, user.organizationId, dataPayload, items);
+      if (!quote) return res.status(404).json({ message: "Quotation not found" });
+    }
+    await auditLog(req, "UPDATE_QUOTATION", "FuneralQuotation", existing.id, existing, quote);
+    return res.json(quote);
+  });
+
+  app.get("/api/quotations/:id/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { streamQuotationPDF } = await import("./quotation-pdf");
+    await streamQuotationPDF(req.params.id as string, user.organizationId, res, {
+      attachment: req.query.download === "1",
+    });
+  });
+
+  app.post("/api/quotations/:id/link-case", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { funeralCaseId } = req.body;
+    if (!funeralCaseId) return res.status(400).json({ message: "funeralCaseId required" });
+    const updated = await storage.linkQuotationToCase(req.params.id as string, funeralCaseId, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Quotation not found" });
+    await auditLog(req, "LINK_QUOTATION_TO_CASE", "FuneralQuotation", req.params.id as string, null, updated);
+    return res.json(updated);
+  });
+
+  app.post("/api/quotations/:id/guarantor", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const guarantor = await storage.upsertQuotationGuarantor(req.params.id as string, user.organizationId, req.body);
+    return res.json(guarantor);
+  });
+
+  app.get("/api/quotations/:id/guarantor", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getQuotationGuarantor(req.params.id as string, user.organizationId) ?? null);
+  });
+
+  app.get("/api/quotations/:id/collateral", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getQuotationCollateral(req.params.id as string, user.organizationId));
+  });
+
+  app.post("/api/quotations/:id/collateral", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const item = await storage.addQuotationCollateral({
+      ...req.body,
+      quotationId: req.params.id as string,
+      organizationId: user.organizationId,
+    });
+    return res.status(201).json(item);
+  });
+
+  app.delete("/api/quotations/collateral/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteQuotationCollateral(req.params.id as string, user.organizationId);
+    return res.status(204).end();
+  });
+
+  app.post("/api/quotations/:id/send-for-authorization", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const quote = await storage.getQuotationById(req.params.id as string, user.organizationId);
+    if (!quote) return res.status(404).json({ message: "Quotation not found" });
+    const [guarantor, collateral] = await Promise.all([
+      storage.getQuotationGuarantor(quote.id, user.organizationId),
+      storage.getQuotationCollateral(quote.id, user.organizationId),
+    ]);
+    const approval = await storage.createApprovalRequest({
+      organizationId: user.organizationId,
+      requestType: "QUOTATION_CONDITIONS",
+      entityType: "FuneralQuotation",
+      entityId: quote.id,
+      requestData: { quotationNumber: quote.quotationNumber, deceasedName: quote.deceasedName, guarantor, collateral },
+      status: "pending",
+      initiatedBy: user.id,
+      approvedBy: null,
+      rejectionReason: null,
+      resolvedAt: null,
+    });
+    await auditLog(req, "SEND_QUOTATION_FOR_AUTHORIZATION", "FuneralQuotation", quote.id, null, approval);
+    return res.status(201).json(approval);
   });
 
   // ─── Price Book ─────────────────────────────────────────────

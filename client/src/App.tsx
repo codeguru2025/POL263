@@ -47,6 +47,8 @@ const StaffPolicies = lazy(() => retryLazy(() => import("@/pages/staff/policies"
 const StaffClients = lazy(() => retryLazy(() => import("@/pages/staff/clients")));
 const StaffClaims = lazy(() => retryLazy(() => import("@/pages/staff/claims")));
 const StaffFunerals = lazy(() => retryLazy(() => import("@/pages/staff/funerals")));
+const StaffMortuary = lazy(() => retryLazy(() => import("@/pages/staff/mortuary")));
+const StaffQuotations = lazy(() => retryLazy(() => import("@/pages/staff/quotations")));
 const StaffFinance = lazy(() => retryLazy(() => import("@/pages/staff/finance")));
 const StaffReports = lazy(() => retryLazy(() => import("@/pages/staff/reports")));
 const StaffLeads = lazy(() => retryLazy(() => import("@/pages/staff/leads")));
@@ -163,6 +165,8 @@ function Router() {
       <SafeRoute path="/staff/clients" component={StaffClients} />
       <SafeRoute path="/staff/claims" component={StaffClaims} />
       <SafeRoute path="/staff/funerals" component={StaffFunerals} />
+      <SafeRoute path="/staff/mortuary" component={StaffMortuary} />
+      <SafeRoute path="/staff/quotations" component={StaffQuotations} />
       <SafeRoute path="/staff/finance" component={StaffFinance} />
       <SafeRoute path="/staff/reports" component={StaffReports} />
       <SafeRoute path="/staff/leads" component={StaffLeads} />
