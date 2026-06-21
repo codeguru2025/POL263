@@ -3694,7 +3694,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!before) return res.status(404).json({ message: "Mortuary intake not found" });
-    const updated = await storage.updateMortuaryIntake(req.params.id as string, req.body, user.organizationId);
+    const safeBody = insertMortuaryIntakeSchema.partial().parse(req.body);
+    const updated = await storage.updateMortuaryIntake(req.params.id as string, safeBody, user.organizationId);
     await auditLog(req, "UPDATE_MORTUARY_INTAKE", "MortuaryIntake", req.params.id as string, before, updated);
     return res.json(updated);
   });
@@ -3716,9 +3717,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       organizationId: user.organizationId,
       dispatchedByUserId: user.id,
     });
-    const dispatch = await storage.upsertMortuaryDispatch(req.params.id as string, user.organizationId, parsed);
-    // Mark intake as dispatched
-    await storage.updateMortuaryIntake(req.params.id as string, { status: "dispatched" }, user.organizationId);
+    // dispatchIntake atomically writes dispatch record + sets intake status in one transaction
+    const dispatch = await storage.dispatchIntake(req.params.id as string, user.organizationId, parsed);
     await auditLog(req, "DISPATCH_BODY", "MortuaryDispatch", dispatch.id, null, dispatch);
     return res.json(dispatch);
   });
@@ -4328,9 +4328,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/quotations/:id/collateral", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
+    const quote = await storage.getQuotationById(req.params.id as string, user.organizationId);
+    if (!quote) return res.status(404).json({ message: "Quotation not found" });
     const item = await storage.addQuotationCollateral({
       ...req.body,
-      quotationId: req.params.id as string,
+      quotationId: quote.id,
       organizationId: user.organizationId,
     });
     return res.status(201).json(item);

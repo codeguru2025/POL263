@@ -3944,47 +3944,6 @@ export class DatabaseStorage implements IStorage {
     id: string,
     orgId: string,
     data: {
-      currency: string; status?: string; notes?: string;
-      informantFullNames?: string; informantPhone?: string; informantAddress?: string;
-      deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
-      quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
-    },
-    items: Omit<InsertFuneralQuotationItem, "quotationId">[]
-  ): Promise<FuneralQuotation | undefined> {
-    const vatRate = data.vatRate ?? 15;
-    const discountAmount = data.discountAmount ?? 0;
-    const totals = this._computeQuotationTotals(items, vatRate, discountAmount);
-    return withOrgTransaction(orgId, async (tx) => {
-      const [updated] = await tx.update(funeralQuotations)
-        .set({
-          currency: data.currency, ...totals,
-          vatRate: String(vatRate), discountAmount: String(discountAmount),
-          ...(data.status !== undefined ? { status: data.status } : {}),
-          ...(data.notes !== undefined ? { notes: data.notes } : {}),
-          ...(data.informantFullNames !== undefined ? { informantFullNames: data.informantFullNames } : {}),
-          ...(data.informantPhone !== undefined ? { informantPhone: data.informantPhone } : {}),
-          ...(data.informantAddress !== undefined ? { informantAddress: data.informantAddress } : {}),
-          ...(data.deceasedName !== undefined ? { deceasedName: data.deceasedName } : {}),
-          ...(data.deceasedAge !== undefined ? { deceasedAge: data.deceasedAge } : {}),
-          ...(data.deceasedSex !== undefined ? { deceasedSex: data.deceasedSex } : {}),
-          ...(data.casketType !== undefined ? { casketType: data.casketType } : {}),
-          ...(data.quotationDate !== undefined ? { quotationDate: data.quotationDate } : {}),
-          ...(data.paymentType !== undefined ? { paymentType: data.paymentType } : {}),
-        })
-        .where(and(eq(funeralQuotations.id, id), eq(funeralQuotations.organizationId, orgId)))
-        .returning();
-      if (!updated) return undefined;
-      await tx.delete(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, id));
-      if (items.length > 0) {
-        await tx.insert(funeralQuotationItems).values(items.map((it) => ({ ...it, quotationId: id })));
-      }
-      return updated;
-    });
-  }
-  async updateStandaloneQuotation(
-    id: string,
-    orgId: string,
-    data: {
       currency: string; status?: string; notes?: string; createdBy?: string;
       informantFullNames?: string; informantPhone?: string; informantAddress?: string;
       deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
@@ -4044,14 +4003,11 @@ export class DatabaseStorage implements IStorage {
   }
   async upsertQuotationGuarantor(quotationId: string, orgId: string, data: Omit<InsertQuotationGuarantor, "id" | "quotationId" | "organizationId" | "createdAt">): Promise<QuotationGuarantor> {
     const tdb = await getDbForOrg(orgId);
-    const [existing] = await tdb.select({ id: quotationGuarantors.id }).from(quotationGuarantors)
-      .where(eq(quotationGuarantors.quotationId, quotationId));
-    if (existing) {
-      const [updated] = await tdb.update(quotationGuarantors).set(data).where(eq(quotationGuarantors.id, existing.id)).returning();
-      return updated;
-    }
-    const [created] = await tdb.insert(quotationGuarantors).values({ ...data, quotationId, organizationId: orgId }).returning();
-    return created;
+    const [row] = await tdb.insert(quotationGuarantors)
+      .values({ ...data, quotationId, organizationId: orgId })
+      .onConflictDoUpdate({ target: quotationGuarantors.quotationId, set: data })
+      .returning();
+    return row;
   }
   async getQuotationGuarantor(quotationId: string, orgId: string): Promise<QuotationGuarantor | undefined> {
     const tdb = await getDbForOrg(orgId);
@@ -4473,6 +4429,29 @@ export class DatabaseStorage implements IStorage {
       .values({ ...data, intakeId, organizationId: orgId })
       .returning();
     return created;
+  }
+  async dispatchIntake(intakeId: string, orgId: string, data: Omit<InsertMortuaryDispatch, "intakeId" | "organizationId">): Promise<MortuaryDispatch> {
+    return withOrgTransaction(orgId, async (tx) => {
+      const [existingDispatch] = await tx.select({ id: mortuaryDispatches.id }).from(mortuaryDispatches)
+        .where(and(eq(mortuaryDispatches.intakeId, intakeId), eq(mortuaryDispatches.organizationId, orgId)));
+      let dispatch: MortuaryDispatch;
+      if (existingDispatch) {
+        const [updated] = await tx.update(mortuaryDispatches)
+          .set(data)
+          .where(eq(mortuaryDispatches.id, existingDispatch.id))
+          .returning();
+        dispatch = updated;
+      } else {
+        const [created] = await tx.insert(mortuaryDispatches)
+          .values({ ...data, intakeId, organizationId: orgId })
+          .returning();
+        dispatch = created;
+      }
+      await tx.update(mortuaryIntakes)
+        .set({ status: "dispatched" })
+        .where(and(eq(mortuaryIntakes.id, intakeId), eq(mortuaryIntakes.organizationId, orgId)));
+      return dispatch;
+    });
   }
 
   // ─── Deceased Belongings ────────────────────────────────────
