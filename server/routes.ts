@@ -2110,6 +2110,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    if (req.file.size === 0) return res.status(400).json({ message: "Uploaded file is empty" });
     const documentType = (req.body.documentType || "other") as string;
     const label = (req.body.label || req.file.originalname) as string;
     const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "policy-documents");
