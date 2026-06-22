@@ -2246,17 +2246,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     if (isLegacyRequest) {
       const today = new Date().toISOString().split("T")[0];
-      const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
-      const memberUpdates = members.map((m: any) =>
-        storage.updatePolicyMember(m.id, { waitingPeriodEndDate: today }, user.organizationId)
-      );
-      await Promise.all(memberUpdates);
       updated = (await storage.updatePolicy(req.params.id as string, {
         isLegacy: true,
         status: "active",
+        waitingPeriodEndDate: today,
         inceptionDate: updated.inceptionDate || today,
-        effectiveDate: updated.effectiveDate || today,
+        ...(!updated.effectiveDate ? { effectiveDate: today } : {}),
       }, user.organizationId)) ?? updated;
+      await storage.createPolicyStatusHistory(req.params.id as string, before.status, "active", "Legacy policy — marked by admin on edit", user.id, user.organizationId);
       await auditLog(req, "LEGACY_POLICY_ACTIVATED", "Policy", req.params.id as string, before, updated);
     }
 
