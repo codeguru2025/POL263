@@ -21,6 +21,7 @@ const PgSession = connectPgSimple(session);
 // Per-account lockout for agent (email/password) login. Complements the IP-based
 // authLimiter in index.ts. In-memory only (per-process) — acceptable as defence in
 // depth on top of the network rate limiter; the `users` table has no lockout columns.
+// TODO(scalability): move to Redis or DB — per-process lockout bypassed under multiple instances
 const AGENT_LOCKOUT_THRESHOLD = 5;
 const AGENT_LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const agentLoginAttempts = new Map<string, { count: number; lockedUntil: number }>();
@@ -676,7 +677,7 @@ export function setupAuth(app: Express) {
     return res.json({ message: "Password updated" });
   });
 
-  app.post("/api/users/:id/reset-password", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/users/:id/reset-password", requireAuth, requireTenantScope, async (req: Request, res: Response) => {
     const admin = req.user as any;
     const { newPassword } = req.body;
     if (!newPassword || String(newPassword).length < 8) {

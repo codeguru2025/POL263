@@ -30,7 +30,9 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        scriptSrc: process.env.NODE_ENV === "production"
+          ? ["'self'"]
+          : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         imgSrc: ["'self'", "data:", "https:", "blob:"],
@@ -102,6 +104,9 @@ if (enableCsrf) {
 // Rate limiters (optional Redis when REDIS_URL set); then health, auth, routes
 (async () => {
   const getRedisStore = await createRedisStore({ prefix: "rl:pol263" });
+  if (!getRedisStore && process.env.NODE_ENV === "production") {
+    structuredLog("warn", "REDIS_URL not set — rate limits are per-instance. Set REDIS_URL in production for shared rate limiting.");
+  }
   const limiterOpts = { standardHeaders: true, legacyHeaders: false };
 
   app.use(
@@ -150,6 +155,9 @@ if (enableCsrf) {
   });
   app.use("/api/reports", reportExportLimiter);
   app.use("/api/dashboard/stats", reportExportLimiter);
+  app.use("/api/dashboard/revenue-trend", reportExportLimiter);
+  app.use("/api/dashboard/product-performance", reportExportLimiter);
+  app.use("/api/dashboard/lapse-retention", reportExportLimiter);
 
   const writeLimiter = rateLimit({
     ...limiterOpts,
@@ -172,6 +180,7 @@ if (enableCsrf) {
   });
   app.use("/api/upload", writeLimiter);
   app.use("/api/public/register-policy", writeLimiter);
+  app.use("/api/admin/run-notifications", writeLimiter);
 
   app.use(
     "/api/public/agent-app-latest",

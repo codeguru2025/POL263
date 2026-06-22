@@ -154,6 +154,14 @@ export async function runBackupSync(): Promise<void> {
     return;
   }
 
+  // Advisory lock: only one instance runs the backup at a time under horizontal scaling
+  const { pool: mainPool } = await import("./db");
+  const lockResult = await mainPool.query("SELECT pg_try_advisory_lock(987654321) as acquired");
+  if (!lockResult.rows[0]?.acquired) {
+    structuredLog("info", "Backup sync skipped — another instance holds the advisory lock");
+    return;
+  }
+
   const startTime = Date.now();
   structuredLog("info", "Backup sync started");
 
@@ -301,6 +309,7 @@ export async function runBackupSync(): Promise<void> {
     structuredLog("error", "Backup sync failed", { error: (err as Error).message });
   } finally {
     if (backupPool) await backupPool.end().catch(() => {});
+    await mainPool.query("SELECT pg_advisory_unlock(987654321)").catch(() => {});
   }
 }
 

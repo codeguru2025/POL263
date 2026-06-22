@@ -136,7 +136,9 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
     structuredLog("info", "Creating dedicated tenant pool", { orgId, host: urlHost });
     const tenantPool = new pg.Pool(buildPoolConfig(url, { forTenant: true }));
     tenantPool.on("error", (err) => {
-      structuredLog("warn", "Tenant pool error", { orgId, host: urlHost, error: err.message });
+      structuredLog("warn", "Tenant pool error — evicting from cache", { orgId, host: urlHost, error: err.message });
+      poolCache.delete(orgId);
+      dbCache.delete(orgId);
     });
     poolCache.set(orgId, tenantPool);
     poolLastAccess.set(orgId, Date.now());
