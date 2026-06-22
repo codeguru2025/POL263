@@ -2195,7 +2195,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete body.memberAddOns;
     delete body.addOnIds;
     delete body.beneficiary;
-    if (!user.isPlatformOwner) delete body.agentId;
+    if (!canEditPremium) delete body.agentId;
+
+    const isLegacyRequest = canEditPremium && body.isLegacy === true && !before.isLegacy;
+    delete body.isLegacy;
 
     const ALLOWED_FIELDS = new Set([
       "currency", "paymentSchedule", "effectiveDate", "branchId", "agentId", "groupId",
@@ -2239,6 +2242,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         actorId: user.id,
       });
       updated = (await storage.updatePolicy(req.params.id as string, { premiumAmount: manualPremium.toFixed(2) }, user.organizationId)) ?? updated;
+    }
+
+    if (isLegacyRequest) {
+      const today = new Date().toISOString().split("T")[0];
+      const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
+      const memberUpdates = members.map((m: any) =>
+        storage.updatePolicyMember(m.id, { waitingPeriodEndDate: today }, user.organizationId)
+      );
+      await Promise.all(memberUpdates);
+      updated = (await storage.updatePolicy(req.params.id as string, {
+        isLegacy: true,
+        status: "active",
+        inceptionDate: updated.inceptionDate || today,
+        effectiveDate: updated.effectiveDate || today,
+      }, user.organizationId)) ?? updated;
+      await auditLog(req, "LEGACY_POLICY_ACTIVATED", "Policy", req.params.id as string, before, updated);
     }
 
     await auditLog(req, "UPDATE_POLICY", "Policy", req.params.id as string, before, updated);

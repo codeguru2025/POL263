@@ -170,6 +170,7 @@ export default function StaffPolicies() {
     premiumAmount: "",
     premiumEffectiveDate: "",
     premiumChangeReason: "",
+    isLegacy: false,
   });
 
   const [createForm, setCreateForm] = useState({
@@ -951,6 +952,7 @@ export default function StaffPolicies() {
       premiumAmount: policy.premiumAmount ? parseFloat(policy.premiumAmount).toFixed(2) : "",
       premiumEffectiveDate: todayISO,
       premiumChangeReason: "",
+      isLegacy: !!policy.isLegacy,
     });
     setShowEditDialog(true);
   };
@@ -978,6 +980,7 @@ export default function StaffPolicies() {
         if (editForm.premiumChangeReason) data.premiumChangeReason = editForm.premiumChangeReason;
       }
     }
+    if (canEditPremium && editForm.isLegacy !== !!displayPolicy.isLegacy) data.isLegacy = editForm.isLegacy;
     if (Object.keys(data).length === 0) {
       setShowEditDialog(false);
       return;
@@ -1406,6 +1409,10 @@ export default function StaffPolicies() {
               <TabsTrigger value="financials" data-testid="tab-policy-financials">Financials</TabsTrigger>
               <TabsTrigger value="payments" data-testid="tab-policy-payments">Payments</TabsTrigger>
               <TabsTrigger value="documents" data-testid="tab-policy-documents">Documents</TabsTrigger>
+              <TabsTrigger value="waivers" data-testid="tab-policy-waivers">
+                Waivers
+                {policyWaiver?.status === "pending" && <span className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-amber-500" />}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="space-y-4 mt-4">
@@ -2197,7 +2204,10 @@ export default function StaffPolicies() {
             )}
           </CardSection>
 
-          <CardSection title="Waiting Period Waiver" description="Request or view the status of a waiting period waiver for this policy." icon={ShieldCheck} contentClassName="space-y-3">
+            </TabsContent>
+
+            <TabsContent value="waivers" className="space-y-4 mt-4">
+          <CardSection title="Waiting Period Waiver" description="Request or view the status of a waiting period waiver for this policy. Upload supporting documents (previous policy, payment history) in the Documents tab." icon={ShieldCheck} contentClassName="space-y-3">
             {policyWaiver ? (
               <div className={`rounded-md border p-3 space-y-1 ${policyWaiver.status === "approved" ? "border-emerald-300 bg-emerald-50/50" : policyWaiver.status === "rejected" ? "border-red-300 bg-red-50/50" : "border-amber-300 bg-amber-50/50"}`}>
                 <div className="flex items-center gap-2">
@@ -2599,6 +2609,21 @@ export default function StaffPolicies() {
                     </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-1">A past effective date back-charges (arrears) or credits the difference for the elapsed periods.</p>
+                </div>
+              )}
+
+              {canEditPremium && (
+                <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/30 p-3">
+                  <Checkbox
+                    id="edit-is-legacy"
+                    checked={editForm.isLegacy}
+                    onCheckedChange={(v) => setEditForm({ ...editForm, isLegacy: !!v })}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-0.5">
+                    <label htmlFor="edit-is-legacy" className="text-sm font-medium cursor-pointer">Legacy / backfilled policy</label>
+                    <p className="text-xs text-muted-foreground">This was an existing policy not previously in the system. Enabling this will immediately activate the policy and mark all waiting periods as completed.</p>
+                  </div>
                 </div>
               )}
 
