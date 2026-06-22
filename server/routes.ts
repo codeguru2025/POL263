@@ -3272,7 +3272,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       else cb(new Error("Only CSV or Excel files are allowed"));
     },
   });
-  app.post("/api/month-end-run", requireAuth, requireTenantScope, requirePermission("write:finance"), memoryUpload.single("file"), handleMulterError, async (req, res) => {
+  app.post("/api/month-end-run", requireAuth, requireTenantScope, requirePermission("write:finance"), memoryUpload.single("file"), async (req, res) => {
     const user = req.user as any;
     if (!req.file?.buffer) return res.status(400).json({ message: "No file uploaded" });
     const recordedByForLedger = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
@@ -3396,6 +3396,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await auditLog(req, "MONTH_END_RUN", "MonthEndRun", run.id, null, { runId: run.id, runNumber, receiptedCount: receipted, creditNoteCount: creditNotes, totalRows: rows.length, fileName: run.fileName });
     return res.status(201).json({ run: { ...run, receiptedCount: receipted, creditNoteCount: creditNotes, status: "completed" }, receiptedCount: receipted, creditNoteCount: creditNotes });
   });
+  app.use("/api/month-end-run", handleMulterError);
 
   app.get("/api/credit-notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;

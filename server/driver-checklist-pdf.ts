@@ -114,12 +114,12 @@ export async function streamDriverChecklistPDF(
   doc.fillColor(C_TEXT);
   y += 8;
 
-  function summaryRow(label: string, value: string) {
+  const summaryRow = (label: string, value: string) => {
     const lw = 130;
     doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(label, MARGIN + 8, y, { width: lw });
     doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(value, MARGIN + lw + 4, y, { width: COL - lw - 16 });
     y += 13;
-  }
+  };
 
   summaryRow("Deceased Name:", fmt(fc.deceasedName));
   summaryRow("Date of Burial:", fmtDate(fc.funeralDate));
@@ -136,7 +136,7 @@ export async function streamDriverChecklistPDF(
   y += 26;
   doc.fillColor(C_TEXT);
 
-  function checkRow(label: string, ticked: boolean | null | undefined, detail?: string) {
+  const checkRow = (label: string, ticked: boolean | null | undefined, detail?: string) => {
     const boxSize = 10;
     doc.rect(MARGIN + 4, y, boxSize, boxSize).lineWidth(0.8).strokeColor(C_BORDER).stroke();
     if (ticked) {
@@ -149,7 +149,7 @@ export async function streamDriverChecklistPDF(
       doc.font("Helvetica-Bold").fontSize(9).fillColor(C_TEXT).text(detail, MARGIN + 230, y, { width: COL - 230 });
     }
     y += 16;
-  }
+  };
 
   checkRow("Grave Tent", checklist?.graveTent);
   checkRow("Lowering Device", checklist?.loweringDevice);
@@ -176,12 +176,12 @@ export async function streamDriverChecklistPDF(
   y += 26;
   doc.fillColor(C_TEXT);
 
-  function adminRow(label: string, value: string) {
+  const adminRow = (label: string, value: string) => {
     const lw = 180;
     doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(label, MARGIN + 8, y, { width: lw });
     doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(value, MARGIN + lw + 8, y, { width: COL - lw - 16 });
     y += 14;
-  }
+  };
 
   adminRow("Driver Allowance:", checklist?.driverAllowance ? `$${checklist.driverAllowance}` : "—");
   adminRow("Burial Order Ref:", fmt(checklist?.burialOrderRef));
@@ -207,7 +207,7 @@ export async function streamDriverChecklistPDF(
 
   const half = COL / 2 - 8;
 
-  function sigBlock(label: string, xStart: number, width: number) {
+  const sigBlock = (label: string, xStart: number, width: number) => {
     doc.font("Helvetica").fontSize(8).fillColor(C_MUTED).text(label, xStart, y, { width });
     doc.moveTo(xStart, y + 30).lineTo(xStart + width, y + 30).lineWidth(0.5).strokeColor(C_BORDER).stroke();
     doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("Signature", xStart, y + 33, { width });
@@ -215,7 +215,7 @@ export async function streamDriverChecklistPDF(
     doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("Printed Name", xStart, y + 58, { width });
     doc.moveTo(xStart, y + 78).lineTo(xStart + width, y + 78).lineWidth(0.5).strokeColor(C_BORDER).stroke();
     doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("Date", xStart, y + 81, { width });
-  }
+  };
 
   sigBlock("Driver", MARGIN, half);
   sigBlock("Dispatcher / Authorised By", MARGIN + half + 16, half);
