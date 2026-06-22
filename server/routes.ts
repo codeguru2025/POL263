@@ -960,6 +960,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       id: u.id, email: u.email, displayName: u.displayName,
       avatarUrl: u.avatarUrl, isActive: u.isActive, createdAt: u.createdAt,
       referralCode: u.referralCode, branchId: u.branchId,
+      phone: u.phone, address: u.address, nationalId: u.nationalId,
+      dateOfBirth: u.dateOfBirth, gender: u.gender, maritalStatus: u.maritalStatus,
+      nextOfKinName: u.nextOfKinName, nextOfKinPhone: u.nextOfKinPhone,
       roles: (rolesByUser[u.id] || []).map(r => ({ id: r.id, name: r.name })),
     }));
     return res.json(usersWithRoles);
