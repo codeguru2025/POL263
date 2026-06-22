@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { apiRequest, apiFetch, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
@@ -630,9 +630,8 @@ export default function StaffPolicies() {
       fd.append("file", file);
       fd.append("documentType", docUploadType);
       fd.append("label", docUploadLabel || file.name);
-      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy!.id}/documents`, {
+      const res = await apiFetch(`/api/policies/${selectedPolicy!.id}/documents`, {
         method: "POST",
-        credentials: "include",
         body: fd,
       });
       if (!res.ok) {
@@ -651,9 +650,8 @@ export default function StaffPolicies() {
   }
 
   async function deletePolicyDoc(docId: string) {
-    const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy!.id}/documents/${docId}`, {
+    const res = await apiFetch(`/api/policies/${selectedPolicy!.id}/documents/${docId}`, {
       method: "DELETE",
-      credentials: "include",
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

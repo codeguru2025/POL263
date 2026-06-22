@@ -1735,6 +1735,7 @@ export const leads = pgTable(
     email: text("email"),
     source: text("source").default("walk_in").notNull(),
     stage: text("stage").default("captured").notNull(),
+    productInterest: text("product_interest"),
     lostReason: text("lost_reason"),
     notes: text("notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

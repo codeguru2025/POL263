@@ -2113,10 +2113,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
     const existing = await storage.getWaiverForPolicy(policy.id, user.organizationId);
     if (existing && existing.status === "pending") return res.status(409).json({ message: "A waiver request is already pending for this policy." });
+    const requestedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId) ?? user.id;
     const waiver = await storage.createWaiverRequest({
       organizationId: user.organizationId,
       policyId: policy.id,
-      requestedBy: user.id,
+      requestedBy,
       status: "pending",
       reason: req.body.reason || null,
       supportingNotes: req.body.supportingNotes || null,

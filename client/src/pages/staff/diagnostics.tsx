@@ -19,6 +19,7 @@ import {
   Server,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 interface SystemHealth {
   dbConnected: boolean;
@@ -74,18 +75,22 @@ export default function StaffDiagnostics() {
 
   const { data: health, isLoading: healthLoading, isError: healthError } = useQuery<SystemHealth>({
     queryKey: ["/api/diagnostics/health", refreshKey],
+    queryFn: () => apiRequest("GET", "/api/diagnostics/health").then(r => r.json()),
   });
 
   const { data: failures, isLoading: failuresLoading } = useQuery<NotificationFailure[]>({
     queryKey: ["/api/diagnostics/notification-failures", refreshKey],
+    queryFn: () => apiRequest("GET", "/api/diagnostics/notification-failures").then(r => r.json()),
   });
 
   const { data: unallocated, isLoading: unallocatedLoading } = useQuery<UnallocatedPayment[]>({
     queryKey: ["/api/diagnostics/unallocated-payments", refreshKey],
+    queryFn: () => apiRequest("GET", "/api/diagnostics/unallocated-payments").then(r => r.json()),
   });
 
   const { data: errors, isLoading: errorsLoading } = useQuery<RecentError[]>({
     queryKey: ["/api/diagnostics/recent-errors", refreshKey],
+    queryFn: () => apiRequest("GET", "/api/diagnostics/recent-errors").then(r => r.json()),
   });
 
   const handleRefresh = () => setRefreshKey((k) => k + 1);
