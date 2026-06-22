@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
+import { structuredLog } from "./logger";
 
 const A4_W = 595.28;
 const A4_H = 841.89;
@@ -79,6 +80,7 @@ export async function streamDriverChecklistPDF(
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true, info: { Title: `Driver Checklist — ${fc.caseNumber}`, Author: org.name || "POL263" } });
   doc.pipe(res);
 
+  try {
   let y = MARGIN;
 
   // ── Header ────────────────────────────────────────────────
@@ -228,5 +230,10 @@ export async function streamDriverChecklistPDF(
       MARGIN, footerY + 6, { width: COL, align: "center" }
     );
 
-  doc.end();
+    doc.end();
+  } catch (err: any) {
+    structuredLog("error", "Driver checklist PDF generation failed", { caseId, error: err?.message });
+    try { doc.end(); } catch { /* already ended */ }
+    res.destroy();
+  }
 }

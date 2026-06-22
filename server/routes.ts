@@ -46,7 +46,7 @@ import {
   insertRequisitionSchema, REQUISITION_STATUSES,
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
-  policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases,
+  policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases, waitingPeriodWaivers,
 } from "@shared/schema";
 import { sql, eq, count, and, max } from "drizzle-orm";
 import { pool, db } from "./db";
@@ -387,9 +387,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-  // Serve local uploads; when object storage is enabled, /uploads/* is proxied below
+  // Serve local uploads with auth check; when object storage is enabled, /uploads/* is proxied below
   if (!objectStorage.isObjectStorageEnabled) {
-    app.use("/uploads", express.static(uploadsDir, { maxAge: "1d" }));
+    app.get("/uploads/*path", requireAuth, (req, res) => {
+      const filePath = path.join(uploadsDir, String((req.params as any).path || ""));
+      if (!filePath.startsWith(uploadsDir + path.sep) && filePath !== uploadsDir) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      return res.sendFile(filePath, { maxAge: 0 }, (err) => {
+        if (err) res.status(404).json({ message: "File not found" });
+      });
+    });
   } else {
     app.get("/uploads/*path", (req, res) => {
       const key = (req.params as any).path;
@@ -407,9 +415,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Paynow result URL (webhook) — no auth; hash verified in handler. Always return 200 to avoid Paynow retries.
   app.post("/api/payments/paynow/result", express.urlencoded({ extended: false }), async (req, res) => {
-    const body = req.body as Record<string, string>;
-    const result = await handlePaynowResult(body);
-    return res.status(200).send(result.ok ? "OK" : "Error");
+    try {
+      const body = req.body as Record<string, string>;
+      const result = await handlePaynowResult(body);
+      return res.status(200).send(result.ok ? "OK" : "Error");
+    } catch (err: any) {
+      structuredLog("error", "PayNow result handler threw", { error: err?.message });
+      return res.status(200).send("Error");
+    }
   });
 
   // Fix 7: SVG removed from both upload allowlists.
@@ -439,12 +452,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     },
   });
 
+  const POLICY_DOC_ALLOWED_MIMES = new Set([
+    "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp",
+    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "audio/mpeg", "audio/wav", "audio/mp4", "audio/ogg",
+    "video/mp4", "video/quicktime", "video/x-msvideo",
+  ]);
   const policyDocUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       const allowed = /\.(pdf|jpg|jpeg|png|gif|webp|doc|docx|mp3|mp4|wav|m4a|ogg|avi|mov)$/i;
-      if (allowed.test(path.extname(file.originalname))) cb(null, true);
+      if (allowed.test(path.extname(file.originalname)) && POLICY_DOC_ALLOWED_MIMES.has(file.mimetype)) cb(null, true);
       else cb(new Error("File type not allowed. Supported: PDF, images, Word, audio, video"));
     },
   });
@@ -460,26 +479,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/upload", requireAuth, requireTenantScope, memUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-    const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
-    return res.json({ url, filename: key });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    try {
+      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+      return res.json({ url, filename: key });
+    } catch (err: any) {
+      structuredLog("error", "Upload failed", { error: err?.message });
+      return res.status(500).json({ message: "Upload failed. Please try again." });
+    }
   });
   app.use("/api/upload", handleMulterError);
 
   app.post("/api/upload/logo", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoMemUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-    const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "logos");
-    return res.json({ url, filename: key });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    try {
+      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "logos");
+      return res.json({ url, filename: key });
+    } catch (err: any) {
+      structuredLog("error", "Logo upload failed", { error: err?.message });
+      return res.status(500).json({ message: "Upload failed. Please try again." });
+    }
   });
   app.use("/api/upload/logo", handleMulterError);
 
   // Avatar upload — any authenticated staff user can upload their own avatar.
   app.post("/api/upload/avatar", requireAuth, logoMemUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-    const user = req.user as any;
-    const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "avatars");
-    await storage.updateUser(user.id, { avatarUrl: url });
-    await auditLog(req, "UPDATE_AVATAR", "User", user.id, { avatarUrl: user.avatarUrl }, { avatarUrl: url });
-    return res.json({ url, filename: key });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    try {
+      const user = req.user as any;
+      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "avatars");
+      await storage.updateUser(user.id, { avatarUrl: url });
+      await auditLog(req, "UPDATE_AVATAR", "User", user.id, { avatarUrl: user.avatarUrl }, { avatarUrl: url });
+      return res.json({ url, filename: key });
+    } catch (err: any) {
+      structuredLog("error", "Avatar upload failed", { error: err?.message });
+      return res.status(500).json({ message: "Upload failed. Please try again." });
+    }
   });
   app.use("/api/upload/avatar", handleMulterError);
 
@@ -952,8 +989,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/users", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const usersList = await storage.getUsersByOrg(user.organizationId, limit, offset);
     const rolesByUser = await storage.getUserRolesBatch(usersList.map(u => u.id), user.organizationId);
     const usersWithRoles = usersList.map((u) => ({
@@ -1178,8 +1215,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/audit-logs", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const filters: { search?: string; action?: string; from?: string; to?: string } = {};
     if (req.query.search) filters.search = String(req.query.search);
     if (req.query.action) filters.action = String(req.query.action);
@@ -1209,8 +1246,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/clients", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
@@ -1715,8 +1752,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
     schedulePolicyPremiumBackfill(user.organizationId);
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
@@ -2144,30 +2181,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/waivers/:id/resolve", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
     const user = req.user as any;
+    const { action, rejectionReason } = req.body;
+    if (action !== "approve" && action !== "reject") return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
     const waiver = await storage.getWaiverById(req.params.id as string, user.organizationId);
     if (!waiver) return res.status(404).json({ message: "Waiver not found" });
     if (waiver.status !== "pending") return res.status(400).json({ message: "This waiver has already been resolved." });
-    const { action, rejectionReason } = req.body;
-    if (action !== "approve" && action !== "reject") return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
-    const updated = await storage.updateWaiver(waiver.id, {
-      status: action === "approve" ? "approved" : "rejected",
-      resolvedBy: user.id,
-      resolvedAt: new Date(),
-      rejectionReason: rejectionReason || null,
-    }, user.organizationId);
-    if (action === "approve") {
-      const policy = await storage.getPolicy(waiver.policyId, user.organizationId);
-      if (policy) {
+    const result = await withOrgTransaction(user.organizationId, async (txDb) => {
+      // Lock the waiver row to prevent concurrent approvals
+      await txDb.execute(sql`SELECT id FROM waiting_period_waivers WHERE id = ${waiver.id} FOR UPDATE`);
+      const [recheck] = await txDb.select({ status: waitingPeriodWaivers.status }).from(waitingPeriodWaivers).where(eq(waitingPeriodWaivers.id, waiver.id)).limit(1);
+      if (!recheck || recheck.status !== "pending") throw Object.assign(new Error("This waiver has already been resolved."), { statusCode: 400 });
+      const [updated] = await txDb.update(waitingPeriodWaivers).set({
+        status: action === "approve" ? "approved" : "rejected",
+        resolvedBy: user.id,
+        resolvedAt: new Date(),
+        rejectionReason: rejectionReason || null,
+      }).where(eq(waitingPeriodWaivers.id, waiver.id)).returning();
+      if (action === "approve") {
         const today = new Date().toISOString().split("T")[0];
-        await storage.updatePolicy(policy.id, { waitingPeriodEndDate: today }, user.organizationId);
-        if (policy.status === "inactive") {
-          await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, ...(!policy.effectiveDate ? { effectiveDate: today } : {}) }, user.organizationId);
+        await txDb.update(policies).set({ waitingPeriodEndDate: today }).where(eq(policies.id, waiver.policyId));
+        const [policy] = await txDb.select().from(policies).where(eq(policies.id, waiver.policyId)).limit(1);
+        if (policy?.status === "inactive") {
+          await txDb.update(policies).set({ status: "active", inceptionDate: today, ...(!policy.effectiveDate ? { effectiveDate: today } : {}) }).where(eq(policies.id, policy.id));
           await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "Waiting period waiver approved", user.id, user.organizationId);
         }
       }
-    }
-    await auditLog(req, `WAIVER_${action.toUpperCase()}`, "WaitingPeriodWaiver", waiver.id, waiver, updated);
-    return res.json(updated);
+      return updated;
+    });
+    await auditLog(req, `WAIVER_${action.toUpperCase()}`, "WaitingPeriodWaiver", waiver.id, waiver, result);
+    return res.json(result);
   });
 
   app.patch("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -2773,8 +2815,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
@@ -2967,7 +3009,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Payment intents (Paynow) & receipts ─────────────────────
   app.get("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const agentId = isAgent ? user.id : undefined;
@@ -3222,8 +3264,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.send("policy_number,amount,currency\nPOL001,25.00,USD\n");
   });
 
-  const memoryUpload = multer({ storage: multer.memoryStorage() });
-  app.post("/api/month-end-run", requireAuth, requireTenantScope, requirePermission("write:finance"), memoryUpload.single("file"), async (req, res) => {
+  const memoryUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      if (/\.(csv|xlsx?)$/i.test(path.extname(file.originalname))) cb(null, true);
+      else cb(new Error("Only CSV or Excel files are allowed"));
+    },
+  });
+  app.post("/api/month-end-run", requireAuth, requireTenantScope, requirePermission("write:finance"), memoryUpload.single("file"), handleMulterError, async (req, res) => {
     const user = req.user as any;
     if (!req.file?.buffer) return res.status(400).json({ message: "No file uploaded" });
     const recordedByForLedger = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
@@ -3530,7 +3579,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/cashups/my-receipt-totals", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : undefined;
-    if (!date) return res.status(400).json({ error: "Query 'date' (YYYY-MM-DD) is required" });
+    if (!date) return res.status(400).json({ message: "Query 'date' (YYYY-MM-DD) is required" });
     const result = await storage.getReceiptTotalsByUserDate(user.organizationId, user.id, date);
     return res.json(result);
   });
@@ -3644,7 +3693,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     }
 
-    return res.status(400).json({ error: "Invalid action or state", status: cashup.status });
+    return res.status(400).json({ message: "Invalid action or state", status: cashup.status });
   });
 
   // ─── Claims ─────────────────────────────────────────────────
@@ -3652,8 +3701,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
@@ -3678,8 +3727,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: "submitted",
       submittedBy: user.id,
     });
-    const claim = await storage.createClaim(parsed);
-    await storage.createClaimStatusHistory(claim.id, null, "submitted", "Claim submitted", user.id, claim.organizationId);
+    const claim = await withOrgTransaction(user.organizationId, async () => {
+      const created = await storage.createClaim(parsed);
+      await storage.createClaimStatusHistory(created.id, null, "submitted", "Claim submitted", user.id, created.organizationId);
+      return created;
+    });
     await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
     return res.status(201).json(claim);
   });
@@ -3722,8 +3774,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/funeral-cases", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
@@ -3780,14 +3832,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
     const parsed = insertFuneralTaskSchema.parse({ ...req.body, funeralCaseId: req.params.id as string });
     const task = await storage.createFuneralTask(parsed);
+    await auditLog(req, "CREATE_FUNERAL_TASK", "FuneralTask", task.id, null, task);
     return res.status(201).json(task);
   });
 
   app.patch("/api/funeral-tasks/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const before = null; // no single-task fetch in storage; before state not available
     const updated = await storage.updateFuneralTask(id, req.body, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Funeral task not found" });
+    await auditLog(req, "UPDATE_FUNERAL_TASK", "FuneralTask", id, before, updated);
     return res.json(updated);
   });
 
@@ -3832,8 +3887,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/mortuary-intakes", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const status = typeof req.query.status === "string" && req.query.status !== "all" ? req.query.status : undefined;
     return res.json(await storage.getMortuaryIntakesByOrg(user.organizationId, { status, limit, offset }));
   });
@@ -3958,7 +4013,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/fleet", requireAuth, requireTenantScope, requirePermission("read:fleet"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const rows = await storage.getFleetVehicles(user.organizationId);
     return res.json(rows.slice(offset, offset + limit));
   });
@@ -3993,7 +4048,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agentId = req.query.agentId as string | undefined;
     const filterAgent = isAgent ? user.id : agentId;
     const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const rows = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, filterAgent);
     return res.json(rows.slice(offset, offset + limit));
   });
@@ -4003,8 +4058,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/leads", requireAuth, requireTenantScope, requirePermission("read:lead"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const list = isAgent
@@ -4109,7 +4164,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/payment-automation-runs", requireAuth, requireTenantScope, requirePermission("read:notification"), async (req, res) => {
     const user = req.user as any;
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     return res.json(await storage.getPaymentAutomationRuns(user.organizationId, limit));
   });
 
@@ -4127,8 +4182,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent) return res.json([]);
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
@@ -4375,7 +4430,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const q = typeof req.query.q === "string" ? req.query.q : undefined;
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     const limit = Math.min(parseInt(req.query.limit as string) || 200, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     return res.json(await storage.getQuotationsByOrg(user.organizationId, { q, status, limit, offset }));
   });
 
@@ -4559,7 +4614,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getApprovalRequests(user.organizationId, status));
   });
 
-  app.post("/api/approvals", requireAuth, requireTenantScope, async (req, res) => {
+  app.post("/api/approvals", requireAuth, requireTenantScope, requireAnyPermission("write:policy", "write:claim", "write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const parsed = insertApprovalRequestSchema.parse({
       ...req.body,
@@ -4598,7 +4653,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/payroll/employees", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const rows = await storage.getPayrollEmployees(user.organizationId);
     return res.json(rows.slice(offset, offset + limit));
   });
@@ -4613,7 +4668,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/payroll/runs", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const rows = await storage.getPayrollRuns(user.organizationId);
     return res.json(rows.slice(offset, offset + limit));
   });
@@ -4933,8 +4988,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const id = String(req.params.id);
     const user = req.user as any;
     const existing = await storage.getGroup(id, user.organizationId);
-    if (!existing) return res.status(404).json({ error: "Group not found" });
-    if (existing.organizationId !== user.organizationId) return res.status(403).json({ error: "Forbidden" });
+    if (!existing) return res.status(404).json({ message: "Group not found" });
+    if (existing.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
     const updated = await storage.updateGroup(id, req.body, user.organizationId);
     await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
     return res.json(updated);
@@ -4944,7 +4999,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const groupId = String(req.params.id);
     const group = await storage.getGroup(groupId, user.organizationId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group) return res.status(404).json({ message: "Group not found" });
     const policiesList = await storage.getPoliciesByGroupId(user.organizationId, groupId);
     const enriched = await Promise.all(
       policiesList.map(async (p) => {
@@ -5016,7 +5071,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/settlements", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const rows = await storage.getSettlements(user.organizationId);
     return res.json(rows.slice(offset, offset + limit));
   });
@@ -5039,8 +5094,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const existing = await storage.getSettlements(user.organizationId);
     const settlement = existing.find(s => s.id === id);
-    if (!settlement) return res.status(404).json({ error: "Settlement not found" });
-    if (settlement.initiatedBy === user.id) return res.status(400).json({ error: "Cannot approve own settlement" });
+    if (!settlement) return res.status(404).json({ message: "Settlement not found" });
+    if (settlement.initiatedBy === user.id) return res.status(400).json({ message: "Cannot approve own settlement" });
     const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: user.id }, user.organizationId);
     await auditLog(req, "APPROVE_SETTLEMENT", "Settlement", id, settlement, updated);
     return res.json(updated);

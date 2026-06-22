@@ -265,7 +265,7 @@ export const policyDocuments = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
-    policyId: uuid("policy_id").notNull().references(() => policies.id),
+    policyId: uuid("policy_id").notNull().references(() => policies.id, { onDelete: "cascade" }),
     documentType: text("document_type").notNull(),
     label: text("label"),
     fileName: text("file_name").notNull(),
@@ -288,7 +288,7 @@ export const waitingPeriodWaivers = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
-    policyId: uuid("policy_id").notNull().references(() => policies.id),
+    policyId: uuid("policy_id").notNull().references(() => policies.id, { onDelete: "cascade" }),
     requestedBy: uuid("requested_by").notNull().references(() => users.id),
     status: text("status").default("pending").notNull(),
     reason: text("reason"),
@@ -684,7 +684,7 @@ export const policyMembers = pgTable(
     organizationId: uuid("organization_id").references(() => organizations.id),
     policyId: uuid("policy_id")
       .notNull()
-      .references(() => policies.id),
+      .references(() => policies.id, { onDelete: "cascade" }),
     clientId: uuid("client_id").references(() => clients.id),
     dependentId: uuid("dependent_id").references(() => dependents.id),
     memberNumber: text("member_number"),
@@ -705,7 +705,7 @@ export const policyStatusHistory = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     policyId: uuid("policy_id")
       .notNull()
-      .references(() => policies.id),
+      .references(() => policies.id, { onDelete: "cascade" }),
     fromStatus: text("from_status"),
     toStatus: text("to_status").notNull(),
     reason: text("reason"),

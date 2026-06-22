@@ -7,6 +7,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
+import { structuredLog } from "./logger";
 
 const A4_W = 595.28;
 const A4_H = 841.89;
@@ -168,6 +169,7 @@ export async function streamFuneralDocumentToResponse(
 
   const gap = () => { y += 8; };
 
+  try {
   // ── 1. Deceased ─────────────────────────────────────────────
   sectionHeader("1. Deceased Details");
   const deceasedGenderLabel = fc.deceasedGender
@@ -238,5 +240,10 @@ export async function streamFuneralDocumentToResponse(
       MARGIN, footerY + 6, { width: COL, align: "center" }
     );
 
-  doc.end();
+    doc.end();
+  } catch (err: any) {
+    structuredLog("error", "Funeral document PDF generation failed", { caseId, error: err?.message });
+    try { doc.end(); } catch { /* already ended */ }
+    res.destroy();
+  }
 }
