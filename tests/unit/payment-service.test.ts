@@ -60,6 +60,7 @@ vi.mock("../../server/tenant-db", () => ({
 
 vi.mock("../../server/policy-status-on-payment", () => ({
   applyPolicyStatusForClearedPayment: vi.fn(),
+  advancePolicyCycle: vi.fn().mockResolvedValue({ periodFrom: "2026-06-01", periodTo: "2026-06-30" }),
 }));
 
 vi.mock("../../server/outbox", () => ({
