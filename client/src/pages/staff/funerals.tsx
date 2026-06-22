@@ -995,7 +995,7 @@ function CaseFormDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>Start by choosing the service type. For a policy claim, look up the policy and pick the deceased member — their details fill in automatically.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4 pt-1">
 
           {/* Step 1 — service type drives the rest of the flow */}
           <div className="space-y-1.5">
