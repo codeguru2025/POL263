@@ -273,6 +273,21 @@ if (enableCsrf) {
       // Start daily backup sync to Supabase (if SUPABASE_BACKUP_URL is configured)
       import("./backup-sync").then(({ startBackupScheduler }) => startBackupScheduler()).catch(() => {});
 
+      // Ensure all orgs have every role defined in ROLE_PERMISSION_MAP (e.g. newly added roles like "driver")
+      import("./seed").then(async ({ seedPermissions, seedOrgRoles }) => {
+        const { storage } = await import("./storage");
+        try {
+          const permMap = await seedPermissions();
+          const orgs = await storage.getOrganizations();
+          for (const org of orgs) {
+            await seedOrgRoles(org.id, permMap);
+          }
+          structuredLog("info", "Role sync complete", { orgCount: orgs.length });
+        } catch (err: any) {
+          structuredLog("warn", "Startup role sync failed (non-fatal)", { error: err?.message });
+        }
+      }).catch(() => {});
+
       // Fix 12: Warn in production if platform-owner MFA is not enforced.
       // The PLATFORM_OWNER_EMAIL account bypasses all RBAC — a compromise is catastrophic.
       if (process.env.NODE_ENV === "production" && !process.env.PLATFORM_OWNER_MFA_ENFORCED) {
