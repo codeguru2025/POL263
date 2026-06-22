@@ -6,7 +6,7 @@
 import { storage, findPaymentIntentById } from "./storage";
 import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from "./tenant-db";
 import { rollbackClawbacks } from "./route-helpers";
-import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
+import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { getPaynowConfig, getPaynowIntegrationId } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaymentReceipt } from "@shared/schema";
@@ -672,6 +672,10 @@ export async function applyPaymentToPolicy(
         recordedByForLedger = urow?.id ?? null;
       }
       const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
+
+      // Advance the policy cycle first so the period is stamped on tx and receipt
+      const paymentPeriod = await advancePolicyCycle(txDb, intent.policyId, policy, today);
+
       const [tx] = await txDb.insert(paymentTransactions).values({
         organizationId: intent.organizationId,
         policyId: intent.policyId,
@@ -687,6 +691,8 @@ export async function applyPaymentToPolicy(
         postedDate: today,
         valueDate: today,
         recordedBy: recordedByForLedger ?? undefined,
+        periodFrom: paymentPeriod.periodFrom,
+        periodTo: paymentPeriod.periodTo,
       }).returning();
       transaction = tx;
 
@@ -700,6 +706,8 @@ export async function applyPaymentToPolicy(
         amount: String(intent.amount),
         currency: intent.currency,
         paymentChannel,
+        periodFrom: paymentPeriod.periodFrom,
+        periodTo: paymentPeriod.periodTo,
         issuedByUserId: recordedByForLedger ?? undefined,
         status: "issued",
         printFormat: "thermal_80mm",
@@ -806,6 +814,8 @@ export async function applyGroupPaymentToPolicies(
         // Lock policy row to prevent concurrent status changes
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${alloc.policyId} FOR UPDATE`);
 
+        const paymentPeriod = await advancePolicyCycle(txDb, alloc.policyId, policy, today);
+
         const [newTx] = await txDb.insert(paymentTransactions).values({
           organizationId: orgId,
           policyId: alloc.policyId,
@@ -822,6 +832,8 @@ export async function applyGroupPaymentToPolicies(
           valueDate: today,
           notes: "Group PayNow",
           recordedBy: recordedByForLedger ?? undefined,
+          periodFrom: paymentPeriod.periodFrom,
+          periodTo: paymentPeriod.periodTo,
         }).returning();
 
         await txDb.insert(paymentReceipts).values({
@@ -833,6 +845,8 @@ export async function applyGroupPaymentToPolicies(
           amount,
           currency,
           paymentChannel: "paynow_ecocash",
+          periodFrom: paymentPeriod.periodFrom,
+          periodTo: paymentPeriod.periodTo,
           issuedByUserId: recordedByForLedger ?? undefined,
           status: "issued",
           metadataJson: { groupPaymentIntentId: groupIntentId, paynowReference: groupIntent.paynowReference, transactionId: newTx.id },

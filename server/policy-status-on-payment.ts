@@ -5,8 +5,99 @@
  */
 
 import { eq, sql } from "drizzle-orm";
-import { policies, policyStatusHistory } from "@shared/schema";
+import { policies, policyStatusHistory, productVersions } from "@shared/schema";
 import type { Policy } from "@shared/schema";
+
+// ─── Cycle helpers ───────────────────────────────────────────
+
+function addDays(dateStr: string, n: number): string {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
+/** Signed days: positive = b is after a */
+function daysBetween(aStr: string, bStr: string): number {
+  return Math.round(
+    (new Date(bStr + "T00:00:00").getTime() - new Date(aStr + "T00:00:00").getTime()) / 86400000
+  );
+}
+
+function cycleDays(schedule: string): number {
+  if (schedule === "weekly") return 7;
+  if (schedule === "biweekly") return 14;
+  if (schedule === "yearly") return 365;
+  return 30; // monthly
+}
+
+/**
+ * Compute and persist the new cover cycle for a policy after a cleared payment.
+ *
+ * Rules:
+ *  - Period always anchors to the due date (currentCycleEnd + 1), not the actual payment date.
+ *  - First payment has no prior cycle — period starts from the payment date.
+ *  - Late payment: grace days used accumulate. Early/on-time: grace resets to 0 used.
+ *  - graceEndDate = nextDueDate + remaining grace days.
+ *
+ * Call this inside the same DB transaction as the payment insert, BEFORE inserting
+ * the transaction row so the returned period can be stamped on it.
+ */
+export async function advancePolicyCycle(
+  db: { select(fields?: any): any; update(table: any): any },
+  policyId: string,
+  policy: Policy | null,
+  postedDate: string,
+): Promise<{ periodFrom: string; periodTo: string }> {
+  if (!policy) return { periodFrom: postedDate, periodTo: postedDate };
+
+  // Fetch grace period from the product version
+  let gracePeriodDays = 30;
+  if (policy.productVersionId) {
+    const [pv] = await (db as any).select({ gracePeriodDays: productVersions.gracePeriodDays })
+      .from(productVersions)
+      .where(eq(productVersions.id, policy.productVersionId))
+      .limit(1);
+    if (pv?.gracePeriodDays != null) gracePeriodDays = Number(pv.gracePeriodDays);
+  }
+
+  const schedule = policy.paymentSchedule ?? "monthly";
+  const currentCycleEnd = policy.currentCycleEnd ? String(policy.currentCycleEnd) : null;
+  const currentGraceUsed = (policy as any).graceUsedDays ?? 0;
+
+  let periodFrom: string;
+  let daysLate: number;
+
+  if (!currentCycleEnd) {
+    // First payment — no prior cycle, period starts from today
+    periodFrom = postedDate;
+    daysLate = 0;
+  } else {
+    // Due date = day after the last covered day
+    const dueDate = addDays(currentCycleEnd, 1);
+    daysLate = Math.max(0, daysBetween(dueDate, postedDate));
+    periodFrom = dueDate; // always anchored to due date, even if paid late or early
+  }
+
+  const len = cycleDays(schedule);
+  const periodTo = addDays(periodFrom, len - 1);   // last covered day
+  const nextDueDate = addDays(periodFrom, len);     // when next payment is due
+
+  const newGraceUsed = daysLate > 0
+    ? Math.min(gracePeriodDays, currentGraceUsed + daysLate)
+    : 0; // on-time or early → fully reset
+
+  const remainingGrace = Math.max(0, gracePeriodDays - newGraceUsed);
+  const newGraceEndDate = addDays(nextDueDate, remainingGrace);
+
+  await (db as any).update(policies).set({
+    currentCycleStart: periodFrom,
+    currentCycleEnd: periodTo,
+    graceEndDate: newGraceEndDate,
+    graceUsedDays: newGraceUsed,
+  }).where(eq(policies.id, policyId));
+
+  return { periodFrom, periodTo };
+}
 
 /**
  * Update policy status and insert status history when a cleared payment is recorded.

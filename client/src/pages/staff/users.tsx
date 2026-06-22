@@ -28,6 +28,8 @@ export default function StaffUsers() {
   const [newUser, setNewUser] = useState({ email: "", displayName: "", roleIds: [] as string[], branchId: "", password: "", phone: "", address: "", nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", nextOfKinName: "", nextOfKinPhone: "" });
 
   // Delete / reassign dialog state
+  const [viewingUser, setViewingUser] = useState<any>(null);
+
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [deleteAgentPolicies, setDeleteAgentPolicies] = useState<{ count: number; policies: any[] } | null>(null);
   const [reassignToId, setReassignToId] = useState("__none__");
@@ -153,6 +155,7 @@ export default function StaffUsers() {
       cashier: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400",
       claims_officer: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
       fleet_ops: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400",
+      driver: "bg-slate-100 text-slate-800 dark:bg-slate-900/30 dark:text-slate-400",
       staff: "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400",
     };
     return colors[name] || colors.staff;
@@ -322,7 +325,7 @@ export default function StaffUsers() {
                 </TableHeader>
                 <TableBody>
                   {filtered.map((u: any) => (
-                    <TableRow key={u.id} data-testid={`row-user-${u.id}`}>
+                    <TableRow key={u.id} data-testid={`row-user-${u.id}`} className="cursor-pointer hover:bg-muted/40" onClick={() => setViewingUser(u)}>
                       <TableCell className="font-medium">{u.displayName || "—"}</TableCell>
                       <TableCell className="text-muted-foreground">{u.email}</TableCell>
                       <TableCell className="text-muted-foreground">{u.phone || "—"}</TableCell>
@@ -338,7 +341,7 @@ export default function StaffUsers() {
                       <TableCell>
                         {u.referralCode ? (
                           <div className="flex flex-col gap-1">
-                            <button className="inline-flex items-center gap-1 text-sm font-mono bg-muted px-2 py-0.5 rounded hover:bg-muted/80" onClick={() => copyToClipboard(`${window.location.origin}/join?ref=${u.referralCode}`)} data-testid={`button-copy-referral-${u.id}`}>
+                            <button className="inline-flex items-center gap-1 text-sm font-mono bg-muted px-2 py-0.5 rounded hover:bg-muted/80" onClick={(e) => { e.stopPropagation(); copyToClipboard(`${window.location.origin}/join?ref=${u.referralCode}`); }} data-testid={`button-copy-referral-${u.id}`}>
                               {u.referralCode} <Copy className="h-3 w-3" />
                             </button>
                           </div>
@@ -350,7 +353,7 @@ export default function StaffUsers() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
                           <Button variant="ghost" size="sm" onClick={() => setEditingUser({ ...u, roleIds: u.roles?.map((r: any) => r.id) || [], branchId: u.branchId || "" })} data-testid={`button-edit-user-${u.id}`} title="Edit user">
                             <Pencil className="h-4 w-4" />
@@ -639,6 +642,104 @@ export default function StaffUsers() {
               >
                 {resetPasswordMutation.isPending ? "Resetting..." : "Reset password"}
               </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ── User View Card ── */}
+        <Dialog open={!!viewingUser} onOpenChange={(open) => { if (!open) setViewingUser(null); }}>
+          <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col p-0">
+            <div className="px-6 pt-6 pb-2 shrink-0">
+              <DialogHeader>
+                <DialogTitle>{viewingUser?.displayName || viewingUser?.email || "User Details"}</DialogTitle>
+                <DialogDescription>Full profile for this team member.</DialogDescription>
+              </DialogHeader>
+            </div>
+            {viewingUser && (
+              <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Display Name</p>
+                    <p className="font-medium">{viewingUser.displayName || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Email</p>
+                    <p className="font-medium break-all">{viewingUser.email || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Phone</p>
+                    <p className="font-medium">{viewingUser.phone || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">National ID</p>
+                    <p className="font-medium font-mono">{viewingUser.nationalId || "—"}</p>
+                  </div>
+                  <div className="col-span-2 space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Address</p>
+                    <p className="font-medium">{viewingUser.address || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Date of Birth</p>
+                    <p className="font-medium">{viewingUser.dateOfBirth || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Gender</p>
+                    <p className="font-medium">{viewingUser.gender || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Marital Status</p>
+                    <p className="font-medium">{viewingUser.maritalStatus || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Branch</p>
+                    <p className="font-medium">{branches.find((b: any) => b.id === viewingUser.branchId)?.name || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Next of Kin</p>
+                    <p className="font-medium">{viewingUser.nextOfKinName || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Next of Kin Phone</p>
+                    <p className="font-medium">{viewingUser.nextOfKinPhone || "—"}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Status</p>
+                    <Badge variant={viewingUser.isActive ? "default" : "secondary"} className={viewingUser.isActive ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : ""}>
+                      {viewingUser.isActive ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Joined</p>
+                    <p className="font-medium">{viewingUser.createdAt ? new Date(viewingUser.createdAt).toLocaleDateString() : "—"}</p>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-xs text-muted-foreground">Roles</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {viewingUser.roles?.length > 0 ? viewingUser.roles.map((r: any) => (
+                      <span key={r.id} className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${roleColor(r.name)}`}>
+                        {r.name}
+                      </span>
+                    )) : <span className="text-muted-foreground text-sm">No roles</span>}
+                  </div>
+                </div>
+                {viewingUser.referralCode && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-muted-foreground">Referral Link</p>
+                    <button className="inline-flex items-center gap-1 text-sm font-mono bg-muted px-2 py-0.5 rounded hover:bg-muted/80" onClick={() => copyToClipboard(`${window.location.origin}/join?ref=${viewingUser.referralCode}`)}>
+                      {viewingUser.referralCode} <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            <DialogFooter className="px-6 pb-6 pt-4 shrink-0 border-t flex-wrap gap-2">
+              {canEditUsers && viewingUser && (
+                <Button variant="outline" className="mr-auto" onClick={() => { setEditingUser({ ...viewingUser, roleIds: viewingUser.roles?.map((r: any) => r.id) || [], branchId: viewingUser.branchId || "" }); setViewingUser(null); }}>
+                  <Pencil className="h-4 w-4 mr-1" /> Edit
+                </Button>
+              )}
+              <Button onClick={() => setViewingUser(null)}>Close</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

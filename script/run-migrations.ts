@@ -158,6 +158,7 @@ async function run() {
   // Failures here are non-fatal: a temporarily unreachable tenant DB must not block deployment.
   const dedicatedTenantEnvs = [
     { key: "FALAKHE_DATABASE_URL", label: "FALAKHE_DATABASE_URL" },
+    { key: "SUPABASE_BACKUP_URL", label: "SUPABASE_BACKUP_URL (backup)" },
   ];
   for (const { key, label } of dedicatedTenantEnvs) {
     const raw = process.env[key]?.trim();

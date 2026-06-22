@@ -139,6 +139,10 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     row("Amount", `${receipt.currency} ${Number(receipt.amount).toFixed(2)}`);
     row("Channel", String(receipt.paymentChannel || "—").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()));
     const meta = receipt.metadataJson as Record<string, string> | null;
+    if (receipt.periodFrom && receipt.periodTo) {
+      const pfmt = (s: string) => fmtDate(new Date(s + "T00:00:00"));
+      row("Cover Period", `${pfmt(receipt.periodFrom)} – ${pfmt(receipt.periodTo)}`);
+    }
     if (meta?.paynowReference) row("Paynow Reference", meta.paynowReference);
     if (meta?.mobileNumber) row("Mobile Number", meta.mobileNumber);
     row("Date & Time", fmtDateTime(new Date(receipt.issuedAt)));
@@ -263,6 +267,10 @@ export async function streamReceiptToResponse(
   row("Amount", `${receipt.currency} ${Number(receipt.amount).toFixed(2)}`);
   row("Channel", String(receipt.paymentChannel || "—").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()));
   const meta = receipt.metadataJson as Record<string, string> | null;
+  if (receipt.periodFrom && receipt.periodTo) {
+    const pfmt2 = (s: string) => fmtDate(new Date(s + "T00:00:00"));
+    row("Cover Period", `${pfmt2(receipt.periodFrom)} – ${pfmt2(receipt.periodTo)}`);
+  }
   if (meta?.paynowReference) row("Paynow Reference", meta.paynowReference);
   if (meta?.mobileNumber) row("Mobile Number", meta.mobileNumber);
   row("Date & Time", fmtDateTime(new Date(receipt.issuedAt)));
@@ -387,6 +395,10 @@ export async function streamThermalReceiptToResponse(
   const channel = String(receipt.paymentChannel || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   ctr(channel);
   const meta = receipt.metadataJson as Record<string, string> | null;
+  if (receipt.periodFrom && receipt.periodTo) {
+    const pfmtT = (s: string) => fmtDate(new Date(s + "T00:00:00"));
+    lft("Period:", `${pfmtT(receipt.periodFrom)} – ${pfmtT(receipt.periodTo)}`);
+  }
   if (meta?.paynowReference) lft("Ref:", meta.paynowReference);
   if (meta?.mobileNumber) lft("Mobile:", meta.mobileNumber);
   rule();

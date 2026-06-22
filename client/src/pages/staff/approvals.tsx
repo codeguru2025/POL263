@@ -11,17 +11,32 @@ import { CheckCircle2, XCircle, Clock, Loader2, Eye, ShieldCheck } from "lucide-
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
+import { getApiBase } from "@/lib/queryClient";
 
 export default function StaffApprovals() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState("pending");
   const [selectedApproval, setSelectedApproval] = useState<any>(null);
   const [resolveAction, setResolveAction] = useState<"approve" | "reject" | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [waiverRejectionReason, setWaiverRejectionReason] = useState("");
+  const [resolvingWaiverId, setResolvingWaiverId] = useState<string | null>(null);
+  const [waiverAction, setWaiverAction] = useState<"approve" | "reject" | null>(null);
 
   const { data: approvals, isLoading } = useQuery<any[]>({
     queryKey: ["/api/approvals"],
+  });
+
+  const { data: waivers, isLoading: waiversLoading } = useQuery<any[]>({
+    queryKey: ["/api/waivers"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/waivers", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
   });
 
   const resolveMutation = useMutation({
@@ -127,6 +142,53 @@ export default function StaffApprovals() {
     },
   ];
 
+  const waiverColumns: EdtColumn<any>[] = [
+    {
+      id: "policy",
+      header: "Policy",
+      accessor: (w) => w.policyId,
+      cell: (w) => (
+        <Button variant="link" size="sm" className="p-0 h-auto text-sm" onClick={() => navigate(`/staff/policies?openPolicy=${w.policyId}`)}>
+          View policy
+        </Button>
+      ),
+    },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (w) => w.status,
+      cell: (w) => statusBadge(w.status),
+    },
+    {
+      id: "reason",
+      header: "Reason",
+      accessor: (w) => w.reason || "",
+      cell: (w) => <span className="text-sm truncate max-w-[200px] block">{w.reason || "—"}</span>,
+    },
+    {
+      id: "created",
+      header: "Requested",
+      accessor: (w) => (w.createdAt ? new Date(w.createdAt).getTime() : 0),
+      cell: (w) => <span className="text-sm text-muted-foreground">{w.createdAt ? new Date(w.createdAt).toLocaleDateString() : "—"}</span>,
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      align: "right",
+      exportable: false,
+      cell: (waiver) => waiver.status === "pending" ? (
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="outline" size="sm" className="text-emerald-600 border-emerald-200 hover:bg-emerald-50" onClick={() => { setResolvingWaiverId(waiver.id); setWaiverAction("approve"); }}>
+            <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
+          </Button>
+          <Button variant="outline" size="sm" className="text-red-600 border-red-200 hover:bg-red-50" onClick={() => { setResolvingWaiverId(waiver.id); setWaiverAction("reject"); }}>
+            <XCircle className="h-4 w-4 mr-1" /> Reject
+          </Button>
+        </div>
+      ) : null,
+    },
+  ];
+
   const statusBadge = (status: string) => {
     switch (status) {
       case "pending":
@@ -174,34 +236,36 @@ export default function StaffApprovals() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-2 max-w-sm">
+          <TabsList className="flex flex-wrap h-auto max-w-md">
             <TabsTrigger value="pending" data-testid="tab-pending">
               Pending {pendingApprovals.length > 0 && <Badge variant="secondary" className="ml-2 h-5 px-1.5">{pendingApprovals.length}</Badge>}
             </TabsTrigger>
             <TabsTrigger value="resolved" data-testid="tab-resolved">Resolved</TabsTrigger>
+            <TabsTrigger value="waivers" data-testid="tab-waivers">
+              Waivers {(waivers?.filter(w => w.status === "pending").length ?? 0) > 0 && <Badge variant="secondary" className="ml-2 h-5 px-1.5">{waivers!.filter(w => w.status === "pending").length}</Badge>}
+            </TabsTrigger>
           </TabsList>
 
-          <TabsContent value={activeTab} className="mt-4">
-            <CardSection
-              title={activeTab === "pending" ? "Pending Approvals" : "Resolved Approvals"}
-              description={activeTab === "pending" ? "These requests require your review and action." : "Previously approved or rejected requests."}
-              icon={ShieldCheck}
-            >
-              {isLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                </div>
-              ) : (
-                <EnhancedDataTable
-                  columns={approvalColumns}
-                  rows={filteredApprovals}
-                  getRowKey={(a) => a.id}
-                  rowTestId={(a) => `row-approval-${a.id}`}
-                  searchPlaceholder="Search approvals…"
-                  exportFilename={`approvals-${activeTab}`}
-                  storageKey="approvals"
-                  emptyMessage={`No ${activeTab} approval requests`}
-                />
+          <TabsContent value="pending" className="mt-4">
+            <CardSection title="Pending Approvals" description="These requests require your review and action." icon={ShieldCheck}>
+              {isLoading ? <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div> : (
+                <EnhancedDataTable columns={approvalColumns} rows={pendingApprovals} getRowKey={(a) => a.id} rowTestId={(a) => `row-approval-${a.id}`} searchPlaceholder="Search approvals…" exportFilename="approvals-pending" storageKey="approvals-pending" emptyMessage="No pending approval requests" />
+              )}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="resolved" className="mt-4">
+            <CardSection title="Resolved Approvals" description="Previously approved or rejected requests." icon={ShieldCheck}>
+              {isLoading ? <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div> : (
+                <EnhancedDataTable columns={approvalColumns} rows={resolvedApprovals} getRowKey={(a) => a.id} rowTestId={(a) => `row-approval-${a.id}`} searchPlaceholder="Search approvals…" exportFilename="approvals-resolved" storageKey="approvals-resolved" emptyMessage="No resolved approval requests" />
+              )}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="waivers" className="mt-4">
+            <CardSection title="Waiting Period Waivers" description="Review and act on waiting period waiver requests submitted by agents." icon={ShieldCheck}>
+              {waiversLoading ? <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div> : (
+                <EnhancedDataTable columns={waiverColumns} rows={waivers || []} getRowKey={(w) => w.id} rowTestId={(w) => `row-waiver-${w.id}`} searchPlaceholder="Search waivers…" exportFilename="waivers" storageKey="waivers" emptyMessage="No waiver requests" />
               )}
             </CardSection>
           </TabsContent>
@@ -325,6 +389,45 @@ export default function StaffApprovals() {
                 <XCircle className="h-4 w-4 mr-1" />
               )}
               {resolveAction === "approve" ? "Confirm Approval" : "Confirm Rejection"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!resolvingWaiverId && !!waiverAction} onOpenChange={(open) => { if (!open) { setResolvingWaiverId(null); setWaiverAction(null); setWaiverRejectionReason(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{waiverAction === "approve" ? "Approve Waiver" : "Reject Waiver"}</DialogTitle>
+            <DialogDescription>
+              {waiverAction === "approve"
+                ? "The waiting period will be marked as complete and the policy will be auto-activated if inactive."
+                : "Provide a reason for rejection."}
+            </DialogDescription>
+          </DialogHeader>
+          {waiverAction === "reject" && (
+            <div className="space-y-2">
+              <Label>Rejection Reason</Label>
+              <Textarea value={waiverRejectionReason} onChange={(e) => setWaiverRejectionReason(e.target.value)} placeholder="Why is this waiver being rejected?" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setResolvingWaiverId(null); setWaiverAction(null); setWaiverRejectionReason(""); }}>Cancel</Button>
+            <Button
+              disabled={waiverAction === "reject" && !waiverRejectionReason.trim()}
+              className={waiverAction === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"}
+              onClick={async () => {
+                if (!resolvingWaiverId || !waiverAction) return;
+                const res = await apiRequest("POST", `/api/waivers/${resolvingWaiverId}/resolve`, { action: waiverAction, rejectionReason: waiverRejectionReason || undefined });
+                if (res.ok) {
+                  queryClient.invalidateQueries({ queryKey: ["/api/waivers"] });
+                  toast({ title: waiverAction === "approve" ? "Waiver approved" : "Waiver rejected" });
+                  setResolvingWaiverId(null); setWaiverAction(null); setWaiverRejectionReason("");
+                } else {
+                  const e = await res.json().catch(() => ({}));
+                  toast({ title: "Error", description: e.message, variant: "destructive" });
+                }
+              }}
+            >
+              {waiverAction === "approve" ? <><CheckCircle2 className="h-4 w-4 mr-1" /> Approve</> : <><XCircle className="h-4 w-4 mr-1" /> Reject</>}
             </Button>
           </DialogFooter>
         </DialogContent>

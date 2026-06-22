@@ -191,6 +191,7 @@ export default function StaffPolicies() {
     },
     memberAddOns: {} as Record<string, string[]>,
     newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
+    isLegacy: false,
   });
   const [createStep, setCreateStep] = useState(1);
   const [clientMode, setClientMode] = useState<"search" | "new">("search");
@@ -589,6 +590,102 @@ export default function StaffPolicies() {
     },
   });
 
+  const { data: policyDocs = [], refetch: refetchPolicyDocs } = useQuery<any[]>({
+    queryKey: ["/api/policies", selectedPolicy?.id, "documents"],
+    enabled: !!selectedPolicy?.id && showDetailView,
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/documents`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const { data: policyWaiver, refetch: refetchWaiver } = useQuery<any>({
+    queryKey: ["/api/policies", selectedPolicy?.id, "waiver-request"],
+    enabled: !!selectedPolicy?.id && showDetailView,
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy.id}/waiver-request`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+  });
+
+  const [docUploadType, setDocUploadType] = useState("other");
+  const [docUploadLabel, setDocUploadLabel] = useState("");
+  const [docUploading, setDocUploading] = useState(false);
+  const docFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [waiverReason, setWaiverReason] = useState("");
+  const [waiverNotes, setWaiverNotes] = useState("");
+  const [showWaiverDialog, setShowWaiverDialog] = useState(false);
+  const [waiverSubmitting, setWaiverSubmitting] = useState(false);
+
+  const canManageApprovals = safePermissions.includes("manage:approvals");
+
+  async function uploadPolicyDoc(file: File) {
+    setDocUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("documentType", docUploadType);
+      fd.append("label", docUploadLabel || file.name);
+      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy!.id}/documents`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Upload failed");
+      }
+      refetchPolicyDocs();
+      setDocUploadLabel("");
+      toast({ title: "Document uploaded" });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setDocUploading(false);
+      if (docFileInputRef.current) docFileInputRef.current.value = "";
+    }
+  }
+
+  async function deletePolicyDoc(docId: string) {
+    const res = await fetch(getApiBase() + `/api/policies/${selectedPolicy!.id}/documents/${docId}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+      return;
+    }
+    refetchPolicyDocs();
+    toast({ title: "Document deleted" });
+  }
+
+  async function submitWaiverRequest() {
+    setWaiverSubmitting(true);
+    try {
+      const res = await apiRequest("POST", `/api/policies/${selectedPolicy!.id}/waiver-request`, {
+        reason: waiverReason,
+        supportingNotes: waiverNotes,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to submit waiver request");
+      }
+      refetchWaiver();
+      setShowWaiverDialog(false);
+      setWaiverReason("");
+      setWaiverNotes("");
+      toast({ title: "Waiver request submitted", description: "Admins and managers have been notified." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setWaiverSubmitting(false);
+    }
+  }
+
   const createMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
       let clientId = data.clientId;
@@ -683,6 +780,7 @@ export default function StaffPolicies() {
           members,
           memberAddOns,
           beneficiary,
+          isLegacy: data.isLegacy || undefined,
         });
         return res.json();
       } catch (err) {
@@ -719,8 +817,9 @@ export default function StaffPolicies() {
         },
         memberAddOns: {},
         newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
+        isLegacy: false,
       });
-      toast({ title: "Policy created", description: `Policy ${policy.policyNumber} has been created in inactive status.` });
+      toast({ title: "Policy created", description: policy.isLegacy ? `Policy ${policy.policyNumber} has been created and auto-activated as a legacy policy.` : `Policy ${policy.policyNumber} has been created in inactive status.` });
     },
     onError: (err: Error & { clientSavedId?: string }) => {
       if (err.clientSavedId) {
@@ -863,7 +962,7 @@ export default function StaffPolicies() {
     if (editForm.paymentSchedule !== (displayPolicy.paymentSchedule || "monthly")) data.paymentSchedule = editForm.paymentSchedule;
     if (editForm.effectiveDate !== (displayPolicy.effectiveDate || "")) data.effectiveDate = editForm.effectiveDate || null;
     if (editForm.branchId !== (displayPolicy.branchId || "")) data.branchId = editForm.branchId || null;
-    if (isPlatformOwner && editForm.agentId !== (displayPolicy.agentId || "")) data.agentId = editForm.agentId || null;
+    if (canEditPremium && editForm.agentId !== (displayPolicy.agentId || "")) data.agentId = editForm.agentId || null;
     if (editForm.beneficiaryFirstName !== (displayPolicy.beneficiaryFirstName || "")) data.beneficiaryFirstName = editForm.beneficiaryFirstName || null;
     if (editForm.beneficiaryLastName !== (displayPolicy.beneficiaryLastName || "")) data.beneficiaryLastName = editForm.beneficiaryLastName || null;
     if (editForm.beneficiaryRelationship !== (displayPolicy.beneficiaryRelationship || "")) data.beneficiaryRelationship = editForm.beneficiaryRelationship || null;
@@ -1869,6 +1968,7 @@ export default function StaffPolicies() {
                       <TableHead className="text-right">Amount</TableHead>
                       <TableHead>Method</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Period</TableHead>
                       <TableHead>Reference</TableHead>
                       {(canEditPayment || canDeletePayment) && <TableHead className="text-right pr-6">Actions</TableHead>}
                     </TableRow>
@@ -1885,6 +1985,11 @@ export default function StaffPolicies() {
                             variant="payment"
                             label={p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : undefined}
                           />
+                        </TableCell>
+                        <TableCell className="text-muted-foreground tabular-nums text-xs">
+                          {p.periodFrom && p.periodTo
+                            ? `${new Date(p.periodFrom + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" })}`
+                            : "—"}
                         </TableCell>
                         <TableCell className="text-muted-foreground">{p.reference || "—"}</TableCell>
                         {(canEditPayment || canDeletePayment) && (
@@ -1923,6 +2028,7 @@ export default function StaffPolicies() {
                       <TableHead className="pl-6">Receipt #</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Channel</TableHead>
+                      <TableHead>Period</TableHead>
                       <TableHead>Issued</TableHead>
                       <TableHead className="text-right pr-6">Actions</TableHead>
                     </TableRow>
@@ -1940,6 +2046,11 @@ export default function StaffPolicies() {
                           <TableCell className="pl-6 font-mono font-medium">{displayNum}</TableCell>
                           <TableCell>{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
                           <TableCell className="capitalize">{r.paymentChannel}</TableCell>
+                          <TableCell className="text-muted-foreground tabular-nums text-xs">
+                            {r.periodFrom && r.periodTo
+                              ? new Date(r.periodFrom + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" })
+                              : "—"}
+                          </TableCell>
                           <TableCell>{new Date(r.issuedAt).toLocaleDateString("en-GB")}</TableCell>
                           <TableCell className="text-right pr-6">
                             <div className="flex items-center justify-end gap-1">
@@ -2029,6 +2140,101 @@ export default function StaffPolicies() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">Leave dates empty for full payment history. Uses tenant logo and signature from Settings.</p>
+          </CardSection>
+
+          <CardSection title="Policy Documents" description="Upload and manage documents for this policy (PDF, images, Word, audio, video — max 10MB each)." icon={FileText} contentClassName="space-y-4">
+            {canWritePolicy && (
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Document type</Label>
+                  <Select value={docUploadType} onValueChange={setDocUploadType}>
+                    <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="other">General</SelectItem>
+                      <SelectItem value="id_copy">ID Copy</SelectItem>
+                      <SelectItem value="policy_schedule">Policy Schedule</SelectItem>
+                      <SelectItem value="payment_proof">Payment Proof</SelectItem>
+                      <SelectItem value="claim_support">Claim Support</SelectItem>
+                      <SelectItem value="medical">Medical</SelectItem>
+                      <SelectItem value="waiver_support">Waiver Support</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Label (optional)</Label>
+                  <Input className="w-48 h-9" placeholder="e.g. ID copy front" value={docUploadLabel} onChange={(e) => setDocUploadLabel(e.target.value)} />
+                </div>
+                <Button variant="outline" className="gap-2 h-9" disabled={docUploading} onClick={() => docFileInputRef.current?.click()}>
+                  {docUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Upload file
+                </Button>
+                <input ref={docFileInputRef} type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.doc,.docx,.mp3,.mp4,.wav,.m4a,.ogg,.avi,.mov" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPolicyDoc(f); }} />
+              </div>
+            )}
+            {policyDocs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No documents uploaded yet.</p>
+            ) : (
+              <div className="divide-y divide-border rounded-md border">
+                {policyDocs.map((doc: any) => (
+                  <div key={doc.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{doc.label || doc.fileName}</p>
+                      <p className="text-xs text-muted-foreground">{doc.documentType} · {doc.mimeType} · {doc.fileSize ? `${(doc.fileSize / 1024).toFixed(0)} KB` : ""}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Open document"><Eye className="h-3.5 w-3.5" /></Button>
+                      </a>
+                      <a href={doc.fileUrl} download={doc.fileName}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Download"><Download className="h-3.5 w-3.5" /></Button>
+                      </a>
+                      {canWritePolicy && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="Delete" onClick={() => deletePolicyDoc(doc.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardSection>
+
+          <CardSection title="Waiting Period Waiver" description="Request or view the status of a waiting period waiver for this policy." icon={ShieldCheck} contentClassName="space-y-3">
+            {policyWaiver ? (
+              <div className={`rounded-md border p-3 space-y-1 ${policyWaiver.status === "approved" ? "border-emerald-300 bg-emerald-50/50" : policyWaiver.status === "rejected" ? "border-red-300 bg-red-50/50" : "border-amber-300 bg-amber-50/50"}`}>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className={policyWaiver.status === "approved" ? "border-emerald-500 text-emerald-700" : policyWaiver.status === "rejected" ? "border-red-500 text-red-700" : "border-amber-500 text-amber-700"}>
+                    {policyWaiver.status.charAt(0).toUpperCase() + policyWaiver.status.slice(1)}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">{policyWaiver.createdAt ? new Date(policyWaiver.createdAt).toLocaleDateString() : ""}</span>
+                </div>
+                {policyWaiver.reason && <p className="text-sm"><span className="font-medium">Reason:</span> {policyWaiver.reason}</p>}
+                {policyWaiver.supportingNotes && <p className="text-sm"><span className="font-medium">Notes:</span> {policyWaiver.supportingNotes}</p>}
+                {policyWaiver.rejectionReason && <p className="text-sm text-destructive"><span className="font-medium">Rejection reason:</span> {policyWaiver.rejectionReason}</p>}
+                {canManageApprovals && policyWaiver.status === "pending" && (
+                  <div className="flex gap-2 pt-1">
+                    <Button size="sm" className="gap-1" onClick={async () => {
+                      const res = await apiRequest("POST", `/api/waivers/${policyWaiver.id}/resolve`, { action: "approve" });
+                      if (res.ok) { refetchWaiver(); toast({ title: "Waiver approved", description: "Policy waiting period waived and activated." }); }
+                      else { const e = await res.json().catch(() => ({})); toast({ title: "Error", description: e.message, variant: "destructive" }); }
+                    }}><CheckCircle2 className="h-3.5 w-3.5" /> Approve</Button>
+                    <Button size="sm" variant="destructive" className="gap-1" onClick={async () => {
+                      const reason = window.prompt("Rejection reason (optional):");
+                      const res = await apiRequest("POST", `/api/waivers/${policyWaiver.id}/resolve`, { action: "reject", rejectionReason: reason || "" });
+                      if (res.ok) { refetchWaiver(); toast({ title: "Waiver rejected" }); }
+                      else { const e = await res.json().catch(() => ({})); toast({ title: "Error", description: e.message, variant: "destructive" }); }
+                    }}><X className="h-3.5 w-3.5" /> Reject</Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">No waiver request has been submitted for this policy.</p>
+                {canWritePolicy && (
+                  <Button variant="outline" size="sm" className="gap-2" onClick={() => setShowWaiverDialog(true)}>
+                    <ShieldCheck className="h-4 w-4" /> Request waiver
+                  </Button>
+                )}
+              </div>
+            )}
           </CardSection>
             </TabsContent>
           </Tabs>
@@ -2138,6 +2344,32 @@ export default function StaffPolicies() {
                   <Button variant="outline" onClick={() => { setShowPolicyDocViewer(false); setPolicyDocViewerUrl(""); }}>Close</Button>
                 </div>
               </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={showWaiverDialog} onOpenChange={(open) => { setShowWaiverDialog(open); if (!open) { setWaiverReason(""); setWaiverNotes(""); } }}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Request Waiting Period Waiver</DialogTitle>
+                <DialogDescription>Provide the reason for the waiver. Admins and managers will review your request before approving.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <div>
+                  <Label>Reason for waiver <span className="text-destructive">*</span></Label>
+                  <Textarea placeholder="e.g. Client had an active policy with another insurer for the past 2 years" value={waiverReason} onChange={(e) => setWaiverReason(e.target.value)} rows={3} />
+                </div>
+                <div>
+                  <Label>Supporting notes (optional)</Label>
+                  <Textarea placeholder="Any additional context or document references" value={waiverNotes} onChange={(e) => setWaiverNotes(e.target.value)} rows={2} />
+                </div>
+                <p className="text-xs text-muted-foreground">Upload supporting documents (payment history, previous policy docs) in the Documents section of this policy.</p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowWaiverDialog(false)}>Cancel</Button>
+                <Button disabled={!waiverReason.trim() || waiverSubmitting} onClick={submitWaiverRequest}>
+                  {waiverSubmitting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Submit request
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
 
@@ -2255,7 +2487,7 @@ export default function StaffPolicies() {
             <DialogHeader>
               <DialogTitle>Edit Policy Details</DialogTitle>
               <DialogDescription>
-                Update details for policy <strong>{displayPolicy?.policyNumber}</strong>.{!isPlatformOwner && " Agent assignment cannot be changed."}
+                Update details for policy <strong>{displayPolicy?.policyNumber}</strong>.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-6">
@@ -2293,7 +2525,7 @@ export default function StaffPolicies() {
                     </SelectContent>
                   </Select>
                 </div>
-                {isPlatformOwner && (
+                {canEditPremium && (
                   <div className="col-span-2">
                     <Label className="text-xs">Agent</Label>
                     <Select value={editForm.agentId || "walk-in"} onValueChange={(v) => setEditForm({ ...editForm, agentId: v === "walk-in" ? "" : v })}>
@@ -2372,10 +2604,8 @@ export default function StaffPolicies() {
 
               <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
                 <strong>Note:</strong> {canEditPremium
-                  ? "Policy number and client cannot be changed. Premium can be overridden above; it otherwise auto-calculates from the product, add-ons, and members."
-                  : isPlatformOwner
-                  ? "Premium amount, policy number, and client cannot be changed. Agent can be reassigned above."
-                  : "Agent assignment, premium amount, policy number, and client cannot be changed after policy creation."
+                  ? "Policy number and client cannot be changed. Premium can be overridden above; it otherwise auto-calculates from the product, add-ons, and members. Agent can be reassigned."
+                  : "Premium amount, agent assignment, policy number, and client cannot be changed without manager or administrator access."
                 }
               </div>
             </div>
@@ -3608,8 +3838,29 @@ export default function StaffPolicies() {
                   <p className="text-sm font-medium">
                     Premium (from product & add-ons): {createForm.currency} {calculatedPremium ?? "—"}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-1">Premium is calculated from the selected product version and add-ons; it cannot be edited.</p>
+                  {canEditPremium ? (
+                    <p className="text-xs text-muted-foreground mt-1">Auto-calculated above. Enter an override below only if needed.</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground mt-1">Premium is calculated from the selected product version and add-ons.</p>
+                  )}
                 </div>
+                {canEditPremium && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label>Override premium ({createForm.currency})</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder={calculatedPremium ?? "Leave blank to use calculated"}
+                        value={createForm.premiumAmount}
+                        onChange={(e) => setCreateForm({ ...createForm, premiumAmount: e.target.value })}
+                        data-testid="input-create-premium-override"
+                      />
+                      <p className="text-xs text-muted-foreground mt-0.5">Leave blank to use the auto-calculated amount.</p>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Currency</Label>
@@ -3640,6 +3891,20 @@ export default function StaffPolicies() {
                     />
                   </div>
                 </div>
+                {canEditPremium && (
+                  <div className="flex items-start gap-3 border rounded-md p-3 bg-amber-50/50 dark:bg-amber-950/20">
+                    <Checkbox
+                      id="create-legacy-flag"
+                      checked={createForm.isLegacy}
+                      onCheckedChange={(v) => setCreateForm({ ...createForm, isLegacy: !!v })}
+                      data-testid="checkbox-is-legacy"
+                    />
+                    <div className="space-y-1 leading-none">
+                      <label htmlFor="create-legacy-flag" className="text-sm font-medium cursor-pointer">Mark as legacy / pre-existing policy</label>
+                      <p className="text-xs text-muted-foreground">This policy was captured from a prior system. It will be automatically activated with no waiting period.</p>
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-3 border rounded-md p-3">
                   <p className="text-sm font-medium">Saved mobile wallet (automation)</p>
                   <p className="text-xs text-muted-foreground">When automation runs for overdue balances, we use this number so the client can approve on their phone. Stored cards are not used for recurring collection.</p>
@@ -3757,7 +4022,7 @@ export default function StaffPolicies() {
               <Button
                 onClick={() => createMutation.mutate({
                   ...createForm,
-                  premiumAmount: calculatedPremium ?? "",
+                  premiumAmount: (canEditPremium && createForm.premiumAmount) ? createForm.premiumAmount : (calculatedPremium ?? ""),
                 })}
                 disabled={
                   createMutation.isPending ||

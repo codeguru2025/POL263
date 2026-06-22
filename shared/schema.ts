@@ -259,6 +259,52 @@ export const clientDocuments = pgTable(
   ]
 );
 
+// ─── POLICY DOCUMENTS ────────────────────────────────────────
+export const policyDocuments = pgTable(
+  "policy_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    policyId: uuid("policy_id").notNull().references(() => policies.id),
+    documentType: text("document_type").notNull(),
+    label: text("label"),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type"),
+    fileUrl: text("file_url").notNull(),
+    storageKey: text("storage_key"),
+    fileSize: integer("file_size"),
+    uploadedBy: uuid("uploaded_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("policy_docs_org_idx").on(t.organizationId),
+    index("policy_docs_policy_idx").on(t.policyId),
+  ]
+);
+
+// ─── WAITING PERIOD WAIVERS ─────────────────────────────────
+export const waitingPeriodWaivers = pgTable(
+  "waiting_period_waivers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    policyId: uuid("policy_id").notNull().references(() => policies.id),
+    requestedBy: uuid("requested_by").notNull().references(() => users.id),
+    status: text("status").default("pending").notNull(),
+    reason: text("reason"),
+    supportingNotes: text("supporting_notes"),
+    resolvedBy: uuid("resolved_by").references(() => users.id),
+    resolvedAt: timestamp("resolved_at"),
+    rejectionReason: text("rejection_reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("wpw_org_idx").on(t.organizationId),
+    index("wpw_policy_idx").on(t.policyId),
+    index("wpw_status_idx").on(t.status),
+  ]
+);
+
 // ─── CLIENT DEVICE TOKENS (for push notifications) ───
 export const clientDeviceTokens = pgTable(
   "client_device_tokens",
@@ -605,6 +651,7 @@ export const policies = pgTable(
     currentCycleStart: date("current_cycle_start"),
     currentCycleEnd: date("current_cycle_end"),
     graceEndDate: date("grace_end_date"),
+    graceUsedDays: integer("grace_used_days").default(0).notNull(),
     lastAutoPaymentAttemptAt: timestamp("last_auto_payment_attempt_at"),
     lastAutoReminderAt: timestamp("last_auto_reminder_at"),
     cancelledAt: timestamp("cancelled_at"),
@@ -616,6 +663,7 @@ export const policies = pgTable(
     beneficiaryPhone: text("beneficiary_phone"),
     beneficiaryDependentId: uuid("beneficiary_dependent_id").references(() => dependents.id),
     version: integer("version").default(1).notNull(),
+    isLegacy: boolean("is_legacy").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -711,6 +759,8 @@ export const paymentTransactions = pgTable(
     postedDate: date("posted_date"),
     valueDate: date("value_date"),
     notes: text("notes"),
+    periodFrom: date("period_from"),
+    periodTo: date("period_to"),
     recordedBy: uuid("recorded_by").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -835,6 +885,8 @@ export const paymentReceipts = pgTable(
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
     currency: text("currency").default("USD").notNull(),
     paymentChannel: text("payment_channel").notNull(), // paynow_ecocash | paynow_card | cash | other
+    periodFrom: date("period_from"),
+    periodTo: date("period_to"),
     issuedByUserId: uuid("issued_by_user_id").references(() => users.id),
     issuedAt: timestamp("issued_at").defaultNow().notNull(),
     pdfStorageKey: text("pdf_storage_key"),
@@ -2072,6 +2124,8 @@ export const insertPermissionSchema = createInsertSchema(permissions).omit({ id:
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true });
 export const insertClientSchema = createInsertSchema(clients).omit({ id: true, createdAt: true });
 export const insertClientDocumentSchema = createInsertSchema(clientDocuments).omit({ id: true, createdAt: true });
+export const insertPolicyDocumentSchema = createInsertSchema(policyDocuments).omit({ id: true, createdAt: true });
+export const insertWaiverSchema = createInsertSchema(waitingPeriodWaivers).omit({ id: true, createdAt: true });
 export const insertDependentSchema = createInsertSchema(dependents).omit({ id: true, createdAt: true });
 export const insertClientPaymentMethodSchema = createInsertSchema(clientPaymentMethods).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPaymentAutomationSettingsSchema = createInsertSchema(paymentAutomationSettings).omit({ id: true, createdAt: true, updatedAt: true });
@@ -2141,6 +2195,10 @@ export type Client = typeof clients.$inferSelect;
 export type InsertClient = z.infer<typeof insertClientSchema>;
 export type ClientDocument = typeof clientDocuments.$inferSelect;
 export type InsertClientDocument = z.infer<typeof insertClientDocumentSchema>;
+export type PolicyDocument = typeof policyDocuments.$inferSelect;
+export type InsertPolicyDocument = z.infer<typeof insertPolicyDocumentSchema>;
+export type WaitingPeriodWaiver = typeof waitingPeriodWaivers.$inferSelect;
+export type InsertWaiver = z.infer<typeof insertWaiverSchema>;
 export type Dependent = typeof dependents.$inferSelect;
 export type InsertDependent = z.infer<typeof insertDependentSchema>;
 export type ClientPaymentMethod = typeof clientPaymentMethods.$inferSelect;

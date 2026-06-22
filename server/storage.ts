@@ -9,6 +9,7 @@ import {
   organizations, branches, users, roles, permissions, rolePermissions,
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
   products, productVersions, benefitCatalogItems, benefitBundles, addOns,
+  policyDocuments, waitingPeriodWaivers,
   ageBandConfigs, policies, policyMembers, policyStatusHistory, policyAddOns,
   orgMemberSequences, orgPolicySequences,
   paymentTransactions, receipts, reversalEntries, cashups,
@@ -46,6 +47,8 @@ import {
   type AuditLog, type InsertAuditLog,
   type Client, type InsertClient,
   type ClientDocument, type InsertClientDocument,
+  type PolicyDocument, type InsertPolicyDocument,
+  type WaitingPeriodWaiver, type InsertWaiver,
   type ClientPaymentMethod, type InsertClientPaymentMethod,
   type PaymentAutomationSettings, type InsertPaymentAutomationSettings,
   type PaymentAutomationRun, type InsertPaymentAutomationRun,
@@ -293,6 +296,14 @@ export interface IStorage {
   getClientDocuments(clientId: string, orgId: string): Promise<ClientDocument[]>;
   createClientDocument(doc: InsertClientDocument): Promise<ClientDocument>;
   deleteClientDocument(id: string, orgId: string): Promise<void>;
+  getPolicyDocuments(policyId: string, orgId: string): Promise<PolicyDocument[]>;
+  createPolicyDocument(doc: InsertPolicyDocument): Promise<PolicyDocument>;
+  deletePolicyDocument(id: string, orgId: string): Promise<void>;
+  createWaiverRequest(data: InsertWaiver): Promise<WaitingPeriodWaiver>;
+  getWaiverForPolicy(policyId: string, orgId: string): Promise<WaitingPeriodWaiver | undefined>;
+  getWaiverById(id: string, orgId: string): Promise<WaitingPeriodWaiver | undefined>;
+  updateWaiver(id: string, data: Partial<WaitingPeriodWaiver>, orgId: string): Promise<WaitingPeriodWaiver>;
+  getAllWaivers(orgId: string): Promise<WaitingPeriodWaiver[]>;
   getDependentsByClient(clientId: string, orgId: string): Promise<Dependent[]>;
   getDependent(id: string, orgId: string): Promise<Dependent | undefined>;
   createDependent(dep: InsertDependent): Promise<Dependent>;
@@ -1035,6 +1046,56 @@ export class DatabaseStorage implements IStorage {
   async deleteClientDocument(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(clientDocuments).where(and(eq(clientDocuments.id, id), eq(clientDocuments.organizationId, orgId)));
+  }
+
+  // ─── Policy Documents ──────────────────────────────────────
+  async getPolicyDocuments(policyId: string, orgId: string): Promise<PolicyDocument[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(policyDocuments)
+      .where(and(eq(policyDocuments.policyId, policyId), eq(policyDocuments.organizationId, orgId)))
+      .orderBy(desc(policyDocuments.createdAt));
+  }
+  async createPolicyDocument(doc: InsertPolicyDocument): Promise<PolicyDocument> {
+    const tdb = await getDbForOrg(doc.organizationId);
+    const [created] = await tdb.insert(policyDocuments).values(doc).returning();
+    return created;
+  }
+  async deletePolicyDocument(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(policyDocuments).where(and(eq(policyDocuments.id, id), eq(policyDocuments.organizationId, orgId)));
+  }
+
+  // ─── Waiting Period Waivers ────────────────────────────────
+  async createWaiverRequest(data: InsertWaiver): Promise<WaitingPeriodWaiver> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(waitingPeriodWaivers).values(data).returning();
+    return created;
+  }
+  async getWaiverForPolicy(policyId: string, orgId: string): Promise<WaitingPeriodWaiver | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(waitingPeriodWaivers)
+      .where(and(eq(waitingPeriodWaivers.policyId, policyId), eq(waitingPeriodWaivers.organizationId, orgId)))
+      .orderBy(desc(waitingPeriodWaivers.createdAt))
+      .limit(1);
+    return rows[0];
+  }
+  async getWaiverById(id: string, orgId: string): Promise<WaitingPeriodWaiver | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(waitingPeriodWaivers)
+      .where(and(eq(waitingPeriodWaivers.id, id), eq(waitingPeriodWaivers.organizationId, orgId)))
+      .limit(1);
+    return row;
+  }
+  async updateWaiver(id: string, data: Partial<WaitingPeriodWaiver>, orgId: string): Promise<WaitingPeriodWaiver> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(waitingPeriodWaivers).set(data as any).where(and(eq(waitingPeriodWaivers.id, id), eq(waitingPeriodWaivers.organizationId, orgId))).returning();
+    return updated;
+  }
+  async getAllWaivers(orgId: string): Promise<WaitingPeriodWaiver[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(waitingPeriodWaivers)
+      .where(eq(waitingPeriodWaivers.organizationId, orgId))
+      .orderBy(desc(waitingPeriodWaivers.createdAt));
   }
 
   // ─── Dependents ────────────────────────────────────────────

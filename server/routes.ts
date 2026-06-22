@@ -26,7 +26,7 @@ import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS, ROLE_PERMISSION_MAP } from "./constants";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
-import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
+import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
 import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount } from "../shared/validation";
 import {
@@ -59,6 +59,7 @@ import {
   OUTBOX_TYPE_CASH_RECEIPT_FOLLOWUP,
 } from "./outbox";
 import { isAgentScoped } from "@shared/roles";
+
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
@@ -438,9 +439,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     },
   });
 
+  const policyDocUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = /\.(pdf|jpg|jpeg|png|gif|webp|doc|docx|mp3|mp4|wav|m4a|ogg|avi|mov)$/i;
+      if (allowed.test(path.extname(file.originalname))) cb(null, true);
+      else cb(new Error("File type not allowed. Supported: PDF, images, Word, audio, video"));
+    },
+  });
+
   function handleMulterError(err: any, _req: any, res: any, next: any) {
     if (err instanceof multer.MulterError) {
-      if (err.code === "LIMIT_FILE_SIZE") return res.status(400).json({ message: "File too large (max 5MB)" });
+      if (err.code === "LIMIT_FILE_SIZE") return res.status(400).json({ message: "File too large (max 10MB for documents, 5MB for images)" });
       return res.status(400).json({ message: err.message });
     }
     if (err?.message) return res.status(400).json({ message: err.message });
@@ -2001,6 +2012,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     await auditLog(req, "CREATE_POLICY", "Policy", policy.id, null, policy);
 
+    // Legacy/backfilled policies: auto-activate and waive waiting period immediately.
+    if ((policyInsert as any).isLegacy) {
+      const today = new Date().toISOString().split("T")[0];
+      await storage.updatePolicy(policy.id, {
+        status: "active",
+        isLegacy: true,
+        waitingPeriodEndDate: today,
+        inceptionDate: (policyInsert as any).inceptionDate || today,
+        ...(!( policyInsert as any).effectiveDate ? { effectiveDate: today } : {}),
+      }, user.organizationId);
+      await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "Legacy policy — auto-activated on capture", changedBy || undefined, user.organizationId);
+      await auditLog(req, "LEGACY_POLICY_ACTIVATED", "Policy", policy.id, { status: "inactive" }, { status: "active", isLegacy: true });
+    }
+
     if (policy.clientId) {
       enqueueJob("notify:policy_capture", { policyId: policy.id }, async () => {
         const ctx = await buildPolicyContext(policy, user.organizationId);
@@ -2030,6 +2055,115 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       structuredLog("error", "POST /api/policies failed", { error: dbMsg, stack: err?.stack });
       return res.status(500).json({ message: "Failed to create policy. Please try again or contact support." });
     }
+  });
+
+  // ─── Policy Documents ─────────────────────────────────────────────────────
+  app.get("/api/policies/:id/documents", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    return res.json(await storage.getPolicyDocuments(policy.id, user.organizationId));
+  });
+
+  app.post("/api/policies/:id/documents", requireAuth, requireTenantScope, requirePermission("write:policy"), policyDocUpload.single("file"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    const documentType = (req.body.documentType || "other") as string;
+    const label = (req.body.label || req.file.originalname) as string;
+    const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "policy-documents");
+    const doc = await storage.createPolicyDocument({
+      organizationId: user.organizationId,
+      policyId: policy.id,
+      documentType,
+      label,
+      fileName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      fileUrl: url,
+      storageKey: key,
+      fileSize: req.file.size,
+      uploadedBy: user.id,
+    });
+    await auditLog(req, "UPLOAD_POLICY_DOCUMENT", "PolicyDocument", doc.id, null, { policyId: policy.id, documentType, fileName: req.file.originalname });
+    return res.status(201).json(doc);
+  });
+  app.use("/api/policies/:id/documents", handleMulterError);
+
+  app.delete("/api/policies/:id/documents/:docId", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    const docs = await storage.getPolicyDocuments(policy.id, user.organizationId);
+    const doc = docs.find(d => d.id === req.params.docId);
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (doc.storageKey) await objectStorage.deleteFile(doc.storageKey);
+    await storage.deletePolicyDocument(doc.id, user.organizationId);
+    await auditLog(req, "DELETE_POLICY_DOCUMENT", "PolicyDocument", doc.id, { fileName: doc.fileName }, null);
+    return res.status(204).send();
+  });
+
+  // ─── Waiting Period Waivers ───────────────────────────────────────────────
+  app.post("/api/policies/:id/waiver-request", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    const existing = await storage.getWaiverForPolicy(policy.id, user.organizationId);
+    if (existing && existing.status === "pending") return res.status(409).json({ message: "A waiver request is already pending for this policy." });
+    const waiver = await storage.createWaiverRequest({
+      organizationId: user.organizationId,
+      policyId: policy.id,
+      requestedBy: user.id,
+      status: "pending",
+      reason: req.body.reason || null,
+      supportingNotes: req.body.supportingNotes || null,
+    });
+    await auditLog(req, "CREATE_WAIVER_REQUEST", "WaitingPeriodWaiver", waiver.id, null, { policyId: policy.id, reason: waiver.reason });
+    return res.status(201).json(waiver);
+  });
+
+  app.get("/api/policies/:id/waiver-request", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    const waiver = await storage.getWaiverForPolicy(policy.id, user.organizationId);
+    return res.json(waiver || null);
+  });
+
+  app.get("/api/waivers", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+    const user = req.user as any;
+    const all = await storage.getAllWaivers(user.organizationId);
+    const status = req.query.status as string | undefined;
+    if (status) return res.json(all.filter(w => w.status === status));
+    return res.json(all);
+  });
+
+  app.post("/api/waivers/:id/resolve", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+    const user = req.user as any;
+    const waiver = await storage.getWaiverById(req.params.id as string, user.organizationId);
+    if (!waiver) return res.status(404).json({ message: "Waiver not found" });
+    if (waiver.status !== "pending") return res.status(400).json({ message: "This waiver has already been resolved." });
+    const { action, rejectionReason } = req.body;
+    if (action !== "approve" && action !== "reject") return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
+    const updated = await storage.updateWaiver(waiver.id, {
+      status: action === "approve" ? "approved" : "rejected",
+      resolvedBy: user.id,
+      resolvedAt: new Date(),
+      rejectionReason: rejectionReason || null,
+    }, user.organizationId);
+    if (action === "approve") {
+      const policy = await storage.getPolicy(waiver.policyId, user.organizationId);
+      if (policy) {
+        const today = new Date().toISOString().split("T")[0];
+        await storage.updatePolicy(policy.id, { waitingPeriodEndDate: today }, user.organizationId);
+        if (policy.status === "inactive") {
+          await storage.updatePolicy(policy.id, { status: "active", inceptionDate: today, ...(!policy.effectiveDate ? { effectiveDate: today } : {}) }, user.organizationId);
+          await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "Waiting period waiver approved", user.id, user.organizationId);
+        }
+      }
+    }
+    await auditLog(req, `WAIVER_${action.toUpperCase()}`, "WaitingPeriodWaiver", waiver.id, waiver, updated);
+    return res.json(updated);
   });
 
   app.patch("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -2695,7 +2829,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
       }
 
-      const [tx] = await txDb.insert(paymentTransactions).values(parsed).returning();
+      // Advance the policy cover cycle and get the period for this payment
+      const paymentPeriod = await advancePolicyCycle(
+        txDb,
+        parsed.policyId ?? "",
+        policy,
+        String(parsed.postedDate || today),
+      );
+
+      const [tx] = await txDb.insert(paymentTransactions).values({
+        ...parsed,
+        periodFrom: paymentPeriod.periodFrom,
+        periodTo: paymentPeriod.periodTo,
+      }).returning();
 
       let receipt = null;
       if (tx.status === "cleared" && tx.policyId && tx.clientId) {
@@ -2709,6 +2855,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           amount: tx.amount,
           currency: tx.currency,
           paymentChannel: tx.paymentMethod || "cash",
+          periodFrom: paymentPeriod.periodFrom,
+          periodTo: paymentPeriod.periodTo,
           issuedByUserId: recordedByForLedger ?? undefined,
           status: "issued",
           printFormat: "thermal_80mm",
