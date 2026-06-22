@@ -223,7 +223,7 @@ export default function StaffClients() {
   const [uploadDocFile, setUploadDocFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { data: clientsList, isLoading } = useQuery<Client[]>({
+  const { data: clientsList, isLoading, isError } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
   });
 
@@ -1047,6 +1047,8 @@ export default function StaffClients() {
                   ))}
                 </TableBody>
               </DataTable>
+            ) : isError ? (
+              <EmptyState title="Failed to load clients" description="An error occurred. Please refresh the page." className="border-0 rounded-none bg-transparent py-10" />
             ) : (
               <div className="px-4 pb-4 pt-2 sm:px-6">
               <EnhancedDataTable

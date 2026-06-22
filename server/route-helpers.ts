@@ -1,6 +1,8 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { isAgentScoped } from "@shared/roles";
+import { eq, and } from "drizzle-orm";
+import { commissionLedgerEntries } from "@shared/schema";
 
 export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string) {
   const user = req.user as any;
@@ -370,6 +372,43 @@ export async function rollbackClawbacks(orgId: string, policy: any) {
   } catch (err) {
     structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId: policy.id });
   }
+}
+
+export async function rollbackClawbacksInTx(txDb: any, orgId: string, policy: any) {
+  if (!policy.agentId) return;
+  try {
+    const entries = await txDb.select().from(commissionLedgerEntries)
+      .where(and(eq(commissionLedgerEntries.policyId, policy.id), eq(commissionLedgerEntries.organizationId, orgId)));
+    const unreversed = entries
+      .filter((e: any) => e.entryType === "clawback" && e.status === "earned")
+      .reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
+    if (unreversed >= 0) return;
+    await txDb.insert(commissionLedgerEntries).values({
+      organizationId: orgId,
+      agentId: policy.agentId,
+      policyId: policy.id,
+      entryType: "clawback_reversal",
+      amount: Math.abs(unreversed).toFixed(2),
+      currency: policy.currency || "USD",
+      description: `Rollback — policy reinstated, clawback reversed`,
+      status: "earned",
+    });
+  } catch (err) {
+    structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId: policy.id });
+  }
+}
+
+/**
+ * Converts empty-string values to null for the specified fields.
+ * Use before passing req.body to storage update methods for any column
+ * that is a date, timestamp, or uuid in PostgreSQL — those types reject "".
+ */
+export function nullifyEmptyFields(body: Record<string, any>, fields: string[]): Record<string, any> {
+  const out = { ...body };
+  for (const f of fields) {
+    if (out[f] === "") out[f] = null;
+  }
+  return out;
 }
 
 export async function enforceAgentScope(req: any, filters: any): Promise<any> {

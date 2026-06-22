@@ -75,7 +75,7 @@ export default function StaffFunerals() {
   const [showAddTask, setShowAddTask] = useState(false);
   const [showCreateVehicle, setShowCreateVehicle] = useState(false);
 
-  const { data: funeralCases = [], isLoading: casesLoading } = useQuery<FuneralCase[]>({
+  const { data: funeralCases = [], isLoading: casesLoading, isError: casesError } = useQuery<FuneralCase[]>({
     queryKey: ["/api/funeral-cases"],
   });
 
@@ -338,6 +338,8 @@ export default function StaffFunerals() {
               >
                 {casesLoading ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+                ) : casesError ? (
+                  <EmptyState title="Failed to load cases" description="An error occurred. Please refresh the page." className="border-0 rounded-none bg-transparent py-10" />
                 ) : filteredCases.length === 0 ? (
                   <EmptyState title="No funeral cases found" description="No cases match the current filter." className="border-0 rounded-none bg-transparent py-10" data-testid="text-no-cases" />
                 ) : (

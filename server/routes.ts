@@ -8,10 +8,11 @@ import {
   resolveUserIdForOrgDatabase,
   ensureRegistryUserMirroredToOrgDataDbInTx,
   ensureRegistryUserMirroredToOrgDataDb,
+  getPoolForOrg,
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
+import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { buildIncomeStatement, buildCashFlowStatement } from "./financial-statements";
 import { z } from "zod";
 import multer from "multer";
@@ -1376,7 +1377,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete req.body.id;
     delete req.body.organizationId;
     delete req.body.createdAt;
-    const updated = await storage.updateClient(req.params.id as string, req.body, user.organizationId);
+    const sanitizedClient = nullifyEmptyFields(req.body, ["dateOfBirth", "branchId", "agentId"]);
+    const updated = await storage.updateClient(req.params.id as string, sanitizedClient, user.organizationId);
     await auditLog(req, "UPDATE_CLIENT", "Client", req.params.id as string, before, updated);
     return res.json(updated);
   });
@@ -1426,7 +1428,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const client = await storage.getClient(req.params.clientId as string, user.organizationId);
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
-    const updated = await storage.updateDependent(req.params.id as string, req.body, user.organizationId);
+    const updated = await storage.updateDependent(req.params.id as string, nullifyEmptyFields(req.body, ["dateOfBirth"]), user.organizationId);
     if (!updated) return res.status(404).json({ message: "Dependent not found" });
     await auditLog(req, "UPDATE_DEPENDENT", "Dependent", req.params.id as string, null, updated);
     return res.json(updated);
@@ -2953,12 +2955,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
+      if (tx.status === "cleared" && tx.policyId && policy?.status === "lapsed") {
+        await rollbackClawbacksInTx(txDb, user.organizationId, policy);
+      }
       return { tx, receipt, policyStatusChange };
     });
-
-    if (result.tx.status === "cleared" && result.tx.policyId && policy?.status === "lapsed") {
-      await rollbackClawbacks(user.organizationId, policy);
-    }
 
     await auditLog(req, "CREATE_PAYMENT", "PaymentTransaction", result.tx.id, null, result.tx);
     if (result.receipt) await auditLog(req, "CREATE_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
@@ -3220,12 +3221,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         payload: { transactionId: tx.id, receiptId: receipt.id },
       });
 
+      if (policy.status === "lapsed") {
+        await rollbackClawbacksInTx(txDb, user.organizationId, policy);
+      }
       return { tx, receipt };
     });
-
-    if (policy.status === "lapsed") {
-      await rollbackClawbacks(user.organizationId, policy);
-    }
 
     await auditLog(req, "CASH_RECEIPT", "PaymentReceipt", result.receipt.id, null, result.receipt);
 
@@ -3273,9 +3273,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       else cb(new Error("Only CSV or Excel files are allowed"));
     },
   });
+  const MONTH_END_LOCK_KEY = 555666777;
   app.post("/api/month-end-run", requireAuth, requireTenantScope, requirePermission("write:finance"), memoryUpload.single("file"), async (req, res) => {
     const user = req.user as any;
     if (!req.file?.buffer) return res.status(400).json({ message: "No file uploaded" });
+    const orgPool = await getPoolForOrg(user.organizationId);
+    const lockClient = await orgPool.connect();
+    const lockAcquired = (await lockClient.query("SELECT pg_try_advisory_lock($1::bigint) as acquired", [MONTH_END_LOCK_KEY])).rows[0]?.acquired;
+    if (!lockAcquired) {
+      lockClient.release();
+      return res.status(409).json({ message: "A month-end run is already in progress for this organisation. Please wait and try again." });
+    }
+    try {
     const recordedByForLedger = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const runNumber = await storage.getNextMonthEndRunNumber(user.organizationId);
     const run = await storage.createMonthEndRun({
@@ -3349,11 +3358,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             metadataJson: { monthEndRunId: run.id, transactionId: tx.id },
           });
           await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (month-end)", recordedByForLedger ?? undefined);
+          if (policy.status === "lapsed") {
+            await rollbackClawbacksInTx(txDb, user.organizationId, policy);
+          }
         });
         receipted++;
         // Post-transaction best-effort side effects
         if (policy.status === "lapsed") {
-          await rollbackClawbacks(user.organizationId, policy);
           if (policy.clientId) {
             enqueueJob("notify:reinstatement", { policyId: policy.id }, async () => {
               const ctx = await buildPolicyContext({ ...policy, status: "active" }, user.organizationId);
@@ -3396,6 +3407,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     await auditLog(req, "MONTH_END_RUN", "MonthEndRun", run.id, null, { runId: run.id, runNumber, receiptedCount: receipted, creditNoteCount: creditNotes, totalRows: rows.length, fileName: run.fileName });
     return res.status(201).json({ run: { ...run, receiptedCount: receipted, creditNoteCount: creditNotes, status: "completed" }, receiptedCount: receipted, creditNoteCount: creditNotes });
+    } finally {
+      await lockClient.query("SELECT pg_advisory_unlock($1::bigint)", [MONTH_END_LOCK_KEY]).catch(() => {});
+      lockClient.release();
+    }
   });
   app.use("/api/month-end-run", handleMulterError);
 
@@ -3469,14 +3484,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           metadataJson: { groupId, transactionId: tx.id },
         });
         await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", recordedByForLedger ?? undefined);
+        if (policy.status === "lapsed") {
+          await rollbackClawbacksInTx(txDb, user.organizationId, policy);
+        }
         results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum });
       }
     });
-    for (const policy of sortedPolicies) {
-      if (policy.status === "lapsed") {
-        await rollbackClawbacks(user.organizationId, policy);
-      }
-    }
     return res.status(201).json({ receipted: results.length, results });
     } catch (err: any) {
       structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
@@ -3810,7 +3823,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getFuneralCase(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const updated = await storage.updateFuneralCase(req.params.id as string, req.body, user.organizationId);
+    const sanitized = nullifyEmptyFields(req.body, [
+      "bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd",
+      "slaDeadline", "completedAt", "deceasedDob", "dateOfDeath", "funeralDate",
+      "removalVehicleId", "removalDriverId", "burialVehicleId", "burialDriverId",
+      "attendingAgentId", "claimId", "policyId", "branchId", "assignedTo",
+    ]);
+    const updated = await storage.updateFuneralCase(req.params.id as string, sanitized, user.organizationId);
     await auditLog(req, "UPDATE_FUNERAL_CASE", "FuneralCase", req.params.id as string, before, updated);
     return res.json(updated);
   });
@@ -3842,7 +3861,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const before = null; // no single-task fetch in storage; before state not available
-    const updated = await storage.updateFuneralTask(id, req.body, user.organizationId);
+    const updated = await storage.updateFuneralTask(id, nullifyEmptyFields(req.body, ["dueDate", "completedAt"]), user.organizationId);
     if (!updated) return res.status(404).json({ message: "Funeral task not found" });
     await auditLog(req, "UPDATE_FUNERAL_TASK", "FuneralTask", id, before, updated);
     return res.json(updated);
