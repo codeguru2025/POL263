@@ -493,6 +493,7 @@ export interface IStorage {
   generateClaimNumber(orgId: string): Promise<string>;
   getNextMemberNumber(orgId: string): Promise<string>;
   generateCaseNumber(orgId: string): Promise<string>;
+  generateEmployeeNumber(orgId: string): Promise<string>;
   getGroupsByOrg(orgId: string): Promise<Group[]>;
   getGroup(id: string, orgId: string): Promise<Group | undefined>;
   createGroup(group: InsertGroup): Promise<Group>;
@@ -3727,6 +3728,17 @@ export class DatabaseStorage implements IStorage {
     `);
     const nextVal = (result as unknown as { rows?: { case_next: number }[] }).rows?.[0]?.case_next ?? 1;
     return `FNC-${String(nextVal).padStart(6, "0")}`;
+  }
+
+  async generateEmployeeNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, employee_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET employee_next = org_policy_sequences.employee_next + 1
+      RETURNING employee_next
+    `);
+    const nextVal = (result as unknown as { rows?: { employee_next: number }[] }).rows?.[0]?.employee_next ?? 1;
+    return `EMP-${String(nextVal).padStart(5, "0")}`;
   }
 
   // ─── Groups ──────────────────────────────────────────────

@@ -5044,7 +5044,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/payroll/employees", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
     try {
-      const parsed = insertPayrollEmployeeSchema.parse({ ...req.body, organizationId: user.organizationId });
+      // Auto-generate employee number; ignore any value sent by client
+      const employeeNumber = await storage.generateEmployeeNumber(user.organizationId);
+      const parsed = insertPayrollEmployeeSchema.parse({ ...req.body, organizationId: user.organizationId, employeeNumber });
       const emp = await storage.createPayrollEmployee(parsed);
       await auditLog(req, "CREATE_PAYROLL_EMPLOYEE", "PayrollEmployee", emp.id, null, emp);
       return res.status(201).json(emp);

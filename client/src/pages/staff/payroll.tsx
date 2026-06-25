@@ -279,7 +279,6 @@ export default function StaffPayroll() {
   const [empUserId, setEmpUserId] = useState<string>("");
   const [empFirstName, setEmpFirstName] = useState("");
   const [empLastName, setEmpLastName] = useState("");
-  const [empNumber, setEmpNumber] = useState("");
   const [empPosition, setEmpPosition] = useState("");
   const [empDepartment, setEmpDepartment] = useState("");
   const [empBaseSalary, setEmpBaseSalary] = useState("");
@@ -292,6 +291,17 @@ export default function StaffPayroll() {
   const [empPaye, setEmpPaye] = useState(false);
   const [empAidsLevy, setEmpAidsLevy] = useState(false);
   const [empCurrency, setEmpCurrency] = useState("USD");
+  // Employment details
+  const [empEmploymentType, setEmpEmploymentType] = useState("permanent");
+  const [empContractStart, setEmpContractStart] = useState("");
+  const [empContractEnd, setEmpContractEnd] = useState("");
+  // Banking details
+  const [empBankName, setEmpBankName] = useState("");
+  const [empBankBranch, setEmpBankBranch] = useState("");
+  const [empBankAccount, setEmpBankAccount] = useState("");
+  const [empBankAccountType, setEmpBankAccountType] = useState("current");
+  const [empBankBranchCode, setEmpBankBranchCode] = useState("");
+  const [empBankSwift, setEmpBankSwift] = useState("");
 
   // Run form
   const [showRunDialog, setShowRunDialog] = useState(false);
@@ -340,12 +350,15 @@ export default function StaffPayroll() {
   const resetEmployeeForm = useCallback(() => {
     setEditingEmployee(null);
     setEmpUserId("");
-    setEmpFirstName(""); setEmpLastName(""); setEmpNumber("");
+    setEmpFirstName(""); setEmpLastName("");
     setEmpPosition(""); setEmpDepartment(""); setEmpBaseSalary("");
     setEmpHousing(""); setEmpTransport(""); setEmpOtherAllowances([]);
     setEmpFuneralPolicy(""); setEmpOtherInsurance("");
     setEmpNssa(false); setEmpPaye(false); setEmpAidsLevy(false);
     setEmpCurrency("USD");
+    setEmpEmploymentType("permanent"); setEmpContractStart(""); setEmpContractEnd("");
+    setEmpBankName(""); setEmpBankBranch(""); setEmpBankAccount("");
+    setEmpBankAccountType("current"); setEmpBankBranchCode(""); setEmpBankSwift("");
   }, []);
 
   useEffect(() => {
@@ -353,7 +366,6 @@ export default function StaffPayroll() {
       setEmpUserId(editingEmployee.userId || "");
       setEmpFirstName(editingEmployee.firstName || "");
       setEmpLastName(editingEmployee.lastName || "");
-      setEmpNumber(editingEmployee.employeeNumber || "");
       setEmpPosition(editingEmployee.position || "");
       setEmpDepartment(editingEmployee.department || "");
       setEmpBaseSalary(editingEmployee.baseSalary || "");
@@ -366,6 +378,15 @@ export default function StaffPayroll() {
       setEmpPaye(!!editingEmployee.payeEnabled);
       setEmpAidsLevy(!!editingEmployee.aidsLevyEnabled);
       setEmpCurrency(editingEmployee.currency || "USD");
+      setEmpEmploymentType(editingEmployee.employmentType || "permanent");
+      setEmpContractStart(editingEmployee.contractStartDate || "");
+      setEmpContractEnd(editingEmployee.contractEndDate || "");
+      setEmpBankName(editingEmployee.bankName || "");
+      setEmpBankBranch(editingEmployee.bankBranch || "");
+      setEmpBankAccount(editingEmployee.bankAccountNumber || "");
+      setEmpBankAccountType(editingEmployee.bankAccountType || "current");
+      setEmpBankBranchCode(editingEmployee.bankBranchCode || "");
+      setEmpBankSwift(editingEmployee.bankSwiftCode || "");
     }
   }, [editingEmployee]);
 
@@ -373,7 +394,6 @@ export default function StaffPayroll() {
     userId: empUserId || undefined,
     firstName: empFirstName.trim(),
     lastName: empLastName.trim(),
-    employeeNumber: empNumber.trim(),
     position: empPosition.trim() || undefined,
     department: empDepartment.trim() || undefined,
     baseSalary: empBaseSalary || undefined,
@@ -386,6 +406,15 @@ export default function StaffPayroll() {
     payeEnabled: empPaye,
     aidsLevyEnabled: empAidsLevy,
     currency: empCurrency,
+    employmentType: empEmploymentType,
+    contractStartDate: empContractStart || undefined,
+    contractEndDate: empContractEnd || undefined,
+    bankName: empBankName.trim() || undefined,
+    bankBranch: empBankBranch.trim() || undefined,
+    bankAccountNumber: empBankAccount.trim() || undefined,
+    bankAccountType: empBankAccountType || undefined,
+    bankBranchCode: empBankBranchCode.trim() || undefined,
+    bankSwiftCode: empBankSwift.trim() || undefined,
   });
 
   const createEmployeeMutation = useMutation({
@@ -419,8 +448,8 @@ export default function StaffPayroll() {
   });
 
   const handleSaveEmployee = () => {
-    if (!empFirstName || !empLastName || !empNumber) {
-      toast({ title: "Required fields missing", description: "First name, last name and employee number are required.", variant: "destructive" });
+    if (!empFirstName || !empLastName) {
+      toast({ title: "Required fields missing", description: "First name and last name are required.", variant: "destructive" });
       return;
     }
     const payload = buildEmpPayload();
@@ -501,11 +530,10 @@ export default function StaffPayroll() {
                       <TableHead>Emp #</TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>Position</TableHead>
-                      <TableHead>Linked User</TableHead>
+                      <TableHead>Type</TableHead>
                       <TableHead>Basic</TableHead>
-                      <TableHead>Housing</TableHead>
-                      <TableHead>Transport</TableHead>
                       <TableHead>Gross</TableHead>
+                      <TableHead>Banking</TableHead>
                       <TableHead>Taxes</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead></TableHead>
@@ -514,22 +542,33 @@ export default function StaffPayroll() {
                   <TableBody>
                     {employees.map((emp: any) => {
                       const gross = parseFloat(emp.baseSalary || "0") + parseFloat(emp.housingAllowance || "0") + parseFloat(emp.transportAllowance || "0") + (emp.otherAllowances || []).reduce((s: number, a: any) => s + parseFloat(a.amount || "0"), 0);
-                      const taxes = [emp.nssaEnabled && "NSSA", emp.payeEnabled && "PAYE", emp.aidsLevyEnabled && "Aids Levy"].filter(Boolean).join(", ");
+                      const taxes = [emp.nssaEnabled && "NSSA", emp.payeEnabled && "PAYE", emp.aidsLevyEnabled && "Levy"].filter(Boolean).join(", ");
+                      const hasBanking = !!(emp.bankName || emp.bankAccountNumber);
+                      const typeLabel: Record<string, string> = { permanent: "Permanent", contract: "Contract", fixed_term: "Fixed Term", probation: "Probation", casual: "Casual" };
                       return (
                         <TableRow key={emp.id} data-testid={`row-employee-${emp.id}`}>
-                          <TableCell className="font-mono text-sm">{emp.employeeNumber}</TableCell>
-                          <TableCell className="font-medium">{emp.firstName} {emp.lastName}</TableCell>
-                          <TableCell>{emp.position || "—"}</TableCell>
-                          <TableCell className="text-sm">
-                            {emp.userId
-                              ? (() => { const u = (staffUsers as any[]).find((u: any) => u.id === emp.userId); return u ? (u.displayName || u.email) : <span className="text-muted-foreground text-xs">Linked</span>; })()
-                              : <span className="text-muted-foreground text-xs">Not linked</span>
-                            }
+                          <TableCell className="font-mono text-xs">{emp.employeeNumber}</TableCell>
+                          <TableCell className="font-medium">
+                            {emp.firstName} {emp.lastName}
+                            {emp.department && <div className="text-xs text-muted-foreground">{emp.department}</div>}
                           </TableCell>
-                          <TableCell className="tabular-nums">{emp.currency} {parseFloat(emp.baseSalary || "0").toFixed(2)}</TableCell>
-                          <TableCell className="tabular-nums">{parseFloat(emp.housingAllowance || "0") > 0 ? `${emp.currency} ${parseFloat(emp.housingAllowance).toFixed(2)}` : "—"}</TableCell>
-                          <TableCell className="tabular-nums">{parseFloat(emp.transportAllowance || "0") > 0 ? `${emp.currency} ${parseFloat(emp.transportAllowance).toFixed(2)}` : "—"}</TableCell>
-                          <TableCell className="font-semibold tabular-nums">{emp.currency} {gross.toFixed(2)}</TableCell>
+                          <TableCell className="text-sm">{emp.position || "—"}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs">{typeLabel[emp.employmentType] || emp.employmentType || "—"}</Badge>
+                            {emp.contractEndDate && (() => {
+                              const days = Math.ceil((new Date(emp.contractEndDate).getTime() - Date.now()) / 86_400_000);
+                              if (days < 0) return <div className="text-xs text-red-600">Expired</div>;
+                              if (days <= 30) return <div className="text-xs text-amber-600">{days}d left</div>;
+                              return null;
+                            })()}
+                          </TableCell>
+                          <TableCell className="tabular-nums text-sm">{emp.currency} {parseFloat(emp.baseSalary || "0").toFixed(2)}</TableCell>
+                          <TableCell className="font-semibold tabular-nums text-sm">{emp.currency} {gross.toFixed(2)}</TableCell>
+                          <TableCell>
+                            {hasBanking
+                              ? <span className="text-xs text-emerald-700">{emp.bankName || "Set"}</span>
+                              : <span className="text-xs text-muted-foreground">Not set</span>}
+                          </TableCell>
                           <TableCell className="text-xs text-muted-foreground">{taxes || "None"}</TableCell>
                           <TableCell><Badge variant={emp.isActive ? "default" : "secondary"}>{emp.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                           <TableCell>
@@ -623,38 +662,111 @@ export default function StaffPayroll() {
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingEmployee ? "Edit Employee" : "Add Employee"}</DialogTitle>
-            <DialogDescription>Configure salary, allowances, deductions, and statutory tax settings.</DialogDescription>
+            <DialogDescription>
+              {editingEmployee
+                ? `Employee No: ${editingEmployee.employeeNumber} — update salary, allowances, deductions, employment details and banking.`
+                : "Employee number is auto-generated. Fill in personal details, salary, banking and contract information."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 py-2">
+
+            {/* Auto-generated number badge (edit only) */}
+            {editingEmployee && (
+              <div className="flex items-center gap-2 rounded-md border border-dashed bg-muted/40 px-4 py-2">
+                <span className="text-xs text-muted-foreground">Employee Number</span>
+                <span className="font-mono font-semibold text-sm">{editingEmployee.employeeNumber}</span>
+                <span className="text-xs text-muted-foreground ml-auto">(auto-generated, read-only)</span>
+              </div>
+            )}
+
             {/* Link to system user */}
             <div className="space-y-1.5">
               <Label>System User Account <span className="text-muted-foreground text-xs">(optional — required for self-logging attendance)</span></Label>
               <Select value={empUserId || "__none__"} onValueChange={(v) => setEmpUserId(v === "__none__" ? "" : v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Not linked to a user" />
-                </SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Not linked to a user" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">Not linked to a user</SelectItem>
                   {(staffUsers as any[]).map((u: any) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.displayName || u.email} <span className="text-muted-foreground text-xs ml-1">{u.email}</span>
-                    </SelectItem>
+                    <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">Link this employee record to a staff user account so they can log their own attendance.</p>
             </div>
 
             <Separator />
 
-            {/* Basic info */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>First Name *</Label><Input value={empFirstName} onChange={(e) => setEmpFirstName(e.target.value)} /></div>
-              <div className="space-y-1.5"><Label>Last Name *</Label><Input value={empLastName} onChange={(e) => setEmpLastName(e.target.value)} /></div>
-              <div className="space-y-1.5"><Label>Employee Number *</Label><Input value={empNumber} onChange={(e) => setEmpNumber(e.target.value)} /></div>
-              <div className="space-y-1.5"><Label>Currency</Label><CurrencySelect value={empCurrency} onValueChange={setEmpCurrency} /></div>
-              <div className="space-y-1.5"><Label>Position</Label><Input value={empPosition} onChange={(e) => setEmpPosition(e.target.value)} /></div>
-              <div className="space-y-1.5"><Label>Department</Label><Input value={empDepartment} onChange={(e) => setEmpDepartment(e.target.value)} /></div>
+            {/* Personal & role */}
+            <div>
+              <p className="text-sm font-semibold mb-3">Personal Details</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5"><Label>First Name *</Label><Input value={empFirstName} onChange={(e) => setEmpFirstName(e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Last Name *</Label><Input value={empLastName} onChange={(e) => setEmpLastName(e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Position / Job Title</Label><Input value={empPosition} onChange={(e) => setEmpPosition(e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Department</Label><Input value={empDepartment} onChange={(e) => setEmpDepartment(e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Currency</Label><CurrencySelect value={empCurrency} onValueChange={setEmpCurrency} /></div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Employment type & contract */}
+            <div>
+              <p className="text-sm font-semibold mb-3">Employment Details</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Employment Type</Label>
+                  <Select value={empEmploymentType} onValueChange={setEmpEmploymentType}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="permanent">Permanent</SelectItem>
+                      <SelectItem value="contract">Contract</SelectItem>
+                      <SelectItem value="fixed_term">Fixed Term</SelectItem>
+                      <SelectItem value="probation">Probation</SelectItem>
+                      <SelectItem value="casual">Casual / Part-time</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div /> {/* spacer */}
+                <div className="space-y-1.5">
+                  <Label>Contract Start Date</Label>
+                  <Input type="date" value={empContractStart} onChange={(e) => setEmpContractStart(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Contract End Date <span className="text-muted-foreground text-xs">(if applicable)</span></Label>
+                  <Input type="date" value={empContractEnd} onChange={(e) => setEmpContractEnd(e.target.value)} />
+                </div>
+              </div>
+              {empEmploymentType !== "permanent" && empContractEnd && (() => {
+                const days = Math.ceil((new Date(empContractEnd).getTime() - Date.now()) / 86_400_000);
+                if (days < 0) return <p className="text-xs text-red-600 mt-1">Contract has expired ({Math.abs(days)} days ago)</p>;
+                if (days <= 30) return <p className="text-xs text-amber-600 mt-1">Contract expires in {days} day{days !== 1 ? "s" : ""}</p>;
+                return <p className="text-xs text-muted-foreground mt-1">{days} days remaining on contract</p>;
+              })()}
+            </div>
+
+            <Separator />
+
+            {/* Banking details */}
+            <div>
+              <p className="text-sm font-semibold mb-3">Banking Details</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5"><Label>Bank Name</Label><Input value={empBankName} onChange={(e) => setEmpBankName(e.target.value)} placeholder="e.g. CBZ Bank" /></div>
+                <div className="space-y-1.5"><Label>Branch Name</Label><Input value={empBankBranch} onChange={(e) => setEmpBankBranch(e.target.value)} placeholder="e.g. Harare Main" /></div>
+                <div className="space-y-1.5"><Label>Account Number</Label><Input value={empBankAccount} onChange={(e) => setEmpBankAccount(e.target.value)} placeholder="Account number" /></div>
+                <div className="space-y-1.5">
+                  <Label>Account Type</Label>
+                  <Select value={empBankAccountType} onValueChange={setEmpBankAccountType}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="current">Current</SelectItem>
+                      <SelectItem value="savings">Savings</SelectItem>
+                      <SelectItem value="cheque">Cheque</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5"><Label>Branch Code</Label><Input value={empBankBranchCode} onChange={(e) => setEmpBankBranchCode(e.target.value)} placeholder="Branch sort code" /></div>
+                <div className="space-y-1.5"><Label>SWIFT Code <span className="text-muted-foreground text-xs">(optional)</span></Label><Input value={empBankSwift} onChange={(e) => setEmpBankSwift(e.target.value)} placeholder="e.g. CBZWZWHAXXX" /></div>
+              </div>
             </div>
 
             <Separator />
@@ -663,18 +775,9 @@ export default function StaffPayroll() {
             <div>
               <p className="text-sm font-semibold mb-3">Earnings (monthly defaults)</p>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Basic Salary</Label>
-                  <Input type="number" step="0.01" min="0" value={empBaseSalary} onChange={(e) => setEmpBaseSalary(e.target.value)} placeholder="0.00" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Housing Allowance</Label>
-                  <Input type="number" step="0.01" min="0" value={empHousing} onChange={(e) => setEmpHousing(e.target.value)} placeholder="0.00" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Transport Allowance</Label>
-                  <Input type="number" step="0.01" min="0" value={empTransport} onChange={(e) => setEmpTransport(e.target.value)} placeholder="0.00" />
-                </div>
+                <div className="space-y-1.5"><Label>Basic Salary</Label><Input type="number" step="0.01" min="0" value={empBaseSalary} onChange={(e) => setEmpBaseSalary(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-1.5"><Label>Housing Allowance</Label><Input type="number" step="0.01" min="0" value={empHousing} onChange={(e) => setEmpHousing(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-1.5"><Label>Transport Allowance</Label><Input type="number" step="0.01" min="0" value={empTransport} onChange={(e) => setEmpTransport(e.target.value)} placeholder="0.00" /></div>
               </div>
               <div className="mt-3 space-y-1.5">
                 <Label>Other Allowances</Label>
@@ -688,14 +791,8 @@ export default function StaffPayroll() {
             <div>
               <p className="text-sm font-semibold mb-3">Fixed Monthly Deductions</p>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Funeral Policy</Label>
-                  <Input type="number" step="0.01" min="0" value={empFuneralPolicy} onChange={(e) => setEmpFuneralPolicy(e.target.value)} placeholder="0.00" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Other Insurance</Label>
-                  <Input type="number" step="0.01" min="0" value={empOtherInsurance} onChange={(e) => setEmpOtherInsurance(e.target.value)} placeholder="0.00" />
-                </div>
+                <div className="space-y-1.5"><Label>Funeral Policy</Label><Input type="number" step="0.01" min="0" value={empFuneralPolicy} onChange={(e) => setEmpFuneralPolicy(e.target.value)} placeholder="0.00" /></div>
+                <div className="space-y-1.5"><Label>Other Insurance</Label><Input type="number" step="0.01" min="0" value={empOtherInsurance} onChange={(e) => setEmpOtherInsurance(e.target.value)} placeholder="0.00" /></div>
               </div>
             </div>
 
@@ -704,27 +801,18 @@ export default function StaffPayroll() {
             {/* Zimbabwe statutory taxes */}
             <div>
               <p className="text-sm font-semibold mb-1">Zimbabwe Statutory Deductions</p>
-              <p className="text-xs text-muted-foreground mb-3">Toggle on/off per employee. Amounts are entered manually when processing each payroll run.</p>
+              <p className="text-xs text-muted-foreground mb-3">Toggle on/off per employee. Amounts entered manually per payroll run.</p>
               <div className="space-y-3">
                 <div className="flex items-center justify-between rounded-md border px-4 py-3">
-                  <div>
-                    <p className="text-sm font-medium">NSSA</p>
-                    <p className="text-xs text-muted-foreground">National Social Security Authority</p>
-                  </div>
+                  <div><p className="text-sm font-medium">NSSA</p><p className="text-xs text-muted-foreground">National Social Security Authority</p></div>
                   <Switch checked={empNssa} onCheckedChange={setEmpNssa} />
                 </div>
                 <div className="flex items-center justify-between rounded-md border px-4 py-3">
-                  <div>
-                    <p className="text-sm font-medium">PAYE</p>
-                    <p className="text-xs text-muted-foreground">Pay As You Earn income tax</p>
-                  </div>
+                  <div><p className="text-sm font-medium">PAYE</p><p className="text-xs text-muted-foreground">Pay As You Earn income tax</p></div>
                   <Switch checked={empPaye} onCheckedChange={setEmpPaye} />
                 </div>
                 <div className="flex items-center justify-between rounded-md border px-4 py-3">
-                  <div>
-                    <p className="text-sm font-medium">AIDS Levy</p>
-                    <p className="text-xs text-muted-foreground">3% surcharge on PAYE</p>
-                  </div>
+                  <div><p className="text-sm font-medium">AIDS Levy</p><p className="text-xs text-muted-foreground">3% surcharge on PAYE</p></div>
                   <Switch checked={empAidsLevy} onCheckedChange={setEmpAidsLevy} />
                 </div>
               </div>

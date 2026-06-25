@@ -70,6 +70,7 @@ export const orgPolicySequences = pgTable("org_policy_sequences", {
   caseNext: integer("case_next").default(0).notNull(),
   mortuaryNext: integer("mortuary_next").default(0).notNull(),
   quotationNext: integer("quotation_next").default(0).notNull(),
+  employeeNext: integer("employee_next").default(0).notNull(),
 });
 
 // ─── IDENTITY ───────────────────────────────────────────────
@@ -1634,7 +1635,17 @@ export const payrollEmployees = pgTable(
     payeEnabled: boolean("paye_enabled").default(false).notNull(),
     aidsLevyEnabled: boolean("aids_levy_enabled").default(false).notNull(),
     currency: text("currency").default("USD").notNull(),
-    bankDetails: jsonb("bank_details"),
+    // Employment details
+    employmentType: text("employment_type").default("permanent"), // permanent | contract | fixed_term | probation | casual
+    contractStartDate: date("contract_start_date"),
+    contractEndDate: date("contract_end_date"),
+    // Banking details (structured)
+    bankName: text("bank_name"),
+    bankBranch: text("bank_branch"),
+    bankAccountNumber: text("bank_account_number"),
+    bankAccountType: text("bank_account_type"), // savings | current | cheque
+    bankBranchCode: text("bank_branch_code"),
+    bankSwiftCode: text("bank_swift_code"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
