@@ -83,8 +83,8 @@ function OtherAllowancesEditor({ value, onChange }: { value: { name: string; amo
     <div className="space-y-2">
       {value.map((a, i) => (
         <div key={i} className="flex gap-2 items-center">
-          <Input placeholder="Name" value={a.name} onChange={(e) => { const v = [...value]; v[i] = { ...v[i], name: e.target.value }; onChange(v); }} className="flex-1" />
-          <Input type="number" placeholder="Amount" step="0.01" min="0" value={a.amount} onChange={(e) => { const v = [...value]; v[i] = { ...v[i], amount: e.target.value }; onChange(v); }} className="w-28" />
+          <Input value={a.name} onChange={(e) => { const v = [...value]; v[i] = { ...v[i], name: e.target.value }; onChange(v); }} className="flex-1" />
+          <Input type="number" step="0.01" min="0" value={a.amount} onChange={(e) => { const v = [...value]; v[i] = { ...v[i], amount: e.target.value }; onChange(v); }} className="w-28" />
           <Button type="button" size="icon" variant="ghost" className="text-destructive h-8 w-8" onClick={() => onChange(value.filter((_, j) => j !== i))}>×</Button>
         </div>
       ))}
@@ -592,12 +592,12 @@ export default function StaffPayroll() {
           <div className="space-y-5 py-2">
             {/* Basic info */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>First Name *</Label><Input value={empFirstName} onChange={(e) => setEmpFirstName(e.target.value)} placeholder="John" /></div>
-              <div className="space-y-1.5"><Label>Last Name *</Label><Input value={empLastName} onChange={(e) => setEmpLastName(e.target.value)} placeholder="Doe" /></div>
-              <div className="space-y-1.5"><Label>Employee Number *</Label><Input value={empNumber} onChange={(e) => setEmpNumber(e.target.value)} placeholder="EMP-001" /></div>
+              <div className="space-y-1.5"><Label>First Name *</Label><Input value={empFirstName} onChange={(e) => setEmpFirstName(e.target.value)} /></div>
+              <div className="space-y-1.5"><Label>Last Name *</Label><Input value={empLastName} onChange={(e) => setEmpLastName(e.target.value)} /></div>
+              <div className="space-y-1.5"><Label>Employee Number *</Label><Input value={empNumber} onChange={(e) => setEmpNumber(e.target.value)} /></div>
               <div className="space-y-1.5"><Label>Currency</Label><CurrencySelect value={empCurrency} onValueChange={setEmpCurrency} /></div>
-              <div className="space-y-1.5"><Label>Position</Label><Input value={empPosition} onChange={(e) => setEmpPosition(e.target.value)} placeholder="Sales Agent" /></div>
-              <div className="space-y-1.5"><Label>Department</Label><Input value={empDepartment} onChange={(e) => setEmpDepartment(e.target.value)} placeholder="Sales" /></div>
+              <div className="space-y-1.5"><Label>Position</Label><Input value={empPosition} onChange={(e) => setEmpPosition(e.target.value)} /></div>
+              <div className="space-y-1.5"><Label>Department</Label><Input value={empDepartment} onChange={(e) => setEmpDepartment(e.target.value)} /></div>
             </div>
 
             <Separator />
