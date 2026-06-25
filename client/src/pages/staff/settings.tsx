@@ -148,6 +148,100 @@ export default function StaffSettings() {
   const [termIsActive, setTermIsActive] = useState(true);
   const [termToDeleteId, setTermToDeleteId] = useState<string | null>(null);
 
+  // ── Receipt Adverts ──────────────────────────────────────────
+  const [advertDialogOpen, setAdvertDialogOpen] = useState(false);
+  const [editingAdvertId, setEditingAdvertId] = useState<string | null>(null);
+  const [advertTitle, setAdvertTitle] = useState("");
+  const [advertBody, setAdvertBody] = useState("");
+  const [advertImageUrl, setAdvertImageUrl] = useState("");
+  const [advertImageUploading, setAdvertImageUploading] = useState(false);
+  const [advertDeleteId, setAdvertDeleteId] = useState<string | null>(null);
+
+  const { data: advertsList = [], refetch: refetchAdverts } = useQuery<any[]>({
+    queryKey: ["/api/receipt-adverts"],
+    enabled: !isControlPlaneMode,
+  });
+
+  const createAdvertMutation = useMutation({
+    mutationFn: async (data: { title: string; body: string; imageUrl: string }) => {
+      return apiRequest("POST", "/api/receipt-adverts", data);
+    },
+    onSuccess: () => { refetchAdverts(); setAdvertDialogOpen(false); resetAdvertForm(); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateAdvertMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: { title: string; body: string; imageUrl: string } }) => {
+      return apiRequest("PATCH", `/api/receipt-adverts/${id}`, data);
+    },
+    onSuccess: () => { refetchAdverts(); setAdvertDialogOpen(false); resetAdvertForm(); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteAdvertMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/receipt-adverts/${id}`),
+    onSuccess: () => { refetchAdverts(); setAdvertDeleteId(null); },
+  });
+
+  const activateAdvertMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipt-adverts/${id}/activate`),
+    onSuccess: () => refetchAdverts(),
+  });
+
+  const deactivateAdvertMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/receipt-adverts/${id}/deactivate`),
+    onSuccess: () => refetchAdverts(),
+  });
+
+  function resetAdvertForm() {
+    setEditingAdvertId(null);
+    setAdvertTitle("");
+    setAdvertBody("");
+    setAdvertImageUrl("");
+  }
+
+  function openNewAdvert() {
+    resetAdvertForm();
+    setAdvertDialogOpen(true);
+  }
+
+  function openEditAdvert(advert: any) {
+    setEditingAdvertId(advert.id);
+    setAdvertTitle(advert.title || "");
+    setAdvertBody(advert.body || "");
+    setAdvertImageUrl(advert.imageUrl || "");
+    setAdvertDialogOpen(true);
+  }
+
+  async function handleAdvertImageUpload(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAdvertImageUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const csrf = getCsrfToken();
+      const res = await fetch("/api/upload/receipt-advert-image", {
+        method: "POST",
+        headers: csrf ? { "x-csrf-token": csrf } : {},
+        body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message || "Upload failed");
+      setAdvertImageUrl(json.url);
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setAdvertImageUploading(false);
+    }
+  }
+
+  function handleSaveAdvert() {
+    const data = { title: advertTitle.trim(), body: advertBody.trim(), imageUrl: advertImageUrl.trim() };
+    if (editingAdvertId) updateAdvertMutation.mutate({ id: editingAdvertId, data });
+    else createAdvertMutation.mutate(data);
+  }
+
   const [changePasswordCurrent, setChangePasswordCurrent] = useState("");
   const [changePasswordNew, setChangePasswordNew] = useState("");
   const [changePasswordConfirm, setChangePasswordConfirm] = useState("");
@@ -1054,6 +1148,123 @@ export default function StaffSettings() {
                 )}
               </div>
             </CardSection>
+
+            {/* Receipt Adverts */}
+            {!isControlPlaneMode && (
+              <CardSection
+                title="Receipt Adverts"
+                description="Add a promotional image, title, and message to appear at the bottom of printed receipts."
+                icon={FileText}
+              >
+                <div className="space-y-4">
+                  <Button size="sm" onClick={openNewAdvert} className="flex items-center gap-2">
+                    <Plus className="h-4 w-4" /> New Advert
+                  </Button>
+
+                  {advertsList.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No adverts configured. Create one to have it print on receipts.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {advertsList.map((advert: any) => (
+                        <div key={advert.id} className="flex items-start gap-4 rounded-lg border p-4 bg-muted/20">
+                          {advert.imageUrl && (
+                            <img src={advert.imageUrl} alt="" className="h-16 w-24 object-contain rounded border bg-white shrink-0" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-medium text-sm truncate">{advert.title || "(No title)"}</span>
+                              {advert.isActive && <Badge className="bg-emerald-600 text-white text-xs">Active</Badge>}
+                            </div>
+                            {advert.body && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{advert.body}</p>}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {advert.isActive ? (
+                              <Button size="sm" variant="outline" className="text-xs" onClick={() => deactivateAdvertMutation.mutate(advert.id)} disabled={deactivateAdvertMutation.isPending}>
+                                Deactivate
+                              </Button>
+                            ) : (
+                              <Button size="sm" variant="outline" className="text-xs text-emerald-700 border-emerald-300" onClick={() => activateAdvertMutation.mutate(advert.id)} disabled={activateAdvertMutation.isPending}>
+                                Set Active
+                              </Button>
+                            )}
+                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEditAdvert(advert)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setAdvertDeleteId(advert.id)}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardSection>
+            )}
+
+            {/* Advert create/edit dialog */}
+            <Dialog open={advertDialogOpen} onOpenChange={(v) => { if (!v) { setAdvertDialogOpen(false); resetAdvertForm(); } else setAdvertDialogOpen(true); }}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>{editingAdvertId ? "Edit Advert" : "New Receipt Advert"}</DialogTitle>
+                  <DialogDescription>This advert will appear at the bottom of all printed receipts when set as active.</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  <div className="space-y-2">
+                    <Label>Advert Image <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <div className="flex items-center gap-4">
+                      <div className="h-20 w-32 rounded border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
+                        {advertImageUrl ? (
+                          <img src={advertImageUrl} alt="Advert" className="object-contain max-h-full max-w-full p-1" />
+                        ) : (
+                          <span className="text-xs text-muted-foreground text-center px-2">No image</span>
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        <input id="advert-img-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleAdvertImageUpload} />
+                        <Button type="button" size="sm" variant="outline" disabled={advertImageUploading} onClick={() => document.getElementById("advert-img-upload")?.click()}>
+                          {advertImageUploading ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Uploading…</> : "Upload Image"}
+                        </Button>
+                        {advertImageUrl && (
+                          <Button type="button" size="sm" variant="ghost" className="text-destructive text-xs" onClick={() => setAdvertImageUrl("")}>Remove</Button>
+                        )}
+                        <p className="text-xs text-muted-foreground">PNG, JPG or WebP. Max 5MB.</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="advert-title">Title <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input id="advert-title" value={advertTitle} onChange={(e) => setAdvertTitle(e.target.value)} placeholder="e.g. Special Offer — Family Cover" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="advert-body">Message <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Textarea id="advert-body" value={advertBody} onChange={(e) => setAdvertBody(e.target.value)} placeholder="e.g. Add a family member for only $2 extra/month. Ask your agent today." rows={3} />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => { setAdvertDialogOpen(false); resetAdvertForm(); }}>Cancel</Button>
+                  <Button onClick={handleSaveAdvert} disabled={createAdvertMutation.isPending || updateAdvertMutation.isPending}>
+                    {(createAdvertMutation.isPending || updateAdvertMutation.isPending) ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</> : "Save Advert"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Advert delete confirm */}
+            <AlertDialog open={!!advertDeleteId} onOpenChange={(v) => { if (!v) setAdvertDeleteId(null); }}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete Advert?</AlertDialogTitle>
+                  <AlertDialogDescription>This cannot be undone. The advert will stop appearing on receipts immediately.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => advertDeleteId && deleteAdvertMutation.mutate(advertDeleteId)} className="bg-destructive text-white">
+                    Delete
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </TabsContent>
 
           {/* Account */}

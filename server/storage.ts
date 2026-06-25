@@ -25,7 +25,7 @@ import {
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
   fxRates, requisitions, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
-  quotationGuarantors, quotationCollateral,
+  quotationGuarantors, quotationCollateral, receiptAdverts,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   type FxRate, type InsertFxRate, type Requisition, type InsertRequisition,
@@ -95,6 +95,7 @@ import {
   type ClientFeedback, type InsertClientFeedback,
   directoryContacts,
   type DirectoryContact, type InsertDirectoryContact,
+  type ReceiptAdvert, type InsertReceiptAdvert,
 } from "@shared/schema";
 
 /** Drizzle handle for this org's data database (shared `DATABASE_URL` pool or isolated tenant Postgres). */
@@ -517,6 +518,12 @@ export interface IStorage {
   getServiceReceipts(orgId: string, opts?: { funeralCaseId?: string; fromDate?: string; toDate?: string }): Promise<ServiceReceipt[]>;
   getServiceReceiptByIdempotencyKey(orgId: string, idempotencyKey: string): Promise<ServiceReceipt | undefined>;
   createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt>;
+  getReceiptAdverts(orgId: string): Promise<ReceiptAdvert[]>;
+  getActiveReceiptAdvert(orgId: string): Promise<ReceiptAdvert | null>;
+  createReceiptAdvert(data: InsertReceiptAdvert): Promise<ReceiptAdvert>;
+  updateReceiptAdvert(id: string, data: Partial<InsertReceiptAdvert>, orgId: string): Promise<ReceiptAdvert | undefined>;
+  deleteReceiptAdvert(id: string, orgId: string): Promise<void>;
+  setActiveReceiptAdvert(id: string, orgId: string): Promise<void>;
   getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
   addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
   removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void>;
@@ -4435,6 +4442,46 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(directoryContacts)
       .where(and(eq(directoryContacts.id, id), eq(directoryContacts.organizationId, orgId)));
+  }
+
+  // ─── Receipt Adverts ────────────────────────────────────────
+  async getReceiptAdverts(orgId: string): Promise<ReceiptAdvert[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(receiptAdverts)
+      .where(eq(receiptAdverts.organizationId, orgId))
+      .orderBy(desc(receiptAdverts.createdAt));
+  }
+  async getActiveReceiptAdvert(orgId: string): Promise<ReceiptAdvert | null> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(receiptAdverts)
+      .where(and(eq(receiptAdverts.organizationId, orgId), eq(receiptAdverts.isActive, true)))
+      .limit(1);
+    return row ?? null;
+  }
+  async createReceiptAdvert(data: InsertReceiptAdvert): Promise<ReceiptAdvert> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(receiptAdverts).values(data).returning();
+    return row;
+  }
+  async updateReceiptAdvert(id: string, data: Partial<InsertReceiptAdvert>, orgId: string): Promise<ReceiptAdvert | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(receiptAdverts)
+      .set(data)
+      .where(and(eq(receiptAdverts.id, id), eq(receiptAdverts.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+  async deleteReceiptAdvert(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(receiptAdverts)
+      .where(and(eq(receiptAdverts.id, id), eq(receiptAdverts.organizationId, orgId)));
+  }
+  async setActiveReceiptAdvert(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    // Deactivate all, then activate the chosen one
+    await tdb.update(receiptAdverts).set({ isActive: false }).where(eq(receiptAdverts.organizationId, orgId));
+    await tdb.update(receiptAdverts).set({ isActive: true })
+      .where(and(eq(receiptAdverts.id, id), eq(receiptAdverts.organizationId, orgId)));
   }
 
   // ─── Mortuary Intakes ───────────────────────────────────────

@@ -99,8 +99,15 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     let coverDate = "";
     if (inceptionDate) { const d = new Date(inceptionDate); d.setDate(d.getDate() + waitingPeriodDays); coverDate = d.toISOString().split("T")[0]; }
     const waitingOver = !coverDate || coverDate <= today;
-    const claimable = policyStatusOk && waitingOver;
-    const claimableReason = !policyStatusOk ? `Policy ${policy.status}` : !waitingOver ? `Waiting until ${coverDate}` : "Eligible";
+    const legacyWaived = !!(policy as any).isLegacy;
+    const claimable = policyStatusOk && (legacyWaived || waitingOver);
+    const claimableReason = !policyStatusOk
+      ? `Policy ${policy.status}`
+      : legacyWaived
+      ? "Eligible (Legacy — waived)"
+      : !waitingOver
+      ? `Waiting until ${coverDate}`
+      : "Eligible";
     enrichedMembers.push({ name, relationship, nationalId, dateOfBirth, age, gender, captureDate, inceptionDate: inceptionDate || "", coverDate, waitingDays: waitingPeriodDays, claimable, claimableReason });
   }
   const doc = new PDFDocument({ size: "A4", margin: 50 });
@@ -185,8 +192,8 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     ["Capture Date", policy.createdAt ? new Date(policy.createdAt).toLocaleDateString("en-GB") : "—"],
     ["Effective Date", policy.effectiveDate || "Not set"],
     ["Inception Date", policy.inceptionDate || "Not set"],
-    ["Waiting Period", `${waitingPeriodDays} days`],
-    ["Waiting Period End", policy.waitingPeriodEndDate || "N/A"],
+    ["Waiting Period", (policy as any).isLegacy ? "Waived (Legacy Policy)" : `${waitingPeriodDays} days`],
+    ["Waiting Period End", (policy as any).isLegacy ? "Waived" : (policy.waitingPeriodEndDate || "N/A")],
   ];
   doc.font("Helvetica").fontSize(9).fillColor("#000000");
   for (const [label, value] of policyFields) {
@@ -365,7 +372,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       .stroke();
     y += 20;
     const covFields = [
-      ["Waiting Period", `${productVersion.waitingPeriodDays} days`],
+      ["Waiting Period", (policy as any).isLegacy ? "Waived (Legacy Policy)" : `${productVersion.waitingPeriodDays} days`],
       ["Grace Period", `${productVersion.gracePeriodDays} days`],
       [
         "Eligible Age Range",

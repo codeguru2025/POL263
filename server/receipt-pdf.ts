@@ -66,13 +66,45 @@ function fmtDateTime(d: Date): string {
   return `${fmtDate(d)} at ${fmtTime(d)}`;
 }
 
+/** Number of calendar months a receipt covers (e.g. "01 Jun 2026 – 30 Jun 2026" → 1). */
+function monthsFromPeriod(from: string, to: string): number {
+  const f = new Date(from + "T00:00:00");
+  const t = new Date(to + "T00:00:00");
+  return Math.max(1, (t.getFullYear() - f.getFullYear()) * 12 + (t.getMonth() - f.getMonth()) + 1);
+}
+
+async function loadReceiptContext(receipt: any, orgId: string) {
+  const [policy, client, org, activeAdvert] = await Promise.all([
+    storage.getPolicy(receipt.policyId, orgId),
+    storage.getClient(receipt.clientId, orgId),
+    storage.getOrganization(orgId),
+    storage.getActiveReceiptAdvert(orgId),
+  ]);
+  let productName: string | null = null;
+  if (policy?.productVersionId) {
+    const pv = await storage.getProductVersion(policy.productVersionId, orgId);
+    if (pv) {
+      const prod = await storage.getProduct(pv.productId, orgId);
+      if (prod) productName = prod.name;
+    }
+  }
+  let issuedByName: string | null = null;
+  if (receipt.issuedByUserId) {
+    const u = await storage.getUser(receipt.issuedByUserId);
+    if (u) issuedByName = u.displayName || u.email || null;
+  }
+  let advertImageData: Buffer | null = null;
+  if (activeAdvert?.imageUrl) {
+    advertImageData = await resolveImage(activeAdvert.imageUrl);
+  }
+  return { policy, client, org, productName, issuedByName, activeAdvert, advertImageData };
+}
+
 export async function generateReceiptPdf(receiptId: string): Promise<string | null> {
   const receipt = await findPaymentReceiptById(receiptId);
   if (!receipt) return null;
   const orgId = receipt.organizationId;
-  const policy = await storage.getPolicy(receipt.policyId, orgId);
-  const client = await storage.getClient(receipt.clientId, orgId);
-  const org = await storage.getOrganization(orgId);
+  const { policy, client, org, productName, issuedByName, activeAdvert, advertImageData } = await loadReceiptContext(receipt, orgId);
   if (!policy || !client || !org) return null;
 
   const displayReceiptNum = /^\d+$/.test(String(receipt.receiptNumber).trim())
@@ -147,6 +179,8 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     if (client.phone) row("Phone", client.phone);
     if (client.nationalId) row("National ID", client.nationalId);
     row("Policy Number", policy.policyNumber);
+    if (productName) row("Product", productName);
+    row("Payment Schedule", (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() + (policy.paymentSchedule || "monthly").slice(1));
     row("Policy Status", policy.status.toUpperCase());
     y += 6;
 
@@ -157,13 +191,42 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     const meta = receipt.metadataJson as Record<string, string> | null;
     if (receipt.periodFrom && receipt.periodTo) {
       const pfmt = (s: string) => fmtDate(new Date(s + "T00:00:00"));
+      const months = monthsFromPeriod(receipt.periodFrom, receipt.periodTo);
       row("Cover Period", `${pfmt(receipt.periodFrom)} – ${pfmt(receipt.periodTo)}`);
+      row("Months Paid", `${months} ${months === 1 ? "month" : "months"}`);
     }
     if (meta?.paynowReference) row("Paynow Reference", meta.paynowReference);
     if (meta?.mobileNumber) row("Mobile Number", meta.mobileNumber);
+    if (issuedByName) row("Issued By", issuedByName);
     row("Date & Time", fmtDateTime(new Date(receipt.issuedAt)));
     row("Receipt Number", displayReceiptNum);
     y += 6;
+
+    // ── Advert ──────────────────────────────────────────────────
+    if (activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData)) {
+      const footerTop = A4_H - MARGIN - 55;
+      let ay = y + 10;
+      if (ay < footerTop - 10) {
+        doc.moveTo(MARGIN, ay).lineTo(A4_W - MARGIN, ay).lineWidth(0.4).strokeColor(C_BORDER).stroke();
+        ay += 8;
+        if (advertImageData && ay + 65 < footerTop) {
+          try {
+            const imgW = Math.min(200, COL);
+            doc.image(advertImageData, MARGIN + (COL - imgW) / 2, ay, { width: imgW, fit: [imgW, 55] });
+            ay += 61;
+          } catch { /* skip */ }
+        }
+        if (activeAdvert.title && ay < footerTop) {
+          doc.font("Helvetica-Bold").fontSize(10).fillColor(C_PRIMARY)
+            .text(activeAdvert.title, MARGIN, ay, { width: COL, align: "center" });
+          ay = doc.y + 3;
+        }
+        if (activeAdvert.body && ay < footerTop) {
+          doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
+            .text(activeAdvert.body, MARGIN, ay, { width: COL, align: "center" });
+        }
+      }
+    }
 
     // ── Footer ──────────────────────────────────────────────────
     const footerY = A4_H - MARGIN - 28;
@@ -203,9 +266,7 @@ export async function streamReceiptToResponse(
     res.status(404).json({ message: "Receipt not found" });
     return;
   }
-  const policy = await storage.getPolicy(receipt.policyId, orgId);
-  const client = await storage.getClient(receipt.clientId, orgId);
-  const org = await storage.getOrganization(orgId);
+  const { policy, client, org, productName, issuedByName, activeAdvert, advertImageData } = await loadReceiptContext(receipt, orgId);
   if (!policy || !client || !org) {
     res.status(404).json({ message: "Receipt data incomplete" });
     return;
@@ -277,6 +338,8 @@ export async function streamReceiptToResponse(
     if (client.phone) row("Phone", client.phone);
     if (client.nationalId) row("National ID", client.nationalId);
     row("Policy Number", policy.policyNumber);
+    if (productName) row("Product", productName);
+    row("Payment Schedule", (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() + (policy.paymentSchedule || "monthly").slice(1));
     row("Policy Status", policy.status.toUpperCase());
     y += 6;
 
@@ -286,13 +349,42 @@ export async function streamReceiptToResponse(
     const meta = receipt.metadataJson as Record<string, string> | null;
     if (receipt.periodFrom && receipt.periodTo) {
       const pfmt2 = (s: string) => fmtDate(new Date(s + "T00:00:00"));
+      const months2 = monthsFromPeriod(receipt.periodFrom, receipt.periodTo);
       row("Cover Period", `${pfmt2(receipt.periodFrom)} – ${pfmt2(receipt.periodTo)}`);
+      row("Months Paid", `${months2} ${months2 === 1 ? "month" : "months"}`);
     }
     if (meta?.paynowReference) row("Paynow Reference", meta.paynowReference);
     if (meta?.mobileNumber) row("Mobile Number", meta.mobileNumber);
+    if (issuedByName) row("Issued By", issuedByName);
     row("Date & Time", fmtDateTime(new Date(receipt.issuedAt)));
     row("Receipt Number", displayReceiptNum);
     y += 6;
+
+    // ── Advert ──────────────────────────────────────────────────
+    if (activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData)) {
+      const footerTop = A4_H - MARGIN - 55;
+      let ay = y + 10;
+      if (ay < footerTop - 10) {
+        doc.moveTo(MARGIN, ay).lineTo(A4_W - MARGIN, ay).lineWidth(0.4).strokeColor(C_BORDER).stroke();
+        ay += 8;
+        if (advertImageData && ay + 65 < footerTop) {
+          try {
+            const imgW = Math.min(200, COL);
+            doc.image(advertImageData, MARGIN + (COL - imgW) / 2, ay, { width: imgW, fit: [imgW, 55] });
+            ay += 61;
+          } catch { /* skip */ }
+        }
+        if (activeAdvert.title && ay < footerTop) {
+          doc.font("Helvetica-Bold").fontSize(10).fillColor(C_PRIMARY)
+            .text(activeAdvert.title, MARGIN, ay, { width: COL, align: "center" });
+          ay = doc.y + 3;
+        }
+        if (activeAdvert.body && ay < footerTop) {
+          doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
+            .text(activeAdvert.body, MARGIN, ay, { width: COL, align: "center" });
+        }
+      }
+    }
 
     const footerY = A4_H - MARGIN - 28;
     doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
@@ -329,9 +421,7 @@ export async function streamThermalReceiptToResponse(
     res.status(404).json({ message: "Receipt not found" });
     return;
   }
-  const policy = await storage.getPolicy(receipt.policyId, orgId);
-  const client = await storage.getClient(receipt.clientId, orgId);
-  const org = await storage.getOrganization(orgId);
+  const { policy, client, org, productName, issuedByName, activeAdvert, advertImageData } = await loadReceiptContext(receipt, orgId);
   if (!policy || !client || !org) {
     res.status(404).json({ message: "Receipt data incomplete" });
     return;
@@ -412,6 +502,8 @@ export async function streamThermalReceiptToResponse(
     if (client.phone) lft("Phone:", client.phone);
     if (client.nationalId) lft("ID:", client.nationalId);
     lft("Policy:", policy.policyNumber);
+    if (productName) lft("Product:", productName);
+    lft("Schedule:", (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() + (policy.paymentSchedule || "monthly").slice(1));
     gap(3);
     rule();
 
@@ -427,11 +519,16 @@ export async function streamThermalReceiptToResponse(
     const meta = receipt.metadataJson as Record<string, string> | null;
     if (receipt.periodFrom && receipt.periodTo) {
       const pfmtT = (s: string) => fmtDate(new Date(s + "T00:00:00"));
+      const monthsT = monthsFromPeriod(receipt.periodFrom, receipt.periodTo);
       gap(2);
-      lft("Period:", `${pfmtT(receipt.periodFrom)} – ${pfmtT(receipt.periodTo)}`);
+      lft("Period:", `${pfmtT(receipt.periodFrom)} –`);
+      lft("", `${pfmtT(receipt.periodTo)}`);
+      gap(1);
+      lft("Months paid:", `${monthsT} ${monthsT === 1 ? "month" : "months"}`);
     }
     if (meta?.paynowReference) { gap(1); lft("Ref:", meta.paynowReference); }
     if (meta?.mobileNumber) { gap(1); lft("Mobile:", meta.mobileNumber); }
+    if (issuedByName) { gap(1); lft("Issued by:", issuedByName); }
     gap(3);
     rule();
 
@@ -439,8 +536,35 @@ export async function streamThermalReceiptToResponse(
     ctr(org.footerText || "Thank you for your payment.", true, F_BODY);
     gap(3);
     ctr(`Printed: ${fmtDateTime(new Date())}`, false, F_SM);
-    gap(10);
+    gap(4);
 
+    // ── Advert ────────────────────────────────────────────────
+    if (activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData)) {
+      rule();
+      gap(3);
+      if (advertImageData) {
+        const imgSz = Math.min(LOGO_SZ + 20, INNER - 4);
+        try {
+          const imgX = Math.round((W - imgSz) / 2);
+          doc.image(advertImageData, imgX, doc.y, { width: imgSz, fit: [imgSz, imgSz] });
+          doc.y += imgSz + 4;
+        } catch { /* skip */ }
+      }
+      if (activeAdvert.title) {
+        doc.font("Helvetica-Bold").fontSize(F_BODY).fillColor(C_PRIMARY)
+          .text(activeAdvert.title, M, doc.y, { width: INNER, align: "center" });
+        doc.fillColor(C_TEXT);
+        gap(2);
+      }
+      if (activeAdvert.body) {
+        doc.font("Helvetica").fontSize(F_SM).fillColor(C_TEXT)
+          .text(activeAdvert.body, M, doc.y, { width: INNER, align: "center" });
+        gap(2);
+      }
+      rule();
+    }
+
+    gap(10);
     doc.end();
   } catch (err: any) {
     structuredLog("error", "Thermal receipt PDF generation failed", { receiptId, sizeMm, error: err?.message });

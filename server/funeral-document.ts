@@ -18,7 +18,6 @@ const C_PRIMARY = "#0f766e";
 const C_TEXT = "#111827";
 const C_MUTED = "#6b7280";
 const C_BORDER = "#e5e7eb";
-const C_LIGHT_BG = "#f9fafb";
 
 function fmt(v: string | null | undefined): string {
   return v?.trim() || "—";
@@ -30,6 +29,17 @@ function fmtDate(v: string | null | undefined): string {
     return new Date(v).toLocaleDateString("en-ZA", { day: "2-digit", month: "long", year: "numeric" });
   } catch {
     return v;
+  }
+}
+
+function fmtDateTime(v: Date | string | null | undefined): string {
+  if (!v) return "—";
+  try {
+    const d = typeof v === "string" ? new Date(v) : v;
+    return d.toLocaleDateString("en-ZA", { day: "2-digit", month: "long", year: "numeric" }) +
+      " at " + d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return String(v);
   }
 }
 
@@ -48,7 +58,6 @@ export async function streamFuneralDocumentToResponse(
   const org = await storage.getOrganization(orgId);
   if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
 
-  // Resolve linked records
   const [removalVehicle, burialVehicle] = await Promise.all([
     fc.removalVehicleId ? storage.getFleetVehicleById(fc.removalVehicleId, orgId) : null,
     fc.burialVehicleId ? storage.getFleetVehicleById(fc.burialVehicleId, orgId) : null,
@@ -68,6 +77,7 @@ export async function streamFuneralDocumentToResponse(
   const removalDriver = fc.removalDriverId ? usersMap[fc.removalDriverId] : null;
   const burialDriver = fc.burialDriverId ? usersMap[fc.burialDriverId] : null;
   const attendingAgent = fc.attendingAgentId ? usersMap[fc.attendingAgentId] : null;
+  const assignedUser = fc.assignedTo ? usersMap[fc.assignedTo] : null;
 
   const logoData = await resolveImage(org.logoUrl);
 
@@ -92,7 +102,6 @@ export async function streamFuneralDocumentToResponse(
     } catch { /* skip */ }
   }
 
-  // Company name + contact block (right-aligned)
   doc.font("Helvetica-Bold").fontSize(13).fillColor(C_PRIMARY)
     .text(org.name || "Funeral Parlour", MARGIN + 130, y, { width: COL - 130, align: "right" });
   y += 16;
@@ -109,7 +118,6 @@ export async function streamFuneralDocumentToResponse(
 
   y = Math.max(y, MARGIN + 56) + 12;
 
-  // ── Rule ────────────────────────────────────────────────────
   doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
   y += 8;
 
@@ -118,11 +126,12 @@ export async function streamFuneralDocumentToResponse(
     .text("FUNERAL SERVICE NOTIFICATION", MARGIN, y, { width: COL, align: "center" });
   y += 22;
   doc.font("Helvetica").fontSize(9).fillColor(C_MUTED)
-    .text(`Case No: ${fc.caseNumber}  ·  Generated: ${fmtDate(new Date().toISOString())}`, MARGIN, y, { width: COL, align: "center" });
+    .text(`Case No: ${fc.caseNumber}  ·  Status: ${fmt(fc.status).replace(/_/g, " ").toUpperCase()}  ·  Generated: ${fmtDate(new Date().toISOString())}`, MARGIN, y, { width: COL, align: "center" });
   y += 20;
 
-  // ── Section helper ──────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────
   function sectionHeader(title: string) {
+    if (y > A4_H - MARGIN - 80) { doc.addPage(); y = MARGIN; }
     doc.rect(MARGIN, y, COL, 18).fill(C_PRIMARY);
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff")
       .text(title.toUpperCase(), MARGIN + 8, y + 4, { width: COL - 16 });
@@ -130,115 +139,132 @@ export async function streamFuneralDocumentToResponse(
     doc.fillColor(C_TEXT);
   }
 
-  function row(label: string, value: string, colWidth?: number) {
-    const lw = colWidth ?? 140;
-    const vw = COL - lw - 8;
+  function row(label: string, value: string, colWidth = 140) {
+    if (y > A4_H - MARGIN - 30) { doc.addPage(); y = MARGIN; }
+    const vw = COL - colWidth - 8;
     const startY = y;
     doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED)
-      .text(label, MARGIN, y, { width: lw });
+      .text(label, MARGIN, y, { width: colWidth });
     doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
-      .text(value, MARGIN + lw + 8, startY, { width: vw });
+      .text(value, MARGIN + colWidth + 8, startY, { width: vw });
     y += 14;
   }
 
-  function twoRows(
-    l1: string, v1: string,
-    l2: string, v2: string
-  ) {
+  function twoRows(l1: string, v1: string, l2: string, v2: string) {
+    if (y > A4_H - MARGIN - 30) { doc.addPage(); y = MARGIN; }
     const half = COL / 2 - 4;
     const startY = y;
-    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED)
-      .text(l1, MARGIN, startY, { width: 100 });
-    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
-      .text(v1, MARGIN + 104, startY, { width: half - 104 });
-    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED)
-      .text(l2, MARGIN + half + 8, startY, { width: 100 });
-    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
-      .text(v2, MARGIN + half + 112, startY, { width: half - 104 });
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(l1, MARGIN, startY, { width: 100 });
+    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(v1, MARGIN + 104, startY, { width: half - 104 });
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(l2, MARGIN + half + 8, startY, { width: 100 });
+    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(v2, MARGIN + half + 112, startY, { width: half - 104 });
     y += 14;
   }
 
-  function lightBox(contentFn: () => void) {
-    const boxStartY = y;
-    contentFn();
-    const boxH = y - boxStartY + 6;
-    doc.rect(MARGIN, boxStartY - 4, COL, boxH).lineWidth(0.5).strokeColor(C_BORDER).stroke();
-    doc.rect(MARGIN, boxStartY - 4, COL, boxH).fillOpacity(0.4).fill(C_LIGHT_BG).fillOpacity(1);
-    // Re-draw content on top (PDF layers already rendered; this trick won't work in PDFKit — skip fill)
+  function driverBlock(driver: { displayName: string | null; phone: string | null; email: string | null; gender: string | null } | null) {
+    if (!driver) { row("Driver", "—"); return; }
+    row("Driver Name", fmt(driver.displayName));
+    if (driver.phone) row("Driver Phone", driver.phone);
+    if (driver.email) row("Driver Email", driver.email);
   }
 
   const gap = () => { y += 8; };
 
   try {
-  // ── 1. Deceased ─────────────────────────────────────────────
-  sectionHeader("1. Deceased Details");
-  const deceasedGenderLabel = fc.deceasedGender
-    ? fc.deceasedGender.charAt(0).toUpperCase() + fc.deceasedGender.slice(1)
-    : "";
-  twoRows("Full Name", fmt(fc.deceasedName), "Date of Birth", fmtDate(fc.deceasedDob));
-  twoRows("Gender", fmt(deceasedGenderLabel), "National ID", fmt(fc.deceasedNationalId));
-  if (fc.serviceType === "claim") {
-    twoRows("Relationship to Policyholder", fmt(fc.deceasedRelationship), "Date of Death", fmtDate(fc.dateOfDeath));
-  } else {
-    row("Date of Death", fmtDate(fc.dateOfDeath));
-  }
-  twoRows("Cause of Death", fmt(fc.causeOfDeath), "Place of Death", fmt(fc.placeOfDeath));
-  gap();
+    // ── 1. Deceased ────────────────────────────────────────────
+    sectionHeader("1. Deceased Details");
+    const genderLabel = fc.deceasedGender
+      ? fc.deceasedGender.charAt(0).toUpperCase() + fc.deceasedGender.slice(1)
+      : "—";
+    twoRows("Full Name", fmt(fc.deceasedName), "Date of Birth", fmtDate(fc.deceasedDob));
+    twoRows("Gender", genderLabel, "National ID", fmt(fc.deceasedNationalId));
+    if (fc.serviceType === "claim") {
+      twoRows("Relationship to Policyholder", fmt(fc.deceasedRelationship), "Date of Death", fmtDate(fc.dateOfDeath));
+    } else {
+      row("Date of Death", fmtDate(fc.dateOfDeath));
+    }
+    twoRows("Cause of Death", fmt(fc.causeOfDeath), "Place of Death", fmt(fc.placeOfDeath));
+    gap();
 
-  // ── 2. Informant ────────────────────────────────────────────
-  sectionHeader("2. Informant (Next of Kin)");
-  twoRows("Name", fmt(fc.informantName), "Relationship", fmt(fc.informantRelationship));
-  row("Contact Phone", fmt(fc.informantPhone));
-  gap();
+    // ── 2. Body Identification ─────────────────────────────────
+    if (fc.bodyIdentifierName || fc.bodyIdentifierIdNumber) {
+      sectionHeader("2. Body Identification");
+      twoRows("Identified By", fmt(fc.bodyIdentifierName), "Identifier ID No.", fmt(fc.bodyIdentifierIdNumber));
+      gap();
+    }
 
-  // ── 3. Service Details ──────────────────────────────────────
-  sectionHeader("3. Service Details");
-  const serviceLabel = fc.serviceType === "claim" ? "Policy Claim" : fc.serviceType === "cash" ? "Cash Service" : "—";
-  twoRows("Service Type", serviceLabel, "Policy / Ref", fc.policyId ? `Linked (${fc.policyId.slice(0, 8)}…)` : fc.claimId ? `Claim linked` : "—");
-  twoRows("Date of Burial", fmtDate(fc.funeralDate), "Place of Burial", fmt(fc.funeralLocation));
-  gap();
+    // ── 3. Informant ───────────────────────────────────────────
+    sectionHeader("3. Informant (Next of Kin)");
+    twoRows("Name", fmt(fc.informantName), "Relationship", fmt(fc.informantRelationship));
+    row("Contact Phone", fmt(fc.informantPhone));
+    gap();
 
-  // ── 4. Body Removal ─────────────────────────────────────────
-  sectionHeader("4. Body Removal");
-  row("Removal Location", fmt(fc.removalLocation));
-  const remVehicleStr = removalVehicle ? `${removalVehicle.registration}${removalVehicle.make ? ` — ${removalVehicle.make} ${removalVehicle.model || ""}`.trim() : ""}` : "—";
-  const remDriverStr = removalDriver ? `${fmt(removalDriver.displayName)}${removalDriver.phone ? `  ·  ${removalDriver.phone}` : ""}` : "—";
-  twoRows("Vehicle (Reg)", remVehicleStr, "Driver", remDriverStr);
-  gap();
+    // ── 4. Case Summary ────────────────────────────────────────
+    sectionHeader("4. Case Summary");
+    const serviceLabel = fc.serviceType === "claim" ? "Policy Claim" : fc.serviceType === "cash" ? "Cash Service" : "—";
+    twoRows("Service Type", serviceLabel, "Case Status", fmt(fc.status).replace(/_/g, " ").toUpperCase());
+    const refStr = fc.policyId ? `Policy linked` : fc.claimId ? `Claim linked` : "—";
+    twoRows("Reference", refStr, "Assigned Staff", fmt(assignedUser?.displayName));
+    if (fc.slaDeadline) row("SLA Deadline", fmtDateTime(fc.slaDeadline));
+    if (fc.completedAt) row("Completed At", fmtDateTime(fc.completedAt));
+    gap();
 
-  // ── 5. Burial Logistics ─────────────────────────────────────
-  sectionHeader("5. Burial Logistics");
-  const burVehicleStr = burialVehicle ? `${burialVehicle.registration}${burialVehicle.make ? ` — ${burialVehicle.make} ${burialVehicle.model || ""}`.trim() : ""}` : "—";
-  const burDriverStr = burialDriver ? `${fmt(burialDriver.displayName)}${burialDriver.phone ? `  ·  ${burialDriver.phone}` : ""}` : "—";
-  twoRows("Vehicle (Reg)", burVehicleStr, "Driver", burDriverStr);
-  gap();
+    // ── 5. Service Timeline (sequential) ──────────────────────
+    sectionHeader("5. Service Timeline");
+    row("Body Wash", fc.bodyWashTime ? fmtDateTime(fc.bodyWashTime) : "—");
+    if (fc.memorialServiceStart || fc.memorialServiceEnd) {
+      row("Memorial Service Start", fc.memorialServiceStart ? fmtDateTime(fc.memorialServiceStart) : "—");
+      row("Memorial Service End", fc.memorialServiceEnd ? fmtDateTime(fc.memorialServiceEnd) : "—");
+    }
+    row("Burial Departure", fc.burialDepartureTime ? fmtDateTime(fc.burialDepartureTime) : "—");
+    twoRows("Date of Burial", fmtDate(fc.funeralDate), "Place of Burial", fmt(fc.funeralLocation));
+    gap();
 
-  // ── 6. Attending Agent ──────────────────────────────────────
-  sectionHeader("6. Attending Agent");
-  if (attendingAgent) {
-    twoRows("Name", fmt(attendingAgent.displayName), "Gender", fmt(attendingAgent.gender));
-    twoRows("Phone", fmt(attendingAgent.phone), "Email", fmt(attendingAgent.email));
-  } else {
-    row("Assigned Agent", "—");
-  }
-  gap();
+    // ── 6. Body Removal ────────────────────────────────────────
+    sectionHeader("6. Body Removal");
+    row("Removal Location", fmt(fc.removalLocation));
+    const remVehicleStr = removalVehicle
+      ? `${removalVehicle.registration}${removalVehicle.make ? ` — ${removalVehicle.make} ${removalVehicle.model || ""}`.trim() : ""}`
+      : "—";
+    row("Vehicle (Reg)", remVehicleStr);
+    driverBlock(removalDriver);
+    gap();
 
-  // ── 7. Notes ────────────────────────────────────────────────
-  if (fc.notes) {
-    sectionHeader("7. Notes");
-    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
-      .text(fc.notes, MARGIN, y, { width: COL });
-    y += doc.heightOfString(fc.notes, { width: COL }) + 8;
-  }
+    // ── 7. Burial Logistics ────────────────────────────────────
+    sectionHeader("7. Burial Logistics");
+    const burVehicleStr = burialVehicle
+      ? `${burialVehicle.registration}${burialVehicle.make ? ` — ${burialVehicle.make} ${burialVehicle.model || ""}`.trim() : ""}`
+      : "—";
+    row("Vehicle (Reg)", burVehicleStr);
+    driverBlock(burialDriver);
+    gap();
 
-  // ── Footer ──────────────────────────────────────────────────
-  const footerY = A4_H - MARGIN - 28;
-  doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
-  doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED)
-    .text(
-      `This document was generated by ${org.name || "POL263"} · Case ${fc.caseNumber} · Status: ${fc.status.replace("_", " ").toUpperCase()}`,
-      MARGIN, footerY + 6, { width: COL, align: "center" }
-    );
+    // ── 8. Attending Agent ─────────────────────────────────────
+    sectionHeader("8. Attending Agent");
+    if (attendingAgent) {
+      twoRows("Name", fmt(attendingAgent.displayName), "Gender", fmt(attendingAgent.gender));
+      twoRows("Phone", fmt(attendingAgent.phone), "Email", fmt(attendingAgent.email));
+    } else {
+      row("Attending Agent", "—");
+    }
+    gap();
+
+    // ── 9. Notes ───────────────────────────────────────────────
+    if (fc.notes) {
+      sectionHeader("9. Notes");
+      doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
+        .text(fc.notes, MARGIN, y, { width: COL });
+      y += doc.heightOfString(fc.notes, { width: COL }) + 8;
+    }
+
+    // ── Footer ──────────────────────────────────────────────────
+    const footerY = A4_H - MARGIN - 28;
+    doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
+    doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED)
+      .text(
+        `This document was generated by ${org.name || "POL263"} · Case ${fc.caseNumber} · Status: ${fc.status.replace(/_/g, " ").toUpperCase()}`,
+        MARGIN, footerY + 6, { width: COL, align: "center" }
+      );
 
     doc.end();
   } catch (err: any) {

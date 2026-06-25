@@ -43,6 +43,7 @@ import {
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
+  insertReceiptAdvertSchema,
   insertDependentSchema, insertTermsSchema,
   insertRequisitionSchema, REQUISITION_STATUSES,
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
@@ -506,6 +507,68 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
   app.use("/api/upload/logo", handleMulterError);
+
+  // Receipt advert image upload
+  app.post("/api/upload/receipt-advert-image", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoMemUpload.single("file"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    try {
+      const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "receipt-adverts");
+      return res.json({ url });
+    } catch (err: any) {
+      structuredLog("error", "Receipt advert image upload failed", { error: err?.message });
+      return res.status(500).json({ message: "Upload failed. Please try again." });
+    }
+  });
+  app.use("/api/upload/receipt-advert-image", handleMulterError);
+
+  // ─── Receipt Adverts ────────────────────────────────────────────
+  app.get("/api/receipt-adverts", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getReceiptAdverts(user.organizationId));
+  });
+
+  app.post("/api/receipt-adverts", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const data = insertReceiptAdvertSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const advert = await storage.createReceiptAdvert(data);
+      await auditLog(req, "CREATE_RECEIPT_ADVERT", "ReceiptAdvert", advert.id, null, advert);
+      return res.status(201).json(advert);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      return res.status(500).json({ message: err?.message || "Failed to create advert" });
+    }
+  });
+
+  app.patch("/api/receipt-adverts/:id", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const before = (await storage.getReceiptAdverts(user.organizationId)).find(a => a.id === req.params.id);
+    const updated = await storage.updateReceiptAdvert(req.params.id as string, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Advert not found" });
+    await auditLog(req, "UPDATE_RECEIPT_ADVERT", "ReceiptAdvert", req.params.id as string, before, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/receipt-adverts/:id", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteReceiptAdvert(req.params.id as string, user.organizationId);
+    await auditLog(req, "DELETE_RECEIPT_ADVERT", "ReceiptAdvert", req.params.id as string, null, null);
+    return res.status(204).end();
+  });
+
+  app.post("/api/receipt-adverts/:id/activate", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    await storage.setActiveReceiptAdvert(req.params.id as string, user.organizationId);
+    await auditLog(req, "ACTIVATE_RECEIPT_ADVERT", "ReceiptAdvert", req.params.id as string, null, null);
+    return res.json({ success: true });
+  });
+
+  app.post("/api/receipt-adverts/:id/deactivate", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    await storage.updateReceiptAdvert(req.params.id as string, { isActive: false }, user.organizationId);
+    return res.json({ success: true });
+  });
 
   // Avatar upload — any authenticated staff user can upload their own avatar.
   app.post("/api/upload/avatar", requireAuth, logoMemUpload.single("file"), async (req, res) => {
@@ -4033,8 +4096,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
     if (!fc) return res.status(404).json({ message: "Funeral case not found" });
+    const clBody = { ...req.body };
+    if (clBody.completedAt && typeof clBody.completedAt === "string") { const d = new Date(clBody.completedAt); clBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
+    else if (!clBody.completedAt) clBody.completedAt = undefined;
     const parsed = insertDriverChecklistSchema.parse({
-      ...req.body,
+      ...clBody,
       funeralCaseId: req.params.id as string,
       organizationId: user.organizationId,
       preparedByUserId: user.id,

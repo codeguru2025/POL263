@@ -2182,6 +2182,26 @@ export const insertPayrollEmployeeSchema = createInsertSchema(payrollEmployees).
 export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({ id: true, createdAt: true });
 export const insertCashupSchema = createInsertSchema(cashups).omit({ id: true, createdAt: true });
 
+// ─── RECEIPT ADVERTS ────────────────────────────────────────
+
+export const receiptAdverts = pgTable(
+  "receipt_adverts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    title: text("title"),
+    body: text("body"),
+    imageUrl: text("image_url"),
+    isActive: boolean("is_active").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("ra_org_idx").on(t.organizationId)]
+);
+
+export const insertReceiptAdvertSchema = createInsertSchema(receiptAdverts).omit({ id: true, createdAt: true });
+export type ReceiptAdvert = typeof receiptAdverts.$inferSelect;
+export type InsertReceiptAdvert = z.infer<typeof insertReceiptAdvertSchema>;
+
 // ─── TYPES ──────────────────────────────────────────────────
 
 export type Organization = typeof organizations.$inferSelect;
