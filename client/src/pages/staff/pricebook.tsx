@@ -77,6 +77,16 @@ const CATEGORIES = [
   "Other",
 ];
 
+const CASKET_TYPES = [
+  "Flat Lid",
+  "Dome",
+  "Mini Dome",
+  "Executive Dome",
+  "2-Tier",
+  "3-Tier",
+  "Coffin Shaped",
+];
+
 const UNITS = ["each", "per km", "per hour", "per day", "per person", "flat rate", "per item"];
 
 export default function StaffPriceBook() {
@@ -86,6 +96,7 @@ export default function StaffPriceBook() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [showCreateItem, setShowCreateItem] = useState(false);
+  const [editingItem, setEditingItem] = useState<PriceBookItem | null>(null);
   const [showCreateCostSheet, setShowCreateCostSheet] = useState(false);
   const [selectedSheetId, setSelectedSheetId] = useState<string | null>(null);
   const [showAddLineItem, setShowAddLineItem] = useState(false);
@@ -116,6 +127,19 @@ export default function StaffPriceBook() {
       queryClient.invalidateQueries({ queryKey: ["/api/price-book"] });
       setShowCreateItem(false);
       toast({ title: "Price book item created" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const updateItemMut = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
+      const res = await apiRequest("PATCH", `/api/price-book/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/price-book"] });
+      setEditingItem(null);
+      toast({ title: "Price book item updated" });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -242,6 +266,7 @@ export default function StaffPriceBook() {
                         <TableHead>Effective</TableHead>
                         <TableHead>Version</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -272,6 +297,17 @@ export default function StaffPriceBook() {
                             >
                               {item.isActive ? "Active" : "Inactive"}
                             </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => setEditingItem(item)}
+                              data-testid={`button-edit-pricebook-${item.id}`}
+                            >
+                              Edit
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -443,6 +479,17 @@ export default function StaffPriceBook() {
         isPending={createItemMut.isPending}
       />
 
+      {editingItem && (
+        <EditPriceBookItemDialog
+          key={editingItem.id}
+          item={editingItem}
+          open={!!editingItem}
+          onClose={() => setEditingItem(null)}
+          onSubmit={(data) => updateItemMut.mutate({ id: editingItem.id, data })}
+          isPending={updateItemMut.isPending}
+        />
+      )}
+
       <CreateCostSheetDialog
         open={showCreateCostSheet}
         onClose={() => setShowCreateCostSheet(false)}
@@ -476,16 +523,20 @@ function CreatePriceBookItemDialog({
   isPending: boolean;
 }) {
   const [name, setName] = useState("");
+  const [casketType, setCasketType] = useState("");
   const [unit, setUnit] = useState("each");
   const [priceAmount, setPriceAmount] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [category, setCategory] = useState("");
   const [effectiveFrom, setEffectiveFrom] = useState("");
 
+  const isCasket = category === "Casket & Coffin";
+  const effectiveName = isCasket ? (casketType ? `Type of Coffin — ${casketType}` : "") : name;
+
   const handleSubmit = () => {
-    if (!name || !priceAmount) return;
+    if (!effectiveName || !priceAmount) return;
     onSubmit({
-      name,
+      name: effectiveName,
       unit,
       priceAmount,
       currency,
@@ -495,6 +546,7 @@ function CreatePriceBookItemDialog({
       isActive: true,
     });
     setName("");
+    setCasketType("");
     setUnit("each");
     setPriceAmount("");
     setCurrency("USD");
@@ -510,23 +562,39 @@ function CreatePriceBookItemDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>Item Name *</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Standard Casket" data-testid="input-pricebook-name" />
+            <Label>Category</Label>
+            <Select value={category} onValueChange={(v) => { setCategory(v); setCasketType(""); setName(""); }}>
+              <SelectTrigger data-testid="select-pricebook-category-top">
+                <SelectValue placeholder="Select category first…" />
+              </SelectTrigger>
+              <SelectContent>
+                {CATEGORIES.map((cat) => (
+                  <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Category</Label>
-              <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger data-testid="select-pricebook-category">
-                  <SelectValue placeholder="Select..." />
+          <div className="space-y-2">
+            <Label>Item Name *</Label>
+            {isCasket ? (
+              <Select value={casketType} onValueChange={setCasketType} data-testid="select-casket-type">
+                <SelectTrigger>
+                  <SelectValue placeholder="Select coffin type…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {CATEGORIES.map((cat) => (
-                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                  {CASKET_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            ) : (
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Removal Fee" data-testid="input-pricebook-name" />
+            )}
+            {isCasket && casketType && (
+              <p className="text-xs text-muted-foreground">Will be saved as: <strong>Type of Coffin — {casketType}</strong></p>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Unit *</Label>
               <Select value={unit} onValueChange={setUnit}>
@@ -540,8 +608,6 @@ function CreatePriceBookItemDialog({
                 </SelectContent>
               </Select>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Price *</Label>
               <Input type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} placeholder="0.00" data-testid="input-pricebook-price" />
@@ -558,7 +624,7 @@ function CreatePriceBookItemDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={isPending || !name || !priceAmount} data-testid="button-submit-pricebook-item">
+          <Button onClick={handleSubmit} disabled={isPending || !effectiveName || !priceAmount} data-testid="button-submit-pricebook-item">
             {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
             Create Item
           </Button>
@@ -726,6 +792,100 @@ function AddLineItemDialog({
           <Button onClick={handleSubmit} disabled={isPending || !description || !unitPrice} data-testid="button-submit-lineitem">
             {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
             Add Item
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditPriceBookItemDialog({
+  open,
+  onClose,
+  onSubmit,
+  isPending,
+  item,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (data: Record<string, unknown>) => void;
+  isPending: boolean;
+  item: PriceBookItem;
+}) {
+  const isCasketInit = item.category === "Casket & Coffin";
+  const casketTypeInit = isCasketInit && item.name.startsWith("Type of Coffin — ")
+    ? item.name.replace("Type of Coffin — ", "")
+    : "";
+
+  const [casketType, setCasketType] = useState(casketTypeInit);
+  const [name, setName] = useState(isCasketInit ? "" : item.name);
+  const [unit, setUnit] = useState(item.unit);
+  const [priceAmount, setPriceAmount] = useState(item.priceAmount);
+  const [currency, setCurrency] = useState(item.currency);
+  const [category, setCategory] = useState(item.category || "");
+  const [effectiveFrom, setEffectiveFrom] = useState(item.effectiveFrom || "");
+
+  const isCasket = category === "Casket & Coffin";
+  const effectiveName = isCasket ? (casketType ? `Type of Coffin — ${casketType}` : "") : name;
+
+  const handleSubmit = () => {
+    if (!effectiveName || !priceAmount) return;
+    onSubmit({ name: effectiveName, unit, priceAmount, currency, category: category || null, effectiveFrom: effectiveFrom || null });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle>Edit Price Book Item</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Category</Label>
+            <Select value={category} onValueChange={(v) => { setCategory(v); setCasketType(""); setName(""); }}>
+              <SelectTrigger><SelectValue placeholder="Select category…" /></SelectTrigger>
+              <SelectContent>{CATEGORIES.map((cat) => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Item Name *</Label>
+            {isCasket ? (
+              <Select value={casketType} onValueChange={setCasketType}>
+                <SelectTrigger><SelectValue placeholder="Select coffin type…" /></SelectTrigger>
+                <SelectContent>{CASKET_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+              </Select>
+            ) : (
+              <Input value={name} onChange={(e) => setName(e.target.value)} />
+            )}
+            {isCasket && casketType && (
+              <p className="text-xs text-muted-foreground">Will be saved as: <strong>Type of Coffin — {casketType}</strong></p>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label>Unit *</Label>
+              <Select value={unit} onValueChange={setUnit}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Price *</Label>
+              <Input type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="space-y-2">
+              <Label>Currency</Label>
+              <CurrencySelect value={currency} onValueChange={setCurrency} />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Effective From</Label>
+            <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={isPending || !effectiveName || !priceAmount}>
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Save Changes
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -93,14 +93,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   async function recalculatePolicyPremiumIfNeeded(policy: any, orgId: string): Promise<any> {
     if (!policy?.id || !policy?.productVersionId) return policy;
     const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, orgId);
-    const addOnIds = await getPolicyAddOnIds(policy.id, orgId);
+    const rawAddOns = await storage.getPolicyAddOns(policy.id, orgId);
+    const memberAddOns = rawAddOns
+      .filter((a: any) => a.addOnId)
+      .map((a: any) => ({ memberRef: a.policyMemberId ?? "holder", addOnId: a.addOnId }));
     const recomputedPremium = await computePolicyPremium(
       orgId,
       policy.productVersionId,
       policy.currency || "USD",
       policy.paymentSchedule || "monthly",
-      addOnIds,
-      undefined,
+      [],
+      memberAddOns.length > 0 ? memberAddOns : undefined,
       undefined,
       dependentDateOfBirths,
     );
@@ -3807,6 +3810,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/funeral-cases", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
+    const quotationId = typeof req.body.quotationId === "string" && req.body.quotationId ? req.body.quotationId : null;
+    if (req.body.serviceType === "cash") {
+      if (!quotationId) {
+        return res.status(422).json({ message: "A quotation must be linked before creating a cash service case." });
+      }
+      const quote = await storage.getQuotationById(quotationId, user.organizationId);
+      if (!quote) return res.status(422).json({ message: "Quotation not found." });
+      if (quote.funeralCaseId) return res.status(422).json({ message: "This quotation is already linked to another funeral case." });
+    }
     const caseNumber = await storage.generateCaseNumber(user.organizationId);
     const parsed = insertFuneralCaseSchema.parse({
       ...req.body,
@@ -3815,6 +3827,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: "open",
     });
     const fc = await storage.createFuneralCase(parsed);
+    if (req.body.serviceType === "cash" && quotationId) {
+      await storage.linkQuotationToCase(quotationId, fc.id, user.organizationId);
+    }
     await auditLog(req, "CREATE_FUNERAL_CASE", "FuneralCase", fc.id, null, fc);
     return res.status(201).json(fc);
   });
@@ -3829,6 +3844,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "removalVehicleId", "removalDriverId", "burialVehicleId", "burialDriverId",
       "attendingAgentId", "claimId", "policyId", "branchId", "assignedTo",
     ]);
+    for (const f of ["bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd", "slaDeadline", "completedAt"] as const) {
+      if (sanitized[f] && typeof sanitized[f] === "string") {
+        const d = new Date(sanitized[f] as string);
+        sanitized[f] = isNaN(d.getTime()) ? null : d;
+      }
+    }
     const updated = await storage.updateFuneralCase(req.params.id as string, sanitized, user.organizationId);
     await auditLog(req, "UPDATE_FUNERAL_CASE", "FuneralCase", req.params.id as string, before, updated);
     return res.json(updated);
@@ -4403,13 +4424,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
     const idempotencyKey = typeof req.body.idempotencyKey === "string" && req.body.idempotencyKey ? req.body.idempotencyKey : null;
 
+    const quote = await storage.getFuneralQuotation(fc.id, user.organizationId);
+    if (!quote || !quote.items?.length) {
+      return res.status(422).json({ message: "A quotation with at least one line item must exist before recording a payment." });
+    }
+
     if (idempotencyKey) {
       const existing = await storage.getServiceReceiptByIdempotencyKey(user.organizationId, idempotencyKey);
       if (existing) return res.status(200).json({ ...existing, duplicate: true });
     }
 
     const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
-    const quote = await storage.getFuneralQuotation(fc.id, user.organizationId);
     const created = await storage.createServiceReceipt({
       organizationId: user.organizationId,
       branchId: fc.branchId ?? null,
@@ -4625,6 +4650,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const item = await storage.createPriceBookItem(parsed);
     await auditLog(req, "CREATE_PRICE_BOOK_ITEM", "PriceBookItem", item.id, null, item);
     return res.status(201).json(item);
+  });
+
+  app.patch("/api/price-book/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const itemId = req.params.id as string;
+    const before = (await storage.getPriceBookItems(user.organizationId)).find((i: any) => i.id === itemId);
+    if (!before) return res.status(404).json({ message: "Item not found" });
+    const allowed = ["name", "unit", "priceAmount", "currency", "category", "effectiveFrom", "effectiveTo", "isActive"];
+    const patch: Record<string, unknown> = {};
+    for (const k of allowed) { if (k in req.body) patch[k] = req.body[k]; }
+    const updated = await storage.updatePriceBookItem(itemId, patch as any, user.organizationId);
+    await auditLog(req, "UPDATE_PRICE_BOOK_ITEM", "PriceBookItem", itemId, before, updated);
+    return res.json(updated);
   });
 
   // ─── Approvals (Maker-Checker) ──────────────────────────────

@@ -123,6 +123,7 @@ export default function StaffPolicies() {
   const [inPolicyReceiptCurrency, setInPolicyReceiptCurrency] = useState("USD");
   const [inPolicyReceiptRef, setInPolicyReceiptRef] = useState("");
   const [inPolicyReceiptNotes, setInPolicyReceiptNotes] = useState("");
+  const [inPolicyReceiptMonths, setInPolicyReceiptMonths] = useState(1);
   const [pnIntentId, setPnIntentId] = useState<string | null>(null);
   const [pnPolling, setPnPolling] = useState(false);
   const [pnPollStartTime, setPnPollStartTime] = useState<number>(0);
@@ -1078,7 +1079,7 @@ export default function StaffPolicies() {
     setPnIntentId(null); setPnPolling(false); setPnPollStartTime(0); setPnPollError(null);
     setPnInnbucksCode(""); setPnInnbucksExpiry("");
     setPnNeedsOtp(false); setPnOtpRef(""); setPnOtp(""); setPnPhase("select");
-    setInPolicyReceiptMethod("cash"); setInPolicyReceiptRef(""); setInPolicyReceiptNotes("");
+    setInPolicyReceiptMethod("cash"); setInPolicyReceiptRef(""); setInPolicyReceiptNotes(""); setInPolicyReceiptMonths(1);
   };
 
   const inPolicyReceiptMutation = useMutation({
@@ -1109,7 +1110,7 @@ export default function StaffPolicies() {
     mutationFn: async () => {
       const dp = displayPolicy;
       if (!dp) throw new Error("No policy");
-      const amt = dp.premiumAmount ? parseFloat(dp.premiumAmount).toFixed(2) : "0";
+      const amt = dp.premiumAmount ? (parseFloat(dp.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0";
       const intentRes = await apiRequest("POST", "/api/payment-intents", {
         policyId: selectedPolicy.id, clientId: dp.clientId, amount: amt, currency: inPolicyReceiptCurrency, purpose: "premium",
       });
@@ -1599,8 +1600,11 @@ export default function StaffPolicies() {
                       today.setHours(0, 0, 0, 0);
                       endDate.setHours(0, 0, 0, 0);
                       const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                      const waived = policyWaiver?.status === "approved";
                       return daysRemaining > 0 ? (
                         <p className="font-semibold text-amber-600">{daysRemaining} days left</p>
+                      ) : waived ? (
+                        <p className="font-semibold text-emerald-600 flex items-center gap-1">Waived <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700">WAIVER</span></p>
                       ) : (
                         <p className="font-semibold text-emerald-600">Completed</p>
                       );
@@ -1699,6 +1703,12 @@ export default function StaffPolicies() {
             </TabsContent>
 
             <TabsContent value="members" className="space-y-4 mt-4">
+              {policyWaiver?.status === "approved" && (
+                <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-800">
+                  <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 mr-1">WAIVER APPROVED</span>
+                  Waiting period has been formally waived — all members on this policy are immediately claimable.
+                </div>
+              )}
           <CardSection
             title="Policy members"
             description="All lives covered (policy holder + dependants). Filter by age band."
@@ -2831,12 +2841,23 @@ export default function StaffPolicies() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Label className="text-xs">Months</Label>
+                  <Select value={String(inPolicyReceiptMonths)} onValueChange={(v) => setInPolicyReceiptMonths(Number(v))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                        <SelectItem key={m} value={String(m)}>{m} {m === 1 ? "month" : "months"}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div>
                   <Label className="text-xs">Amount</Label>
                   <Input
                     type="number"
-                    value={displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "0.00"}
+                    value={displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0.00"}
                     readOnly
                     className="bg-muted cursor-not-allowed"
                   />
@@ -2846,6 +2867,11 @@ export default function StaffPolicies() {
                   <CurrencySelect value={inPolicyReceiptCurrency} onValueChange={setInPolicyReceiptCurrency} />
                 </div>
               </div>
+              {inPolicyReceiptMonths > 1 && (
+                <p className="text-xs text-muted-foreground">
+                  {inPolicyReceiptMonths}× premium of {inPolicyReceiptCurrency} {displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "0.00"} = <strong>{inPolicyReceiptCurrency} {displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0.00"}</strong>
+                </p>
+              )}
               <div>
                 <Label className="text-xs">Payment Method</Label>
                 <Select value={inPolicyReceiptMethod} onValueChange={setInPolicyReceiptMethod}>
@@ -2971,7 +2997,7 @@ export default function StaffPolicies() {
                       inPolicyReceiptMutation.mutate({
                         policyId: selectedPolicy.id,
                         clientId: displayPolicy.clientId,
-                        amount: displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "0",
+                        amount: displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0",
                         currency: inPolicyReceiptCurrency,
                         paymentMethod: inPolicyReceiptMethod,
                         status: "cleared",

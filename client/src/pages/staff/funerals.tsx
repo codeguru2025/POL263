@@ -50,6 +50,7 @@ type CaseForm = {
   notes: string;
   policyId: string;
   claimId: string;
+  quotationId: string;
 };
 
 const BLANK_FORM: CaseForm = {
@@ -61,7 +62,7 @@ const BLANK_FORM: CaseForm = {
   burialVehicleId: "", burialDriverId: "", attendingAgentId: "",
   bodyWashTime: "", burialDepartureTime: "", memorialServiceStart: "", memorialServiceEnd: "",
   bodyIdentifierName: "", bodyIdentifierIdNumber: "",
-  notes: "", policyId: "", claimId: "",
+  notes: "", policyId: "", claimId: "", quotationId: "",
 };
 
 export default function StaffFunerals() {
@@ -767,7 +768,14 @@ function CaseDetailView({
         headerRight={(
           <div className="flex gap-2">
             <Button size="sm" variant="outline" className="gap-1.5" onClick={onEditQuotation} data-testid="button-edit-quotation"><Pencil className="h-3.5 w-3.5" /> Quotation</Button>
-            <Button size="sm" className="gap-1.5" onClick={onRecordPayment} data-testid="button-record-payment"><Plus className="h-3.5 w-3.5" /> Record Payment</Button>
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={onRecordPayment}
+              disabled={!quotation?.items?.length}
+              title={!quotation?.items?.length ? "Add line items to the quotation before recording a payment" : undefined}
+              data-testid="button-record-payment"
+            ><Plus className="h-3.5 w-3.5" /> Record Payment</Button>
           </div>
         )}
       >
@@ -886,15 +894,16 @@ function CaseFormDialog({
         burialVehicleId: initial.burialVehicleId ?? "",
         burialDriverId: initial.burialDriverId ?? "",
         attendingAgentId: initial.attendingAgentId ?? "",
-        bodyWashTime: (initial as any).bodyWashTime ?? "",
-        burialDepartureTime: (initial as any).burialDepartureTime ?? "",
-        memorialServiceStart: (initial as any).memorialServiceStart ?? "",
-        memorialServiceEnd: (initial as any).memorialServiceEnd ?? "",
+        bodyWashTime: (initial as any).bodyWashTime ? new Date((initial as any).bodyWashTime).toISOString().slice(0, 16) : "",
+        burialDepartureTime: (initial as any).burialDepartureTime ? new Date((initial as any).burialDepartureTime).toISOString().slice(0, 16) : "",
+        memorialServiceStart: (initial as any).memorialServiceStart ? new Date((initial as any).memorialServiceStart).toISOString().slice(0, 16) : "",
+        memorialServiceEnd: (initial as any).memorialServiceEnd ? new Date((initial as any).memorialServiceEnd).toISOString().slice(0, 16) : "",
         bodyIdentifierName: (initial as any).bodyIdentifierName ?? "",
         bodyIdentifierIdNumber: (initial as any).bodyIdentifierIdNumber ?? "",
         notes: initial.notes ?? "",
         policyId: initial.policyId ?? "",
         claimId: initial.claimId ?? "",
+        quotationId: "",
       };
     }
     return { ...BLANK_FORM };
@@ -913,6 +922,32 @@ function CaseFormDialog({
   const [policyLookupError, setPolicyLookupError] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const policySearchRef = useRef<HTMLInputElement>(null);
+
+  const [quotSearch, setQuotSearch] = useState("");
+  const [quotLookupLoading, setQuotLookupLoading] = useState(false);
+  const [foundQuot, setFoundQuot] = useState<any>(null);
+  const [quotLookupError, setQuotLookupError] = useState("");
+
+  const lookupQuotation = async (search: string) => {
+    if (!search.trim()) return;
+    setQuotLookupLoading(true);
+    setQuotLookupError("");
+    setFoundQuot(null);
+    try {
+      const res = await fetch(`${getApiBase()}/api/quotations?q=${encodeURIComponent(search.trim())}&limit=5`, { credentials: "include" });
+      const data = await res.json();
+      const quotes: any[] = Array.isArray(data) ? data : [];
+      const exact = quotes.find((q: any) => q.quotationNumber?.toLowerCase() === search.trim().toLowerCase()) || quotes[0];
+      if (!exact) { setQuotLookupError("No quotation found with that number."); return; }
+      if (exact.funeralCaseId) { setQuotLookupError("This quotation is already linked to another funeral case."); return; }
+      setFoundQuot(exact);
+      setForm((f) => ({ ...f, quotationId: exact.id }));
+    } catch {
+      setQuotLookupError("Failed to look up quotation.");
+    } finally {
+      setQuotLookupLoading(false);
+    }
+  };
 
   const lookupPolicy = async (search: string) => {
     if (!search.trim()) return;
@@ -995,7 +1030,7 @@ function CaseFormDialog({
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>Start by choosing the service type. For a policy claim, look up the policy and pick the deceased member — their details fill in automatically.</DialogDescription>
+          <DialogDescription>Choose the service type. Cash service requires an existing quotation — create the quote first, then open this form. For a policy claim, look up the policy and pick the deceased member.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} noValidate className="space-y-4 pt-1">
 
@@ -1016,6 +1051,10 @@ function CaseFormDialog({
                       setFoundPolicy(null); setPolicyMembers([]); setPolicySearch(""); setPolicyLookupError(""); setSelectedMemberId("");
                       setForm((f) => ({ ...f, policyId: "" }));
                     }
+                    if (opt.v !== "cash") {
+                      setFoundQuot(null); setQuotSearch(""); setQuotLookupError("");
+                      setForm((f) => ({ ...f, quotationId: "" }));
+                    }
                   }}
                   className={`rounded-md border p-3 text-left transition-colors ${form.serviceType === opt.v ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50"}`}
                   data-testid={`button-service-${opt.v}`}
@@ -1026,6 +1065,36 @@ function CaseFormDialog({
               ))}
             </div>
           </div>
+
+          {/* Step 2 (cash only) — link an existing quotation */}
+          {form.serviceType === "cash" && !initial && (
+            <div className="border rounded-md p-3 space-y-3 bg-muted/20">
+              <p className="text-xs font-semibold text-primary">Link a quotation to this cash service case. <span className="font-normal text-muted-foreground">(Required — create the quote first if it doesn't exist yet.)</span></p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Quotation number, e.g. QUO-000001"
+                  value={quotSearch}
+                  onChange={(e) => setQuotSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookupQuotation(quotSearch); } }}
+                  className="flex-1"
+                  data-testid="input-quotation-search"
+                />
+                <Button type="button" size="sm" onClick={() => lookupQuotation(quotSearch)} disabled={quotLookupLoading || !quotSearch.trim()}>
+                  {quotLookupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
+                </Button>
+              </div>
+              {quotLookupError && <p className="text-xs text-destructive">{quotLookupError}</p>}
+              {foundQuot && (
+                <div className="text-xs border-t pt-2 space-y-0.5">
+                  <p className="text-muted-foreground">Linked: <strong className="text-foreground">{foundQuot.quotationNumber}</strong> · {foundQuot.currency} {Number(foundQuot.grandTotal || foundQuot.total || 0).toFixed(2)} · {(foundQuot.items?.length || 0)} item(s)</p>
+                  {foundQuot.deceasedName && <p>Deceased: <strong>{foundQuot.deceasedName}</strong></p>}
+                </div>
+              )}
+              {!form.quotationId && (
+                <p className="text-[11px] text-amber-600">Find and link a quotation to continue.</p>
+              )}
+            </div>
+          )}
 
           {/* Step 2 (claim only) — find the policy, then pick the deceased covered member */}
           {form.serviceType === "claim" && (
@@ -1274,7 +1343,7 @@ function CaseFormDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={isPending || !form.deceasedName} data-testid="button-submit-case">
+            <Button type="submit" disabled={isPending || !form.deceasedName || (!initial && form.serviceType === "cash" && !form.quotationId)} data-testid="button-submit-case">
               {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
               {initial ? "Save Changes" : "Create Case"}
             </Button>
