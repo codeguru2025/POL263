@@ -4134,6 +4134,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // ─── Daily Schedule of Service PDF ─────────────────────────
+
+  app.get("/api/schedule/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    // Default to tomorrow
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const defaultDate = tomorrow.toISOString().slice(0, 10);
+    const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date : defaultDate;
+    const { streamDailyScheduleToResponse } = await import("./schedule-pdf");
+    await streamDailyScheduleToResponse(user.organizationId, date, res, { attachment: req.query.download === "1" });
+  });
+
+  // ─── Department Reports PDF ────────────────────────────────
+
+  app.get("/api/department-report/pdf", requireAuth, requireTenantScope, requirePermission("read:report"), async (req, res) => {
+    const user = req.user as any;
+    const validDepts = ["funeral", "finance", "hr", "mortuary", "sales", "claims"] as const;
+    const dept = req.query.dept as string;
+    if (!validDepts.includes(dept as any)) return res.status(400).json({ message: `dept must be one of: ${validDepts.join(", ")}` });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const firstOfMonth = today.slice(0, 8) + "01";
+    const from = typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : firstOfMonth;
+    const to = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : today;
+
+    const { streamDepartmentReportToResponse } = await import("./department-report-pdf");
+    await streamDepartmentReportToResponse(user.organizationId, dept as any, from, to, res, { attachment: req.query.download === "1" });
+  });
+
   // Linked mortuary intake for a funeral case
   app.get("/api/funeral-cases/:id/mortuary-intake", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;

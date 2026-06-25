@@ -331,6 +331,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const reportsMenu: StaffNavItem[] = isControlPlaneMode
     ? []
     : filterNav([
+        { href: "/staff/schedule-reports", label: "Schedule & Department Reports", icon: CalendarDays, permission: "read:report" },
         { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
         { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2, agentHidden: true },
         { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
@@ -461,6 +462,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         {
           title: "Reports",
           items: filterNav([
+            { href: "/staff/schedule-reports", label: "Schedule & Dept Reports", icon: CalendarDays, permission: "read:report" },
             { href: "/staff/reports?section=policies", label: "Operational Reports", icon: FileStack, permission: "read:report" },
             { href: "/staff/reports?section=finance", label: "Financial Reports", icon: Receipt, permission: "read:report" },
             { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },

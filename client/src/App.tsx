@@ -59,6 +59,7 @@ const StaffDiagnostics = lazy(() => retryLazy(() => import("@/pages/staff/diagno
 const StaffPriceBook = lazy(() => retryLazy(() => import("@/pages/staff/pricebook")));
 const StaffPayroll = lazy(() => retryLazy(() => import("@/pages/staff/payroll")));
 const StaffAttendance = lazy(() => retryLazy(() => import("@/pages/staff/attendance")));
+const StaffScheduleReports = lazy(() => retryLazy(() => import("@/pages/staff/schedule-reports")));
 const StaffUsers = lazy(() => retryLazy(() => import("@/pages/staff/users")));
 const StaffTenants = lazy(() => retryLazy(() => import("@/pages/staff/tenants")));
 const StaffHelpCenter = lazy(() => retryLazy(() => import("@/pages/staff/help-center")));
@@ -178,6 +179,7 @@ function Router() {
       <SafeRoute path="/staff/pricebook" component={StaffPriceBook} />
       <SafeRoute path="/staff/payroll" component={StaffPayroll} />
       <SafeRoute path="/staff/attendance" component={StaffAttendance} />
+      <SafeRoute path="/staff/schedule-reports" component={StaffScheduleReports} />
       <SafeRoute path="/staff/users" component={StaffUsers} />
       <SafeRoute path="/staff/tenants" component={StaffTenants} />
       <SafeRoute path="/staff/help" component={StaffHelpCenter} />
