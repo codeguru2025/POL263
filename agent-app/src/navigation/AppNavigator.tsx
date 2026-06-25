@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Text, View, StyleSheet, Image, TouchableOpacity, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { NotificationProvider, useNotifications } from "../context/NotificationContext";
 import DashboardScreen from "../screens/DashboardScreen";
 import ClientsScreen from "../screens/ClientsScreen";
 import PoliciesScreen from "../screens/PoliciesScreen";
@@ -211,7 +212,8 @@ const bannerStyles = StyleSheet.create({
   text: { fontSize: fontSize.xs, color: "#92400e", fontWeight: "500" },
 });
 
-export default function AppNavigator() {
+function AppNavigatorInner() {
+  const { unreadCount } = useNotifications();
   return (
     <View style={{ flex: 1 }}>
       <AutoSync />
@@ -250,8 +252,23 @@ export default function AppNavigator() {
           component={LeadsScreen}
           options={{ headerTitle: () => <LogoHeader />, title: "Quotations" }}
         />
-        <Tab.Screen name="More" component={MoreStackScreen} options={{ headerShown: false }} />
+        <Tab.Screen
+          name="More"
+          component={MoreStackScreen}
+          options={{
+            headerShown: false,
+            tabBarBadge: unreadCount > 0 ? (unreadCount > 99 ? "99+" : unreadCount) : undefined,
+          }}
+        />
       </Tab.Navigator>
     </View>
+  );
+}
+
+export default function AppNavigator() {
+  return (
+    <NotificationProvider>
+      <AppNavigatorInner />
+    </NotificationProvider>
   );
 }

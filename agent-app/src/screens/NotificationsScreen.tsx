@@ -5,15 +5,19 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNetwork } from "../context/NetworkContext";
+import { useNotifications } from "../context/NotificationContext";
 import { colors, spacing, fontSize } from "../theme";
 import { getDb } from "../db/schema";
 import { apiGet, apiPatch } from "../api";
+import { clearBadge } from "../services/pushService";
 
 interface Notification {
   id: string;
   type: string;
   title: string;
-  message: string;
+  /** Server returns 'body'; 'message' kept for backward compat with local cache. */
+  body?: string;
+  message?: string;
   isRead: boolean;
   createdAt: string;
   metadata?: any;
@@ -21,6 +25,7 @@ interface Notification {
 
 export default function NotificationsScreen() {
   const { isOnline } = useNetwork();
+  const { refresh: refreshCount } = useNotifications();
   const [notifs, setNotifs] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -30,7 +35,9 @@ export default function NotificationsScreen() {
     try {
       if (isOnline) {
         const data = await apiGet<any>("/api/notifications");
-        const items: Notification[] = Array.isArray(data) ? data : (data.notifications ?? []);
+        const raw: any[] = Array.isArray(data) ? data : (data.notifications ?? []);
+        // Normalise: server uses 'body', local cache used 'message'
+        const items: Notification[] = raw.map((n) => ({ ...n, message: n.body ?? n.message ?? "" }));
         setNotifs(items);
         const db = await getDb();
         await db.runAsync("DELETE FROM cache_my_notifications");
@@ -45,7 +52,11 @@ export default function NotificationsScreen() {
     } catch {} finally { setLoading(false); }
   }, [isOnline]);
 
-  useEffect(() => { fetch_(); }, [fetch_]);
+  // Clear badge when user opens this screen
+  useEffect(() => {
+    fetch_();
+    clearBadge().catch(() => {});
+  }, [fetch_]);
 
   const onRefresh = async () => { setRefreshing(true); await fetch_(); setRefreshing(false); };
 
@@ -60,13 +71,19 @@ export default function NotificationsScreen() {
     try {
       await apiPatch("/api/notifications/mark-all-read");
       setNotifs(prev => prev.map(n => ({ ...n, isRead: true })));
+      refreshCount();
+      clearBadge().catch(() => {});
     } catch {}
   };
 
   const typeEmoji: Record<string, string> = {
+    TRIP_ASSIGNED: "🚗", CLAIM_SUBMITTED: "🏥", CLAIM_STATUS: "📝",
+    APPROVAL_NEEDED: "✅", APPROVAL_RESOLVED: "📋", PAYMENT_RECEIVED: "💰",
+    COMMISSION_EARNED: "💵", POLICY_ISSUED: "📄", ATTENDANCE_RESOLVED: "🕐",
+    // legacy client-side keys
     policy_created: "📋", payment_received: "💰", claim_submitted: "🏥",
-    claim_updated: "📝", policy_lapsed: "⚠️", policy_renewed: "🔄",
-    premium_due: "📅", default: "🔔",
+    claim_updated: "📝", policy_lapsed: "⚠️", premium_due: "📅",
+    default: "🔔",
   };
 
   const unreadCount = notifs.filter(n => !n.isRead).length;

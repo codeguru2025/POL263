@@ -6,6 +6,8 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { recordAgentCommission } from "./route-helpers";
+import { notifyUser } from "./user-notifications";
+import { pushToClient } from "./push";
 import { dispatchNotification, buildPolicyContext } from "./notifications";
 import type { OutboxMessage } from "@shared/schema";
 import {
@@ -80,12 +82,30 @@ async function runPaymentStaffFollowup(orgId: string, payload: StaffPayload): Pr
   if (txSnapshot.status === "cleared" && txSnapshot.clientId && txSnapshot.policyId) {
     const policySnap = await storage.getPolicy(txSnapshot.policyId, orgId);
     if (policySnap) {
+      const amtLabel = `${txSnapshot.currency} ${parseFloat(String(txSnapshot.amount)).toFixed(2)}`;
       const payCtx = await buildPolicyContext(policySnap, orgId, {
-        paymentAmount: `${txSnapshot.currency} ${parseFloat(String(txSnapshot.amount)).toFixed(2)}`,
+        paymentAmount: amtLabel,
         paymentDate: new Date().toLocaleDateString("en-GB"),
         paymentMethod: txSnapshot.paymentMethod || "Cash",
       });
       await dispatchNotification(orgId, "payment_received", txSnapshot.clientId, payCtx);
+      // Push to client device
+      pushToClient(orgId, txSnapshot.clientId, {
+        title: "Payment Received",
+        body: `Your payment of ${amtLabel} for policy ${policySnap.policyNumber} has been confirmed.`,
+        data: { type: "PAYMENT_RECEIVED", policyId: policySnap.id },
+      }).catch(() => {});
+      // Notify agent that their client paid
+      if (policySnap.agentId) {
+        const client = await storage.getClient(txSnapshot.clientId, orgId);
+        const clientName = client ? `${client.firstName} ${client.lastName}` : "A client";
+        notifyUser(orgId, policySnap.agentId, {
+          type: "PAYMENT_RECEIVED",
+          title: "Client Payment Received",
+          body: `${clientName} paid ${amtLabel} for policy ${policySnap.policyNumber}.`,
+          metadata: { policyId: policySnap.id, policyNumber: policySnap.policyNumber, clientId: txSnapshot.clientId, amount: amtLabel },
+        }).catch(() => {});
+      }
     }
   }
 }

@@ -2552,6 +2552,72 @@ export const insertAppDownloadInterestSchema = createInsertSchema(appDownloadInt
 export type AppDownloadInterest = typeof appDownloadInterests.$inferSelect;
 export type InsertAppDownloadInterest = z.infer<typeof insertAppDownloadInterestSchema>;
 
+// ─── USER (STAFF/AGENT) NOTIFICATIONS ─────────────────────
+// Separate from notification_logs (which is client-only) so the field
+// shapes don't collide. The agent-app NotificationsScreen reads from here.
+
+export const userNotifications = pgTable(
+  "user_notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    recipientId: uuid("recipient_id")
+      .notNull()
+      .references(() => users.id),
+    /** Notification category — drives icon/colour in the app UI. */
+    type: text("type").notNull(), // TRIP_ASSIGNED | CLAIM_SUBMITTED | CLAIM_STATUS | APPROVAL_NEEDED | APPROVAL_RESOLVED | PAYMENT_RECEIVED | COMMISSION_EARNED | POLICY_ISSUED | ATTENDANCE_RESOLVED | GENERAL
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    /** Arbitrary JSON payload — entity IDs, deep-link targets, etc. */
+    metadata: jsonb("metadata"),
+    isRead: boolean("is_read").default(false).notNull(),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("un_org_idx").on(t.organizationId),
+    index("un_recipient_idx").on(t.recipientId),
+    index("un_read_idx").on(t.recipientId, t.isRead),
+    index("un_created_idx").on(t.createdAt),
+  ]
+);
+
+export const insertUserNotificationSchema = createInsertSchema(userNotifications).omit({ id: true, createdAt: true });
+export type UserNotification = typeof userNotifications.$inferSelect;
+export type InsertUserNotification = z.infer<typeof insertUserNotificationSchema>;
+
+// ─── USER (STAFF/AGENT) DEVICE TOKENS ─────────────────────
+// Stores Expo push tokens for staff/agent users. Mirrors client_device_tokens
+// but references users.id instead of clients.id.
+
+export const userDeviceTokens = pgTable(
+  "user_device_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    token: text("token").notNull(),
+    platform: text("platform").notNull(), // ios | android | web
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("udt_org_idx").on(t.organizationId),
+    index("udt_user_idx").on(t.userId),
+    uniqueIndex("udt_token_unique").on(t.token),
+  ]
+);
+
+export const insertUserDeviceTokenSchema = createInsertSchema(userDeviceTokens).omit({ id: true, createdAt: true, updatedAt: true });
+export type UserDeviceToken = typeof userDeviceTokens.$inferSelect;
+export type InsertUserDeviceToken = z.infer<typeof insertUserDeviceTokenSchema>;
+
 // ─── APP RELEASES ──────────────────────────────────────────────
 // Platform-level: tracks each APK release, minimum supported version,
 // and download URL. Used for in-app version enforcement and OTA checks.

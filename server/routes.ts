@@ -53,6 +53,9 @@ import {
 import { sql, eq, count, and, max } from "drizzle-orm";
 import { pool, db } from "./db";
 import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
+import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
+import { pushToClient } from "./push";
+import { sseConnect, sseActiveCount } from "./sse";
 import { enqueueJob, getJobStats } from "./job-queue";
 import {
   insertOutboxMessageInTx,
@@ -3922,6 +3925,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return created;
       });
       await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
+      // Auto-create approval request — all claims require manager approval
+      try {
+        const approvalReq = await storage.createApprovalRequest({
+          organizationId: user.organizationId,
+          requestType: "CLAIM_REVIEW",
+          entityType: "Claim",
+          entityId: claim.id,
+          requestData: { claimNumber: claim.claimNumber, claimType: claim.claimType, amount: claim.cashInLieuAmount },
+          status: "pending",
+          initiatedBy: user.id,
+        });
+        await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+          type: "APPROVAL_NEEDED",
+          title: "Claim Requires Approval",
+          body: `Claim ${claim.claimNumber} has been submitted and requires your approval.`,
+          metadata: { claimId: claim.id, claimNumber: claim.claimNumber, approvalId: approvalReq.id },
+        });
+      } catch (approvalErr: any) {
+        structuredLog("warn", "Failed to auto-create claim approval", { claimId: claim.id, error: approvalErr?.message });
+      }
       return res.status(201).json(claim);
     } catch (err: any) {
       if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid claim data", errors: err.errors });
@@ -3956,6 +3979,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = await storage.updateClaim(claim.id, updateData, claim.organizationId);
     await storage.createClaimStatusHistory(claim.id, claim.status, toStatus, reason, user.id, claim.organizationId);
     await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, updated);
+    // Notify submitter of status change
+    if (claim.submittedBy && claim.submittedBy !== user.id) {
+      notifyUser(claim.organizationId, claim.submittedBy, {
+        type: "CLAIM_STATUS",
+        title: `Claim ${toStatus.charAt(0).toUpperCase() + toStatus.slice(1)}`,
+        body: `Claim ${claim.claimNumber} has been ${toStatus}${reason ? `: ${reason}` : ""}.`,
+        metadata: { claimId: claim.id, claimNumber: claim.claimNumber, toStatus },
+      }).catch(() => {});
+    }
+    // Notify client
+    if (claim.clientId) {
+      const statusLabel = toStatus.charAt(0).toUpperCase() + toStatus.slice(1);
+      notifyClientPush(claim.organizationId, claim.clientId, `Claim ${statusLabel}`, `Your claim ${claim.claimNumber} has been ${toStatus}.`, claim.policyId ?? undefined).catch(() => {});
+    }
     return res.json(updated);
   });
 
@@ -4053,6 +4090,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const updated = await storage.updateFuneralCase(caseId, sanitized, user.organizationId);
       await auditLog(req, "UPDATE_FUNERAL_CASE", "FuneralCase", caseId, before, updated);
+
+      // Notify newly assigned drivers/agents immediately with full trip details
+      const tripDate = sanitized.funeralDate || sanitized.burialDepartureTime;
+      const location = sanitized.funeralLocation || sanitized.removalLocation;
+      const deceased = before.deceasedName || "Deceased";
+      const notifyIfAssigned = async (fieldKey: string, newId: string | null | undefined, role: string) => {
+        if (!newId || (before as any)[fieldKey] === newId) return;
+        notifyUser(user.organizationId, newId, {
+          type: "TRIP_ASSIGNED",
+          title: "Trip Assignment",
+          body: `You have been assigned as ${role} for ${deceased}'s funeral${tripDate ? ` on ${new Date(tripDate).toLocaleString("en-GB")}` : ""}${location ? ` at ${location}` : ""}.`,
+          metadata: { funeralCaseId: caseId, role, funeralDate: tripDate, location, deceasedName: deceased },
+        }).catch(() => {});
+      };
+      await Promise.all([
+        notifyIfAssigned("removalDriverId", sanitized.removalDriverId, "Removal Driver"),
+        notifyIfAssigned("burialDriverId", sanitized.burialDriverId, "Burial Driver"),
+        notifyIfAssigned("attendingAgentId", sanitized.attendingAgentId, "Attending Agent"),
+        notifyIfAssigned("assignedTo", sanitized.assignedTo, "Case Manager"),
+      ]);
+
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/funeral-cases/:id failed", { error: err?.message, stack: err?.stack, caseId });
@@ -5059,6 +5117,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       rejectionReason: rejectionReason || null,
     }, user.organizationId);
     await auditLog(req, `RESOLVE_APPROVAL_${action.toUpperCase()}`, "ApprovalRequest", approval.id, approval, updated);
+    // Notify the submitter of the decision
+    if (approval.initiatedBy) {
+      const label = action === "approve" ? "Approved" : "Rejected";
+      notifyUser(user.organizationId, approval.initiatedBy, {
+        type: "APPROVAL_RESOLVED",
+        title: `Request ${label}`,
+        body: `Your ${approval.requestType.replace(/_/g, " ")} request has been ${label.toLowerCase()}${rejectionReason ? `: ${rejectionReason}` : ""}.`,
+        metadata: { approvalId: approval.id, action, entityType: approval.entityType, entityId: approval.entityId },
+      }).catch(() => {});
+    }
     return res.json(updated);
   });
 
@@ -5576,6 +5644,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (e instanceof z.ZodError) return res.status(400).json({ message: "Validation failed", details: e.errors });
       throw e;
     }
+  });
+
+  // ─── User (staff/agent) notifications ───────────────────
+
+  // SSE stream — agent-app and web keep this open for real-time delivery
+  app.get("/api/notifications/stream", requireAuth, (req, res) => {
+    const user = (req as any).user as { id: string };
+    sseConnect(user.id, req, res);
+  });
+
+  app.get("/api/notifications", requireAuth, requireTenantScope, async (req, res) => {
+    const user = (req as any).user as { id: string; organizationId: string };
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const offset = Number(req.query.offset) || 0;
+    const notifications = await storage.getUserNotifications(user.organizationId, user.id, limit, offset);
+    const unreadCount = await storage.getUnreadUserNotificationCount(user.organizationId, user.id);
+    return res.json({ notifications, unreadCount });
+  });
+
+  app.get("/api/notifications/unread-count", requireAuth, requireTenantScope, async (req, res) => {
+    const user = (req as any).user as { id: string; organizationId: string };
+    const count = await storage.getUnreadUserNotificationCount(user.organizationId, user.id);
+    return res.json({ count });
+  });
+
+  app.patch("/api/notifications/:id/read", requireAuth, requireTenantScope, async (req, res) => {
+    const user = (req as any).user as { id: string; organizationId: string };
+    await storage.markUserNotificationRead(req.params.id as string, user.id, user.organizationId);
+    return res.json({ ok: true });
+  });
+
+  app.patch("/api/notifications/mark-all-read", requireAuth, requireTenantScope, async (req, res) => {
+    const user = (req as any).user as { id: string; organizationId: string };
+    await storage.markAllUserNotificationsRead(user.organizationId, user.id);
+    return res.json({ ok: true });
+  });
+
+  // Push token registration — staff/agent
+  app.post("/api/agent-auth/push-token", requireAuth, requireTenantScope, async (req, res) => {
+    const user = (req as any).user as { id: string; organizationId: string };
+    const { token, platform } = req.body;
+    if (!token || typeof token !== "string") return res.status(400).json({ message: "token required" });
+    await storage.upsertUserDeviceToken(user.organizationId, user.id, token, platform || "unknown");
+    return res.json({ ok: true });
+  });
+
+  // SSE diagnostics (admin only)
+  app.get("/api/notifications/sse-stats", requireAuth, (req, res) => {
+    res.json({ activeConnections: sseActiveCount() });
+  });
+
+  // Push token registration — clients
+  app.post("/api/client-auth/push-token", async (req, res) => {
+    const client = (req as any).clientUser as { id: string; organizationId: string } | undefined;
+    if (!client) return res.status(401).json({ message: "Unauthorized" });
+    const { token, platform } = req.body;
+    if (!token || typeof token !== "string") return res.status(400).json({ message: "token required" });
+    await storage.addClientDeviceToken(client.organizationId, client.id, token, platform || "unknown");
+    return res.json({ ok: true });
   });
 
   // ─── Public walk-in self-registration ───────────────────

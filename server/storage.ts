@@ -28,6 +28,7 @@ import {
   quotationGuarantors, quotationCollateral, receiptAdverts,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
+  userNotifications, userDeviceTokens,
   type FxRate, type InsertFxRate, type Requisition, type InsertRequisition,
   type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
@@ -98,6 +99,8 @@ import {
   directoryContacts,
   type DirectoryContact, type InsertDirectoryContact,
   type ReceiptAdvert, type InsertReceiptAdvert,
+  type UserNotification, type InsertUserNotification,
+  type UserDeviceToken,
 } from "@shared/schema";
 
 /** Drizzle handle for this org's data database (shared `DATABASE_URL` pool or isolated tenant Postgres). */
@@ -255,6 +258,7 @@ export interface IStorage {
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
   getUserByReferralCode(code: string): Promise<User | undefined>;
   getUsersByOrg(organizationId: string, limit?: number, offset?: number): Promise<User[]>;
+  getUsersWithPermission(organizationId: string, permission: string): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, data: Partial<InsertUser>): Promise<User | undefined>;
   getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]>;
@@ -565,6 +569,17 @@ export interface IStorage {
   createCostSheet(data: any): Promise<any>;
   getCostLineItems(costSheetId: string, orgId: string): Promise<any[]>;
   createCostLineItem(data: any): Promise<any>;
+  // ── User notifications (staff/agent) ──
+  createUserNotification(data: InsertUserNotification): Promise<UserNotification>;
+  getUserNotifications(orgId: string, userId: string, limit?: number, offset?: number): Promise<UserNotification[]>;
+  getUnreadUserNotificationCount(orgId: string, userId: string): Promise<number>;
+  markUserNotificationRead(id: string, userId: string, orgId: string): Promise<void>;
+  markAllUserNotificationsRead(orgId: string, userId: string): Promise<void>;
+  // ── User device tokens (staff/agent push) ──
+  getUserDeviceTokens(orgId: string, userId: string): Promise<{ id: string; token: string; platform: string }[]>;
+  getAllUserDeviceTokensByOrg(orgId: string): Promise<{ id: string; userId: string; token: string; platform: string }[]>;
+  upsertUserDeviceToken(orgId: string, userId: string, token: string, platform: string): Promise<void>;
+  removeUserDeviceToken(token: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -622,6 +637,21 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(organizationId);
     return tdb.select().from(users).where(eq(users.organizationId, organizationId))
       .orderBy(desc(users.createdAt)).limit(limit).offset(offset);
+  }
+  async getUsersWithPermission(organizationId: string, permission: string): Promise<User[]> {
+    const tdb = await getDbForOrg(organizationId);
+    // Fetch IDs of users with this permission, then hydrate full rows
+    const matched = await tdb
+      .selectDistinct({ id: users.id })
+      .from(users)
+      .innerJoin(userRoles, eq(userRoles.userId, users.id))
+      .innerJoin(roles, and(eq(roles.id, userRoles.roleId), eq(roles.organizationId, organizationId)))
+      .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+      .innerJoin(permissions, and(eq(permissions.id, rolePermissions.permissionId), eq(permissions.name, permission)))
+      .where(and(eq(users.organizationId, organizationId), eq(users.isActive, true)));
+    if (!matched.length) return [];
+    const ids = matched.map((r) => r.id);
+    return tdb.select().from(users).where(inArray(users.id, ids));
   }
   async createUser(user: InsertUser): Promise<User> {
     const orgId = user.organizationId;
@@ -4287,6 +4317,66 @@ export class DatabaseStorage implements IStorage {
     const conditions = [eq(clientDeviceTokens.organizationId, orgId), eq(clientDeviceTokens.token, token.trim())];
     if (clientId) conditions.push(eq(clientDeviceTokens.clientId, clientId));
     await tdb.delete(clientDeviceTokens).where(and(...conditions));
+  }
+
+  // ── User notifications ──────────────────────────────────────
+  async createUserNotification(data: InsertUserNotification): Promise<UserNotification> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(userNotifications).values(data).returning();
+    return row;
+  }
+  async getUserNotifications(orgId: string, userId: string, limit = 50, offset = 0): Promise<UserNotification[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(userNotifications)
+      .where(and(eq(userNotifications.organizationId, orgId), eq(userNotifications.recipientId, userId)))
+      .orderBy(desc(userNotifications.createdAt))
+      .limit(limit).offset(offset);
+  }
+  async getUnreadUserNotificationCount(orgId: string, userId: string): Promise<number> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select({ cnt: count() }).from(userNotifications)
+      .where(and(eq(userNotifications.organizationId, orgId), eq(userNotifications.recipientId, userId), eq(userNotifications.isRead, false)));
+    return Number(row?.cnt ?? 0);
+  }
+  async markUserNotificationRead(id: string, userId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(userNotifications)
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(eq(userNotifications.id, id), eq(userNotifications.recipientId, userId), eq(userNotifications.organizationId, orgId)));
+  }
+  async markAllUserNotificationsRead(orgId: string, userId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(userNotifications)
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(eq(userNotifications.organizationId, orgId), eq(userNotifications.recipientId, userId), eq(userNotifications.isRead, false)));
+  }
+
+  // ── User device tokens ──────────────────────────────────────
+  async getUserDeviceTokens(orgId: string, userId: string): Promise<{ id: string; token: string; platform: string }[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select({ id: userDeviceTokens.id, token: userDeviceTokens.token, platform: userDeviceTokens.platform })
+      .from(userDeviceTokens)
+      .where(and(eq(userDeviceTokens.organizationId, orgId), eq(userDeviceTokens.userId, userId)));
+  }
+  async getAllUserDeviceTokensByOrg(orgId: string): Promise<{ id: string; userId: string; token: string; platform: string }[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select({ id: userDeviceTokens.id, userId: userDeviceTokens.userId, token: userDeviceTokens.token, platform: userDeviceTokens.platform })
+      .from(userDeviceTokens)
+      .where(eq(userDeviceTokens.organizationId, orgId));
+  }
+  async upsertUserDeviceToken(orgId: string, userId: string, token: string, platform: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    const tok = token.trim();
+    const existing = await tdb.select().from(userDeviceTokens).where(eq(userDeviceTokens.token, tok)).limit(1);
+    if (existing.length > 0) {
+      await tdb.update(userDeviceTokens).set({ userId, organizationId: orgId, platform, updatedAt: new Date() }).where(eq(userDeviceTokens.id, existing[0].id));
+    } else {
+      await tdb.insert(userDeviceTokens).values({ organizationId: orgId, userId, token: tok, platform });
+    }
+  }
+  async removeUserDeviceToken(token: string): Promise<void> {
+    const tdb = db; // token is unique globally, use main db
+    await tdb.delete(userDeviceTokens).where(eq(userDeviceTokens.token, token.trim()));
   }
   async getClientPaymentMethods(clientId: string, orgId: string): Promise<ClientPaymentMethod[]> {
     const tdb = await getDbForOrg(orgId);

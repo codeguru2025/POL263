@@ -3,6 +3,7 @@ import { structuredLog } from "./logger";
 import { isAgentScoped } from "@shared/roles";
 import { eq, and } from "drizzle-orm";
 import { commissionLedgerEntries } from "@shared/schema";
+import { notifyUser } from "./user-notifications";
 
 export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string) {
   const user = req.user as any;
@@ -314,6 +315,13 @@ export async function recordAgentCommission(orgId: string, policy: any, transact
       description: `${rate}% commission on payment #${clearedCount} (${entryType === "first_months" ? "initial" : "recurring"}, ${sourceLabel})`,
       status: "earned",
     });
+    // Notify agent of commission earned
+    notifyUser(orgId, policy.agentId, {
+      type: "COMMISSION_EARNED",
+      title: "Commission Earned",
+      body: `${policy.currency || "USD"} ${amount} commission credited for policy ${policy.policyNumber || policy.id}.`,
+      metadata: { policyId: policy.id, transactionId, amount, currency: policy.currency || "USD" },
+    }).catch(() => {});
   } catch (err) {
     structuredLog("error", "Commission calculation failed", { error: (err as Error).message, policyId: policy.id });
   }

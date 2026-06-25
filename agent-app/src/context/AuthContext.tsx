@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import * as SecureStore from "expo-secure-store";
 import { API_BASE } from "../config";
 import { fetchCsrfToken, clearCsrfToken, setOrgId } from "../api";
+import { initPushNotifications } from "../services/pushService";
 
 interface User {
   id: string;
@@ -100,6 +101,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (userData.organizationId) setOrgId(userData.organizationId);
       // Fetch CSRF token for subsequent mutating API calls
       await fetchCsrfToken();
+      // Register push token (best-effort, don't block login)
+      initPushNotifications().catch(() => {});
     } catch (e: any) {
       setError(e.message || "Login failed");
       throw e;

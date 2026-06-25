@@ -4,6 +4,7 @@ import {
   TextInput, Modal, ScrollView, Alert, RefreshControl, ActivityIndicator,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as WebBrowser from "expo-web-browser";
 import { v4 as uuidv4 } from "uuid";
 import { getDb } from "../db/schema";
 import { useNetwork } from "../context/NetworkContext";
@@ -709,7 +710,17 @@ export default function ClientsScreen({ navigation }: any) {
                           {doc.fileSize ? ` · ${(doc.fileSize / 1024).toFixed(1)} KB` : ""}
                         </Text>
                       </View>
-                      <Text style={styles.docDate}>{new Date(doc.createdAt).toLocaleDateString()}</Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Text style={styles.docDate}>{new Date(doc.createdAt).toLocaleDateString()}</Text>
+                        {!!doc.fileUrl && (
+                          <TouchableOpacity
+                            onPress={() => WebBrowser.openBrowserAsync(doc.fileUrl)}
+                            style={styles.viewDocBtn}
+                          >
+                            <Text style={styles.viewDocText}>View</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                     </View>
                   ))
                 )}
@@ -876,6 +887,8 @@ const styles = StyleSheet.create({
   docName: { fontSize: fontSize.sm, fontWeight: "600", color: colors.text },
   docMeta: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2, textTransform: "capitalize" },
   docDate: { fontSize: fontSize.xs, color: colors.textMuted },
+  viewDocBtn: { backgroundColor: colors.primary + "18", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  viewDocText: { fontSize: fontSize.xs, color: colors.primary, fontWeight: "600" },
   // Policy rows in detail
   polRow: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.xs, borderBottomWidth: 1, borderBottomColor: colors.border },
   polNumber: { fontSize: fontSize.sm, fontWeight: "700", color: colors.primary },
