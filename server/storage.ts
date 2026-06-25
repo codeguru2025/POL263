@@ -87,6 +87,7 @@ import {
   type ApprovalRequest, type InsertApprovalRequest,
   type PayrollEmployee, type InsertPayrollEmployee,
   type PayrollRun, type InsertPayrollRun,
+  type Payslip, type InsertPayslip,
   type Cashup, type InsertCashup,
   type Group, type InsertGroup,
   type PlatformReceivable, type InsertPlatformReceivable,
@@ -467,8 +468,12 @@ export interface IStorage {
   updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined>;
   getPayrollEmployees(orgId: string): Promise<PayrollEmployee[]>;
   createPayrollEmployee(emp: InsertPayrollEmployee): Promise<PayrollEmployee>;
+  updatePayrollEmployee(id: string, data: Partial<InsertPayrollEmployee>, orgId: string): Promise<PayrollEmployee | undefined>;
   getPayrollRuns(orgId: string): Promise<PayrollRun[]>;
   createPayrollRun(run: InsertPayrollRun): Promise<PayrollRun>;
+  getPayslipsForRun(runId: string, orgId: string): Promise<(Payslip & { employee: PayrollEmployee })[]>;
+  upsertPayslip(runId: string, employeeId: string, orgId: string, data: Omit<InsertPayslip, "payrollRunId" | "employeeId">): Promise<Payslip>;
+  updatePayrollRunTotals(runId: string, orgId: string): Promise<void>;
   getCashups(orgId: string, limit?: number, filters?: ReportFilters & { preparedBy?: string; status?: string }): Promise<Cashup[]>;
   getCashup(id: string, orgId: string): Promise<Cashup | undefined>;
   createCashup(cashup: InsertCashup): Promise<Cashup>;
@@ -3377,6 +3382,13 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(payrollEmployees).values(emp).returning();
     return created;
   }
+  async updatePayrollEmployee(id: string, data: Partial<InsertPayrollEmployee>, orgId: string): Promise<PayrollEmployee | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(payrollEmployees).set(data)
+      .where(and(eq(payrollEmployees.id, id), eq(payrollEmployees.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
   async getPayrollRuns(orgId: string): Promise<PayrollRun[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(payrollRuns).where(eq(payrollRuns.organizationId, orgId))
@@ -3386,6 +3398,34 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(run.organizationId);
     const [created] = await tdb.insert(payrollRuns).values(run).returning();
     return created;
+  }
+  async getPayslipsForRun(runId: string, orgId: string): Promise<(Payslip & { employee: PayrollEmployee })[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(payslips)
+      .innerJoin(payrollEmployees, eq(payslips.employeeId, payrollEmployees.id))
+      .where(and(eq(payslips.payrollRunId, runId), eq(payrollEmployees.organizationId, orgId)));
+    return rows.map((r) => ({ ...r.payslips, employee: r.payroll_employees }));
+  }
+  async upsertPayslip(runId: string, employeeId: string, orgId: string, data: Omit<InsertPayslip, "payrollRunId" | "employeeId">): Promise<Payslip> {
+    const tdb = await getDbForOrg(orgId);
+    const [existing] = await tdb.select().from(payslips)
+      .where(and(eq(payslips.payrollRunId, runId), eq(payslips.employeeId, employeeId)));
+    if (existing) {
+      const [updated] = await tdb.update(payslips).set(data).where(eq(payslips.id, existing.id)).returning();
+      return updated;
+    }
+    const [created] = await tdb.insert(payslips).values({ ...data, payrollRunId: runId, employeeId }).returning();
+    return created;
+  }
+  async updatePayrollRunTotals(runId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    const slips = await tdb.select().from(payslips).where(eq(payslips.payrollRunId, runId));
+    const totalGross = slips.reduce((s, p) => s + parseFloat(p.grossAmount || "0"), 0);
+    const totalNet = slips.reduce((s, p) => s + parseFloat(p.netAmount || "0"), 0);
+    const totalDeductions = totalGross - totalNet;
+    await tdb.update(payrollRuns)
+      .set({ totalGross: String(totalGross), totalDeductions: String(totalDeductions), totalNet: String(totalNet) })
+      .where(and(eq(payrollRuns.id, runId), eq(payrollRuns.organizationId, orgId)));
   }
 
   // ─── Cashups ───────────────────────────────────────────────

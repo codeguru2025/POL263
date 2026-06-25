@@ -1622,6 +1622,17 @@ export const payrollEmployees = pgTable(
     position: text("position"),
     department: text("department"),
     baseSalary: numeric("base_salary"),
+    // Allowances (monthly defaults, prorated when partial month)
+    housingAllowance: numeric("housing_allowance"),
+    transportAllowance: numeric("transport_allowance"),
+    otherAllowances: jsonb("other_allowances"), // [{name: string, amount: string}]
+    // Fixed monthly deductions
+    funeralPolicyDeduction: numeric("funeral_policy_deduction"),
+    otherInsuranceDeduction: numeric("other_insurance_deduction"),
+    // Zimbabwe statutory deductions (toggled per employee; amounts entered manually per payslip)
+    nssaEnabled: boolean("nssa_enabled").default(false).notNull(),
+    payeEnabled: boolean("paye_enabled").default(false).notNull(),
+    aidsLevyEnabled: boolean("aids_levy_enabled").default(false).notNull(),
     currency: text("currency").default("USD").notNull(),
     bankDetails: jsonb("bank_details"),
     isActive: boolean("is_active").default(true).notNull(),
@@ -1660,13 +1671,24 @@ export const payslips = pgTable(
     employeeId: uuid("employee_id")
       .notNull()
       .references(() => payrollEmployees.id),
+    // Proration
+    daysWorked: integer("days_worked"),    // null = full month
+    totalDays: integer("total_days"),      // working days in period
+    // Earnings breakdown (stored as jsonb for full audit trail)
+    earnings: jsonb("earnings"),           // {base, housing, transport, otherAllowances:[{name,amount}], totalGross}
+    // Deductions breakdown
+    deductionsDetail: jsonb("deductions_detail"), // {funeralPolicy, otherInsurance, nssa, paye, aidsLevy, totalDeductions}
+    // Summary columns (computed, kept for reporting queries)
     grossAmount: numeric("gross_amount").notNull(),
-    deductions: jsonb("deductions"),
+    deductions: jsonb("deductions"),       // legacy / backward compat
     netAmount: numeric("net_amount").notNull(),
     currency: text("currency").default("USD").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("payslips_run_idx").on(t.payrollRunId)]
+  (t) => [
+    index("payslips_run_idx").on(t.payrollRunId),
+    index("payslips_emp_run_idx").on(t.employeeId, t.payrollRunId),
+  ]
 );
 
 // ─── NOTIFICATIONS ──────────────────────────────────────────
@@ -2180,6 +2202,7 @@ export const insertPriceBookItemSchema = createInsertSchema(priceBookItems).omit
 export const insertApprovalRequestSchema = createInsertSchema(approvalRequests).omit({ id: true, createdAt: true });
 export const insertPayrollEmployeeSchema = createInsertSchema(payrollEmployees).omit({ id: true, createdAt: true });
 export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({ id: true, createdAt: true });
+export const insertPayslipSchema = createInsertSchema(payslips).omit({ id: true, createdAt: true });
 export const insertCashupSchema = createInsertSchema(cashups).omit({ id: true, createdAt: true });
 
 // ─── RECEIPT ADVERTS ────────────────────────────────────────
@@ -2312,6 +2335,8 @@ export type PayrollEmployee = typeof payrollEmployees.$inferSelect;
 export type InsertPayrollEmployee = z.infer<typeof insertPayrollEmployeeSchema>;
 export type PayrollRun = typeof payrollRuns.$inferSelect;
 export type InsertPayrollRun = z.infer<typeof insertPayrollRunSchema>;
+export type Payslip = typeof payslips.$inferSelect;
+export type InsertPayslip = z.infer<typeof insertPayslipSchema>;
 export type Cashup = typeof cashups.$inferSelect;
 export type InsertCashup = z.infer<typeof insertCashupSchema>;
 

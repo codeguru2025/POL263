@@ -5047,6 +5047,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.patch("/api/payroll/employees/:id", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      // Coerce numeric empty strings to null
+      const body = { ...req.body };
+      for (const f of ["baseSalary", "housingAllowance", "transportAllowance", "funeralPolicyDeduction", "otherInsuranceDeduction"]) {
+        if (body[f] === "" || body[f] === undefined) body[f] = null;
+        else if (typeof body[f] === "number") body[f] = String(body[f]);
+      }
+      const updated = await storage.updatePayrollEmployee(req.params.id as string, body, user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Employee not found" });
+      await auditLog(req, "UPDATE_PAYROLL_EMPLOYEE", "PayrollEmployee", updated.id, null, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      return res.status(500).json({ message: err?.message || "Failed to update employee" });
+    }
+  });
+
+  app.get("/api/payroll/runs/:id/payslips", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getPayslipsForRun(req.params.id as string, user.organizationId));
+  });
+
+  app.put("/api/payroll/runs/:id/payslips/:employeeId", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const { id: runId, employeeId } = req.params as { id: string; employeeId: string };
+    try {
+      const body = req.body as {
+        daysWorked?: number | null;
+        totalDays?: number;
+        earnings?: any;
+        deductionsDetail?: any;
+        grossAmount: string;
+        netAmount: string;
+        currency?: string;
+      };
+      const slip = await storage.upsertPayslip(runId, employeeId, user.organizationId, {
+        daysWorked: body.daysWorked ?? null,
+        totalDays: body.totalDays ?? null,
+        earnings: body.earnings ?? null,
+        deductionsDetail: body.deductionsDetail ?? null,
+        grossAmount: body.grossAmount,
+        netAmount: body.netAmount,
+        currency: body.currency || "USD",
+        deductions: body.deductionsDetail ?? null,
+      });
+      await storage.updatePayrollRunTotals(runId, user.organizationId);
+      await auditLog(req, "UPSERT_PAYSLIP", "Payslip", slip.id, null, slip);
+      return res.json(slip);
+    } catch (err: any) {
+      return res.status(500).json({ message: err?.message || "Failed to save payslip" });
+    }
+  });
+
   // ─── Security Questions (for client auth) ───────────────────
 
   app.get("/api/security-questions", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
