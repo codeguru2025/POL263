@@ -3983,8 +3983,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (quote.funeralCaseId) return res.status(422).json({ message: "This quotation is already linked to another funeral case." });
     }
     const caseNumber = await storage.generateCaseNumber(user.organizationId);
+    const caseBody = { ...req.body };
+    for (const f of ["bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd", "slaDeadline", "completedAt"]) {
+      if (caseBody[f] && typeof caseBody[f] === "string") { const d = new Date(caseBody[f]); caseBody[f] = isNaN(d.getTime()) ? undefined : d; }
+      else if (!caseBody[f]) caseBody[f] = undefined;
+    }
     const parsed = insertFuneralCaseSchema.parse({
-      ...req.body,
+      ...caseBody,
       organizationId: user.organizationId,
       caseNumber,
       status: "open",
