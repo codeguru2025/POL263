@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { Users, Plus, Loader2, Banknote, Calendar, FileSpreadsheet, Play, Pencil, ChevronDown, ChevronUp } from "lucide-react";
+import { Users, Plus, Loader2, Banknote, Calendar, FileSpreadsheet, Play, Pencil, ChevronDown, ChevronUp, Printer, Download, Send, Mail } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 // ── Payroll calculation (mirrored server-side in the PUT route) ──────────────
@@ -92,6 +92,58 @@ function OtherAllowancesEditor({ value, onChange }: { value: { name: string; amo
         <Plus className="h-3.5 w-3.5 mr-1" />Add Allowance
       </Button>
     </div>
+  );
+}
+
+// ── Send all payslips in a run ─────────────────────────────────────────────
+function SendAllPayslipsButton({ runId }: { runId: string }) {
+  const { toast } = useToast();
+  const [sending, setSending] = useState(false);
+  const handleSendAll = async () => {
+    if (!confirm("Send payslips by email to all employees in this run? Only employees with a linked user account and email address will receive theirs.")) return;
+    setSending(true);
+    try {
+      const res = await fetch(`/api/payroll/runs/${runId}/send-all`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      toast({ title: `Sent ${data.sent}, failed ${data.failed}`, description: data.failed > 0 ? "Some payslips could not be delivered — check employee email addresses." : "All payslips delivered." });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally { setSending(false); }
+  };
+  return (
+    <Button size="sm" variant="outline" className="text-xs" onClick={handleSendAll} disabled={sending}>
+      {sending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Mail className="h-3.5 w-3.5 mr-1" />}
+      {sending ? "Sending…" : "Send All"}
+    </Button>
+  );
+}
+
+// ── Send payslip button (per employee) ───────────────────────────────────────
+function SendPayslipButton({ runId, employeeId }: { runId: string; employeeId: string }) {
+  const { toast } = useToast();
+  const [sending, setSending] = useState(false);
+  const handleSend = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`/api/payroll/runs/${runId}/payslips/${employeeId}/send`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (res.ok) toast({ title: "Payslip sent", description: data.message });
+      else toast({ title: "Could not send", description: data.message, variant: "destructive" });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally { setSending(false); }
+  };
+  return (
+    <Button size="sm" variant="outline" className="text-xs h-8" onClick={handleSend} disabled={sending}>
+      {sending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Send className="h-3.5 w-3.5 mr-1" />}
+      {sending ? "Sending…" : "Send Email"}
+    </Button>
   );
 }
 
@@ -257,7 +309,22 @@ function PayslipRow({ emp, run, existing, onSave, saving }: {
             </div>
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex gap-2">
+              {existing && (
+                <>
+                  <Button size="sm" variant="outline" className="text-xs h-8"
+                    onClick={() => window.open(`/api/payroll/runs/${run.id}/payslips/${emp.id}/pdf`, "_blank")}>
+                    <Printer className="h-3.5 w-3.5 mr-1" />Print / Preview
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-xs h-8"
+                    onClick={() => window.open(`/api/payroll/runs/${run.id}/payslips/${emp.id}/pdf?download=1`, "_blank")}>
+                    <Download className="h-3.5 w-3.5 mr-1" />Download PDF
+                  </Button>
+                  <SendPayslipButton runId={run.id} employeeId={emp.id} />
+                </>
+              )}
+            </div>
             <Button onClick={handleSave} disabled={saving} size="sm">
               {saving ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Saving…</> : "Save Payslip"}
             </Button>
@@ -618,9 +685,12 @@ export default function StaffPayroll() {
                         <TableCell className="tabular-nums text-red-600">{run.totalDeductions ? parseFloat(run.totalDeductions).toFixed(2) : "—"}</TableCell>
                         <TableCell className="font-semibold tabular-nums text-emerald-700">{run.totalNet ? parseFloat(run.totalNet).toFixed(2) : "—"}</TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="sm" onClick={() => setSelectedRun(selectedRun?.id === run.id ? null : run)}>
-                            <FileSpreadsheet className="h-4 w-4 mr-1" />{selectedRun?.id === run.id ? "Close" : "Enter Payslips"}
-                          </Button>
+                          <div className="flex gap-1 flex-wrap">
+                            <Button variant="ghost" size="sm" onClick={() => setSelectedRun(selectedRun?.id === run.id ? null : run)}>
+                              <FileSpreadsheet className="h-4 w-4 mr-1" />{selectedRun?.id === run.id ? "Close" : "Enter Payslips"}
+                            </Button>
+                            <SendAllPayslipsButton runId={run.id} />
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}

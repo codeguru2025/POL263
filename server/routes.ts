@@ -5190,6 +5190,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getPayslipsForRun(req.params.id as string, user.organizationId));
   });
 
+  // ── Print payslip PDF (inline preview or download) ──────────
+  app.get("/api/payroll/runs/:id/payslips/:employeeId/pdf", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const { streamPayslipToResponse } = await import("./payslip-pdf");
+    await streamPayslipToResponse(req.params.id as string, req.params.employeeId as string, user.organizationId, res, { attachment: req.query.download === "1" });
+  });
+
+  // ── Email payslip to employee ────────────────────────────────
+  app.post("/api/payroll/runs/:id/payslips/:employeeId/send", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const { sendPayslipEmail } = await import("./payslip-email");
+    const result = await sendPayslipEmail(req.params.id as string, req.params.employeeId as string, user.organizationId);
+    if (result.ok) {
+      await auditLog(req, "SEND_PAYSLIP_EMAIL", "Payslip", `${req.params.id}:${req.params.employeeId}`, null, { sentTo: result.sentTo });
+      return res.json(result);
+    }
+    return res.status(422).json(result);
+  });
+
+  // ── Send all payslips in a run ───────────────────────────────
+  app.post("/api/payroll/runs/:id/send-all", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const runId = req.params.id as string;
+    const { sendPayslipEmail } = await import("./payslip-email");
+    const slips = await storage.getPayslipsForRun(runId, user.organizationId);
+    const results = await Promise.all(
+      slips.map(async (s: any) => {
+        const empId: string = s.employeeId ?? s.employee?.id;
+        const r = await sendPayslipEmail(runId, empId, user.organizationId);
+        return { employeeId: empId, ...r };
+      })
+    );
+    await auditLog(req, "SEND_ALL_PAYSLIPS", "PayrollRun", runId, null, { results });
+    const sent = results.filter(r => r.ok).length;
+    const failed = results.filter(r => !r.ok).length;
+    return res.json({ sent, failed, results });
+  });
+
   app.put("/api/payroll/runs/:id/payslips/:employeeId", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
     const { id: runId, employeeId } = req.params as { id: string; employeeId: string };
