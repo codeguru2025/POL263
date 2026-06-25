@@ -11,11 +11,13 @@
  *   Set PUSH_BACKEND=redis in env. No API contract changes.
  */
 
-import Expo, { ExpoPushMessage, ExpoPushTicket } from "expo-server-sdk";
+import { Expo, ExpoPushMessage, ExpoPushTicket } from "expo-server-sdk";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 
-const expo = new Expo();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ExpoClass: typeof Expo = (Expo as any).default ?? Expo;
+const expo = new ExpoClass();
 
 export interface PushPayload {
   title: string;
@@ -76,7 +78,7 @@ async function _dispatch(
   payload: PushPayload,
   onInvalid: (token: string) => Promise<void>
 ): Promise<void> {
-  const valid = tokens.filter((t) => Expo.isExpoPushToken(t));
+  const valid = tokens.filter((t) => ExpoClass.isExpoPushToken(t));
   if (!valid.length) return;
 
   const messages: ExpoPushMessage[] = valid.map((to) => ({
