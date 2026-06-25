@@ -1641,6 +1641,29 @@ export const payrollEmployees = pgTable(
   (t) => [index("payroll_employees_org_idx").on(t.organizationId)]
 );
 
+export const attendanceLogs = pgTable(
+  "attendance_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    employeeId: uuid("employee_id").notNull().references(() => payrollEmployees.id),
+    date: date("date").notNull(),
+    loggedAt: timestamp("logged_at").defaultNow().notNull(),
+    notes: text("notes"),
+    status: text("status").default("pending").notNull(), // pending | approved | rejected
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at"),
+    approvalNotes: text("approval_notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("al_org_idx").on(t.organizationId),
+    index("al_emp_date_idx").on(t.employeeId, t.date),
+    index("al_status_idx").on(t.status),
+    uniqueIndex("al_emp_date_unique").on(t.employeeId, t.date),
+  ]
+);
+
 export const payrollRuns = pgTable(
   "payroll_runs",
   {
@@ -2200,6 +2223,7 @@ export const insertClientFeedbackSchema = createInsertSchema(clientFeedback).omi
 export const insertExpenditureSchema = createInsertSchema(expenditures).omit({ id: true, createdAt: true });
 export const insertPriceBookItemSchema = createInsertSchema(priceBookItems).omit({ id: true, createdAt: true });
 export const insertApprovalRequestSchema = createInsertSchema(approvalRequests).omit({ id: true, createdAt: true });
+export const insertAttendanceLogSchema = createInsertSchema(attendanceLogs).omit({ id: true, createdAt: true, loggedAt: true });
 export const insertPayrollEmployeeSchema = createInsertSchema(payrollEmployees).omit({ id: true, createdAt: true });
 export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({ id: true, createdAt: true });
 export const insertPayslipSchema = createInsertSchema(payslips).omit({ id: true, createdAt: true });
@@ -2331,6 +2355,8 @@ export type PriceBookItem = typeof priceBookItems.$inferSelect;
 export type InsertPriceBookItem = z.infer<typeof insertPriceBookItemSchema>;
 export type ApprovalRequest = typeof approvalRequests.$inferSelect;
 export type InsertApprovalRequest = z.infer<typeof insertApprovalRequestSchema>;
+export type AttendanceLog = typeof attendanceLogs.$inferSelect;
+export type InsertAttendanceLog = z.infer<typeof insertAttendanceLogSchema>;
 export type PayrollEmployee = typeof payrollEmployees.$inferSelect;
 export type InsertPayrollEmployee = z.infer<typeof insertPayrollEmployeeSchema>;
 export type PayrollRun = typeof payrollRuns.$inferSelect;

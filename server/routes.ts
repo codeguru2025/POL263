@@ -5047,6 +5047,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─── Attendance Logging ─────────────────────────────────────
+
+  // Admin/manager: get all logs (filter by date, status, employeeId)
+  app.get("/api/attendance", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const filters = {
+      date: typeof req.query.date === "string" ? req.query.date : undefined,
+      status: typeof req.query.status === "string" && req.query.status !== "all" ? req.query.status : undefined,
+      employeeId: typeof req.query.employeeId === "string" ? req.query.employeeId : undefined,
+    };
+    return res.json(await storage.getAttendanceLogs(user.organizationId, filters));
+  });
+
+  // Employee: get own logs (finds payrollEmployee record by userId)
+  app.get("/api/attendance/my", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const employees = await storage.getPayrollEmployees(user.organizationId);
+    const emp = employees.find((e) => e.userId === user.id);
+    if (!emp) return res.json([]);
+    return res.json(await storage.getMyAttendanceLogs(emp.id, user.organizationId));
+  });
+
+  // Employee: log attendance for today (or a specified date)
+  app.post("/api/attendance", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    try {
+      const employees = await storage.getPayrollEmployees(user.organizationId);
+      const emp = employees.find((e) => e.userId === user.id);
+      if (!emp) return res.status(422).json({ message: "No payroll employee record linked to your account. Ask your administrator to link your user account." });
+      const date = typeof req.body.date === "string" ? req.body.date : new Date().toISOString().slice(0, 10);
+      const log = await storage.createAttendanceLog({
+        organizationId: user.organizationId,
+        employeeId: emp.id,
+        date,
+        notes: typeof req.body.notes === "string" ? req.body.notes : null,
+        status: "pending",
+      });
+      await auditLog(req, "LOG_ATTENDANCE", "AttendanceLog", log.id, null, log);
+      return res.status(201).json(log);
+    } catch (err: any) {
+      if (err?.code === "23505") return res.status(409).json({ message: "Attendance already logged for this date." });
+      return res.status(500).json({ message: err?.message || "Failed to log attendance" });
+    }
+  });
+
+  // Admin/manager: approve a log
+  app.post("/api/attendance/:id/approve", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const before = (await storage.getAttendanceLogs(user.organizationId, {})).find((l) => l.id === req.params.id);
+    const updated = await storage.updateAttendanceLog(req.params.id as string, {
+      status: "approved",
+      approvedBy: user.id,
+      approvedAt: new Date(),
+      approvalNotes: typeof req.body.notes === "string" ? req.body.notes : null,
+    }, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Log not found" });
+    await auditLog(req, "APPROVE_ATTENDANCE", "AttendanceLog", updated.id, before, updated);
+    return res.json(updated);
+  });
+
+  // Admin/manager: reject a log
+  app.post("/api/attendance/:id/reject", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const before = (await storage.getAttendanceLogs(user.organizationId, {})).find((l) => l.id === req.params.id);
+    const updated = await storage.updateAttendanceLog(req.params.id as string, {
+      status: "rejected",
+      approvedBy: user.id,
+      approvedAt: new Date(),
+      approvalNotes: typeof req.body.notes === "string" ? req.body.notes : null,
+    }, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Log not found" });
+    await auditLog(req, "REJECT_ATTENDANCE", "AttendanceLog", updated.id, before, updated);
+    return res.json(updated);
+  });
+
   app.patch("/api/payroll/employees/:id", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
     try {

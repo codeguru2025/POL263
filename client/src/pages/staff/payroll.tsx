@@ -255,6 +255,7 @@ export default function StaffPayroll() {
   // Employee form
   const [showEmployeeDialog, setShowEmployeeDialog] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<any | null>(null);
+  const [empUserId, setEmpUserId] = useState<string>("");
   const [empFirstName, setEmpFirstName] = useState("");
   const [empLastName, setEmpLastName] = useState("");
   const [empNumber, setEmpNumber] = useState("");
@@ -282,6 +283,10 @@ export default function StaffPayroll() {
 
   const { data: employees = [], isLoading: loadingEmployees } = useQuery<any[]>({
     queryKey: ["/api/payroll/employees"],
+  });
+
+  const { data: staffUsers = [] } = useQuery<any[]>({
+    queryKey: ["/api/users"],
   });
 
   const { data: runs = [], isLoading: loadingRuns } = useQuery<any[]>({
@@ -313,6 +318,7 @@ export default function StaffPayroll() {
 
   const resetEmployeeForm = useCallback(() => {
     setEditingEmployee(null);
+    setEmpUserId("");
     setEmpFirstName(""); setEmpLastName(""); setEmpNumber("");
     setEmpPosition(""); setEmpDepartment(""); setEmpBaseSalary("");
     setEmpHousing(""); setEmpTransport(""); setEmpOtherAllowances([]);
@@ -323,6 +329,7 @@ export default function StaffPayroll() {
 
   useEffect(() => {
     if (editingEmployee) {
+      setEmpUserId(editingEmployee.userId || "");
       setEmpFirstName(editingEmployee.firstName || "");
       setEmpLastName(editingEmployee.lastName || "");
       setEmpNumber(editingEmployee.employeeNumber || "");
@@ -342,6 +349,7 @@ export default function StaffPayroll() {
   }, [editingEmployee]);
 
   const buildEmpPayload = () => ({
+    userId: empUserId || undefined,
     firstName: empFirstName.trim(),
     lastName: empLastName.trim(),
     employeeNumber: empNumber.trim(),
@@ -472,6 +480,7 @@ export default function StaffPayroll() {
                       <TableHead>Emp #</TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>Position</TableHead>
+                      <TableHead>Linked User</TableHead>
                       <TableHead>Basic</TableHead>
                       <TableHead>Housing</TableHead>
                       <TableHead>Transport</TableHead>
@@ -490,6 +499,12 @@ export default function StaffPayroll() {
                           <TableCell className="font-mono text-sm">{emp.employeeNumber}</TableCell>
                           <TableCell className="font-medium">{emp.firstName} {emp.lastName}</TableCell>
                           <TableCell>{emp.position || "—"}</TableCell>
+                          <TableCell className="text-sm">
+                            {emp.userId
+                              ? (() => { const u = (staffUsers as any[]).find((u: any) => u.id === emp.userId); return u ? (u.displayName || u.email) : <span className="text-muted-foreground text-xs">Linked</span>; })()
+                              : <span className="text-muted-foreground text-xs">Not linked</span>
+                            }
+                          </TableCell>
                           <TableCell className="tabular-nums">{emp.currency} {parseFloat(emp.baseSalary || "0").toFixed(2)}</TableCell>
                           <TableCell className="tabular-nums">{parseFloat(emp.housingAllowance || "0") > 0 ? `${emp.currency} ${parseFloat(emp.housingAllowance).toFixed(2)}` : "—"}</TableCell>
                           <TableCell className="tabular-nums">{parseFloat(emp.transportAllowance || "0") > 0 ? `${emp.currency} ${parseFloat(emp.transportAllowance).toFixed(2)}` : "—"}</TableCell>
@@ -590,6 +605,27 @@ export default function StaffPayroll() {
             <DialogDescription>Configure salary, allowances, deductions, and statutory tax settings.</DialogDescription>
           </DialogHeader>
           <div className="space-y-5 py-2">
+            {/* Link to system user */}
+            <div className="space-y-1.5">
+              <Label>System User Account <span className="text-muted-foreground text-xs">(optional — required for self-logging attendance)</span></Label>
+              <Select value={empUserId || "__none__"} onValueChange={(v) => setEmpUserId(v === "__none__" ? "" : v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Not linked to a user" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Not linked to a user</SelectItem>
+                  {(staffUsers as any[]).map((u: any) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.displayName || u.email} <span className="text-muted-foreground text-xs ml-1">{u.email}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Link this employee record to a staff user account so they can log their own attendance.</p>
+            </div>
+
+            <Separator />
+
             {/* Basic info */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>First Name *</Label><Input value={empFirstName} onChange={(e) => setEmpFirstName(e.target.value)} /></div>

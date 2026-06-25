@@ -19,7 +19,7 @@ import {
   mortuaryIntakes, mortuaryDispatches, deceasedBelongings, bodyWashRequirements, driverChecklists,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
-  payrollEmployees, payrollRuns, payslips,
+  payrollEmployees, payrollRuns, payslips, attendanceLogs,
   notificationTemplates, notificationLogs, leads, expenditures,
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
@@ -88,6 +88,7 @@ import {
   type PayrollEmployee, type InsertPayrollEmployee,
   type PayrollRun, type InsertPayrollRun,
   type Payslip, type InsertPayslip,
+  type AttendanceLog, type InsertAttendanceLog,
   type Cashup, type InsertCashup,
   type Group, type InsertGroup,
   type PlatformReceivable, type InsertPlatformReceivable,
@@ -466,6 +467,10 @@ export interface IStorage {
   updateTerms(id: string, data: Partial<InsertTerms>, orgId: string): Promise<TermsAndConditions | undefined>;
   deleteTerms(id: string, orgId: string): Promise<void>;
   updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined>;
+  getAttendanceLogs(orgId: string, filters?: { date?: string; status?: string; employeeId?: string }): Promise<(AttendanceLog & { employee: PayrollEmployee })[]>;
+  getMyAttendanceLogs(employeeId: string, orgId: string): Promise<AttendanceLog[]>;
+  createAttendanceLog(data: InsertAttendanceLog): Promise<AttendanceLog>;
+  updateAttendanceLog(id: string, data: Partial<Pick<AttendanceLog, "status" | "approvedBy" | "approvedAt" | "approvalNotes">>, orgId: string): Promise<AttendanceLog | undefined>;
   getPayrollEmployees(orgId: string): Promise<PayrollEmployee[]>;
   createPayrollEmployee(emp: InsertPayrollEmployee): Promise<PayrollEmployee>;
   updatePayrollEmployee(id: string, data: Partial<InsertPayrollEmployee>, orgId: string): Promise<PayrollEmployee | undefined>;
@@ -3370,6 +3375,38 @@ export class DatabaseStorage implements IStorage {
   async deleteTerms(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(termsAndConditions).where(eq(termsAndConditions.id, id));
+  }
+
+  // ─── Attendance ────────────────────────────────────────────
+  async getAttendanceLogs(orgId: string, filters?: { date?: string; status?: string; employeeId?: string }): Promise<(AttendanceLog & { employee: PayrollEmployee })[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions = [eq(attendanceLogs.organizationId, orgId)];
+    if (filters?.date) conditions.push(eq(attendanceLogs.date, filters.date));
+    if (filters?.status) conditions.push(eq(attendanceLogs.status, filters.status));
+    if (filters?.employeeId) conditions.push(eq(attendanceLogs.employeeId, filters.employeeId));
+    const rows = await tdb.select().from(attendanceLogs)
+      .innerJoin(payrollEmployees, eq(attendanceLogs.employeeId, payrollEmployees.id))
+      .where(and(...conditions))
+      .orderBy(desc(attendanceLogs.date), desc(attendanceLogs.loggedAt));
+    return rows.map((r) => ({ ...r.attendance_logs, employee: r.payroll_employees }));
+  }
+  async getMyAttendanceLogs(employeeId: string, orgId: string): Promise<AttendanceLog[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(attendanceLogs)
+      .where(and(eq(attendanceLogs.employeeId, employeeId), eq(attendanceLogs.organizationId, orgId)))
+      .orderBy(desc(attendanceLogs.date));
+  }
+  async createAttendanceLog(data: InsertAttendanceLog): Promise<AttendanceLog> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(attendanceLogs).values(data).returning();
+    return created;
+  }
+  async updateAttendanceLog(id: string, data: Partial<Pick<AttendanceLog, "status" | "approvedBy" | "approvedAt" | "approvalNotes">>, orgId: string): Promise<AttendanceLog | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(attendanceLogs).set(data)
+      .where(and(eq(attendanceLogs.id, id), eq(attendanceLogs.organizationId, orgId)))
+      .returning();
+    return updated;
   }
 
   // ─── Payroll ───────────────────────────────────────────────

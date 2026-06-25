@@ -321,6 +321,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         // People & periodic
         { href: "/staff/finance?tab=commissions", label: "Commissions", icon: TrendingUp, permission: "read:commission" },
         { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
+        { href: "/staff/attendance", label: "Attendance", icon: ClipboardList, permission: "read:payroll" },
         { href: "/staff/finance?tab=month-end", label: "Month-End Close", icon: CalendarDays, permission: "write:finance", agentHidden: true },
         { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
         { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
@@ -449,6 +450,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/finance?tab=expenditures", label: "Expenses", icon: FileMinus, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=commissions", label: "Commissions", icon: TrendingUp, permission: "read:commission" },
             { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
+            { href: "/staff/attendance", label: "Attendance", icon: ClipboardList, permission: "read:payroll" },
             { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
             { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
             { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
