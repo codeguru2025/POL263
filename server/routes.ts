@@ -4099,20 +4099,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/funeral-cases/:id/driver-checklist", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
-    if (!fc) return res.status(404).json({ message: "Funeral case not found" });
-    const clBody = { ...req.body };
-    if (clBody.completedAt && typeof clBody.completedAt === "string") { const d = new Date(clBody.completedAt); clBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
-    else if (!clBody.completedAt) clBody.completedAt = undefined;
-    const parsed = insertDriverChecklistSchema.parse({
-      ...clBody,
-      funeralCaseId: req.params.id as string,
-      organizationId: user.organizationId,
-      preparedByUserId: user.id,
-    });
-    const cl = await storage.upsertDriverChecklist(req.params.id as string, user.organizationId, parsed);
-    await auditLog(req, "UPSERT_DRIVER_CHECKLIST", "DriverChecklist", cl.id, null, cl);
-    return res.json(cl);
+    try {
+      const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+      if (!fc) return res.status(404).json({ message: "Funeral case not found" });
+      const clBody = { ...req.body };
+      // Coerce datetime-local string to Date
+      if (clBody.completedAt && typeof clBody.completedAt === "string") { const d = new Date(clBody.completedAt); clBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
+      else if (!clBody.completedAt) clBody.completedAt = undefined;
+      // Coerce numeric fields: empty string → null, number → string (drizzle-zod numeric = z.string())
+      for (const f of ["tollGateAmount", "driverAllowance"]) {
+        if (clBody[f] === "" || clBody[f] === null || clBody[f] === undefined) clBody[f] = null;
+        else if (typeof clBody[f] === "number") clBody[f] = String(clBody[f]);
+      }
+      const parsed = insertDriverChecklistSchema.parse({
+        ...clBody,
+        funeralCaseId: req.params.id as string,
+        organizationId: user.organizationId,
+        preparedByUserId: user.id,
+      });
+      const cl = await storage.upsertDriverChecklist(req.params.id as string, user.organizationId, parsed);
+      await auditLog(req, "UPSERT_DRIVER_CHECKLIST", "DriverChecklist", cl.id, null, cl);
+      return res.json(cl);
+    } catch (err: any) {
+      structuredLog("error", "POST driver-checklist failed", { error: err?.message, caseId: req.params.id });
+      return res.status(err?.name === "ZodError" ? 400 : 500).json({ message: err?.message || "Failed to save checklist" });
+    }
   });
 
   app.get("/api/funeral-cases/:id/driver-checklist/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
