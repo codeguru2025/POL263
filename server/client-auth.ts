@@ -5,7 +5,7 @@ import { structuredLog } from "./logger";
 import { z } from "zod";
 import argon2 from "argon2";
 import { createPaymentIntent, initiatePaynowPayment, pollPaynowStatus } from "./payment-service";
-import { getPaynowConfig } from "./paynow-config";
+import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { streamPolicyDocumentToResponse } from "./policy-document";
 import { insertClaimSchema, insertClientFeedbackSchema } from "@shared/schema";
 
@@ -809,8 +809,11 @@ export function setupClientAuth(app: Express) {
     return res.download(result, `receipt-${receipt.receiptNumber}.pdf`);
   });
 
-  app.get("/api/client-auth/paynow-config", (_req: Request, res: Response) => {
-    const config = getPaynowConfig();
+  app.get("/api/client-auth/paynow-config", async (req: Request, res: Response) => {
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    const config = clientOrgId
+      ? await getOrgPaynowConfig(clientOrgId)
+      : getPaynowConfig();
     return res.json({
       enabled: config.enabled,
       mode: config.mode,
