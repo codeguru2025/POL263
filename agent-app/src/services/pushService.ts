@@ -50,6 +50,30 @@ export async function initPushNotifications(): Promise<string | null> {
   }
 }
 
+/** Same as initPushNotifications but registers via the client-auth endpoint. */
+export async function initClientPushNotifications(): Promise<string | null> {
+  if (Platform.OS === "web") return null;
+
+  const { status: existing } = await Notifications.getPermissionsAsync();
+  let finalStatus = existing;
+
+  if (existing !== "granted") {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+
+  if (finalStatus !== "granted") return null;
+
+  try {
+    const { data: token } = await Notifications.getExpoPushTokenAsync();
+    await apiPost("/api/client-auth/push-token", { token, platform: Platform.OS });
+    return token;
+  } catch (err: any) {
+    structuredLog("warn", "Client push token registration failed", { error: err?.message });
+    return null;
+  }
+}
+
 /** Set the app icon badge number. */
 export async function setBadgeCount(count: number): Promise<void> {
   try {

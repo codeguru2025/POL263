@@ -2228,6 +2228,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    // Notify the issuing agent that a new policy has been created
+    if (policy.agentId) {
+      notifyUser(user.organizationId, policy.agentId, {
+        type: "POLICY_ISSUED",
+        title: "Policy Issued",
+        body: `Policy ${policy.policyNumber} has been successfully created.`,
+        metadata: { policyId: policy.id, policyNumber: policy.policyNumber },
+      }).catch(() => {});
+    }
+
     return res.status(201).json(policy);
     } catch (err: any) {
       if (err instanceof z.ZodError) throw err;

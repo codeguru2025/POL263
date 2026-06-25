@@ -1028,6 +1028,15 @@ export function setupClientAuth(app: Express) {
     return res.json({ message: "Dependent removed" });
   });
 
+  // ─── Client uploaded documents (ID, proof of residence, etc.) ──────────
+  app.get("/api/client-auth/my-documents", async (req: Request, res: Response) => {
+    const clientId = (req.session as any)?.clientId;
+    const clientOrgId = (req.session as any)?.clientOrgId;
+    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+    const docs = await storage.getClientDocuments(clientId, clientOrgId);
+    return res.json(docs);
+  });
+
   // ─── Beneficiary per policy (client self-service) ──────────
   app.get("/api/client-auth/policies/:id/beneficiary", async (req: Request, res: Response) => {
     const clientId = (req.session as any)?.clientId;

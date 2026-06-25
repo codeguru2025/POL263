@@ -12,6 +12,7 @@ import { useNetwork } from "../context/NetworkContext";
 import { colors, spacing, fontSize } from "../theme";
 import { API_BASE } from "../config";
 import { clientSync, loadClientCache, queuePayment, getQueuedPayments } from "../sync/engine";
+import { initClientPushNotifications } from "../services/pushService";
 
 interface Policy {
   id: string; policyNumber: string; status: string; premiumAmount: string;
@@ -34,6 +35,7 @@ interface ClaimItem {
 interface Receipt { id: string; receiptNumber: string; amount: string; currency: string; createdAt: string; pdfStorageKey?: string; issuedAt?: string; }
 interface FeedbackItem { id: string; type: string; subject: string; status: string; createdAt: string; }
 interface QueuedPayment { id: number; policy_id: string; policy_number: string | null; amount: string; currency: string; method: string; phone: string; status: string; error: string | null; created_at: string; }
+interface ClientDoc { id: string; documentType: string; fileName?: string; fileUrl?: string; storageKey?: string; createdAt: string; }
 
 type Tab = "policies" | "payments" | "claims" | "documents" | "feedback" | "dependents" | "notifications" | "profile";
 
@@ -82,6 +84,7 @@ export default function ClientPortalScreen() {
   const [dependents, setDependents] = useState<Dependent[]>([]);
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
+  const [clientDocs, setClientDocs] = useState<ClientDoc[]>([]);
   const [queuedPayments, setQueuedPayments] = useState<QueuedPayment[]>([]);
   const [cacheDate, setCacheDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -150,8 +153,9 @@ export default function ClientPortalScreen() {
         api("/api/client-auth/dependents"),
         api("/api/client-auth/notifications"),
         api("/api/client-auth/feedback"),
+        api("/api/client-auth/my-documents"),
       ]);
-      const [polR, recR, claimR, depR, notifR, fbR] = results;
+      const [polR, recR, claimR, depR, notifR, fbR, docsR] = results;
       if (polR.status === "fulfilled" && polR.value.ok) setPolicies(await polR.value.json());
       if (recR.status === "fulfilled" && recR.value.ok) setReceipts(await recR.value.json());
       if (claimR.status === "fulfilled" && claimR.value.ok) setClaims(await claimR.value.json());
@@ -161,6 +165,7 @@ export default function ClientPortalScreen() {
         setNotifs(Array.isArray(raw) ? raw : (raw?.notifications ?? []));
       }
       if (fbR.status === "fulfilled" && fbR.value.ok) setFeedback(await fbR.value.json());
+      if (docsR.status === "fulfilled" && docsR.value.ok) setClientDocs(await docsR.value.json());
       clientSync().catch(() => {});
       setCacheDate(new Date().toISOString());
     } finally {
@@ -168,7 +173,11 @@ export default function ClientPortalScreen() {
     }
   }, [isOnline]);
 
-  useEffect(() => { fetchAll(); loadQueued(); }, [fetchAll, loadQueued]);
+  useEffect(() => {
+    fetchAll();
+    loadQueued();
+    initClientPushNotifications().catch(() => {});
+  }, [fetchAll, loadQueued]);
 
   const onRefresh = async () => { setRefreshing(true); await fetchAll(); await loadQueued(); setRefreshing(false); };
 
@@ -448,35 +457,75 @@ export default function ClientPortalScreen() {
           <Text style={s.offlineText}>📶 Offline — documents require connectivity to view or download</Text>
         </View>
       )}
-      {policies.length === 0
-        ? <Empty emoji="📄" title="No documents" sub="Policy documents will appear here." />
-        : policies.map(p => (
-          <Card key={p.id}>
-            <View style={{ marginBottom: spacing.sm }}>
-              <Text style={s.polNum}>{p.policyNumber}</Text>
-              {p.productName && <Text style={s.productName}>{p.productName}</Text>}
-              <Badge text={p.status.toUpperCase()} color={STATUS_COLORS[p.status] || "#6b7280"} />
-            </View>
-            <View style={{ flexDirection: "row", gap: spacing.sm }}>
-              <TouchableOpacity
-                style={[s.viewBtn, { flex: 1, justifyContent: "center" }]}
-                onPress={() => viewDocument(`${API_BASE}/api/client-auth/policies/${p.id}/document`)}
-                disabled={!isOnline}
-              >
-                <Ionicons name="eye-outline" size={16} color={isOnline ? colors.primary : colors.textMuted} />
-                <Text style={[s.viewBtnText, !isOnline && { color: colors.textMuted }]}>View</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.dlBtn, { flex: 1, justifyContent: "center" }]}
-                onPress={() => Linking.openURL(`${API_BASE}/api/client-auth/policies/${p.id}/document?download=1`)}
-                disabled={!isOnline}
-              >
-                <Ionicons name="download-outline" size={16} color={isOnline ? colors.primary : colors.textMuted} />
-                <Text style={[s.dlBtnText, !isOnline && { color: colors.textMuted }]}>Download</Text>
-              </TouchableOpacity>
-            </View>
-          </Card>
-        ))}
+
+      {/* Policy schedule documents */}
+      {policies.length > 0 && (
+        <>
+          <Text style={s.sectionLabel}>Policy Documents</Text>
+          {policies.map(p => (
+            <Card key={p.id}>
+              <View style={{ marginBottom: spacing.sm }}>
+                <Text style={s.polNum}>{p.policyNumber}</Text>
+                {p.productName && <Text style={s.productName}>{p.productName}</Text>}
+                <Badge text={p.status.toUpperCase()} color={STATUS_COLORS[p.status] || "#6b7280"} />
+              </View>
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                <TouchableOpacity
+                  style={[s.viewBtn, { flex: 1, justifyContent: "center" }]}
+                  onPress={() => viewDocument(`${API_BASE}/api/client-auth/policies/${p.id}/document`)}
+                  disabled={!isOnline}
+                >
+                  <Ionicons name="eye-outline" size={16} color={isOnline ? colors.primary : colors.textMuted} />
+                  <Text style={[s.viewBtnText, !isOnline && { color: colors.textMuted }]}>View</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.dlBtn, { flex: 1, justifyContent: "center" }]}
+                  onPress={() => Linking.openURL(`${API_BASE}/api/client-auth/policies/${p.id}/document?download=1`)}
+                  disabled={!isOnline}
+                >
+                  <Ionicons name="download-outline" size={16} color={isOnline ? colors.primary : colors.textMuted} />
+                  <Text style={[s.dlBtnText, !isOnline && { color: colors.textMuted }]}>Download</Text>
+                </TouchableOpacity>
+              </View>
+            </Card>
+          ))}
+        </>
+      )}
+
+      {/* Client-uploaded identity / supporting documents */}
+      {clientDocs.length > 0 && (
+        <>
+          <Text style={[s.sectionLabel, { marginTop: spacing.md }]}>My Documents</Text>
+          {clientDocs.map(doc => {
+            const url = doc.fileUrl || (doc.storageKey ? `${API_BASE}/api/files/${doc.storageKey}` : null);
+            return (
+              <Card key={doc.id}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.polNum}>{doc.documentType.replace(/_/g, " ")}</Text>
+                    {doc.fileName && <Text style={s.productName}>{doc.fileName}</Text>}
+                    <Text style={s.dateText}>{new Date(doc.createdAt).toLocaleDateString()}</Text>
+                  </View>
+                  {url && (
+                    <TouchableOpacity
+                      style={[s.viewBtn, { marginLeft: spacing.sm }]}
+                      onPress={() => viewDocument(url)}
+                      disabled={!isOnline}
+                    >
+                      <Ionicons name="eye-outline" size={16} color={isOnline ? colors.primary : colors.textMuted} />
+                      <Text style={[s.viewBtnText, !isOnline && { color: colors.textMuted }]}>View</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </Card>
+            );
+          })}
+        </>
+      )}
+
+      {policies.length === 0 && clientDocs.length === 0 && (
+        <Empty emoji="📄" title="No documents" sub="Policy documents and uploaded files will appear here." />
+      )}
     </>
   );
 
@@ -843,6 +892,7 @@ const s = StyleSheet.create({
   polNum: { fontSize: fontSize.md, fontWeight: "700", color: colors.text, flex: 1 },
   productName: { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.xs },
   dateText: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
+  sectionLabel: { fontSize: fontSize.sm, fontWeight: "700", color: colors.textMuted, marginBottom: spacing.sm, textTransform: "uppercase", letterSpacing: 0.6 },
   metaRow: { flexDirection: "row", gap: spacing.md, marginTop: spacing.xs },
   metaCol: { flex: 1 },
   metaLabel: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: "600" },
