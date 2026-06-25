@@ -813,8 +813,11 @@ function EditPriceBookItemDialog({
   item: PriceBookItem;
 }) {
   const isCasketInit = item.category === "Casket & Coffin";
-  const casketTypeInit = isCasketInit && item.name.startsWith("Type of Coffin — ")
-    ? item.name.replace("Type of Coffin — ", "")
+  // Support both em dash (UI-created) and plain hyphen (raw SQL inserts)
+  const casketTypeInit = isCasketInit
+    ? (item.name.replace(/^Type of Coffin\s*[—–-]\s*/, "") !== item.name
+        ? item.name.replace(/^Type of Coffin\s*[—–-]\s*/, "")
+        : "")
     : "";
 
   const [casketType, setCasketType] = useState(casketTypeInit);
@@ -826,7 +829,8 @@ function EditPriceBookItemDialog({
   const [effectiveFrom, setEffectiveFrom] = useState(item.effectiveFrom || "");
 
   const isCasket = category === "Casket & Coffin";
-  const effectiveName = isCasket ? (casketType ? `Type of Coffin — ${casketType}` : "") : name;
+  // When casket category but no type chosen yet, keep existing name so price-only edits aren't blocked
+  const effectiveName = isCasket ? (casketType ? `Type of Coffin — ${casketType}` : item.name) : name;
 
   const handleSubmit = () => {
     if (!effectiveName || !priceAmount) return;

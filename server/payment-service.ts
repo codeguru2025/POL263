@@ -11,7 +11,7 @@ import { getPaynowConfig, getPaynowIntegrationId } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaymentReceipt } from "@shared/schema";
 import type { Policy } from "@shared/schema";
-import { paymentTransactions, paymentReceipts, paymentIntents, users } from "@shared/schema";
+import { paymentTransactions, paymentReceipts, paymentIntents, users, policies } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import { structuredLog } from "./logger";
 import { insertOutboxMessageInTx, requestOutboxDrain, OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP } from "./outbox";
@@ -673,8 +673,23 @@ export async function applyPaymentToPolicy(
       }
       const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
 
-      // Advance the policy cycle first so the period is stamped on tx and receipt
-      const paymentPeriod = await advancePolicyCycle(txDb, intent.policyId, policy, today);
+      // Advance the policy cycle N times — infer months from amount/premium ratio
+      const premiumAmt = policy.premiumAmount ? parseFloat(String(policy.premiumAmount)) : 0;
+      const paidAmt = parseFloat(String(intent.amount));
+      const monthCount = (premiumAmt > 0 && Number.isFinite(paidAmt / premiumAmt))
+        ? Math.min(12, Math.max(1, Math.round(paidAmt / premiumAmt)))
+        : 1;
+      let currentPolicySnap: typeof policy = policy;
+      let paymentPeriod: { periodFrom: string; periodTo: string } = { periodFrom: today, periodTo: today };
+      for (let m = 0; m < monthCount; m++) {
+        const period = await advancePolicyCycle(txDb, intent.policyId, currentPolicySnap, today);
+        if (m === 0) paymentPeriod = { periodFrom: period.periodFrom, periodTo: period.periodTo };
+        else paymentPeriod.periodTo = period.periodTo;
+        if (m < monthCount - 1) {
+          const [snap] = await txDb.select().from(policies).where(eq(policies.id, intent.policyId)).limit(1);
+          if (snap) currentPolicySnap = snap as any;
+        }
+      }
 
       const [tx] = await txDb.insert(paymentTransactions).values({
         organizationId: intent.organizationId,

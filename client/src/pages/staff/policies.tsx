@@ -2002,9 +2002,12 @@ export default function StaffPolicies() {
                           />
                         </TableCell>
                         <TableCell className="text-muted-foreground tabular-nums text-xs">
-                          {p.periodFrom && p.periodTo
-                            ? `${new Date(p.periodFrom + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" })}`
-                            : "—"}
+                          {p.periodFrom && p.periodTo ? (() => {
+                            const fmt = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+                            const from = fmt(p.periodFrom);
+                            const to = fmt(p.periodTo);
+                            return from === to ? from : `${from} – ${to}`;
+                          })() : "—"}
                         </TableCell>
                         <TableCell className="text-muted-foreground">{p.reference || "—"}</TableCell>
                         {(canEditPayment || canDeletePayment) && (
@@ -2062,9 +2065,12 @@ export default function StaffPolicies() {
                           <TableCell>{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
                           <TableCell className="capitalize">{r.paymentChannel}</TableCell>
                           <TableCell className="text-muted-foreground tabular-nums text-xs">
-                            {r.periodFrom && r.periodTo
-                              ? new Date(r.periodFrom + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" })
-                              : "—"}
+                            {r.periodFrom && r.periodTo ? (() => {
+                              const fmt = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+                              const from = fmt(r.periodFrom);
+                              const to = fmt(r.periodTo);
+                              return from === to ? from : `${from} – ${to}`;
+                            })() : "—"}
                           </TableCell>
                           <TableCell>{new Date(r.issuedAt).toLocaleDateString("en-GB")}</TableCell>
                           <TableCell className="text-right pr-6">
@@ -2832,7 +2838,7 @@ export default function StaffPolicies() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={showInPolicyReceiptDialog} onOpenChange={setShowInPolicyReceiptDialog}>
+        <Dialog open={showInPolicyReceiptDialog} onOpenChange={(open) => { setShowInPolicyReceiptDialog(open); if (!open) resetPnState(); }}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Receipt Payment</DialogTitle>
@@ -2844,7 +2850,7 @@ export default function StaffPolicies() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <Label className="text-xs">Months</Label>
-                  <Select value={String(inPolicyReceiptMonths)} onValueChange={(v) => setInPolicyReceiptMonths(Number(v))}>
+                  <Select value={String(inPolicyReceiptMonths)} onValueChange={(v) => setInPolicyReceiptMonths(Number(v))} disabled={pnPhase !== "select"}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
@@ -2998,6 +3004,7 @@ export default function StaffPolicies() {
                         policyId: selectedPolicy.id,
                         clientId: displayPolicy.clientId,
                         amount: displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0",
+                        months: inPolicyReceiptMonths,
                         currency: inPolicyReceiptCurrency,
                         paymentMethod: inPolicyReceiptMethod,
                         status: "cleared",

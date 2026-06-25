@@ -2601,8 +2601,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const inceptionForWaiting = policy.inceptionDate || policy.effectiveDate || memberCreatedAt;
       const inceptionDate = inceptionForWaiting;
 
-      let coverDate: string | null = null;
-      if (inceptionForWaiting) {
+      // Use policy.waitingPeriodEndDate as the authoritative cover date when set —
+      // this is written by waiver approval, legacy flag, and manual overrides.
+      // Fall back to formula only when it is absent.
+      const policyWaitingEndDate = policy.waitingPeriodEndDate ? String(policy.waitingPeriodEndDate) : null;
+      let coverDate: string | null = policyWaitingEndDate;
+      if (!coverDate && inceptionForWaiting) {
         const inception = new Date(inceptionForWaiting);
         inception.setDate(inception.getDate() + waitingPeriodDays);
         coverDate = inception.toISOString().split("T")[0];
@@ -2616,6 +2620,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         claimableReason = `Policy status is "${policy.status}"; must be active or in grace period.`;
       } else if (!memberWaitingOver) {
         claimableReason = `Waiting period ends ${coverDate}. Covered after that date.`;
+      } else if (policyWaitingEndDate && policyWaitingEndDate <= today) {
+        claimableReason = "Eligible for claim — waiting period waived.";
       } else {
         claimableReason = "Eligible for claim — waiting period completed.";
       }
@@ -2897,13 +2903,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
       }
 
-      // Advance the policy cover cycle and get the period for this payment
-      const paymentPeriod = await advancePolicyCycle(
-        txDb,
-        parsed.policyId ?? "",
-        policy,
-        String(parsed.postedDate || today),
-      );
+      // Advance the policy cover cycle N times for multi-month receipts (only when a policy is linked)
+      const monthCount = Math.min(12, Math.max(1, parseInt(String(req.body.months ?? 1), 10) || 1));
+      let currentPolicy = policy;
+      let paymentPeriod: { periodFrom: string; periodTo: string } = { periodFrom: today, periodTo: today };
+      if (isClearedWithPolicy && parsed.policyId) {
+        for (let m = 0; m < monthCount; m++) {
+          const period = await advancePolicyCycle(txDb, parsed.policyId, currentPolicy, String(parsed.postedDate || today));
+          if (m === 0) paymentPeriod = { periodFrom: period.periodFrom, periodTo: period.periodTo };
+          else paymentPeriod.periodTo = period.periodTo;
+          if (m < monthCount - 1) {
+            const [refreshed] = await txDb.select().from(policies).where(eq(policies.id, parsed.policyId)).limit(1);
+            if (refreshed) currentPolicy = refreshed;
+          }
+        }
+      }
 
       const [tx] = await txDb.insert(paymentTransactions).values({
         ...parsed,
@@ -3836,23 +3850,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/funeral-cases/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const before = await storage.getFuneralCase(req.params.id as string, user.organizationId);
-    if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const sanitized = nullifyEmptyFields(req.body, [
-      "bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd",
-      "slaDeadline", "completedAt", "deceasedDob", "dateOfDeath", "funeralDate",
-      "removalVehicleId", "removalDriverId", "burialVehicleId", "burialDriverId",
-      "attendingAgentId", "claimId", "policyId", "branchId", "assignedTo",
-    ]);
-    for (const f of ["bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd", "slaDeadline", "completedAt"] as const) {
-      if (sanitized[f] && typeof sanitized[f] === "string") {
-        const d = new Date(sanitized[f] as string);
-        sanitized[f] = isNaN(d.getTime()) ? null : d;
+    const caseId = req.params.id as string;
+    try {
+      const before = await storage.getFuneralCase(caseId, user.organizationId);
+      if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+
+      // Whitelist: only pass known funeralCases column names to Drizzle
+      const ALLOWED = new Set([
+        "deceasedName", "deceasedDob", "deceasedGender", "deceasedNationalId", "deceasedRelationship",
+        "dateOfDeath", "causeOfDeath", "placeOfDeath",
+        "informantName", "informantPhone", "informantRelationship",
+        "serviceType", "funeralDate", "funeralLocation",
+        "removalLocation", "removalVehicleId", "removalDriverId",
+        "burialVehicleId", "burialDriverId", "attendingAgentId",
+        "bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd",
+        "bodyIdentifierName", "bodyIdentifierIdNumber",
+        "status", "assignedTo", "notes", "slaDeadline", "completedAt",
+        "branchId", "claimId", "policyId",
+      ]);
+      const VALID_CASE_STATUSES = new Set(["open", "in_progress", "completed", "cancelled"]);
+      if ("status" in req.body && !VALID_CASE_STATUSES.has(req.body.status)) {
+        return res.status(400).json({ message: `Invalid status "${req.body.status}". Must be one of: open, in_progress, completed, cancelled` });
       }
+      const sanitized: Record<string, any> = {};
+      for (const [k, v] of Object.entries(req.body)) {
+        if (!ALLOWED.has(k)) continue;
+        sanitized[k] = v === "" ? null : v;
+      }
+      // Coerce datetime-local strings to Date objects for timestamp columns
+      for (const f of ["bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd", "slaDeadline", "completedAt"]) {
+        if (sanitized[f] && typeof sanitized[f] === "string") {
+          const d = new Date(sanitized[f]);
+          sanitized[f] = isNaN(d.getTime()) ? null : d;
+        }
+      }
+      const updated = await storage.updateFuneralCase(caseId, sanitized, user.organizationId);
+      await auditLog(req, "UPDATE_FUNERAL_CASE", "FuneralCase", caseId, before, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/funeral-cases/:id failed", { error: err?.message, stack: err?.stack, caseId });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update funeral case. Please try again." : (err?.message || "Update failed") });
     }
-    const updated = await storage.updateFuneralCase(req.params.id as string, sanitized, user.organizationId);
-    await auditLog(req, "UPDATE_FUNERAL_CASE", "FuneralCase", req.params.id as string, before, updated);
-    return res.json(updated);
   });
 
   app.get("/api/funeral-cases/:id/document", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
@@ -4655,14 +4693,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/price-book/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
     const itemId = req.params.id as string;
-    const before = (await storage.getPriceBookItems(user.organizationId)).find((i: any) => i.id === itemId);
-    if (!before) return res.status(404).json({ message: "Item not found" });
-    const allowed = ["name", "unit", "priceAmount", "currency", "category", "effectiveFrom", "effectiveTo", "isActive"];
-    const patch: Record<string, unknown> = {};
-    for (const k of allowed) { if (k in req.body) patch[k] = req.body[k]; }
-    const updated = await storage.updatePriceBookItem(itemId, patch as any, user.organizationId);
-    await auditLog(req, "UPDATE_PRICE_BOOK_ITEM", "PriceBookItem", itemId, before, updated);
-    return res.json(updated);
+    try {
+      const before = (await storage.getPriceBookItems(user.organizationId)).find((i: any) => i.id === itemId);
+      if (!before) return res.status(404).json({ message: "Item not found" });
+      const allowed = ["name", "unit", "priceAmount", "currency", "category", "effectiveFrom", "effectiveTo", "isActive"];
+      const patch: Record<string, unknown> = {};
+      for (const k of allowed) { if (k in req.body) patch[k] = req.body[k]; }
+      if (Object.keys(patch).length === 0) return res.status(400).json({ message: "No fields to update" });
+      if ("priceAmount" in patch) {
+        const n = parseFloat(String(patch.priceAmount));
+        if (!Number.isFinite(n) || n < 0) return res.status(400).json({ message: "priceAmount must be a non-negative number" });
+        patch.priceAmount = n.toFixed(2);
+      }
+      const updated = await storage.updatePriceBookItem(itemId, patch as any, user.organizationId);
+      await auditLog(req, "UPDATE_PRICE_BOOK_ITEM", "PriceBookItem", itemId, before, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/price-book/:id failed", { error: err?.message, itemId });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update item." : (err?.message || "Update failed") });
+    }
   });
 
   // ─── Approvals (Maker-Checker) ──────────────────────────────

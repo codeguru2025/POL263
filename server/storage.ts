@@ -3296,7 +3296,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updatePriceBookItem(id: string, data: Partial<InsertPriceBookItem>, orgId: string): Promise<PriceBookItem | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(priceBookItems).set(data).where(eq(priceBookItems.id, id)).returning();
+    const [updated] = await tdb.update(priceBookItems).set(data).where(and(eq(priceBookItems.id, id), eq(priceBookItems.organizationId, orgId))).returning();
     return updated;
   }
 
