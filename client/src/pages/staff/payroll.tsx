@@ -101,6 +101,7 @@ function PayslipRow({ emp, run, existing, onSave, saving }: {
   onSave: (employeeId: string, data: any) => void;
   saving: boolean;
 }) {
+  const { toast } = useToast();
   const totalDays = workingDaysInPeriod(run.periodStart, run.periodEnd);
   const [fullMonth, setFullMonth] = useState(existing ? existing.daysWorked == null : true);
   const [daysWorked, setDaysWorked] = useState(existing?.daysWorked != null ? String(existing.daysWorked) : "");
@@ -108,6 +109,17 @@ function PayslipRow({ emp, run, existing, onSave, saving }: {
   const [payeAmount, setPayeAmount] = useState(existing?.deductionsDetail?.paye != null ? String(existing.deductionsDetail.paye) : "");
   const [aidsLevyAmount, setAidsLevyAmount] = useState(existing?.deductionsDetail?.aidsLevy != null ? String(existing.deductionsDetail.aidsLevy) : "");
   const [expanded, setExpanded] = useState(!existing);
+
+  // Sync state when existing payslip is saved/updated
+  useEffect(() => {
+    if (existing) {
+      setFullMonth(existing.daysWorked == null);
+      setDaysWorked(existing.daysWorked != null ? String(existing.daysWorked) : "");
+      setNssaAmount(existing.deductionsDetail?.nssa != null ? String(existing.deductionsDetail.nssa) : "");
+      setPayeAmount(existing.deductionsDetail?.paye != null ? String(existing.deductionsDetail.paye) : "");
+      setAidsLevyAmount(existing.deductionsDetail?.aidsLevy != null ? String(existing.deductionsDetail.aidsLevy) : "");
+    }
+  }, [existing]);
 
   const input: PayslipInput = {
     daysWorked: fullMonth ? null : (parseInt(daysWorked) || 0),
@@ -117,6 +129,12 @@ function PayslipRow({ emp, run, existing, onSave, saving }: {
   const calc = calcPayslip(emp, input);
 
   const handleSave = () => {
+    if (!fullMonth) {
+      const dw = parseInt(daysWorked) || 0;
+      if (dw <= 0) { toast({ title: "Days worked must be at least 1", variant: "destructive" }); return; }
+      if (dw > totalDays) { toast({ title: `Days worked cannot exceed ${totalDays} working days in this period`, variant: "destructive" }); return; }
+    }
+    const netPay = Math.max(0, calc.netPay);
     const earnings = {
       base: calc.base, housing: calc.housing, transport: calc.transport,
       otherAllowances: emp.otherAllowances || [], totalGross: calc.totalGross,
@@ -132,7 +150,7 @@ function PayslipRow({ emp, run, existing, onSave, saving }: {
       earnings,
       deductionsDetail,
       grossAmount: calc.totalGross.toFixed(2),
-      netAmount: calc.netPay.toFixed(2),
+      netAmount: netPay.toFixed(2),
       currency: emp.currency || "USD",
     });
   };
@@ -233,7 +251,10 @@ function PayslipRow({ emp, run, existing, onSave, saving }: {
           {/* Net pay */}
           <div className="flex items-center justify-between rounded-md bg-emerald-50 border border-emerald-200 px-4 py-3">
             <span className="font-semibold">Net Pay</span>
-            <span className="text-xl font-bold text-emerald-700 font-mono">{emp.currency} {calc.netPay.toFixed(2)}</span>
+            <div className="text-right">
+              <span className="text-xl font-bold text-emerald-700 font-mono">{emp.currency} {Math.max(0, calc.netPay).toFixed(2)}</span>
+              {calc.netPay < 0 && <p className="text-xs text-amber-600 mt-0.5">Deductions exceed gross — floored at 0</p>}
+            </div>
           </div>
 
           <div className="flex justify-end">
@@ -358,7 +379,7 @@ export default function StaffPayroll() {
     baseSalary: empBaseSalary || undefined,
     housingAllowance: empHousing || undefined,
     transportAllowance: empTransport || undefined,
-    otherAllowances: empOtherAllowances.filter((a) => a.name || a.amount),
+    otherAllowances: empOtherAllowances.filter((a) => a.name.trim() && a.amount),
     funeralPolicyDeduction: empFuneralPolicy || undefined,
     otherInsuranceDeduction: empOtherInsurance || undefined,
     nssaEnabled: empNssa,

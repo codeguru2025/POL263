@@ -468,9 +468,11 @@ export interface IStorage {
   deleteTerms(id: string, orgId: string): Promise<void>;
   updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined>;
   getAttendanceLogs(orgId: string, filters?: { date?: string; status?: string; employeeId?: string }): Promise<(AttendanceLog & { employee: PayrollEmployee })[]>;
+  getAttendanceLogById(id: string, orgId: string): Promise<AttendanceLog | undefined>;
   getMyAttendanceLogs(employeeId: string, orgId: string): Promise<AttendanceLog[]>;
   createAttendanceLog(data: InsertAttendanceLog): Promise<AttendanceLog>;
   updateAttendanceLog(id: string, data: Partial<Pick<AttendanceLog, "status" | "approvedBy" | "approvedAt" | "approvalNotes">>, orgId: string): Promise<AttendanceLog | undefined>;
+  getPayrollEmployeeByUserId(userId: string, orgId: string): Promise<PayrollEmployee | undefined>;
   getPayrollEmployees(orgId: string): Promise<PayrollEmployee[]>;
   createPayrollEmployee(emp: InsertPayrollEmployee): Promise<PayrollEmployee>;
   updatePayrollEmployee(id: string, data: Partial<InsertPayrollEmployee>, orgId: string): Promise<PayrollEmployee | undefined>;
@@ -3390,6 +3392,12 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(attendanceLogs.date), desc(attendanceLogs.loggedAt));
     return rows.map((r) => ({ ...r.attendance_logs, employee: r.payroll_employees }));
   }
+  async getAttendanceLogById(id: string, orgId: string): Promise<AttendanceLog | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(attendanceLogs)
+      .where(and(eq(attendanceLogs.id, id), eq(attendanceLogs.organizationId, orgId)));
+    return row;
+  }
   async getMyAttendanceLogs(employeeId: string, orgId: string): Promise<AttendanceLog[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(attendanceLogs)
@@ -3407,6 +3415,13 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(attendanceLogs.id, id), eq(attendanceLogs.organizationId, orgId)))
       .returning();
     return updated;
+  }
+
+  async getPayrollEmployeeByUserId(userId: string, orgId: string): Promise<PayrollEmployee | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(payrollEmployees)
+      .where(and(eq(payrollEmployees.userId, userId), eq(payrollEmployees.organizationId, orgId)));
+    return row;
   }
 
   // ─── Payroll ───────────────────────────────────────────────
@@ -3456,9 +3471,11 @@ export class DatabaseStorage implements IStorage {
   }
   async updatePayrollRunTotals(runId: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    const slips = await tdb.select().from(payslips).where(eq(payslips.payrollRunId, runId));
-    const totalGross = slips.reduce((s, p) => s + parseFloat(p.grossAmount || "0"), 0);
-    const totalNet = slips.reduce((s, p) => s + parseFloat(p.netAmount || "0"), 0);
+    const slips = await tdb.select().from(payslips)
+      .innerJoin(payrollEmployees, eq(payslips.employeeId, payrollEmployees.id))
+      .where(and(eq(payslips.payrollRunId, runId), eq(payrollEmployees.organizationId, orgId)));
+    const totalGross = slips.reduce((s, p) => s + parseFloat(p.payslips.grossAmount || "0"), 0);
+    const totalNet = slips.reduce((s, p) => s + parseFloat(p.payslips.netAmount || "0"), 0);
     const totalDeductions = totalGross - totalNet;
     await tdb.update(payrollRuns)
       .set({ totalGross: String(totalGross), totalDeductions: String(totalDeductions), totalNet: String(totalNet) })

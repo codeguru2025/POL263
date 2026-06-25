@@ -12,7 +12,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/use-auth";
 import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -36,7 +35,6 @@ function fmtTime(d: string | null | undefined) {
 export default function StaffAttendance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   // My attendance state
   const [logDate, setLogDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -55,8 +53,17 @@ export default function StaffAttendance() {
   });
 
   // Team logs (requires write:payroll permission)
+  // Query key includes filter values so each combination is cached independently
   const { data: teamLogs = [], isLoading: loadingTeam, refetch: refetchTeam } = useQuery<any[]>({
-    queryKey: [`/api/attendance?date=${filterDate}&status=${filterStatus}`],
+    queryKey: ["/api/attendance", { date: filterDate, status: filterStatus }],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filterDate) params.set("date", filterDate);
+      if (filterStatus && filterStatus !== "all") params.set("status", filterStatus);
+      const res = await fetch(`/api/attendance?${params}`, { credentials: "include" });
+      if (!res.ok) { if (res.status === 403) return []; throw new Error(await res.text()); }
+      return res.json();
+    },
     retry: false,
   });
 
@@ -73,7 +80,8 @@ export default function StaffAttendance() {
   const approveMutation = useMutation({
     mutationFn: (id: string) => apiRequest("POST", `/api/attendance/${id}/approve`, { notes: actionNotes }),
     onSuccess: () => {
-      refetchTeam(); setApproveId(null); setActionNotes("");
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance"] });
+      setApproveId(null); setActionNotes("");
       toast({ title: "Attendance approved" });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -82,7 +90,8 @@ export default function StaffAttendance() {
   const rejectMutation = useMutation({
     mutationFn: (id: string) => apiRequest("POST", `/api/attendance/${id}/reject`, { notes: actionNotes }),
     onSuccess: () => {
-      refetchTeam(); setRejectId(null); setActionNotes("");
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance"] });
+      setRejectId(null); setActionNotes("");
       toast({ title: "Attendance rejected" });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),

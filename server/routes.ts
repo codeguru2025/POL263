@@ -5060,28 +5060,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getAttendanceLogs(user.organizationId, filters));
   });
 
-  // Employee: get own logs (finds payrollEmployee record by userId)
+  // Employee: get own logs
   app.get("/api/attendance/my", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const employees = await storage.getPayrollEmployees(user.organizationId);
-    const emp = employees.find((e) => e.userId === user.id);
+    const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
     if (!emp) return res.json([]);
     return res.json(await storage.getMyAttendanceLogs(emp.id, user.organizationId));
   });
 
-  // Employee: log attendance for today (or a specified date)
+  // Employee: log attendance for a date
   app.post("/api/attendance", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try {
-      const employees = await storage.getPayrollEmployees(user.organizationId);
-      const emp = employees.find((e) => e.userId === user.id);
+      const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
       if (!emp) return res.status(422).json({ message: "No payroll employee record linked to your account. Ask your administrator to link your user account." });
-      const date = typeof req.body.date === "string" ? req.body.date : new Date().toISOString().slice(0, 10);
+
+      // Validate date: must be a valid ISO date, not more than 7 days in the past, not in the future
+      const rawDate = typeof req.body.date === "string" ? req.body.date : "";
+      const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRe.test(rawDate)) return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD." });
+      const logDate = new Date(rawDate + "T00:00:00");
+      if (isNaN(logDate.getTime())) return res.status(400).json({ message: "Invalid date." });
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const diffDays = (today.getTime() - logDate.getTime()) / 86_400_000;
+      if (diffDays < 0) return res.status(400).json({ message: "Cannot log attendance for a future date." });
+      if (diffDays > 7) return res.status(400).json({ message: "Cannot log attendance more than 7 days in the past." });
+
       const log = await storage.createAttendanceLog({
         organizationId: user.organizationId,
         employeeId: emp.id,
-        date,
-        notes: typeof req.body.notes === "string" ? req.body.notes : null,
+        date: rawDate,
+        notes: typeof req.body.notes === "string" ? req.body.notes.trim() || null : null,
         status: "pending",
       });
       await auditLog(req, "LOG_ATTENDANCE", "AttendanceLog", log.id, null, log);
@@ -5092,40 +5101,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Admin/manager: approve a log
+  // Admin/manager: approve a log (only if still pending)
   app.post("/api/attendance/:id/approve", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
-    const before = (await storage.getAttendanceLogs(user.organizationId, {})).find((l) => l.id === req.params.id);
-    const updated = await storage.updateAttendanceLog(req.params.id as string, {
+    const existing = await storage.getAttendanceLogById(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Log not found" });
+    if (existing.status !== "pending") return res.status(409).json({ message: `Cannot approve a log that is already ${existing.status}.` });
+    const updated = await storage.updateAttendanceLog(existing.id, {
       status: "approved",
       approvedBy: user.id,
       approvedAt: new Date(),
-      approvalNotes: typeof req.body.notes === "string" ? req.body.notes : null,
+      approvalNotes: typeof req.body.notes === "string" ? req.body.notes.trim() || null : null,
     }, user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Log not found" });
-    await auditLog(req, "APPROVE_ATTENDANCE", "AttendanceLog", updated.id, before, updated);
+    await auditLog(req, "APPROVE_ATTENDANCE", "AttendanceLog", existing.id, existing, updated);
     return res.json(updated);
   });
 
-  // Admin/manager: reject a log
+  // Admin/manager: reject a log (only if still pending)
   app.post("/api/attendance/:id/reject", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
-    const before = (await storage.getAttendanceLogs(user.organizationId, {})).find((l) => l.id === req.params.id);
-    const updated = await storage.updateAttendanceLog(req.params.id as string, {
+    const existing = await storage.getAttendanceLogById(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Log not found" });
+    if (existing.status !== "pending") return res.status(409).json({ message: `Cannot reject a log that is already ${existing.status}.` });
+    const updated = await storage.updateAttendanceLog(existing.id, {
       status: "rejected",
       approvedBy: user.id,
       approvedAt: new Date(),
-      approvalNotes: typeof req.body.notes === "string" ? req.body.notes : null,
+      approvalNotes: typeof req.body.notes === "string" ? req.body.notes.trim() || null : null,
     }, user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Log not found" });
-    await auditLog(req, "REJECT_ATTENDANCE", "AttendanceLog", updated.id, before, updated);
+    await auditLog(req, "REJECT_ATTENDANCE", "AttendanceLog", existing.id, existing, updated);
     return res.json(updated);
   });
 
   app.patch("/api/payroll/employees/:id", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
     try {
-      // Coerce numeric empty strings to null
+      const allEmps = await storage.getPayrollEmployees(user.organizationId);
+      const before = allEmps.find((e) => e.id === req.params.id);
+      if (!before) return res.status(404).json({ message: "Employee not found" });
       const body = { ...req.body };
       for (const f of ["baseSalary", "housingAllowance", "transportAllowance", "funeralPolicyDeduction", "otherInsuranceDeduction"]) {
         if (body[f] === "" || body[f] === undefined) body[f] = null;
@@ -5133,7 +5146,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const updated = await storage.updatePayrollEmployee(req.params.id as string, body, user.organizationId);
       if (!updated) return res.status(404).json({ message: "Employee not found" });
-      await auditLog(req, "UPDATE_PAYROLL_EMPLOYEE", "PayrollEmployee", updated.id, null, updated);
+      await auditLog(req, "UPDATE_PAYROLL_EMPLOYEE", "PayrollEmployee", updated.id, before, updated);
       return res.json(updated);
     } catch (err: any) {
       return res.status(500).json({ message: err?.message || "Failed to update employee" });
@@ -5149,22 +5162,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const { id: runId, employeeId } = req.params as { id: string; employeeId: string };
     try {
-      const body = req.body as {
-        daysWorked?: number | null;
-        totalDays?: number;
-        earnings?: any;
-        deductionsDetail?: any;
-        grossAmount: string;
-        netAmount: string;
-        currency?: string;
-      };
+      // Verify the run and employee both belong to this org
+      const [runs, employees] = await Promise.all([
+        storage.getPayrollRuns(user.organizationId),
+        storage.getPayrollEmployees(user.organizationId),
+      ]);
+      if (!runs.find((r) => r.id === runId)) return res.status(404).json({ message: "Payroll run not found" });
+      if (!employees.find((e) => e.id === employeeId)) return res.status(404).json({ message: "Employee not found" });
+
+      const body = req.body as { daysWorked?: number | null; totalDays?: number; earnings?: any; deductionsDetail?: any; grossAmount: string; netAmount: string; currency?: string; };
+
+      const gross = parseFloat(body.grossAmount);
+      const net = parseFloat(body.netAmount);
+      if (isNaN(gross) || isNaN(net)) return res.status(400).json({ message: "grossAmount and netAmount must be valid numbers." });
+
       const slip = await storage.upsertPayslip(runId, employeeId, user.organizationId, {
         daysWorked: body.daysWorked ?? null,
         totalDays: body.totalDays ?? null,
         earnings: body.earnings ?? null,
         deductionsDetail: body.deductionsDetail ?? null,
-        grossAmount: body.grossAmount,
-        netAmount: body.netAmount,
+        grossAmount: gross.toFixed(2),
+        netAmount: net.toFixed(2),
         currency: body.currency || "USD",
         deductions: body.deductionsDetail ?? null,
       });
