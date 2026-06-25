@@ -22,7 +22,7 @@ import express from "express";
 import { registerPolicyDocumentRoute } from "./policy-document";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import * as objectStorage from "./object-storage";
-import { getPaynowConfig } from "./paynow-config";
+import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS, ROLE_PERMISSION_MAP } from "./constants";
 import { cpDb } from "./control-plane-db";
@@ -425,7 +425,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/payments/paynow/result", express.urlencoded({ extended: false }), async (req, res) => {
     try {
       const body = req.body as Record<string, string>;
-      const result = await handlePaynowResult(body);
+      // ?org=<orgId> is embedded in the resultUrl we give PayNow per tenant so we
+      // can verify with the correct integration key without scanning all orgs.
+      const orgId = typeof req.query.org === "string" ? req.query.org : undefined;
+      const result = await handlePaynowResult(body, orgId);
       return res.status(200).send(result.ok ? "OK" : "Error");
     } catch (err: any) {
       structuredLog("error", "PayNow result handler threw", { error: err?.message });
@@ -894,6 +897,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const TENANT_WRITE_FIELDS = new Set([
       "name", "address", "phone", "email", "website", "logoUrl", "signatureUrl", "primaryColor",
       "footerText", "policyNumberPrefix", "policyNumberPadding",
+      "paynowIntegrationId", "paynowIntegrationKey", "paynowAuthEmail",
+      "paynowReturnUrl", "paynowResultUrl", "paynowMode",
     ]);
     const PLATFORM_ONLY_ORG_FIELDS = new Set(["slug", "isActive", "licenseStatus", "isWhitelabeled", "databaseUrl"]);
     const sanitizedOrg: Record<string, any> = {};
@@ -901,10 +906,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (TENANT_WRITE_FIELDS.has(key)) sanitizedOrg[key] = value;
       else if (PLATFORM_ONLY_ORG_FIELDS.has(key) && isPlatformOwner) sanitizedOrg[key] = value;
     }
+    // Narrow paynowMode to the literal union the schema expects
+    if (sanitizedOrg.paynowMode !== undefined && sanitizedOrg.paynowMode !== "test" && sanitizedOrg.paynowMode !== "live") {
+      delete sanitizedOrg.paynowMode;
+    }
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
     if (Object.keys(sanitizedOrg).length === 0) return res.json(before);
-    const updated = await storage.updateOrganization(id, sanitizedOrg);
+    const updated = await storage.updateOrganization(id, sanitizedOrg as any);
     await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, updated, id);
     return res.json(updated);
   });
@@ -3764,8 +3773,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(result);
   });
 
-  app.get("/api/paynow-config", requireAuth, requireTenantScope, requirePermission("read:finance"), (_req, res) => {
-    return res.json({ enabled: getPaynowConfig().enabled });
+  app.get("/api/paynow-config", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const cfg = await getOrgPaynowConfig(user.organizationId);
+    return res.json({
+      enabled: cfg.enabled,
+      integrationId: cfg.integrationId,
+      authEmail: cfg.authEmail,
+      returnUrl: cfg.returnUrl,
+      resultUrl: cfg.resultUrl,
+      mode: cfg.mode,
+      // Never return the key — only indicate whether one is set
+      hasKey: !!cfg.integrationKey,
+    });
   });
 
   app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {

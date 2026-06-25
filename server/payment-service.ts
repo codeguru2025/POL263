@@ -7,7 +7,7 @@ import { storage, findPaymentIntentById } from "./storage";
 import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from "./tenant-db";
 import { rollbackClawbacks } from "./route-helpers";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
-import { getPaynowConfig, getPaynowIntegrationId } from "./paynow-config";
+import { getOrgPaynowConfig, getPaynowConfig } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaymentReceipt } from "@shared/schema";
 import type { Policy } from "@shared/schema";
@@ -154,12 +154,16 @@ export async function createPaymentIntent(input: CreateIntentInput): Promise<{
   return { intent, created: true };
 }
 
-/** Build form body for Paynow init (standard redirect). Hash uses field order per PayNow docs: id, reference, amount, returnurl, resulturl, authemail, status. */
-function buildInitParams(merchantReference: string, amount: string, returnUrl: string, resultUrl: string, authEmail?: string): Record<string, string> {
-  const id = getPaynowIntegrationId();
-  const email = authEmail || process.env.PAYNOW_AUTH_EMAIL || "";
+/** Build form body for Paynow init (standard redirect). */
+function buildInitParams(
+  merchantReference: string, amount: string,
+  returnUrl: string, resultUrl: string,
+  integrationId: string, integrationKey: string,
+  authEmail?: string,
+): Record<string, string> {
+  const email = authEmail || "";
   const params: Record<string, string> = {
-    id,
+    id: integrationId,
     reference: merchantReference,
     amount: String(parseFloat(amount).toFixed(2)),
     returnurl: returnUrl,
@@ -170,46 +174,38 @@ function buildInitParams(merchantReference: string, amount: string, returnUrl: s
   const hashKeyOrder = email
     ? ["id", "reference", "amount", "returnurl", "resulturl", "authemail", "status"]
     : ["id", "reference", "amount", "returnurl", "resulturl", "status"];
-  params.hash = generatePaynowHash(params, hashKeyOrder);
+  params.hash = generatePaynowHash(params, hashKeyOrder, integrationKey);
   return params;
 }
 
-/** Build form body for Paynow remote (mobile). Hash uses field order: id, reference, amount, returnurl, resulturl, status, method, phone. */
+/** Build form body for Paynow remote (mobile money). */
 function buildRemoteParams(
-  merchantReference: string,
-  amount: string,
-  returnUrl: string,
-  resultUrl: string,
-  method: string,
-  phone: string
+  merchantReference: string, amount: string,
+  returnUrl: string, resultUrl: string,
+  integrationId: string, integrationKey: string,
+  authEmail: string,
+  method: string, phone: string,
 ): Record<string, string> {
-  const id = getPaynowIntegrationId();
   const methodMap: Record<string, string> = {
-    ecocash: "ecocash",
-    onemoney: "onemoney",
-    innbucks: "innbucks",
-    omari: "omari",
+    ecocash: "ecocash", onemoney: "onemoney", innbucks: "innbucks", omari: "omari",
   };
   const paynowMethod = methodMap[method.toLowerCase()] || "ecocash";
   let cleanPhone = phone.replace(/\D/g, "").trim();
-  if (cleanPhone.startsWith("0") && cleanPhone.length === 10) {
-    cleanPhone = "263" + cleanPhone.slice(1);
-  }
-  const email = process.env.PAYNOW_AUTH_EMAIL || "";
+  if (cleanPhone.startsWith("0") && cleanPhone.length === 10) cleanPhone = "263" + cleanPhone.slice(1);
   structuredLog("info", "Paynow remote initiate", { method: paynowMethod, phone: cleanPhone, merchantReference, amount });
   const params: Record<string, string> = {
-    id,
+    id: integrationId,
     reference: merchantReference,
     amount: String(parseFloat(amount).toFixed(2)),
     returnurl: returnUrl,
     resulturl: resultUrl,
-    authemail: email,
+    authemail: authEmail,
     status: "Message",
     method: paynowMethod,
     phone: cleanPhone,
   };
   const hashKeyOrder = ["id", "reference", "amount", "returnurl", "resulturl", "authemail", "status", "method", "phone"];
-  params.hash = generatePaynowHash(params, hashKeyOrder);
+  params.hash = generatePaynowHash(params, hashKeyOrder, integrationKey);
   return params;
 }
 
@@ -231,7 +227,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
   omariOtpUrl?: string;
   omariOtpReference?: string;
 }> {
-  const config = getPaynowConfig();
+  const config = await getOrgPaynowConfig(input.organizationId);
   if (!config.enabled) {
     return { ok: false, error: "Paynow is not configured" };
   }
@@ -255,16 +251,20 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
   let url: string;
   if (isRemote) {
     params = buildRemoteParams(
-      intent.merchantReference,
-      String(intent.amount),
-      returnUrl,
-      resultUrl,
-      method,
-      input.payerPhone!
+      intent.merchantReference, String(intent.amount),
+      returnUrl, resultUrl,
+      config.integrationId, config.integrationKey,
+      config.authEmail,
+      method, input.payerPhone!,
     );
     url = PAYNOW_REMOTE_URL;
   } else {
-    params = buildInitParams(intent.merchantReference, String(intent.amount), returnUrl, resultUrl, input.payerEmail);
+    params = buildInitParams(
+      intent.merchantReference, String(intent.amount),
+      returnUrl, resultUrl,
+      config.integrationId, config.integrationKey,
+      input.payerEmail || config.authEmail,
+    );
     url = PAYNOW_INIT_URL;
   }
 
@@ -361,14 +361,14 @@ export async function submitOmariOtp(intentId: string, orgId: string, otp: strin
   const otpUrl = intent.paynowRedirectUrl;
   if (!otpUrl) return { ok: false, error: "No O'Mari OTP URL available for this payment" };
 
-  const id = getPaynowIntegrationId();
+  const orgCfg = await getOrgPaynowConfig(orgId);
   const params: Record<string, string> = {
-    id,
+    id: orgCfg.integrationId,
     otp,
     status: "Message",
   };
   const hashKeyOrder = ["id", "otp", "status"];
-  params.hash = generatePaynowHash(params, hashKeyOrder);
+  params.hash = generatePaynowHash(params, hashKeyOrder, orgCfg.integrationKey);
 
   const body = toFormUrlEncoded(params);
   let res: Response;
@@ -424,29 +424,60 @@ export async function submitOmariOtp(intentId: string, orgId: string, otp: strin
   return { ok: true, paid: false };
 }
 
-/** Handle Paynow result URL POST (webhook). Verify hash, update intent, apply payment if paid. */
-export async function handlePaynowResult(postedFields: Record<string, string>): Promise<{ ok: boolean; reason?: string }> {
-  if (!verifyPaynowHash(postedFields)) {
-    structuredLog("warn", "Paynow result hash mismatch", {
-      status: (postedFields.status ?? "").toLowerCase(),
-      reference: postedFields.reference ?? postedFields.merchantreference,
-      keys: Object.keys(postedFields).filter((k) => k.toLowerCase() !== "hash").join(","),
-    });
-    return { ok: false, reason: "Invalid hash" };
-  }
-
+/**
+ * Handle Paynow result URL POST (webhook).
+ * Pass `orgId` when the result URL includes ?org=<orgId> so we verify with the
+ * correct per-tenant integration key. If omitted we fall back to scanning all orgs
+ * (platform-key verification only — supports legacy single-tenant setup).
+ */
+export async function handlePaynowResult(
+  postedFields: Record<string, string>,
+  orgId?: string,
+): Promise<{ ok: boolean; reason?: string }> {
   const reference = postedFields.reference ?? postedFields.merchantreference;
   const status = (postedFields.status ?? "").toLowerCase();
   const paynowRef = postedFields.paynowreference ?? postedFields.PaynowReference ?? postedFields.Paynowreference;
 
   if (!reference) return { ok: false, reason: "Missing reference" };
 
+  // Resolve the integration key: prefer per-org, fall back to platform.
+  let verifiedOrgId: string | undefined = orgId;
+  if (orgId) {
+    const cfg = await getOrgPaynowConfig(orgId);
+    if (!verifyPaynowHash(postedFields, cfg.integrationKey)) {
+      structuredLog("warn", "Paynow result hash mismatch (org-keyed)", {
+        orgId, status, reference,
+        keys: Object.keys(postedFields).filter((k) => k.toLowerCase() !== "hash").join(","),
+      });
+      return { ok: false, reason: "Invalid hash" };
+    }
+  } else {
+    // Legacy path: try platform key; if that fails, try each org's key until one matches.
+    if (!verifyPaynowHash(postedFields)) {
+      const orgs = await storage.getOrganizations();
+      let matched = false;
+      for (const org of orgs) {
+        const cfg = await getOrgPaynowConfig(org.id);
+        if (cfg.integrationKey && verifyPaynowHash(postedFields, cfg.integrationKey)) {
+          verifiedOrgId = org.id;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        structuredLog("warn", "Paynow result hash mismatch (all keys tried)", { status, reference });
+        return { ok: false, reason: "Invalid hash" };
+      }
+    }
+  }
+
   const orgs = await storage.getOrganizations();
   if (orgs.length === 0) return { ok: false, reason: "No tenant" };
 
-  // Search all tenants in parallel for the matching payment intent
+  // Search tenants for the matching payment intent (scoped to verified org if known)
   let intent: Awaited<ReturnType<typeof storage.getPaymentIntentByMerchantReference>> = undefined;
-  const intentResults = await Promise.all(orgs.map((org) => storage.getPaymentIntentByMerchantReference(org.id, reference)));
+  const searchOrgs = verifiedOrgId ? orgs.filter((o) => o.id === verifiedOrgId) : orgs;
+  const intentResults = await Promise.all(searchOrgs.map((org) => storage.getPaymentIntentByMerchantReference(org.id, reference)));
   intent = intentResults.find(Boolean);
 
   if (intent) {
@@ -930,7 +961,7 @@ export async function initiatePaynowForGroup(input: InitiatePaynowForGroupInput)
   pollUrl?: string;
   error?: string;
 }> {
-  const config = getPaynowConfig();
+  const config = await getOrgPaynowConfig(input.organizationId);
   if (!config.enabled) return { ok: false, error: "Paynow is not configured" };
 
   const groupIntent = await storage.getGroupPaymentIntentById(input.groupIntentId, input.organizationId);
@@ -952,10 +983,17 @@ export async function initiatePaynowForGroup(input: InitiatePaynowForGroupInput)
   let params: Record<string, string>;
   let url: string;
   if (isRemote) {
-    params = buildRemoteParams(groupIntent.merchantReference, amount, returnUrl, resultUrl, method, input.payerPhone!);
+    params = buildRemoteParams(
+      groupIntent.merchantReference, amount, returnUrl, resultUrl,
+      config.integrationId, config.integrationKey, config.authEmail,
+      method, input.payerPhone!,
+    );
     url = PAYNOW_REMOTE_URL;
   } else {
-    params = buildInitParams(groupIntent.merchantReference, amount, returnUrl, resultUrl);
+    params = buildInitParams(
+      groupIntent.merchantReference, amount, returnUrl, resultUrl,
+      config.integrationId, config.integrationKey, config.authEmail,
+    );
     url = PAYNOW_INIT_URL;
   }
 

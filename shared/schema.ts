@@ -36,6 +36,13 @@ export const organizations = pgTable("organizations", {
   databaseUrl: text("database_url"),
   /** When true, the app is fully white-labeled: tenant branding replaces POL263 everywhere (splash, login, sidebar, etc.). When false, the app loads as POL263 but tenant details appear on documents and receipts. */
   isWhitelabeled: boolean("is_whitelabeled").default(false).notNull(),
+  /** Per-tenant PayNow merchant credentials. When set, these override the platform-level env vars. */
+  paynowIntegrationId: text("paynow_integration_id"),
+  paynowIntegrationKey: text("paynow_integration_key"),
+  paynowAuthEmail: text("paynow_auth_email"),
+  paynowReturnUrl: text("paynow_return_url"),
+  paynowResultUrl: text("paynow_result_url"),
+  paynowMode: text("paynow_mode").$type<"test" | "live">(),
 });
 
 export const branches = pgTable(

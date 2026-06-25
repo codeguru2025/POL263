@@ -591,11 +591,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(organizations);
   }
   async createOrganization(org: InsertOrganization): Promise<Organization> {
-    const [created] = await db.insert(organizations).values(org).returning();
+    const [created] = await db.insert(organizations).values(org as any).returning();
     return created;
   }
   async updateOrganization(id: string, data: Partial<InsertOrganization>): Promise<Organization | undefined> {
-    const [updated] = await db.update(organizations).set(data).where(eq(organizations.id, id)).returning();
+    const [updated] = await db.update(organizations).set(data as any).where(eq(organizations.id, id)).returning();
     return updated;
   }
   async getBranch(id: string, organizationId: string): Promise<Branch | undefined> {

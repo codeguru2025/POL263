@@ -42,6 +42,9 @@ import {
   Settings as SettingsIcon,
   Users,
   FileText,
+  Eye,
+  EyeOff,
+  CreditCard,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken } from "@/lib/queryClient";
@@ -86,7 +89,7 @@ export default function StaffSettings() {
       return;
     }
     if (t === "tenants" && canManageTenants) setActiveTab(t);
-    else if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
+    else if (t === "terms" || t === "rbac" || t === "branding" || t === "account" || t === "payments") setActiveTab(t);
     else setActiveTab("branding");
   }, [search, canManageTenants, isControlPlaneMode]);
 
@@ -138,6 +141,15 @@ export default function StaffSettings() {
   const [policyNumberPadding, setPolicyNumberPadding] = useState(5);
   const [databaseUrl, setDatabaseUrl] = useState("");
   const [isWhitelabeled, setIsWhitelabeled] = useState(false);
+
+  // ── PayNow per-tenant credentials ────────────────────────────
+  const [pnIntegrationId, setPnIntegrationId] = useState("");
+  const [pnIntegrationKey, setPnIntegrationKey] = useState("");
+  const [pnAuthEmail, setPnAuthEmail] = useState("");
+  const [pnReturnUrl, setPnReturnUrl] = useState("");
+  const [pnResultUrl, setPnResultUrl] = useState("");
+  const [pnMode, setPnMode] = useState<"test" | "live">("test");
+  const [showPnKey, setShowPnKey] = useState(false);
 
   const [termDialogOpen, setTermDialogOpen] = useState(false);
   const [editingTermId, setEditingTermId] = useState<string | null>(null);
@@ -277,6 +289,12 @@ export default function StaffSettings() {
       setPolicyNumberPadding(typeof currentOrg.policyNumberPadding === "number" ? currentOrg.policyNumberPadding : 5);
       setDatabaseUrl(currentOrg.databaseUrl ?? "");
       setIsWhitelabeled(currentOrg.isWhitelabeled ?? false);
+      setPnIntegrationId(currentOrg.paynowIntegrationId ?? "");
+      setPnIntegrationKey(currentOrg.paynowIntegrationKey ?? "");
+      setPnAuthEmail(currentOrg.paynowAuthEmail ?? "");
+      setPnReturnUrl(currentOrg.paynowReturnUrl ?? "");
+      setPnResultUrl(currentOrg.paynowResultUrl ?? "");
+      setPnMode(currentOrg.paynowMode ?? "test");
     }
   }, [currentOrg]);
 
@@ -595,15 +613,16 @@ export default function StaffSettings() {
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList
-            className={`grid w-full max-w-2xl ${
+            className={`grid w-full max-w-3xl ${
               isControlPlaneMode
                 ? (canManageTenants ? "grid-cols-2" : "grid-cols-1")
-                : (canManageTenants ? "grid-cols-5" : "grid-cols-4")
+                : (canManageTenants ? "grid-cols-6" : "grid-cols-5")
             }`}
           >
             {canManageTenants && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="branding">Branding</TabsTrigger>}
             <TabsTrigger value="account">Account</TabsTrigger>
+            {!isControlPlaneMode && <TabsTrigger value="payments">Payments</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
           </TabsList>
@@ -1495,6 +1514,126 @@ export default function StaffSettings() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+          </TabsContent>
+
+          {/* Payments / PayNow */}
+          <TabsContent value="payments" className="mt-6">
+            <CardSection
+              title="PayNow Integration"
+              description="Configure your organisation's PayNow merchant credentials. These override the platform defaults and allow each tenant to use their own merchant account."
+              icon={CreditCard}
+              headerRight={
+                <Button
+                  onClick={() =>
+                    updateOrgMutation.mutate({
+                      paynowIntegrationId: pnIntegrationId || null,
+                      paynowIntegrationKey: pnIntegrationKey || null,
+                      paynowAuthEmail: pnAuthEmail || null,
+                      paynowReturnUrl: pnReturnUrl || null,
+                      paynowResultUrl: pnResultUrl || null,
+                      paynowMode: pnMode,
+                    })
+                  }
+                  disabled={updateOrgMutation.isPending}
+                >
+                  {updateOrgMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
+                  Save
+                </Button>
+              }
+            >
+              <div className="p-6 space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="pnIntegrationId">Integration ID</Label>
+                    <Input
+                      id="pnIntegrationId"
+                      value={pnIntegrationId}
+                      onChange={(e) => setPnIntegrationId(e.target.value)}
+                      placeholder="e.g. 12345"
+                    />
+                    <p className="text-xs text-muted-foreground">Your PayNow merchant integration ID</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="pnIntegrationKey">Integration Key</Label>
+                    <div className="relative">
+                      <Input
+                        id="pnIntegrationKey"
+                        type={showPnKey ? "text" : "password"}
+                        value={pnIntegrationKey}
+                        onChange={(e) => setPnIntegrationKey(e.target.value)}
+                        placeholder="Paste key — stored server-side only"
+                        className="pr-10"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowPnKey((v) => !v)}
+                      >
+                        {showPnKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Leave blank to keep the existing key unchanged</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="pnAuthEmail">Auth Email</Label>
+                    <Input
+                      id="pnAuthEmail"
+                      type="email"
+                      value={pnAuthEmail}
+                      onChange={(e) => setPnAuthEmail(e.target.value)}
+                      placeholder="merchant@yourdomain.com"
+                    />
+                    <p className="text-xs text-muted-foreground">Shown on PayNow card payment page</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="pnMode">Mode</Label>
+                    <select
+                      id="pnMode"
+                      value={pnMode}
+                      onChange={(e) => setPnMode(e.target.value as "test" | "live")}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <option value="test">Test</option>
+                      <option value="live">Live</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="pnReturnUrl">Return URL</Label>
+                  <Input
+                    id="pnReturnUrl"
+                    value={pnReturnUrl}
+                    onChange={(e) => setPnReturnUrl(e.target.value)}
+                    placeholder="https://yourapp.com/payment-complete"
+                  />
+                  <p className="text-xs text-muted-foreground">Where the browser redirects after card payment</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="pnResultUrl">Result URL</Label>
+                  <Input
+                    id="pnResultUrl"
+                    value={pnResultUrl}
+                    onChange={(e) => setPnResultUrl(e.target.value)}
+                    placeholder={`https://yourapp.com/api/payments/paynow/result?org=${currentOrg?.id ?? "<orgId>"}`}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Server-side callback where PayNow POSTs payment results. Include <code>?org={currentOrg?.id ?? "<orgId>"}</code> so we verify with your key.
+                  </p>
+                </div>
+
+                {currentOrg && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 space-y-1">
+                    <p className="font-semibold">Suggested Result URL</p>
+                    <code className="block text-xs break-all">
+                      {`https://yourapp.com/api/payments/paynow/result?org=${currentOrg.id}`}
+                    </code>
+                    <p>Copy this into the Result URL field above and register it in your PayNow merchant portal.</p>
+                  </div>
+                )}
+              </div>
+            </CardSection>
           </TabsContent>
 
           {/* RBAC */}
