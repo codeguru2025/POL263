@@ -54,18 +54,32 @@ export async function streamDriverChecklistPDF(
 
   const checklist = await storage.getDriverChecklist(caseId, orgId);
 
-  const burialVehicle = fc.burialVehicleId ? await storage.getFleetVehicleById(fc.burialVehicleId, orgId) : null;
-  const userIds = [fc.burialDriverId, checklist?.driverId, checklist?.preparedByUserId].filter((id): id is string => !!id);
+  const [removalVehicle, burialVehicle] = await Promise.all([
+    fc.removalVehicleId ? storage.getFleetVehicleById(fc.removalVehicleId, orgId) : null,
+    fc.burialVehicleId ? storage.getFleetVehicleById(fc.burialVehicleId, orgId) : null,
+  ]);
+
+  const userIds = [fc.removalDriverId, fc.burialDriverId, fc.attendingAgentId, fc.assignedTo, checklist?.driverId, checklist?.preparedByUserId]
+    .filter((id): id is string => !!id);
   const uniqueIds = Array.from(new Set(userIds));
-  const usersMap: Record<string, { displayName: string | null; phone: string | null }> = {};
+  const usersMap: Record<string, { displayName: string | null; phone: string | null; email: string | null; address: string | null; nextOfKinName: string | null; nextOfKinPhone: string | null }> = {};
   await Promise.all(uniqueIds.map(async (id) => {
     const u = await storage.getUser(id);
-    if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone };
+    if (u) usersMap[id] = {
+      displayName: u.displayName,
+      phone: u.phone ?? null,
+      email: u.email ?? null,
+      address: (u as any).address ?? null,
+      nextOfKinName: (u as any).nextOfKinName ?? null,
+      nextOfKinPhone: (u as any).nextOfKinPhone ?? null,
+    };
   }));
 
-  const driver = (checklist?.driverId ? usersMap[checklist.driverId] : null)
-    ?? (fc.burialDriverId ? usersMap[fc.burialDriverId] : null);
-  const preparedBy = checklist?.preparedByUserId ? usersMap[checklist.preparedByUserId] : null;
+  const removalDriver = fc.removalDriverId ? usersMap[fc.removalDriverId] ?? null : null;
+  const burialDriver = (checklist?.driverId ? usersMap[checklist.driverId] : null)
+    ?? (fc.burialDriverId ? usersMap[fc.burialDriverId] : null) ?? null;
+  const attendingAgent = fc.attendingAgentId ? usersMap[fc.attendingAgentId] ?? null : null;
+  const preparedBy = checklist?.preparedByUserId ? usersMap[checklist.preparedByUserId] ?? null : null;
 
   const logoData = await resolveImage(org.logoUrl);
   const filename = `Driver-Checklist-${fc.caseNumber}.pdf`;
@@ -105,38 +119,125 @@ export async function streamDriverChecklistPDF(
   y += 20;
   doc.font("Helvetica").fontSize(8.5).fillColor(C_MUTED)
     .text(`Case No: ${fc.caseNumber}  ·  Generated: ${fmtDate(new Date())}`, MARGIN, y, { width: COL, align: "center" });
-  y += 20;
+  y += 16;
 
-  // ── Top box: Case summary ─────────────────────────────────
-  const boxTop = y;
-  doc.rect(MARGIN, y, COL, 72).fillColor(C_LIGHT_BG).fill();
-  doc.rect(MARGIN, y, COL, 72).lineWidth(0.8).strokeColor(C_BORDER).stroke();
-  doc.fillColor(C_TEXT);
-  y += 8;
+  // ── Section helpers ───────────────────────────────────────
+  const sectionHeader = (title: string) => {
+    if (y > A4_H - MARGIN - 80) { doc.addPage(); y = MARGIN; }
+    doc.rect(MARGIN, y, COL, 18).fill(C_PRIMARY);
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff").text(title.toUpperCase(), MARGIN + 8, y + 4, { width: COL - 16 });
+    y += 22;
+    doc.fillColor(C_TEXT);
+  };
 
-  const summaryRow = (label: string, value: string) => {
-    const lw = 130;
+  const dataRow = (label: string, value: string, lw = 160) => {
+    if (y > A4_H - MARGIN - 24) { doc.addPage(); y = MARGIN; }
     doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(label, MARGIN + 8, y, { width: lw });
-    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(value, MARGIN + lw + 4, y, { width: COL - lw - 16 });
+    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(value, MARGIN + lw + 8, y, { width: COL - lw - 24 });
     y += 13;
   };
 
-  summaryRow("Deceased Name:", fmt(fc.deceasedName));
-  summaryRow("Date of Burial:", fmtDate(fc.funeralDate));
-  summaryRow("Burial Location:", fmt(fc.funeralLocation));
-  const driverStr = driver ? `${fmt(driver.displayName)}${driver.phone ? `  ·  ${driver.phone}` : ""}` : "—";
-  summaryRow("Driver Allocated:", driverStr);
-  const vehicleStr = burialVehicle ? `${burialVehicle.registration}${burialVehicle.make ? ` — ${burialVehicle.make} ${burialVehicle.model || ""}`.trim() : ""}` : "—";
-  summaryRow("Vehicle:", vehicleStr);
-  y = boxTop + 72 + 16;
+  const twoCol = (l1: string, v1: string, l2: string, v2: string) => {
+    if (y > A4_H - MARGIN - 24) { doc.addPage(); y = MARGIN; }
+    const half = COL / 2 - 4;
+    const sy = y;
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(l1, MARGIN + 8, sy, { width: 90 });
+    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(v1, MARGIN + 100, sy, { width: half - 100 });
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(l2, MARGIN + half + 8, sy, { width: 90 });
+    doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(v2, MARGIN + half + 100, sy, { width: half - 100 });
+    y += 13;
+  };
 
-  // ── Section: Checklist ────────────────────────────────────
-  doc.rect(MARGIN, y, COL, 18).fill(C_PRIMARY);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff").text("PRE-DEPARTURE CHECKLIST", MARGIN + 8, y + 4);
-  y += 26;
-  doc.fillColor(C_TEXT);
+  // ── 1. Funeral Case Summary ───────────────────────────────
+  sectionHeader("1. Funeral Case Summary");
+
+  // Deceased
+  twoCol("Deceased Name:", fmt(fc.deceasedName), "Date of Death:", fmtDate(fc.dateOfDeath));
+  twoCol("Date of Birth:", fmtDate(fc.deceasedDob), "Gender:", fc.deceasedGender ? fc.deceasedGender.charAt(0).toUpperCase() + fc.deceasedGender.slice(1) : "—");
+  twoCol("National ID:", fmt(fc.deceasedNationalId), "Cause of Death:", fmt(fc.causeOfDeath));
+  if (fc.placeOfDeath) dataRow("Place of Death:", fmt(fc.placeOfDeath));
+  if (fc.deceasedRelationship && fc.serviceType === "claim") dataRow("Relationship:", fmt(fc.deceasedRelationship));
+  y += 4;
+
+  // Service details
+  const serviceLabel = fc.serviceType === "claim" ? "Policy Claim" : fc.serviceType === "cash" ? "Cash Service" : "—";
+  twoCol("Service Type:", serviceLabel, "Case Status:", fmt(fc.status).replace(/_/g, " ").toUpperCase());
+  twoCol("Date of Burial:", fmtDate(fc.funeralDate), "Place of Burial:", fmt(fc.funeralLocation));
+  y += 4;
+
+  // ── 2. Informant / Next of Kin ────────────────────────────
+  sectionHeader("2. Informant / Next of Kin (Emergency Contact)");
+  twoCol("Name:", fmt(fc.informantName), "Relationship:", fmt(fc.informantRelationship));
+  dataRow("Contact Phone:", fmt(fc.informantPhone));
+  y += 4;
+
+  // ── 3. Service Timeline ───────────────────────────────────
+  sectionHeader("3. Service Timeline");
+  dataRow("Body Wash Time:", fmtDateTime(fc.bodyWashTime));
+  if (fc.memorialServiceStart || fc.memorialServiceEnd) {
+    twoCol("Memorial Start:", fmtDateTime(fc.memorialServiceStart), "Memorial End:", fmtDateTime(fc.memorialServiceEnd));
+  }
+  dataRow("Burial Departure:", fmtDateTime(fc.burialDepartureTime));
+  dataRow("Burial Date:", fmtDate(fc.funeralDate));
+  if (fc.slaDeadline) dataRow("SLA Deadline:", fmtDateTime(fc.slaDeadline));
+  y += 4;
+
+  // ── 4. Body Removal ───────────────────────────────────────
+  sectionHeader("4. Body Removal");
+  dataRow("Removal Location:", fmt(fc.removalLocation));
+  if (removalVehicle) {
+    const remStr = `${removalVehicle.registration}${removalVehicle.make ? ` — ${removalVehicle.make} ${removalVehicle.model || ""}`.trim() : ""}`;
+    dataRow("Removal Vehicle:", remStr);
+  }
+  if (removalDriver) {
+    dataRow("Removal Driver:", fmt(removalDriver.displayName));
+    if (removalDriver.phone) dataRow("Driver Phone:", removalDriver.phone);
+    if (removalDriver.email) dataRow("Driver Email:", removalDriver.email);
+    if (removalDriver.address) dataRow("Driver Address:", removalDriver.address);
+    if (removalDriver.nextOfKinName) dataRow("Driver Emerg. Contact:", fmt(removalDriver.nextOfKinName));
+    if (removalDriver.nextOfKinPhone) dataRow("Driver Emerg. Phone:", removalDriver.nextOfKinPhone);
+  }
+  y += 4;
+
+  // ── 5. Burial Driver & Vehicle ────────────────────────────
+  sectionHeader("5. Burial Driver & Vehicle");
+  if (burialVehicle) {
+    const burStr = `${burialVehicle.registration}${burialVehicle.make ? ` — ${burialVehicle.make} ${burialVehicle.model || ""}`.trim() : ""}`;
+    dataRow("Vehicle:", burStr);
+  } else {
+    dataRow("Vehicle:", "—");
+  }
+  if (burialDriver) {
+    dataRow("Driver Name:", fmt(burialDriver.displayName));
+    if (burialDriver.phone) dataRow("Driver Phone:", burialDriver.phone);
+    if (burialDriver.email) dataRow("Driver Email:", burialDriver.email);
+    if (burialDriver.address) dataRow("Driver Address:", burialDriver.address);
+    if (burialDriver.nextOfKinName) dataRow("Driver Emerg. Contact:", fmt(burialDriver.nextOfKinName));
+    if (burialDriver.nextOfKinPhone) dataRow("Driver Emerg. Phone:", burialDriver.nextOfKinPhone);
+  } else {
+    dataRow("Driver:", "—");
+  }
+  y += 4;
+
+  // ── 6. Attending Agent ────────────────────────────────────
+  sectionHeader("6. Attending Agent");
+  if (attendingAgent) {
+    dataRow("Name:", fmt(attendingAgent.displayName));
+    if (attendingAgent.phone) dataRow("Phone:", attendingAgent.phone);
+    if (attendingAgent.email) dataRow("Email:", attendingAgent.email);
+    if (attendingAgent.address) dataRow("Address:", attendingAgent.address);
+    if (attendingAgent.nextOfKinName) dataRow("Emergency Contact:", fmt(attendingAgent.nextOfKinName));
+    if (attendingAgent.nextOfKinPhone) dataRow("Emergency Phone:", attendingAgent.nextOfKinPhone);
+  } else {
+    dataRow("Attending Agent:", "—");
+  }
+  y += 4;
+
+  // ── 7. Pre-Departure Checklist ────────────────────────────
+  sectionHeader("7. Pre-Departure Checklist");
 
   const checkRow = (label: string, ticked: boolean | null | undefined, detail?: string) => {
+    if (y > A4_H - MARGIN - 24) { doc.addPage(); y = MARGIN; }
     const boxSize = 10;
     doc.rect(MARGIN + 4, y, boxSize, boxSize).lineWidth(0.8).strokeColor(C_BORDER).stroke();
     if (ticked) {
@@ -156,13 +257,11 @@ export async function streamDriverChecklistPDF(
   checkRow("Gloves", checklist?.gloves);
   checkRow("Masks", checklist?.masks);
 
-  // Fuel gauge row
   const fuelLabel = checklist?.fuelGauge
     ? { full: "Full", three_quarter: "Three-Quarter (¾)", half: "Half (½)", quarter: "Quarter (¼)" }[checklist.fuelGauge] ?? checklist.fuelGauge
     : "Not recorded";
   checkRow("Fuel Gauge", !!checklist?.fuelGauge, fuelLabel);
 
-  // Toll gate
   const tollDetail = checklist?.tollGateRequired
     ? `Yes — Amount: ${checklist.tollGateAmount ? `$${checklist.tollGateAmount}` : "TBD"}`
     : (checklist ? "Not required" : "—");
@@ -170,13 +269,11 @@ export async function streamDriverChecklistPDF(
 
   y += 4;
 
-  // ── Section: Financial ────────────────────────────────────
-  doc.rect(MARGIN, y, COL, 18).fill(C_PRIMARY);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff").text("FINANCIAL / ADMIN", MARGIN + 8, y + 4);
-  y += 26;
-  doc.fillColor(C_TEXT);
+  // ── 8. Financial / Admin ──────────────────────────────────
+  sectionHeader("8. Financial / Admin");
 
   const adminRow = (label: string, value: string) => {
+    if (y > A4_H - MARGIN - 24) { doc.addPage(); y = MARGIN; }
     const lw = 180;
     doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(label, MARGIN + 8, y, { width: lw });
     doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(value, MARGIN + lw + 8, y, { width: COL - lw - 16 });
@@ -187,8 +284,6 @@ export async function streamDriverChecklistPDF(
   adminRow("Burial Order Ref:", fmt(checklist?.burialOrderRef));
   adminRow("Funeral Case No:", fc.caseNumber);
   adminRow("Departure Time:", fmtDateTime(fc.burialDepartureTime));
-  adminRow("Memorial Service Start:", fmtDateTime(fc.memorialServiceStart));
-  adminRow("Memorial Service End:", fmtDateTime(fc.memorialServiceEnd));
 
   if (checklist?.completedAt) {
     adminRow("Checklist Prepared At:", fmtDateTime(checklist.completedAt));
@@ -199,7 +294,8 @@ export async function streamDriverChecklistPDF(
 
   y += 16;
 
-  // ── Section: Signatures ───────────────────────────────────
+  // ── 9. Sign-Off ───────────────────────────────────────────
+  if (y > A4_H - MARGIN - 130) { doc.addPage(); y = MARGIN; }
   doc.rect(MARGIN, y, COL, 18).fill(C_PRIMARY);
   doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff").text("SIGN-OFF", MARGIN + 8, y + 4);
   y += 26;

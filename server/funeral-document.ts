@@ -43,6 +43,16 @@ function fmtDateTime(v: Date | string | null | undefined): string {
   }
 }
 
+type StaffUser = {
+  displayName: string | null;
+  phone: string | null;
+  email: string | null;
+  gender: string | null;
+  address: string | null;
+  nextOfKinName: string | null;
+  nextOfKinPhone: string | null;
+};
+
 export async function streamFuneralDocumentToResponse(
   caseId: string,
   orgId: string,
@@ -66,18 +76,26 @@ export async function streamFuneralDocumentToResponse(
   const userIds = [fc.removalDriverId, fc.burialDriverId, fc.attendingAgentId, fc.assignedTo]
     .filter((id): id is string => !!id);
   const uniqueUserIds = Array.from(new Set(userIds));
-  const usersMap: Record<string, { displayName: string | null; phone: string | null; gender: string | null; email: string | null }> = {};
+  const usersMap: Record<string, StaffUser> = {};
   await Promise.all(
     uniqueUserIds.map(async (id) => {
       const u = await storage.getUser(id);
-      if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone, gender: u.gender, email: u.email };
+      if (u) usersMap[id] = {
+        displayName: u.displayName,
+        phone: u.phone ?? null,
+        email: u.email ?? null,
+        gender: u.gender ?? null,
+        address: (u as any).address ?? null,
+        nextOfKinName: (u as any).nextOfKinName ?? null,
+        nextOfKinPhone: (u as any).nextOfKinPhone ?? null,
+      };
     })
   );
 
-  const removalDriver = fc.removalDriverId ? usersMap[fc.removalDriverId] : null;
-  const burialDriver = fc.burialDriverId ? usersMap[fc.burialDriverId] : null;
-  const attendingAgent = fc.attendingAgentId ? usersMap[fc.attendingAgentId] : null;
-  const assignedUser = fc.assignedTo ? usersMap[fc.assignedTo] : null;
+  const removalDriver = fc.removalDriverId ? usersMap[fc.removalDriverId] ?? null : null;
+  const burialDriver = fc.burialDriverId ? usersMap[fc.burialDriverId] ?? null : null;
+  const attendingAgent = fc.attendingAgentId ? usersMap[fc.attendingAgentId] ?? null : null;
+  const assignedUser = fc.assignedTo ? usersMap[fc.assignedTo] ?? null : null;
 
   const logoData = await resolveImage(org.logoUrl);
 
@@ -161,11 +179,20 @@ export async function streamFuneralDocumentToResponse(
     y += 14;
   }
 
-  function driverBlock(driver: { displayName: string | null; phone: string | null; email: string | null; gender: string | null } | null) {
-    if (!driver) { row("Driver", "—"); return; }
-    row("Driver Name", fmt(driver.displayName));
-    if (driver.phone) row("Driver Phone", driver.phone);
-    if (driver.email) row("Driver Email", driver.email);
+  function staffBlock(role: string, user: StaffUser | null) {
+    if (!user) { row(role, "—"); return; }
+    row(`${role} Name`, fmt(user.displayName));
+    if (user.phone) row(`${role} Phone`, user.phone);
+    if (user.email) row(`${role} Email`, user.email);
+    if (user.address) row(`${role} Address`, user.address);
+  }
+
+  function emergencyBlock(role: string, user: StaffUser | null) {
+    if (!user) return;
+    if (user.nextOfKinName || user.nextOfKinPhone) {
+      row(`${role} Emergency Contact`, fmt(user.nextOfKinName));
+      if (user.nextOfKinPhone) row(`${role} Emergency Phone`, user.nextOfKinPhone);
+    }
   }
 
   const gap = () => { y += 8; };
@@ -193,8 +220,8 @@ export async function streamFuneralDocumentToResponse(
       gap();
     }
 
-    // ── 3. Informant ───────────────────────────────────────────
-    sectionHeader("3. Informant (Next of Kin)");
+    // ── 3. Informant / Emergency Contact ───────────────────────
+    sectionHeader("3. Informant / Emergency Contact (Next of Kin)");
     twoRows("Name", fmt(fc.informantName), "Relationship", fmt(fc.informantRelationship));
     row("Contact Phone", fmt(fc.informantPhone));
     gap();
@@ -227,7 +254,7 @@ export async function streamFuneralDocumentToResponse(
       ? `${removalVehicle.registration}${removalVehicle.make ? ` — ${removalVehicle.make} ${removalVehicle.model || ""}`.trim() : ""}`
       : "—";
     row("Vehicle (Reg)", remVehicleStr);
-    driverBlock(removalDriver);
+    staffBlock("Removal Driver", removalDriver);
     gap();
 
     // ── 7. Burial Logistics ────────────────────────────────────
@@ -236,22 +263,37 @@ export async function streamFuneralDocumentToResponse(
       ? `${burialVehicle.registration}${burialVehicle.make ? ` — ${burialVehicle.make} ${burialVehicle.model || ""}`.trim() : ""}`
       : "—";
     row("Vehicle (Reg)", burVehicleStr);
-    driverBlock(burialDriver);
+    staffBlock("Burial Driver", burialDriver);
     gap();
 
     // ── 8. Attending Agent ─────────────────────────────────────
     sectionHeader("8. Attending Agent");
     if (attendingAgent) {
-      twoRows("Name", fmt(attendingAgent.displayName), "Gender", fmt(attendingAgent.gender));
-      twoRows("Phone", fmt(attendingAgent.phone), "Email", fmt(attendingAgent.email));
+      row("Name", fmt(attendingAgent.displayName));
+      if (attendingAgent.phone) row("Phone", attendingAgent.phone);
+      if (attendingAgent.email) row("Email", attendingAgent.email);
+      if (attendingAgent.address) row("Address", attendingAgent.address);
+      if (attendingAgent.gender) row("Gender", fmt(attendingAgent.gender));
     } else {
       row("Attending Agent", "—");
     }
     gap();
 
-    // ── 9. Notes ───────────────────────────────────────────────
+    // ── 9. Emergency Contacts ──────────────────────────────────
+    sectionHeader("9. Emergency Contacts");
+    // Organisation contact
+    row("Office / Parlour", fmt(org.name));
+    if (org.phone) row("Office Phone", org.phone);
+    if (org.email) row("Office Email", org.email);
+    // Driver next of kin (operational emergency)
+    if (removalDriver) emergencyBlock("Removal Driver", removalDriver);
+    if (burialDriver && burialDriver !== removalDriver) emergencyBlock("Burial Driver", burialDriver);
+    if (attendingAgent) emergencyBlock("Agent", attendingAgent);
+    gap();
+
+    // ── 10. Notes ───────────────────────────────────────────────
     if (fc.notes) {
-      sectionHeader("9. Notes");
+      sectionHeader("10. Notes");
       doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
         .text(fc.notes, MARGIN, y, { width: COL });
       y += doc.heightOfString(fc.notes, { width: COL }) + 8;
