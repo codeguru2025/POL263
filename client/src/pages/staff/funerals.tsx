@@ -641,7 +641,9 @@ function CaseDetailView({
             <DetailRow label="Date of death" value={fc.dateOfDeath} />
             <DetailRow label="Cause of death" value={fc.causeOfDeath} />
             <DetailRow label="Place of death" value={fc.placeOfDeath} />
-            {(fc as any).bodyIdentifierName && <DetailRow label="Body identified by" value={`${(fc as any).bodyIdentifierName}${(fc as any).bodyIdentifierIdNumber ? ` · ${(fc as any).bodyIdentifierIdNumber}` : ""}`} />}
+            {(fc as any).bodyIdentifierName && (
+              <DetailRow label="Body identified by" value={`${(fc as any).bodyIdentifierName}${(fc as any).bodyIdentifierIdNumber ? ` · ${(fc as any).bodyIdentifierIdNumber}` : ""}`} />
+            )}
           </div>
         </CardSection>
 
@@ -654,72 +656,58 @@ function CaseDetailView({
           </div>
         </CardSection>
 
-        {/* Service */}
+        {/* Service details + timeline merged */}
         <CardSection title="Service Details" icon={CheckCircle2}>
           <div className="space-y-0.5">
             <DetailRow label="Service type" value={fc.serviceType === "claim" ? "Policy Claim" : fc.serviceType === "cash" ? "Cash Service" : undefined} />
             <DetailRow label="Date of burial" value={fc.funeralDate} />
             <DetailRow label="Place of burial" value={fc.funeralLocation} />
           </div>
+          {((fc as any).bodyWashTime || (fc as any).burialDepartureTime || (fc as any).memorialServiceStart) && (
+            <>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4 mb-1.5">Timeline</p>
+              <div className="space-y-0.5">
+                <DetailRow label="Body wash" value={(fc as any).bodyWashTime ? new Date((fc as any).bodyWashTime).toLocaleString("en-ZA") : undefined} />
+                <DetailRow label="Departure for burial" value={(fc as any).burialDepartureTime ? new Date((fc as any).burialDepartureTime).toLocaleString("en-ZA") : undefined} />
+                <DetailRow label="Memorial start" value={(fc as any).memorialServiceStart ? new Date((fc as any).memorialServiceStart).toLocaleString("en-ZA") : undefined} />
+                <DetailRow label="Memorial end" value={(fc as any).memorialServiceEnd ? new Date((fc as any).memorialServiceEnd).toLocaleString("en-ZA") : undefined} />
+              </div>
+            </>
+          )}
         </CardSection>
 
-        {/* Status mgmt */}
-        <CardSection title="Status" icon={CheckCircle2}>
-          {(() => {
-            const [pendingStatus, setPendingStatus] = useState<string | null>(null);
-            return (
-              <>
-                <AlertDialog open={!!pendingStatus} onOpenChange={(open) => { if (!open) setPendingStatus(null); }}>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Confirm status change</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        {pendingStatus === "cancelled" ? "Cancelling this case cannot be easily undone. Are you sure?" : `Mark this case as "${pendingStatus?.replace("_", " ")}"?`}
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => { if (pendingStatus) { onUpdateStatus(pendingStatus); setPendingStatus(null); } }}>Confirm</AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-                <div className="flex gap-2 flex-wrap">
-                  {["open", "in_progress", "completed", "cancelled"].map((s) => (
-                    <Button key={s} size="sm" variant={fc.status === s ? "default" : "outline"} onClick={() => setPendingStatus(s)} disabled={fc.status === s} data-testid={`button-status-${s}`}>
-                      {s.replace("_", " ").toUpperCase()}
-                    </Button>
-                  ))}
-                </div>
-              </>
-            );
-          })()}
-        </CardSection>
-
-        {/* Body removal */}
-        <CardSection title="Body Removal" icon={Truck}>
-          <div className="space-y-0.5">
-            <DetailRow label="Removal location" value={fc.removalLocation} />
-            <DetailRow label="Vehicle" value={vehicleLabel(fc.removalVehicleId)} />
-            <DetailRow label="Driver" value={userLabel(fc.removalDriverId)} />
+        {/* Logistics — removal + burial merged into one card */}
+        <CardSection title="Logistics" icon={Truck}>
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Body Removal</p>
+              <div className="space-y-0.5">
+                <DetailRow label="Collection point" value={fc.removalLocation} />
+                <DetailRow label="Vehicle" value={vehicleLabel(fc.removalVehicleId)} />
+                <DetailRow label="Driver" value={userLabel(fc.removalDriverId)} />
+              </div>
+            </div>
+            <div className="border-t pt-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Burial</p>
+              <div className="space-y-0.5">
+                <DetailRow label="Vehicle" value={vehicleLabel(fc.burialVehicleId)} />
+                <DetailRow label="Driver" value={userLabel(fc.burialDriverId)} />
+              </div>
+            </div>
           </div>
         </CardSection>
 
-        {/* Burial logistics */}
-        <CardSection title="Burial Logistics" icon={Truck}>
+        {/* Attending agent */}
+        <CardSection title="Attending Agent" icon={User}>
           <div className="space-y-0.5">
-            <DetailRow label="Vehicle" value={vehicleLabel(fc.burialVehicleId)} />
-            <DetailRow label="Driver" value={userLabel(fc.burialDriverId)} />
+            <DetailRow label="Name" value={userLabel(fc.attendingAgentId)} />
+            <DetailRow label="Gender" value={userGender(fc.attendingAgentId)} />
           </div>
         </CardSection>
 
-        {/* Service timing */}
-        <CardSection title="Service Timing" icon={CheckCircle2}>
-          <div className="space-y-0.5">
-            <DetailRow label="Body wash time" value={(fc as any).bodyWashTime ? new Date((fc as any).bodyWashTime).toLocaleString("en-ZA") : undefined} />
-            <DetailRow label="Departure for burial" value={(fc as any).burialDepartureTime ? new Date((fc as any).burialDepartureTime).toLocaleString("en-ZA") : undefined} />
-            <DetailRow label="Memorial service start" value={(fc as any).memorialServiceStart ? new Date((fc as any).memorialServiceStart).toLocaleString("en-ZA") : undefined} />
-            <DetailRow label="Memorial service end" value={(fc as any).memorialServiceEnd ? new Date((fc as any).memorialServiceEnd).toLocaleString("en-ZA") : undefined} />
-          </div>
+        {/* Status management */}
+        <CardSection title="Case Status" icon={CheckCircle2}>
+          <StatusChanger current={fc.status} onUpdateStatus={onUpdateStatus} />
         </CardSection>
 
         {/* Linked mortuary intake */}
@@ -743,19 +731,13 @@ function CaseDetailView({
           </CardSection>
         )}
 
-        {/* Attending agent */}
-        <CardSection title="Attending Agent" icon={User}>
-          <div className="space-y-0.5">
-            <DetailRow label="Name" value={userLabel(fc.attendingAgentId)} />
-            <DetailRow label="Gender" value={userGender(fc.attendingAgentId)} />
-          </div>
-        </CardSection>
-
-        {/* Notes */}
+        {/* Notes — full width */}
         {fc.notes && (
-          <CardSection title="Notes" icon={Box}>
-            <p className="text-sm">{fc.notes}</p>
-          </CardSection>
+          <div className="md:col-span-2">
+            <CardSection title="Notes" icon={Box}>
+              <p className="text-sm">{fc.notes}</p>
+            </CardSection>
+          </div>
         )}
       </div>
 
@@ -850,6 +832,39 @@ function CaseDetailView({
         )}
       </CardSection>
     </div>
+  );
+}
+
+// ─── Status changer ───────────────────────────────────────────────────────────
+
+function StatusChanger({ current, onUpdateStatus }: { current: string; onUpdateStatus: (s: string) => void }) {
+  const [pendingStatus, setPendingStatus] = useState<string | null>(null);
+  return (
+    <>
+      <AlertDialog open={!!pendingStatus} onOpenChange={(open) => { if (!open) setPendingStatus(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm status change</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingStatus === "cancelled"
+                ? "Cancelling this case cannot be easily undone. Are you sure?"
+                : `Mark this case as "${pendingStatus?.replace("_", " ")}"?`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (pendingStatus) { onUpdateStatus(pendingStatus); setPendingStatus(null); } }}>Confirm</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <div className="flex gap-2 flex-wrap">
+        {["open", "in_progress", "completed", "cancelled"].map((s) => (
+          <Button key={s} size="sm" variant={current === s ? "default" : "outline"} onClick={() => setPendingStatus(s)} disabled={current === s} data-testid={`button-status-${s}`}>
+            {s.replace("_", " ").toUpperCase()}
+          </Button>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -1475,82 +1490,103 @@ function DriverChecklistDialog({ open, onOpenChange, funeralCase, existing, user
           <DialogTitle>Driver Checklist — {funeralCase.caseNumber}</DialogTitle>
           <DialogDescription>Complete before departure. Download as PDF for driver sign-off.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pre-Departure Checklist</p>
-            {([
-              ["graveTent", "Grave Tent"],
-              ["loweringDevice", "Lowering Device"],
-              ["gloves", "Gloves"],
-              ["masks", "Masks"],
-            ] as [keyof typeof form, string][]).map(([key, label]) => (
-              <div key={key} className="flex items-center gap-3">
+        <form onSubmit={handleSubmit} className="space-y-5">
+
+          {/* Pre-departure items — 2×2 grid */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-Departure Items</p>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 rounded-md border bg-muted/30 px-4 py-3">
+              {([
+                ["graveTent", "Grave Tent"],
+                ["loweringDevice", "Lowering Device"],
+                ["gloves", "Gloves"],
+                ["masks", "Masks"],
+              ] as [keyof typeof form, string][]).map(([key, label]) => (
+                <div key={key} className="flex items-center gap-2.5">
+                  <Checkbox
+                    id={key}
+                    checked={!!form[key]}
+                    onCheckedChange={(v) => setForm((f) => ({ ...f, [key]: !!v }))}
+                  />
+                  <label htmlFor={key} className="text-sm cursor-pointer select-none">{label}</label>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Vehicle condition */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Vehicle Condition</p>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Fuel Gauge</Label>
+              <Select value={form.fuelGauge || "__none__"} onValueChange={(v) => setForm((f) => ({ ...f, fuelGauge: v === "__none__" ? "" : v }))}>
+                <SelectTrigger><SelectValue placeholder="Select fuel level…" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— Not set —</SelectItem>
+                  <SelectItem value="full">Full</SelectItem>
+                  <SelectItem value="three_quarter">Three-Quarter (¾)</SelectItem>
+                  <SelectItem value="half">Half (½)</SelectItem>
+                  <SelectItem value="quarter">Quarter (¼)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Toll gate */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Toll Gate</p>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2.5">
                 <Checkbox
-                  id={key}
-                  checked={!!form[key]}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, [key]: !!v }))}
+                  id="tollGateRequired"
+                  checked={form.tollGateRequired}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, tollGateRequired: !!v }))}
                 />
-                <label htmlFor={key} className="text-sm cursor-pointer">{label}</label>
+                <label htmlFor="tollGateRequired" className="text-sm cursor-pointer select-none">Toll gate required on this route</label>
               </div>
-            ))}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs">Fuel Gauge</Label>
-            <Select value={form.fuelGauge || "__none__"} onValueChange={(v) => setForm((f) => ({ ...f, fuelGauge: v === "__none__" ? "" : v }))}>
-              <SelectTrigger><SelectValue placeholder="Select fuel level…" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">— Not set —</SelectItem>
-                <SelectItem value="full">Full</SelectItem>
-                <SelectItem value="three_quarter">Three-Quarter (¾)</SelectItem>
-                <SelectItem value="half">Half (½)</SelectItem>
-                <SelectItem value="quarter">Quarter (¼)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <Checkbox
-                id="tollGateRequired"
-                checked={form.tollGateRequired}
-                onCheckedChange={(v) => setForm((f) => ({ ...f, tollGateRequired: !!v }))}
-              />
-              <label htmlFor="tollGateRequired" className="text-sm cursor-pointer">Toll Gate Required</label>
+              {form.tollGateRequired && (
+                <div className="space-y-1.5 pl-7">
+                  <Label className="text-xs">Amount ($)</Label>
+                  <Input type="number" step="0.01" min="0" value={form.tollGateAmount} onChange={(e) => setForm((f) => ({ ...f, tollGateAmount: e.target.value }))} placeholder="0.00" className="max-w-[160px]" />
+                </div>
+              )}
             </div>
-            {form.tollGateRequired && (
-              <div className="space-y-1.5 pl-7">
-                <Label className="text-xs">Toll Gate Amount ($)</Label>
-                <Input type="number" step="0.01" min="0" value={form.tollGateAmount} onChange={(e) => setForm((f) => ({ ...f, tollGateAmount: e.target.value }))} placeholder="0.00" />
+          </div>
+
+          {/* Expenses & references */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Expenses &amp; References</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Driver Allowance ($)</Label>
+                <Input type="number" step="0.01" min="0" value={form.driverAllowance} onChange={(e) => setForm((f) => ({ ...f, driverAllowance: e.target.value }))} placeholder="0.00" />
               </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Driver Allowance ($)</Label>
-              <Input type="number" step="0.01" min="0" value={form.driverAllowance} onChange={(e) => setForm((f) => ({ ...f, driverAllowance: e.target.value }))} placeholder="0.00" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Burial Order Ref</Label>
-              <Input value={form.burialOrderRef} onChange={(e) => setForm((f) => ({ ...f, burialOrderRef: e.target.value }))} placeholder="Order / reference" />
+              <div className="space-y-1.5">
+                <Label className="text-xs">Burial Order Ref</Label>
+                <Input value={form.burialOrderRef} onChange={(e) => setForm((f) => ({ ...f, burialOrderRef: e.target.value }))} placeholder="Order / reference number" />
+              </div>
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label className="text-xs">Driver Allocated</Label>
-            <SearchableSelect
-              options={driverOptions}
-              value={form.driverId || funeralCase.burialDriverId || ""}
-              onChange={(v) => setForm((f) => ({ ...f, driverId: v }))}
-              placeholder="Select driver…"
-              searchPlaceholder="Search…"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs">Checklist Prepared At</Label>
-            <Input type="datetime-local" value={form.completedAt} onChange={(e) => setForm((f) => ({ ...f, completedAt: e.target.value }))} />
+          {/* Driver & schedule */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Driver &amp; Schedule</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Driver Allocated</Label>
+                <SearchableSelect
+                  options={driverOptions}
+                  value={form.driverId || funeralCase.burialDriverId || ""}
+                  onChange={(v) => setForm((f) => ({ ...f, driverId: v }))}
+                  placeholder="Select driver…"
+                  searchPlaceholder="Search by name…"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Checklist Prepared At</Label>
+                <Input type="datetime-local" value={form.completedAt} onChange={(e) => setForm((f) => ({ ...f, completedAt: e.target.value }))} />
+              </div>
+            </div>
           </div>
 
           <DialogFooter className="gap-2 flex-wrap">

@@ -10,7 +10,7 @@ import { resolveImage } from "./object-storage";
 import { eq, and, gte, lte } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import {
-  funeralCases, policies, claims, mortuaryIntakes, receipts,
+  funeralCases, policies, claims, mortuaryIntakes, paymentReceipts, serviceReceipts,
 } from "../shared/schema";
 
 const A4_W = 595.28;
@@ -200,6 +200,8 @@ export async function streamDepartmentReportToResponse(
   const from0 = fromDate + "T00:00:00";
   const to23 = toDate + "T23:59:59";
 
+  try {
+
   // ════════════════════════════════════════════════════════════
   // FUNERAL DEPARTMENT
   // ════════════════════════════════════════════════════════════
@@ -252,33 +254,57 @@ export async function streamDepartmentReportToResponse(
   // FINANCE DEPARTMENT
   // ════════════════════════════════════════════════════════════
   if (dept === "finance") {
-    const allReceipts = await tdb.select().from(receipts)
-      .where(and(eq(receipts.organizationId, orgId), gte(receipts.issuedAt, new Date(from0)), lte(receipts.issuedAt, new Date(to23))));
+    const [policyRecs, svcRecs] = await Promise.all([
+      tdb.select().from(paymentReceipts)
+        .where(and(eq(paymentReceipts.organizationId, orgId), gte(paymentReceipts.issuedAt, new Date(from0)), lte(paymentReceipts.issuedAt, new Date(to23)))),
+      tdb.select().from(serviceReceipts)
+        .where(and(eq(serviceReceipts.organizationId, orgId), gte(serviceReceipts.issuedAt, new Date(from0)), lte(serviceReceipts.issuedAt, new Date(to23)))),
+    ]);
 
-    const totalAmount = allReceipts.reduce((s, r) => s + parseFloat(r.amount || "0"), 0);
+    const allReceipts = [...policyRecs, ...svcRecs];
+    const totalAmount = allReceipts.reduce((s, r) => s + parseFloat(String(r.amount) || "0"), 0);
     const byCurrency: Record<string, number> = {};
-    for (const r of allReceipts) byCurrency[r.currency] = (byCurrency[r.currency] ?? 0) + parseFloat(r.amount || "0");
+    for (const r of allReceipts) byCurrency[r.currency] = (byCurrency[r.currency] ?? 0) + parseFloat(String(r.amount) || "0");
 
     sectionBand("Summary Statistics");
     statRow([
+      { label: "Policy Payment Receipts", value: String(policyRecs.length) },
+      { label: "Service / Funeral Receipts", value: String(svcRecs.length) },
       { label: "Total Receipts", value: String(allReceipts.length) },
-      { label: "Total Collected (USD)", value: fmtMoney(totalAmount) },
-      { label: "Currencies", value: Object.keys(byCurrency).join(", ") || "—" },
+      { label: "Total Collected", value: fmtMoney(totalAmount) },
     ]);
 
     sectionBand("Collections by Currency");
     for (const [curr, amt] of Object.entries(byCurrency)) kv(curr, fmtMoney(amt, curr));
     y += 8;
 
-    sectionBand("Receipt Register");
-    drawTable([
-      { header: "Receipt No", width: 90, getter: r => fmt(r.receiptNumber) },
-      { header: "Date Issued", width: 90, getter: r => fmtDate(r.issuedAt) },
-      { header: "Amount", width: 80, align: "right", getter: r => `${r.currency} ${parseFloat(r.amount).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}` },
-      { header: "Policy ID", width: COL - 260, getter: r => r.policyId ? r.policyId.slice(0, 8) + "…" : "—" },
-    ], allReceipts.slice(0, 200));
+    if (policyRecs.length > 0) {
+      sectionBand("Policy Payment Receipts");
+      drawTable([
+        { header: "Receipt No", width: 90, getter: r => fmt(r.receiptNumber) },
+        { header: "Date Issued", width: 90, getter: r => fmtDate(r.issuedAt) },
+        { header: "Amount", width: 80, align: "right", getter: r => `${r.currency} ${parseFloat(String(r.amount)).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}` },
+        { header: "Channel", width: 90, getter: r => fmt(r.paymentChannel).replace(/_/g, " ") },
+        { header: "Policy ID", width: COL - 350, getter: r => r.policyId ? r.policyId.slice(0, 8) + "…" : "—" },
+      ], policyRecs.slice(0, 200));
+      if (policyRecs.length > 200) { doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text(`(Showing first 200 of ${policyRecs.length} records)`, M, y); y += 14; }
+    }
 
-    if (allReceipts.length > 200) { doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text(`(Showing first 200 of ${allReceipts.length} records)`, M, y); y += 14; }
+    if (svcRecs.length > 0) {
+      sectionBand("Service / Funeral Receipts");
+      drawTable([
+        { header: "Receipt No", width: 90, getter: r => fmt(r.receiptNumber) },
+        { header: "Date Issued", width: 90, getter: r => fmtDate(r.issuedAt) },
+        { header: "Amount", width: 80, align: "right", getter: r => `${r.currency} ${parseFloat(String(r.amount)).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}` },
+        { header: "Channel", width: 90, getter: r => fmt(r.paymentChannel).replace(/_/g, " ") },
+        { header: "Notes", width: COL - 350, getter: r => fmt((r as any).notes) },
+      ], svcRecs.slice(0, 200));
+    }
+
+    if (allReceipts.length === 0) {
+      doc.font("Helvetica").fontSize(8).fillColor(C_MUTED).text("No receipts found for the selected period.", M, y, { width: COL });
+      y += 16;
+    }
   }
 
   // ════════════════════════════════════════════════════════════
@@ -326,7 +352,13 @@ export async function streamDepartmentReportToResponse(
   // MORTUARY DEPARTMENT
   // ════════════════════════════════════════════════════════════
   if (dept === "mortuary") {
-    const intakes = await storage.getMortuaryIntakesByOrg(orgId, { limit: 500 });
+    const allIntakes = await storage.getMortuaryIntakesByOrg(orgId, { limit: 2000 });
+    const intakes = allIntakes.filter(mi => {
+      const d = (mi as any).receivedAt ?? (mi as any).createdAt;
+      if (!d) return true;
+      const ds = new Date(d).toISOString().slice(0, 10);
+      return ds >= fromDate && ds <= toDate;
+    });
 
     const byStatus: Record<string, number> = {};
     for (const mi of intakes) byStatus[mi.status] = (byStatus[mi.status] ?? 0) + 1;
@@ -433,6 +465,19 @@ export async function streamDepartmentReportToResponse(
       { header: "Deceased", width: 110, getter: r => fmt(r.deceasedName) },
       { header: "Cash in Lieu", width: COL - 450, align: "right", getter: r => fmtMoney(r.cashInLieuAmount, r.currency) },
     ], allClaims.slice(0, 200));
+  }
+
+  } catch (err) {
+    ensureSpace(60);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#dc2626")
+      .text("Error generating report data", M, y, { width: COL });
+    y += 16;
+    doc.font("Helvetica").fontSize(8).fillColor(C_TEXT)
+      .text(String((err as Error).message ?? err), M, y, { width: COL });
+    y += 14;
+    doc.font("Helvetica").fontSize(8).fillColor(C_MUTED)
+      .text("This may indicate pending database migrations. Please run npm run db:migrate and try again.", M, y, { width: COL });
+    y += 14;
   }
 
   // ── Footer on all pages ──────────────────────────────────────

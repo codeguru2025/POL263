@@ -156,6 +156,19 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
     if (pdfPath) await storage.updatePaymentReceipt(receiptFresh.id, { pdfStorageKey: pdfPath }, orgId);
   }
 
+  const hasPr = await storage.hasPlatformReceivableForTransaction(orgId, transaction.id);
+  if (!hasPr) {
+    const chibAmount = (parseFloat(String(transaction.amount)) * 0.025).toFixed(2);
+    await storage.createPlatformReceivable({
+      organizationId: orgId,
+      sourceTransactionId: transaction.id,
+      amount: chibAmount,
+      currency: transaction.currency,
+      description: `2.5% on Paynow payment ${transaction.id}`,
+      isSettled: false,
+    });
+  }
+
   events = await storage.getPaymentEventsByIntentId(intent.id, orgId);
   if (!events.some((e) => e.type === "receipt_issued")) {
     await storage.createPaymentEvent({

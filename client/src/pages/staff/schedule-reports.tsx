@@ -105,10 +105,11 @@ export default function StaffScheduleReports() {
             <ul className="list-disc pl-5 space-y-0.5 text-xs">
               <li>All funeral cases with a service date matching the selected date</li>
               <li>Body wash time, burial departure, and memorial service times</li>
-              <li>Removal and burial drivers — name, phone, email, address, next-of-kin</li>
+              <li>Removal and burial drivers — name, phone, email</li>
               <li>Removal and burial vehicles — make, model, registration</li>
               <li>Attending agent and case manager contact details</li>
               <li>Informant / next-of-kin details</li>
+              <li>Office emergency contact number</li>
               <li>Special notes and instructions per case</li>
             </ul>
           </div>

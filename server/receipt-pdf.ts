@@ -11,6 +11,7 @@
 import path from "path";
 import fs from "fs";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 import { storage, findPaymentReceiptById } from "./storage";
 import { resolveImage } from "./object-storage";
 import * as objectStorage from "./object-storage";
@@ -100,12 +101,76 @@ async function loadReceiptContext(receipt: any, orgId: string) {
   return { policy, client, org, productName, issuedByName, activeAdvert, advertImageData };
 }
 
+async function buildQrBuffer(orgId: string): Promise<Buffer | null> {
+  const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+  if (!appBase) return null;
+  const url = `${appBase}/join/register?org=${orgId}`;
+  try {
+    return await QRCode.toBuffer(url, { type: "png", width: 110, margin: 1, color: { dark: "#0f766e", light: "#ffffff" } });
+  } catch {
+    return null;
+  }
+}
+
+/** Render the Refer & Earn advert + QR code panel. Works with both generateReceiptPdf and streamReceiptToResponse. */
+function drawAdvertAndQr(
+  doc: InstanceType<typeof PDFDocument>,
+  y: number,
+  activeAdvert: { title: string | null; body: string | null } | null | undefined,
+  advertImageData: Buffer | null,
+  qrBuffer: Buffer | null,
+  footerTop: number,
+): void {
+  const hasAdvert = !!(activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData));
+  if (!hasAdvert && !qrBuffer) return;
+  if (y + 44 >= footerTop) return;
+
+  let ay = y + 10;
+  doc.moveTo(MARGIN, ay).lineTo(A4_W - MARGIN, ay).lineWidth(0.4).strokeColor(C_BORDER).stroke();
+  ay += 10;
+
+  const QR_SIZE = 74;
+  const qrX = A4_W - MARGIN - QR_SIZE;
+  const advW = COL - QR_SIZE - 14;
+
+  // QR code — right column
+  if (qrBuffer && ay + QR_SIZE < footerTop) {
+    try {
+      doc.image(qrBuffer, qrX, ay, { width: QR_SIZE, height: QR_SIZE });
+      doc.font("Helvetica-Bold").fontSize(6.5).fillColor(C_PRIMARY)
+        .text("SCAN TO JOIN", qrX, ay + QR_SIZE + 4, { width: QR_SIZE, align: "center" });
+      doc.font("Helvetica").fontSize(5.5).fillColor(C_MUTED)
+        .text("Register for a policy", qrX, ay + QR_SIZE + 13, { width: QR_SIZE, align: "center" });
+    } catch { /* skip */ }
+  }
+
+  // Advert — left column
+  let ly = ay;
+  if (advertImageData && ly + 55 < footerTop) {
+    try {
+      const imgW = Math.min(advW, 190);
+      doc.image(advertImageData, MARGIN, ly, { width: imgW, fit: [imgW, 55] });
+      ly += 60;
+    } catch { /* skip */ }
+  }
+  if (activeAdvert?.title && ly < footerTop) {
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(C_PRIMARY)
+      .text(activeAdvert.title, MARGIN, ly, { width: advW });
+    ly = doc.y + 2;
+  }
+  if (activeAdvert?.body && ly < footerTop) {
+    doc.font("Helvetica").fontSize(7.5).fillColor(C_TEXT)
+      .text(activeAdvert.body, MARGIN, ly, { width: advW });
+  }
+}
+
 export async function generateReceiptPdf(receiptId: string): Promise<string | null> {
   const receipt = await findPaymentReceiptById(receiptId);
   if (!receipt) return null;
   const orgId = receipt.organizationId;
   const { policy, client, org, productName, issuedByName, activeAdvert, advertImageData } = await loadReceiptContext(receipt, orgId);
   if (!policy || !client || !org) return null;
+  const qrBuffer = await buildQrBuffer(orgId);
 
   const displayReceiptNum = /^\d+$/.test(String(receipt.receiptNumber).trim())
     ? `RCP-${String(receipt.receiptNumber).padStart(5, "0")}`
@@ -202,31 +267,8 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     row("Receipt Number", displayReceiptNum);
     y += 6;
 
-    // ── Advert ──────────────────────────────────────────────────
-    if (activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData)) {
-      const footerTop = A4_H - MARGIN - 55;
-      let ay = y + 10;
-      if (ay < footerTop - 10) {
-        doc.moveTo(MARGIN, ay).lineTo(A4_W - MARGIN, ay).lineWidth(0.4).strokeColor(C_BORDER).stroke();
-        ay += 8;
-        if (advertImageData && ay + 65 < footerTop) {
-          try {
-            const imgW = Math.min(200, COL);
-            doc.image(advertImageData, MARGIN + (COL - imgW) / 2, ay, { width: imgW, fit: [imgW, 55] });
-            ay += 61;
-          } catch { /* skip */ }
-        }
-        if (activeAdvert.title && ay < footerTop) {
-          doc.font("Helvetica-Bold").fontSize(10).fillColor(C_PRIMARY)
-            .text(activeAdvert.title, MARGIN, ay, { width: COL, align: "center" });
-          ay = doc.y + 3;
-        }
-        if (activeAdvert.body && ay < footerTop) {
-          doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
-            .text(activeAdvert.body, MARGIN, ay, { width: COL, align: "center" });
-        }
-      }
-    }
+    // ── Advert + QR ─────────────────────────────────────────────
+    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55);
 
     // ── Footer ──────────────────────────────────────────────────
     const footerY = A4_H - MARGIN - 28;
@@ -283,6 +325,7 @@ export async function streamReceiptToResponse(
     : `inline; filename="${filename}"`);
 
   const logoData = await resolveImage(org.logoUrl);
+  const qrBuffer = await buildQrBuffer(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
 
@@ -360,31 +403,8 @@ export async function streamReceiptToResponse(
     row("Receipt Number", displayReceiptNum);
     y += 6;
 
-    // ── Advert ──────────────────────────────────────────────────
-    if (activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData)) {
-      const footerTop = A4_H - MARGIN - 55;
-      let ay = y + 10;
-      if (ay < footerTop - 10) {
-        doc.moveTo(MARGIN, ay).lineTo(A4_W - MARGIN, ay).lineWidth(0.4).strokeColor(C_BORDER).stroke();
-        ay += 8;
-        if (advertImageData && ay + 65 < footerTop) {
-          try {
-            const imgW = Math.min(200, COL);
-            doc.image(advertImageData, MARGIN + (COL - imgW) / 2, ay, { width: imgW, fit: [imgW, 55] });
-            ay += 61;
-          } catch { /* skip */ }
-        }
-        if (activeAdvert.title && ay < footerTop) {
-          doc.font("Helvetica-Bold").fontSize(10).fillColor(C_PRIMARY)
-            .text(activeAdvert.title, MARGIN, ay, { width: COL, align: "center" });
-          ay = doc.y + 3;
-        }
-        if (activeAdvert.body && ay < footerTop) {
-          doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
-            .text(activeAdvert.body, MARGIN, ay, { width: COL, align: "center" });
-        }
-      }
-    }
+    // ── Advert + QR ─────────────────────────────────────────────
+    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55);
 
     const footerY = A4_H - MARGIN - 28;
     doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
@@ -441,6 +461,7 @@ export async function streamThermalReceiptToResponse(
     : `inline; filename="${filename}"`);
 
   const logoData = await resolveImage(org.logoUrl);
+  const qrBuffer = await buildQrBuffer(orgId);
 
   const doc = new PDFDocument({
     size: [W, THERMAL_PAGE_H],
@@ -538,29 +559,50 @@ export async function streamThermalReceiptToResponse(
     ctr(`Printed: ${fmtDateTime(new Date())}`, false, F_SM);
     gap(4);
 
-    // ── Advert ────────────────────────────────────────────────
-    if (activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData)) {
+    // ── Advert + QR (thermal) ─────────────────────────────────
+    const hasAdvert = !!(activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData));
+    if (hasAdvert || qrBuffer) {
       rule();
-      gap(3);
+      gap(4);
+
+      // Full-width advert image — fills the 80mm column for max visibility
       if (advertImageData) {
-        const imgSz = Math.min(LOGO_SZ + 20, INNER - 4);
         try {
-          const imgX = Math.round((W - imgSz) / 2);
-          doc.image(advertImageData, imgX, doc.y, { width: imgSz, fit: [imgSz, imgSz] });
-          doc.y += imgSz + 4;
+          const imgH = Math.round(INNER * 0.55); // aspect-ratio-aware tall crop
+          doc.image(advertImageData, M, doc.y, { width: INNER, height: imgH, fit: [INNER, imgH] });
+          doc.y += imgH + 6;
         } catch { /* skip */ }
       }
-      if (activeAdvert.title) {
-        doc.font("Helvetica-Bold").fontSize(F_BODY).fillColor(C_PRIMARY)
+
+      if (activeAdvert?.title) {
+        doc.font("Helvetica-Bold").fontSize(F_HEAD).fillColor(C_PRIMARY)
           .text(activeAdvert.title, M, doc.y, { width: INNER, align: "center" });
         doc.fillColor(C_TEXT);
-        gap(2);
+        gap(3);
       }
-      if (activeAdvert.body) {
+      if (activeAdvert?.body) {
         doc.font("Helvetica").fontSize(F_SM).fillColor(C_TEXT)
           .text(activeAdvert.body, M, doc.y, { width: INNER, align: "center" });
-        gap(2);
+        gap(4);
       }
+
+      // QR code — wide enough to scan comfortably on 80mm paper
+      if (qrBuffer) {
+        const QR_SZ = Math.round(INNER * 0.62); // ~130pt on 80mm
+        try {
+          const qrX = M + Math.round((INNER - QR_SZ) / 2);
+          doc.image(qrBuffer, qrX, doc.y, { width: QR_SZ, height: QR_SZ });
+          doc.y += QR_SZ + 4;
+          doc.font("Helvetica-Bold").fontSize(F_BODY).fillColor(C_PRIMARY)
+            .text("SCAN TO JOIN", M, doc.y, { width: INNER, align: "center" });
+          doc.fillColor(C_TEXT);
+          gap(2);
+          doc.font("Helvetica").fontSize(F_SM).fillColor(C_MUTED)
+            .text("Register for a policy", M, doc.y, { width: INNER, align: "center" });
+          gap(4);
+        } catch { /* skip */ }
+      }
+
       rule();
     }
 

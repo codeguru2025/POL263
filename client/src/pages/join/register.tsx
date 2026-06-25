@@ -23,8 +23,11 @@ interface ProductWithVersions {
 }
 
 interface RegistrationOptions {
-  agentName: string;
-  referralCode: string;
+  agentName?: string;
+  referralCode?: string | null;
+  orgId?: string;
+  orgName?: string;
+  isWalkIn?: boolean;
   products: ProductWithVersions[];
   branches: { id: string; name: string }[];
 }
@@ -35,9 +38,11 @@ export default function JoinRegisterPage() {
   const { toast } = useToast();
   const params = new URLSearchParams(search || "");
   const refCode = params.get("ref") || "";
+  const orgCode = params.get("org") || "";
+  const isWalkIn = !refCode && !!orgCode;
 
   const [options, setOptions] = useState<RegistrationOptions | null>(null);
-  const [loading, setLoading] = useState(!!refCode);
+  const [loading, setLoading] = useState(!!(refCode || orgCode));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [result, setResult] = useState<{ policyNumber: string; activationCode: string } | null>(null);
@@ -68,15 +73,18 @@ export default function JoinRegisterPage() {
   const [showBenForm, setShowBenForm] = useState(false);
 
   useEffect(() => {
-    if (!refCode) {
+    if (!refCode && !orgCode) {
       setLoading(false);
       setLoadError(null);
       return;
     }
     setLoadError(null);
-    sessionStorage.setItem("agent_referral_code", refCode);
-    fetch(getApiBase() + `/api/public/registration-options?ref=${encodeURIComponent(refCode)}`)
-      .then((r) => (r.ok ? r.json() : null))
+    const url = orgCode && !refCode
+      ? getApiBase() + `/api/public/walkin-options?org=${encodeURIComponent(orgCode)}`
+      : getApiBase() + `/api/public/registration-options?ref=${encodeURIComponent(refCode)}`;
+    if (refCode) sessionStorage.setItem("agent_referral_code", refCode);
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : r.json().then((d: any) => { throw new Error(d?.message || "Failed"); })))
       .then((data) => {
         if (data?.products?.length) {
           setOptions(data);
@@ -92,16 +100,16 @@ export default function JoinRegisterPage() {
           }));
         } else {
           setOptions(null);
-          setLoadError(data?.message || "Invalid or expired referral link.");
+          setLoadError(data?.message || (orgCode ? "No products available. Contact the office." : "Invalid or expired referral link."));
         }
       })
-      .catch(() => {
+      .catch((err: any) => {
         setOptions(null);
-        setLoadError("Could not load registration options. Please check the link and try again.");
+        setLoadError(err?.message || "Could not load registration options. Please try again.");
         toast({ title: "Error", description: "Could not load options.", variant: "destructive" });
       })
       .finally(() => setLoading(false));
-  }, [refCode, toast]);
+  }, [refCode, orgCode, toast]);
 
   const selectedProduct = options?.products?.find((p) => p.id === form.productId);
   const versions = selectedProduct?.versions || [];
@@ -123,7 +131,8 @@ export default function JoinRegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!refCode || !options) return;
+    if (!options) return;
+    if (!isWalkIn && !refCode) return;
     const missing: string[] = [];
     if (!form.firstName.trim()) missing.push("First name");
     if (!form.lastName.trim()) missing.push("Last name");
@@ -139,8 +148,7 @@ export default function JoinRegisterPage() {
     }
     setSubmitLoading(true);
     try {
-      const payload: Record<string, unknown> = {
-        referralCode: options.referralCode,
+      const commonFields = {
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
         email: form.email.trim() || undefined,
@@ -153,9 +161,10 @@ export default function JoinRegisterPage() {
         premiumAmount: form.premiumAmount ? String(form.premiumAmount) : undefined,
         currency: form.premiumCurrency || undefined,
       };
-      if (dependentsList.length > 0) {
-        payload.dependents = dependentsList;
-      }
+      const payload: Record<string, unknown> = isWalkIn
+        ? { orgId: options.orgId, ...commonFields }
+        : { referralCode: options.referralCode, ...commonFields };
+      if (dependentsList.length > 0) payload.dependents = dependentsList;
       if (beneficiary.firstName && beneficiary.lastName) {
         payload.beneficiary = {
           firstName: beneficiary.firstName.trim(),
@@ -168,7 +177,8 @@ export default function JoinRegisterPage() {
       const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
       const csrf = getCsrfToken();
       if (csrf) regHeaders["X-XSRF-TOKEN"] = csrf;
-      const res = await fetch(getApiBase() + "/api/public/register-policy", {
+      const endpoint = isWalkIn ? "/api/public/walkin-register" : "/api/public/register-policy";
+      const res = await fetch(getApiBase() + endpoint, {
         method: "POST",
         headers: regHeaders,
         body: JSON.stringify(payload),
@@ -191,7 +201,7 @@ export default function JoinRegisterPage() {
     setLocation("/client/login");
   };
 
-  if (!refCode) {
+  if (!refCode && !orgCode) {
     return (
       <AppChrome center>
         <Card className="w-full max-w-md">
@@ -282,9 +292,12 @@ export default function JoinRegisterPage() {
           <div className="mx-auto h-14 w-14 bg-primary/10 text-primary rounded-xl flex items-center justify-center mb-4">
             <UserPlus size={28} />
           </div>
-          <CardTitle className="text-2xl">Register for a policy</CardTitle>
+          <CardTitle className="text-2xl">{isWalkIn ? "Join a policy" : "Register for a policy"}</CardTitle>
           <CardDescription>
-            Referred by <strong>{options.agentName}</strong>. Enter your details to get a policy number and activation code.
+            {isWalkIn
+              ? `${options.orgName || "Register"} — Enter your details to get a policy number and activation code.`
+              : <>Referred by <strong>{options.agentName}</strong>. Enter your details to get a policy number and activation code.</>
+            }
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>

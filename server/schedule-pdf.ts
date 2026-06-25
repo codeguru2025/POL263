@@ -51,7 +51,7 @@ function fmtDateTime(v: Date | string | null | undefined): string {
   } catch { return String(v); }
 }
 
-type StaffInfo = { displayName: string | null; phone: string | null; email: string | null; address: string | null; nextOfKinName: string | null; nextOfKinPhone: string | null; };
+type StaffInfo = { displayName: string | null; phone: string | null; email: string | null; };
 
 export async function streamDailyScheduleToResponse(
   orgId: string,
@@ -87,7 +87,7 @@ export async function streamDailyScheduleToResponse(
   await Promise.all([
     ...Array.from(userIdSet).map(async (id) => {
       const u = await storage.getUser(id);
-      if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone ?? null, email: u.email ?? null, address: (u as any).address ?? null, nextOfKinName: (u as any).nextOfKinName ?? null, nextOfKinPhone: (u as any).nextOfKinPhone ?? null };
+      if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone ?? null, email: u.email ?? null };
     }),
     ...Array.from(vehicleIdSet).map(async (id) => {
       const v = await storage.getFleetVehicleById(id, orgId);
@@ -204,8 +204,6 @@ export async function streamDailyScheduleToResponse(
     kv(`${role} Name`, fmt(u.displayName));
     if (u.phone) kv(`${role} Phone`, u.phone);
     if (u.email) kv(`${role} Email`, u.email);
-    if (u.address) kv(`${role} Address`, u.address);
-    if (u.nextOfKinName) kv(`${role} NOK`, `${u.nextOfKinName}${u.nextOfKinPhone ? " · " + u.nextOfKinPhone : ""}`);
   };
 
   const vehicleLabel = (vehicleId: string | null | undefined) => {
@@ -271,6 +269,10 @@ export async function streamDailyScheduleToResponse(
       sectionBand("7. Case Manager");
       staffContact("Manager", fc.assignedTo);
     }
+
+    // Emergency contact (company number for families to reach the office)
+    sectionBand("Emergency Contact");
+    kv("Office Number", "+263772378786");
 
     y += 16;
 

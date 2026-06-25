@@ -889,7 +889,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const isPlatformOwner = user.isPlatformOwner ?? user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
     const TENANT_WRITE_FIELDS = new Set([
-      "name", "address", "phone", "email", "website", "logoUrl", "primaryColor",
+      "name", "address", "phone", "email", "website", "logoUrl", "signatureUrl", "primaryColor",
       "footerText", "policyNumberPrefix", "policyNumberPadding",
     ]);
     const PLATFORM_ONLY_ORG_FIELDS = new Set(["slug", "isActive", "licenseStatus", "isWhitelabeled", "databaseUrl"]);
@@ -3041,8 +3041,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
       }
 
-      // Advance the policy cover cycle N times for multi-month receipts (only when a policy is linked)
-      const monthCount = Math.min(12, Math.max(1, parseInt(String(req.body.months ?? 1), 10) || 1));
+      // Advance the policy cover cycle N times for multi-month receipts (only when a policy is linked).
+      // When months is not explicitly sent, derive it from amount / premium so advance payments
+      // (e.g. paying 2× the monthly premium) automatically cover the correct number of periods.
+      const monthCount = (() => {
+        const explicit = req.body.months != null ? parseInt(String(req.body.months), 10) : null;
+        if (explicit && Number.isFinite(explicit) && explicit >= 1) return Math.min(12, explicit);
+        if (policy?.premiumAmount) {
+          const prem = parseFloat(String(policy.premiumAmount));
+          const amt = parseFloat(String(req.body.amount ?? 0));
+          if (prem > 0 && amt > 0 && Number.isFinite(amt)) {
+            return Math.min(12, Math.max(1, Math.floor(amt / prem)));
+          }
+        }
+        return 1;
+      })();
       let currentPolicy = policy;
       let paymentPeriod: { periodFrom: string; periodTo: string } = { periodFrom: today, periodTo: today };
       if (isClearedWithPolicy && parsed.policyId) {
@@ -4102,6 +4115,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
       if (!fc) return res.status(404).json({ message: "Funeral case not found" });
+      // Mirror the authenticated user into the org DB so the preparedByUserId FK resolves
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
       const clBody = { ...req.body };
       // Coerce datetime-local string to Date
       if (clBody.completedAt && typeof clBody.completedAt === "string") { const d = new Date(clBody.completedAt); clBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
@@ -4779,6 +4794,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", created.id, null, created);
+
+    // 2.5% platform fee on funeral service payments
+    try {
+      const chibAmount = (amount * 0.025).toFixed(2);
+      await storage.createPlatformReceivable({
+        organizationId: user.organizationId,
+        sourceTransactionId: null,
+        amount: chibAmount,
+        currency,
+        description: `2.5% on service receipt ${created.id}`,
+        isSettled: false,
+      });
+    } catch (feeErr) {
+      structuredLog("error", "Platform fee creation failed for service receipt", { receiptId: created.id, error: (feeErr as Error).message });
+    }
+
     return res.status(201).json(created);
   });
 
@@ -5540,6 +5571,154 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         activationCode: client.activationCode,
         clientId: client.id,
         message: "Policy registered. Use your policy number and activation code to claim your account, then sign in.",
+      });
+    } catch (e) {
+      if (e instanceof z.ZodError) return res.status(400).json({ message: "Validation failed", details: e.errors });
+      throw e;
+    }
+  });
+
+  // ─── Public walk-in self-registration ───────────────────
+  app.get("/api/public/walkin-options", async (req, res) => {
+    const orgIdentifier = typeof req.query.org === "string" ? req.query.org.trim() : "";
+    if (!orgIdentifier) return res.status(400).json({ message: "org param required" });
+    const org = await storage.getOrganization(orgIdentifier);
+    if (!org || org.name?.endsWith("(deleted)")) return res.status(404).json({ message: "Organisation not found" });
+    const orgId = org.id;
+    const products = await storage.getProductsByOrg(orgId);
+    const allVersions = await storage.getAllProductVersions(orgId);
+    const versionsByProduct: Record<string, typeof allVersions> = {};
+    for (const v of allVersions) {
+      if (!versionsByProduct[v.productId]) versionsByProduct[v.productId] = [];
+      versionsByProduct[v.productId].push(v);
+    }
+    const withVersions = products.filter((p) => p.isActive).map((p) => ({
+      ...p,
+      versions: (versionsByProduct[p.id] || []).filter((v) => v.isActive !== false),
+    }));
+    const branches = await storage.getBranchesByOrg(orgId);
+    return res.json({
+      orgId,
+      orgName: org.name,
+      isWalkIn: true,
+      products: withVersions,
+      branches: branches.filter((b) => b.isActive),
+    });
+  });
+
+  app.post("/api/public/walkin-register", express.json(), async (req, res) => {
+    const { orgId, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
+    const missingFields: string[] = [];
+    if (!orgId) missingFields.push("orgId");
+    if (!firstName) missingFields.push("firstName");
+    if (!lastName) missingFields.push("lastName");
+    if (!productVersionId) missingFields.push("productVersionId");
+    if (missingFields.length > 0) return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
+    const nationalIdNorm = normalizeNationalId(nationalId);
+    if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
+    if (!isValidNationalId(nationalId)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+    if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
+    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
+    if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
+    const org = await storage.getOrganization(orgId);
+    if (!org) return res.status(400).json({ message: "Organisation not found" });
+    const normalizedPaymentMethod = normalizePaymentMethodInput(rawPaymentMethod);
+    const pv = await storage.getProductVersion(productVersionId, orgId);
+    if (!pv) return res.status(400).json({ message: "Invalid product version" });
+    const product = await storage.getProduct(pv.productId, orgId);
+    if (!product) return res.status(400).json({ message: "Product not found" });
+    const effectiveBranchId = branchId || null;
+    let client: Awaited<ReturnType<typeof storage.createClient>>;
+    const emailTrim = email ? String(email).trim() : "";
+    const nationalIdTrim = nationalIdNorm;
+    let existing = emailTrim ? await storage.getClientByEmail(orgId, emailTrim) : undefined;
+    if (!existing && nationalIdTrim) existing = await storage.getClientByNationalId(orgId, nationalIdTrim);
+    if (existing) {
+      client = existing;
+      const updates: Record<string, unknown> = {};
+      if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
+      if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
+      if (nationalIdTrim) updates.nationalId = nationalIdTrim;
+      if (!client.activationCode) updates.activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      if (Object.keys(updates).length > 0) { const u = await storage.updateClient(client.id, updates, orgId); if (u) client = u; }
+    } else {
+      const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      client = await storage.createClient(insertClientSchema.parse({
+        organizationId: orgId, branchId: effectiveBranchId,
+        firstName: toUpperTrim(firstName, false)!, lastName: toUpperTrim(lastName, false)!,
+        email: emailTrim || null, phone: toUpperTrim(phone, false) || null,
+        dateOfBirth: dateOfBirth || null, nationalId: nationalIdTrim,
+        gender: req.body.gender ? toUpperTrim(req.body.gender, false) : null,
+        activationCode, isEnrolled: false, agentId: null,
+      }));
+    }
+    try {
+      const policyNumber = await storage.generatePolicyNumber(orgId);
+      const depsList = Array.isArray(rawDeps) ? rawDeps : [];
+      const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
+      for (const d of depsList) {
+        const dFirst = toUpperTrim(d.firstName, false); const dLast = toUpperTrim(d.lastName, false);
+        const dRel = toUpperTrim(d.relationship, false); const dDob = d.dateOfBirth ? String(d.dateOfBirth).trim() : null;
+        const dGender = d.gender ? toUpperTrim(d.gender, false) : null;
+        const dNationalId = d.nationalId ? normalizeNationalId(d.nationalId) : null;
+        if (!dFirst || !dLast || !dRel || !dDob || !dGender) continue;
+        if (dNationalId && !isValidNationalId(dNationalId)) continue;
+        createdDeps.push(await storage.createDependent({
+          organizationId: orgId, clientId: client.id,
+          firstName: dFirst, lastName: dLast, relationship: dRel,
+          dateOfBirth: dDob, nationalId: dNationalId || null, gender: dGender,
+        }));
+      }
+      const premium = await computePolicyPremium(orgId, productVersionId, currency || "USD", paymentSchedule || "monthly", [], [], undefined, createdDeps.map((d) => d.dateOfBirth || null));
+      let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
+      if (ben) {
+        const bf = toUpperTrim(ben.firstName, false); const bl = toUpperTrim(ben.lastName, false);
+        const br = toUpperTrim(ben.relationship, false); const bn = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
+        const bp = toUpperTrim(ben.phone, false);
+        if (!bf || !bl || !br || !bn || !bp || !isValidNationalId(ben.nationalId)) ben = null;
+        else ben = { firstName: bf, lastName: bl, relationship: br, nationalId: bn, phone: bp };
+      }
+      const policyParsed = insertPolicySchema.parse({
+        organizationId: orgId, branchId: effectiveBranchId, policyNumber,
+        clientId: client.id, productVersionId: pv.id, agentId: null,
+        status: "inactive", premiumAmount: premium, currency: currency || "USD",
+        paymentSchedule: paymentSchedule || "monthly",
+        effectiveDate: new Date().toISOString().split("T")[0],
+        beneficiaryFirstName: ben?.firstName ? String(ben.firstName).trim() : null,
+        beneficiaryLastName: ben?.lastName ? String(ben.lastName).trim() : null,
+        beneficiaryRelationship: ben?.relationship ? String(ben.relationship).trim() : null,
+        beneficiaryNationalId: ben?.nationalId ? String(ben.nationalId).trim() : null,
+        beneficiaryPhone: ben?.phone ? String(ben.phone).trim() : null,
+        beneficiaryDependentId: null,
+      });
+      const existingForClient = await storage.getPoliciesByClient(client.id, orgId);
+      if (existingForClient.find((p) => p.productVersionId === policyParsed.productVersionId && p.status !== "cancelled")) {
+        return res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
+      }
+      const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
+        { clientId: client.id, role: "policy_holder" },
+        ...createdDeps.map((dep) => ({ dependentId: dep.id, role: "dependent" as const })),
+      ];
+      const { policy } = await storage.createPolicyWithInitialSetup(orgId, {
+        policy: policyParsed,
+        statusHistory: { fromStatus: null, toStatus: "inactive", reason: "Walk-in self-registration", changedBy: null },
+        members: memberRows, memberAddOns: [],
+      });
+      if (normalizedPaymentMethod) {
+        await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
+          organizationId: orgId, clientId: client.id, ...normalizedPaymentMethod, isDefault: true, isActive: true,
+        } as any);
+      }
+      await storage.createLead({
+        organizationId: orgId, branchId: effectiveBranchId || undefined,
+        clientId: client.id, firstName: client.firstName, lastName: client.lastName,
+        phone: client.phone || undefined, email: client.email || undefined,
+        source: "walk_in", stage: "lead",
+      });
+      return res.status(201).json({
+        policyNumber: policy.policyNumber, activationCode: client.activationCode,
+        clientId: client.id,
+        message: "Policy registered. Use your policy number and activation code to claim your account.",
       });
     } catch (e) {
       if (e instanceof z.ZodError) return res.status(400).json({ message: "Validation failed", details: e.errors });
