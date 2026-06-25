@@ -13,6 +13,7 @@ import type { PaymentIntent, InsertPaymentIntent, InsertPaymentEvent, InsertPaym
 import type { Policy } from "@shared/schema";
 import { paymentTransactions, paymentReceipts, paymentIntents, users, policies } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
+import { db } from "./db";
 import { structuredLog } from "./logger";
 import { insertOutboxMessageInTx, requestOutboxDrain, OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP } from "./outbox";
 
@@ -556,7 +557,7 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
   if (!pollUrl) return { status: intent.status, error: "No poll URL" };
 
   try {
-    const res = await fetch(pollUrl, { method: "POST", body: "" });
+    const res = await fetch(pollUrl, { method: "POST", body: "", signal: AbortSignal.timeout(8000) });
     const text = await res.text();
     structuredLog("info", "Paynow poll raw response", { intentId: intent.id, responseText: text.slice(0, 600) });
     const parsed = new URLSearchParams(text);
@@ -628,7 +629,12 @@ export async function applyPaymentToPolicy(
   const orgId = intent.organizationId;
 
   const policy = await storage.getPolicy(intent.policyId, orgId);
-  if (!policy) return { ok: false, error: "Policy not found" };
+  if (!policy) {
+    // Policy was deleted after intent was created — mark intent failed so it doesn't stay stuck
+    await db.update(paymentIntents).set({ status: "failed" }).where(eq(paymentIntents.id, intentId));
+    structuredLog("error", "PayNow confirmation: policy not found — intent marked failed", { intentId, policyId: intent.policyId, orgId });
+    return { ok: false, error: "Policy not found — payment intent marked failed. Contact support." };
+  }
 
   const today = new Date().toISOString().split("T")[0];
   const effectiveUserId = eventActorId(actorType, actorId);

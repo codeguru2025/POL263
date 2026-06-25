@@ -55,7 +55,7 @@ app.use(
     },
   })
 );
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "100kb" }));
 
 const enableCsrf = process.env.ENABLE_CSRF_PROTECTION !== undefined
   ? process.env.ENABLE_CSRF_PROTECTION !== "false"

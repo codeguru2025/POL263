@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
@@ -19,6 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User } from "lucide-react";
 import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
+import { QuoteDialog } from "./quotations";
 
 type CaseForm = {
   deceasedName: string;
@@ -131,37 +133,23 @@ export default function StaffFunerals() {
 
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: "", currency: "USD", paymentChannel: "cash" });
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(() => crypto.randomUUID());
   const addServiceReceiptMutation = useMutation({
     mutationFn: async (data: { amount: string; currency: string; paymentChannel: string }) => {
-      const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/receipts`, data);
+      const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/receipts`, { ...data, idempotencyKey: paymentIdempotencyKey });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/receipts`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/quotation`] });
       setShowPaymentDialog(false);
       setPaymentForm({ amount: "", currency: "USD", paymentChannel: "cash" });
+      setPaymentIdempotencyKey(crypto.randomUUID());
       toast({ title: "Payment recorded" });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
   const [showQuotationDialog, setShowQuotationDialog] = useState(false);
-  const [quotationItems, setQuotationItems] = useState<{ description: string; quantity: string; unitPrice: string }[]>([{ description: "", quantity: "1", unitPrice: "" }]);
-  const [quotationCurrency, setQuotationCurrency] = useState("USD");
-  const saveQuotationMutation = useMutation({
-    mutationFn: async () => {
-      const items = quotationItems.filter((i) => i.description && i.unitPrice).map((i) => ({
-        description: i.description, quantity: i.quantity || "1", unitPrice: i.unitPrice,
-      }));
-      const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/quotation`, { currency: quotationCurrency, status: "sent", items });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/quotation`] });
-      setShowQuotationDialog(false);
-      toast({ title: "Quotation saved" });
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
 
   const createCaseMutation = useMutation({
     mutationFn: async (data: Partial<CaseForm>) => {
@@ -306,15 +294,7 @@ export default function StaffFunerals() {
                 quotation={caseQuotation}
                 receipts={caseReceipts}
                 onRecordPayment={() => setShowPaymentDialog(true)}
-                onEditQuotation={() => {
-                  if (caseQuotation?.items?.length) {
-                    setQuotationItems(caseQuotation.items.map((i: any) => ({ description: i.description, quantity: String(i.quantity), unitPrice: String(i.unitPrice) })));
-                    setQuotationCurrency(caseQuotation.currency || "USD");
-                  } else {
-                    setQuotationItems([{ description: "", quantity: "1", unitPrice: "" }]);
-                  }
-                  setShowQuotationDialog(true);
-                }}
+                onEditQuotation={() => setShowQuotationDialog(true)}
               />
             ) : (
               <CardSection title="Logistics Board" icon={Box} flush
@@ -477,9 +457,17 @@ export default function StaffFunerals() {
       />
 
       {/* Record cash-service payment */}
-      <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
+      <Dialog open={showPaymentDialog} onOpenChange={(open) => { setShowPaymentDialog(open); if (open) setPaymentIdempotencyKey(crypto.randomUUID()); }}>
         <DialogContent className="sm:max-w-sm">
-          <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Record Payment</DialogTitle>
+            {caseQuotation && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Against <span className="font-mono font-semibold text-foreground">{caseQuotation.quotationNumber}</span>
+                {" · "}{caseQuotation.currency} {Number(caseQuotation.grandTotal || caseQuotation.total || 0).toFixed(2)}
+              </p>
+            )}
+          </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -533,43 +521,33 @@ export default function StaffFunerals() {
         />
       )}
 
-      {/* Quotation builder */}
-      <Dialog open={showQuotationDialog} onOpenChange={setShowQuotationDialog}>
-        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Service Quotation</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <div className="w-32">
-              <Label className="text-xs">Currency</Label>
-              <Select value={quotationCurrency} onValueChange={setQuotationCurrency}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="ZAR">ZAR</SelectItem>
-                  <SelectItem value="ZIG">ZiG</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              {quotationItems.map((it, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-6"><Label className="text-[10px]">Description</Label><Input value={it.description} onChange={(e) => setQuotationItems(quotationItems.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))} /></div>
-                  <div className="col-span-2"><Label className="text-[10px]">Qty</Label><Input type="number" value={it.quantity} onChange={(e) => setQuotationItems(quotationItems.map((x, i) => i === idx ? { ...x, quantity: e.target.value } : x))} /></div>
-                  <div className="col-span-3"><Label className="text-[10px]">Unit price</Label><Input type="number" step="0.01" value={it.unitPrice} onChange={(e) => setQuotationItems(quotationItems.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} /></div>
-                  <div className="col-span-1"><Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setQuotationItems(quotationItems.filter((_, i) => i !== idx))}>×</Button></div>
-                </div>
-              ))}
-              <Button variant="outline" size="sm" onClick={() => setQuotationItems([...quotationItems, { description: "", quantity: "1", unitPrice: "" }])}><Plus className="h-3.5 w-3.5 mr-1" /> Add line</Button>
-            </div>
-            <p className="text-sm font-semibold text-right">Total: {quotationCurrency} {quotationItems.reduce((s, i) => s + (parseFloat(i.quantity || "1") * parseFloat(i.unitPrice || "0") || 0), 0).toFixed(2)}</p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowQuotationDialog(false)}>Cancel</Button>
-            <Button onClick={() => saveQuotationMutation.mutate()} disabled={saveQuotationMutation.isPending} data-testid="button-save-quotation">
-              {saveQuotationMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Save Quotation
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Quotation builder — uses same full form as /quotations page */}
+      {showQuotationDialog && (
+        <QuoteDialog
+          open={showQuotationDialog}
+          onClose={() => setShowQuotationDialog(false)}
+          quoteId={caseQuotation?.id}
+          initialData={caseQuotation ? {
+            informantFullNames: caseQuotation.informantFullNames || "",
+            informantPhone: caseQuotation.informantPhone || "",
+            informantAddress: caseQuotation.informantAddress || "",
+            deceasedName: caseQuotation.deceasedName || "",
+            deceasedAge: caseQuotation.deceasedAge != null ? String(caseQuotation.deceasedAge) : "",
+            deceasedSex: caseQuotation.deceasedSex || "",
+            casketType: caseQuotation.casketType || "",
+            quotationDate: caseQuotation.quotationDate ? caseQuotation.quotationDate.slice(0, 10) : new Date().toISOString().slice(0, 10),
+            currency: caseQuotation.currency || "USD",
+            paymentType: caseQuotation.paymentType || "full",
+            vatRate: caseQuotation.vatRate != null ? String(caseQuotation.vatRate) : "0",
+            discountAmount: caseQuotation.discountAmount != null ? String(caseQuotation.discountAmount) : "0",
+            notes: caseQuotation.notes || "",
+          } : undefined}
+          initialItems={caseQuotation?.items?.length
+            ? caseQuotation.items.map((i: any) => ({ description: i.description, qty: String(i.quantity ?? "1"), unitPrice: String(i.unitPrice ?? "") }))
+            : undefined}
+          onSuccess={() => queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/quotation`] })}
+        />
+      )}
     </StaffLayout>
   );
 }
@@ -687,13 +665,34 @@ function CaseDetailView({
 
         {/* Status mgmt */}
         <CardSection title="Status" icon={CheckCircle2}>
-          <div className="flex gap-2 flex-wrap">
-            {["open", "in_progress", "completed", "cancelled"].map((s) => (
-              <Button key={s} size="sm" variant={fc.status === s ? "default" : "outline"} onClick={() => onUpdateStatus(s)} disabled={fc.status === s} data-testid={`button-status-${s}`}>
-                {s.replace("_", " ").toUpperCase()}
-              </Button>
-            ))}
-          </div>
+          {(() => {
+            const [pendingStatus, setPendingStatus] = useState<string | null>(null);
+            return (
+              <>
+                <AlertDialog open={!!pendingStatus} onOpenChange={(open) => { if (!open) setPendingStatus(null); }}>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Confirm status change</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {pendingStatus === "cancelled" ? "Cancelling this case cannot be easily undone. Are you sure?" : `Mark this case as "${pendingStatus?.replace("_", " ")}"?`}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => { if (pendingStatus) { onUpdateStatus(pendingStatus); setPendingStatus(null); } }}>Confirm</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+                <div className="flex gap-2 flex-wrap">
+                  {["open", "in_progress", "completed", "cancelled"].map((s) => (
+                    <Button key={s} size="sm" variant={fc.status === s ? "default" : "outline"} onClick={() => setPendingStatus(s)} disabled={fc.status === s} data-testid={`button-status-${s}`}>
+                      {s.replace("_", " ").toUpperCase()}
+                    </Button>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
         </CardSection>
 
         {/* Body removal */}
@@ -781,11 +780,22 @@ function CaseDetailView({
       >
         {(() => {
           const cur = quotation?.currency || (receipts && receipts[0]?.currency) || "USD";
-          const quoted = quotation ? Number(quotation.total || 0) : 0;
+          const quoted = quotation ? Number(quotation.grandTotal || quotation.total || 0) : 0;
           const received = (receipts || []).filter((r: any) => r.status !== "voided").reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
           const outstanding = quoted - received;
           return (
             <div className="space-y-3">
+              {quotation && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                  <span className="font-mono font-semibold text-foreground">{quotation.quotationNumber}</span>
+                  {quotation.conversionStatus === "converted" && (
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/15 text-emerald-700 border border-emerald-200">PAID IN FULL</span>
+                  )}
+                  {quotation.conversionStatus === "partial" && (
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-500/15 text-amber-700 border border-amber-200">PARTIALLY PAID</span>
+                  )}
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-3">
                 <div><p className="text-xs text-muted-foreground">Quoted</p><p className="text-lg font-bold tabular-nums">{cur} {quoted.toFixed(2)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Received</p><p className="text-lg font-bold tabular-nums text-emerald-600">{cur} {received.toFixed(2)}</p></div>
@@ -1186,7 +1196,7 @@ function CaseFormDialog({
                   <Field label="Relationship to Policyholder">
                     <Input value={form.deceasedRelationship} onChange={set("deceasedRelationship")} placeholder="e.g. Spouse, Son" data-testid="input-deceased-relationship" />
                   </Field>
-                  <Field label="Date of Death">
+                  <Field label="Date of Death" required>
                     <Input type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} data-testid="input-date-of-death" />
                   </Field>
                   <Field label="Cause of Death">
@@ -1206,7 +1216,7 @@ function CaseFormDialog({
               <AccordionTrigger>Informant (Next of Kin)</AccordionTrigger>
               <AccordionContent>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Informant Name">
+                  <Field label="Informant Name" required>
                     <Input value={form.informantName} onChange={set("informantName")} placeholder="Next of kin name" />
                   </Field>
                   <Field label="Informant Phone">

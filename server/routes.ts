@@ -481,7 +481,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     next(err);
   }
 
-  app.post("/api/upload", requireAuth, requireTenantScope, memUpload.single("file"), async (req, res) => {
+  app.post("/api/upload", requireAuth, requireTenantScope, requireAnyPermission("write:client", "write:claim", "write:policy", "write:funeral_ops"), memUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
     try {
@@ -983,10 +983,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/branches", requireAuth, requireTenantScope, requirePermission("write:branch"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertBranchSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const branch = await storage.createBranch(parsed);
-    await auditLog(req, "CREATE_BRANCH", "Branch", branch.id, null, branch);
-    return res.status(201).json(branch);
+    try {
+      const parsed = insertBranchSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const branch = await storage.createBranch(parsed);
+      await auditLog(req, "CREATE_BRANCH", "Branch", branch.id, null, branch);
+      return res.status(201).json(branch);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/branches failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create branch." : err?.message });
+    }
   });
 
   // ─── Users ──────────────────────────────────────────────────
@@ -1054,37 +1060,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    const newUser = await storage.createUser({
-      email,
-      displayName: displayName || email.split("@")[0],
-      organizationId: currentUser.organizationId,
-      branchId: branchId || currentUser.branchId,
-      referralCode: refCode,
-      isActive: true,
-      passwordHash,
-      phone: phone || null,
-      address: address || null,
-      nationalId: nationalId || null,
-      dateOfBirth: dateOfBirth || null,
-      gender: gender || null,
-      maritalStatus: maritalStatus || null,
-      nextOfKinName: nextOfKinName || null,
-      nextOfKinPhone: nextOfKinPhone || null,
-    });
+    let newUser: any;
+    try {
+      newUser = await storage.createUser({
+        email,
+        displayName: displayName || email.split("@")[0],
+        organizationId: currentUser.organizationId,
+        branchId: branchId || currentUser.branchId,
+        referralCode: refCode,
+        isActive: true,
+        passwordHash,
+        phone: phone || null,
+        address: address || null,
+        nationalId: nationalId || null,
+        dateOfBirth: dateOfBirth || null,
+        gender: gender || null,
+        maritalStatus: maritalStatus || null,
+        nextOfKinName: nextOfKinName || null,
+        nextOfKinPhone: nextOfKinPhone || null,
+      });
 
-    if (roleIds && Array.isArray(roleIds)) {
-      const roles = await storage.getRolesByIds(roleIds, currentUser.organizationId);
-      if (roles.length !== roleIds.length) {
-        return res.status(400).json({ message: "One or more roles are invalid for this organization" });
+      if (roleIds && Array.isArray(roleIds)) {
+        const validRoles = await storage.getRolesByIds(roleIds, currentUser.organizationId);
+        if (validRoles.length !== roleIds.length) {
+          return res.status(400).json({ message: "One or more roles are invalid for this organization" });
+        }
+        for (const roleId of roleIds) {
+          await storage.addUserRole(newUser.id, roleId, currentUser.organizationId);
+        }
       }
-      for (const roleId of roleIds) {
-        await storage.addUserRole(newUser.id, roleId, currentUser.organizationId);
-      }
+    } catch (err: any) {
+      structuredLog("error", "POST /api/users failed", { error: err?.message, email });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create user." : err?.message });
     }
 
     const userRoles = await storage.getUserRoles(newUser.id, currentUser.organizationId);
-    await auditLog(req, "CREATE_USER", "User", newUser.id, null, { ...newUser, roles: userRoles.map(r => r.name) });
-    return res.status(201).json({ ...newUser, roles: userRoles.map(r => ({ id: r.id, name: r.name })) });
+    await auditLog(req, "CREATE_USER", "User", newUser.id, null, { ...newUser, roles: userRoles.map((r: any) => r.name) });
+    return res.status(201).json({ ...newUser, roles: userRoles.map((r: any) => ({ id: r.id, name: r.name })) });
   });
 
   app.patch("/api/users/:id", requireAuth, requireTenantScope, requirePermission("write:user"), async (req, res) => {
@@ -1149,6 +1161,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "Cannot deactivate yourself" });
     }
     const updated = await storage.updateUser(req.params.id as string, { isActive: false });
+    // Immediately revoke all active sessions for the deactivated user
+    await pool.query(`DELETE FROM session WHERE sess->>'passport' IS NOT NULL AND (sess->'passport'->>'user')::text = $1`, [req.params.id]);
     await auditLog(req, "DEACTIVATE_USER", "User", req.params.id as string, targetUser, updated);
     return res.json(updated);
   });
@@ -1179,6 +1193,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "REASSIGN_AGENT_POLICIES", "User", target.id, { fromAgentId: target.id }, { toAgentId, count });
     }
     const updated = await storage.updateUser(target.id, { isActive: false });
+    await pool.query(`DELETE FROM session WHERE sess->>'passport' IS NOT NULL AND (sess->'passport'->>'user')::text = $1`, [target.id]);
     await auditLog(req, "DEACTIVATE_USER", "User", target.id, target, updated);
     return res.json({ ok: true });
   });
@@ -1347,21 +1362,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       activationCode,
       agentId: creatorIsAgentScoped ? user.id : undefined,
     });
-    const client = await storage.createClient(parsed);
-    await auditLog(req, "CREATE_CLIENT", "Client", client.id, null, client);
-    const lead = await storage.createLead({
-      organizationId: user.organizationId,
-      branchId: user.branchId || undefined,
-      agentId: creatorIsAgentScoped ? user.id : undefined,
-      clientId: client.id,
-      firstName: client.firstName,
-      lastName: client.lastName,
-      phone: client.phone || undefined,
-      email: client.email || undefined,
-      source: creatorIsAgentScoped ? "agent_capture" : "walk_in",
-      stage: "lead",
-    });
-    await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
+    let client: any;
+    try {
+      client = await storage.createClient(parsed);
+      await auditLog(req, "CREATE_CLIENT", "Client", client.id, null, client);
+      const lead = await storage.createLead({
+        organizationId: user.organizationId,
+        branchId: user.branchId || undefined,
+        agentId: creatorIsAgentScoped ? user.id : undefined,
+        clientId: client.id,
+        firstName: client.firstName,
+        lastName: client.lastName,
+        phone: client.phone || undefined,
+        email: client.email || undefined,
+        source: creatorIsAgentScoped ? "agent_capture" : "walk_in",
+        stage: "lead",
+      });
+      await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
+    } catch (err: any) {
+      // Log prominently — client exists but lead creation failed; admin will need to manually link or retry
+      if (client?.id) {
+        structuredLog("error", "Client created but lead creation failed — orphaned client record", { clientId: client.id, orgId: user.organizationId });
+      }
+      structuredLog("error", "Client creation failed (rolled back)", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create client." : err?.message });
+    }
     const org = await storage.getOrganization(user.organizationId);
     await notifyClient(user.organizationId, client.id, "Welcome!", `Welcome to ${org?.name || "our platform"}. Your account has been created.`);
     return res.status(201).json(client);
@@ -1422,7 +1447,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       organizationId: user.organizationId,
       clientId: req.params.clientId,
     });
-    const dep = await storage.createDependent(parsed);
+    let dep: any;
+    try {
+      dep = await storage.createDependent(parsed);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/clients/:clientId/dependents failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create dependent." : err?.message });
+    }
     await auditLog(req, "CREATE_DEPENDENT", "Dependent", dep.id, null, dep);
     return res.status(201).json(dep);
   });
@@ -1643,18 +1674,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/benefit-catalog", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertBenefitCatalogItemSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const item = await storage.createBenefitCatalogItem(parsed);
-    await auditLog(req, "CREATE_BENEFIT_CATALOG_ITEM", "BenefitCatalogItem", item.id, null, item);
-    return res.status(201).json(item);
+    try {
+      const parsed = insertBenefitCatalogItemSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const item = await storage.createBenefitCatalogItem(parsed);
+      await auditLog(req, "CREATE_BENEFIT_CATALOG_ITEM", "BenefitCatalogItem", item.id, null, item);
+      return res.status(201).json(item);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/benefit-catalog failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create benefit." : err?.message });
+    }
   });
 
   app.patch("/api/benefit-catalog/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const updated = await storage.updateBenefitCatalogItem(req.params.id as string, req.body, user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Not found" });
-    await auditLog(req, "UPDATE_BENEFIT_CATALOG_ITEM", "BenefitCatalogItem", req.params.id as string, null, updated);
-    return res.json(updated);
+    try {
+      const updated = await storage.updateBenefitCatalogItem(req.params.id as string, req.body, user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      await auditLog(req, "UPDATE_BENEFIT_CATALOG_ITEM", "BenefitCatalogItem", req.params.id as string, null, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/benefit-catalog/:id failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update benefit." : err?.message });
+    }
   });
 
   app.get("/api/benefit-bundles", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -1664,18 +1706,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/benefit-bundles", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertBenefitBundleSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const bundle = await storage.createBenefitBundle(parsed);
-    await auditLog(req, "CREATE_BENEFIT_BUNDLE", "BenefitBundle", bundle.id, null, bundle);
-    return res.status(201).json(bundle);
+    try {
+      const parsed = insertBenefitBundleSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const bundle = await storage.createBenefitBundle(parsed);
+      await auditLog(req, "CREATE_BENEFIT_BUNDLE", "BenefitBundle", bundle.id, null, bundle);
+      return res.status(201).json(bundle);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/benefit-bundles failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create bundle." : err?.message });
+    }
   });
 
   app.patch("/api/benefit-bundles/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const updated = await storage.updateBenefitBundle(req.params.id as string, req.body, user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Not found" });
-    await auditLog(req, "UPDATE_BENEFIT_BUNDLE", "BenefitBundle", req.params.id as string, null, updated);
-    return res.json(updated);
+    try {
+      const updated = await storage.updateBenefitBundle(req.params.id as string, req.body, user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      await auditLog(req, "UPDATE_BENEFIT_BUNDLE", "BenefitBundle", req.params.id as string, null, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/benefit-bundles/:id failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update bundle." : err?.message });
+    }
   });
 
   app.get("/api/add-ons", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -1685,18 +1738,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/add-ons", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertAddOnSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const addon = await storage.createAddOn(parsed);
-    await auditLog(req, "CREATE_ADD_ON", "AddOn", addon.id, null, addon);
-    return res.status(201).json(addon);
+    try {
+      const parsed = insertAddOnSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const addon = await storage.createAddOn(parsed);
+      await auditLog(req, "CREATE_ADD_ON", "AddOn", addon.id, null, addon);
+      return res.status(201).json(addon);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/add-ons failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create add-on." : err?.message });
+    }
   });
 
   app.patch("/api/add-ons/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const updated = await storage.updateAddOn(req.params.id as string, req.body, user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Not found" });
-    await auditLog(req, "UPDATE_ADD_ON", "AddOn", req.params.id as string, null, updated);
-    return res.json(updated);
+    try {
+      const updated = await storage.updateAddOn(req.params.id as string, req.body, user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      await auditLog(req, "UPDATE_ADD_ON", "AddOn", req.params.id as string, null, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/add-ons/:id failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update add-on." : err?.message });
+    }
   });
 
   // Per-member add-on management on existing policies
@@ -1737,18 +1801,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/age-bands", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertAgeBandConfigSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const config = await storage.createAgeBandConfig(parsed);
-    await auditLog(req, "CREATE_AGE_BAND", "AgeBandConfig", config.id, null, config);
-    return res.status(201).json(config);
+    try {
+      const parsed = insertAgeBandConfigSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const config = await storage.createAgeBandConfig(parsed);
+      await auditLog(req, "CREATE_AGE_BAND", "AgeBandConfig", config.id, null, config);
+      return res.status(201).json(config);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/age-bands failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create age band." : err?.message });
+    }
   });
 
   app.patch("/api/age-bands/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const updated = await storage.updateAgeBandConfig(req.params.id as string, req.body, user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Not found" });
-    await auditLog(req, "UPDATE_AGE_BAND", "AgeBandConfig", req.params.id as string, null, updated);
-    return res.json(updated);
+    try {
+      const updated = await storage.updateAgeBandConfig(req.params.id as string, req.body, user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      await auditLog(req, "UPDATE_AGE_BAND", "AgeBandConfig", req.params.id as string, null, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/age-bands/:id failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update age band." : err?.message });
+    }
   });
 
   // ─── Policies ───────────────────────────────────────────────
@@ -3141,13 +3216,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const inline = req.query.inline === "1" || req.query.view === "1";
     if (format === "thermal") {
       const { streamThermalReceiptToResponse } = await import("./receipt-pdf");
-      return streamThermalReceiptToResponse(id, user.organizationId, res, { attachment: !inline });
+      const rawSize = parseInt(String(req.query.size || "80"), 10);
+      const size = ([48, 58, 80] as const).includes(rawSize as any) ? rawSize as 48 | 58 | 80 : 80;
+      return streamThermalReceiptToResponse(id, user.organizationId, res, { attachment: !inline, size });
     }
     const { streamReceiptToResponse } = await import("./receipt-pdf");
     return streamReceiptToResponse(id, user.organizationId, res, { attachment: !inline });
   });
 
-  // View endpoint — inline by default; ?format=thermal for thermal roll preview
+  // View endpoint — inline by default; ?format=thermal&size=48|58|80 for thermal roll preview
   app.get("/api/receipts/:id/view", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -3155,7 +3232,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const format = req.query.format as string | undefined;
     if (format === "thermal") {
       const { streamThermalReceiptToResponse } = await import("./receipt-pdf");
-      return streamThermalReceiptToResponse(id, user.organizationId, res, { attachment: false });
+      const rawSize = parseInt(String(req.query.size || "80"), 10);
+      const size = ([48, 58, 80] as const).includes(rawSize as any) ? rawSize as 48 | 58 | 80 : 80;
+      return streamThermalReceiptToResponse(id, user.organizationId, res, { attachment: false, size });
     }
     const { streamReceiptToResponse } = await import("./receipt-pdf");
     return streamReceiptToResponse(id, user.organizationId, res, { attachment: false });
@@ -3751,21 +3830,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/claims", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
     const user = req.user as any;
-    const claimNumber = await storage.generateClaimNumber(user.organizationId);
-    const parsed = insertClaimSchema.parse({
-      ...req.body,
-      organizationId: user.organizationId,
-      claimNumber,
-      status: "submitted",
-      submittedBy: user.id,
-    });
-    const claim = await withOrgTransaction(user.organizationId, async () => {
-      const created = await storage.createClaim(parsed);
-      await storage.createClaimStatusHistory(created.id, null, "submitted", "Claim submitted", user.id, created.organizationId);
-      return created;
-    });
-    await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
-    return res.status(201).json(claim);
+    try {
+      const parsed = insertClaimSchema.parse({
+        ...req.body,
+        organizationId: user.organizationId,
+        claimNumber: "PENDING",
+        status: "submitted",
+        submittedBy: user.id,
+      });
+      const claim = await withOrgTransaction(user.organizationId, async () => {
+        // Generate claim number inside the transaction to prevent race-condition duplicates
+        const claimNumber = await storage.generateClaimNumber(user.organizationId);
+        const created = await storage.createClaim({ ...parsed, claimNumber });
+        await storage.createClaimStatusHistory(created.id, null, "submitted", "Claim submitted", user.id, created.organizationId);
+        return created;
+      });
+      await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
+      return res.status(201).json(claim);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid claim data", errors: err.errors });
+      structuredLog("error", "POST /api/claims failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create claim." : err?.message });
+    }
   });
 
   app.post("/api/claims/:id/transition", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
@@ -3908,22 +3994,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/funeral-cases/:id/tasks", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
-    if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
-    const parsed = insertFuneralTaskSchema.parse({ ...req.body, funeralCaseId: req.params.id as string });
-    const task = await storage.createFuneralTask(parsed);
-    await auditLog(req, "CREATE_FUNERAL_TASK", "FuneralTask", task.id, null, task);
-    return res.status(201).json(task);
+    try {
+      const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
+      if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+      const parsed = insertFuneralTaskSchema.parse({ ...req.body, funeralCaseId: req.params.id as string, organizationId: user.organizationId });
+      const task = await storage.createFuneralTask(parsed);
+      await auditLog(req, "CREATE_FUNERAL_TASK", "FuneralTask", task.id, null, task);
+      return res.status(201).json(task);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/funeral-cases/:id/tasks failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create task." : err?.message });
+    }
   });
 
   app.patch("/api/funeral-tasks/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const before = null; // no single-task fetch in storage; before state not available
-    const updated = await storage.updateFuneralTask(id, nullifyEmptyFields(req.body, ["dueDate", "completedAt"]), user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Funeral task not found" });
-    await auditLog(req, "UPDATE_FUNERAL_TASK", "FuneralTask", id, before, updated);
-    return res.json(updated);
+    try {
+      const updated = await storage.updateFuneralTask(id, nullifyEmptyFields(req.body, ["dueDate", "completedAt"]), user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Funeral task not found" });
+      await auditLog(req, "UPDATE_FUNERAL_TASK", "FuneralTask", id, null, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/funeral-tasks/:id failed", { error: err?.message, id });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update task." : err?.message });
+    }
   });
 
   // Driver checklist for a funeral case
@@ -3975,15 +4071,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/mortuary-intakes", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const intakeNumber = await storage.generateIntakeNumber(user.organizationId);
-    const parsed = insertMortuaryIntakeSchema.parse({
-      ...req.body,
-      organizationId: user.organizationId,
-      intakeNumber,
-    });
-    const intake = await storage.createMortuaryIntake(parsed);
-    await auditLog(req, "CREATE_MORTUARY_INTAKE", "MortuaryIntake", intake.id, null, intake);
-    return res.status(201).json(intake);
+    try {
+      const intakeNumber = await storage.generateIntakeNumber(user.organizationId);
+      const body = { ...req.body };
+      for (const f of ["removalDateTime", "receivedAt"]) {
+        if (body[f] && typeof body[f] === "string") { const d = new Date(body[f]); body[f] = isNaN(d.getTime()) ? undefined : d; }
+        else if (!body[f]) body[f] = undefined;
+      }
+      const parsed = insertMortuaryIntakeSchema.parse({ ...body, organizationId: user.organizationId, intakeNumber });
+      const intake = await storage.createMortuaryIntake(parsed);
+      await auditLog(req, "CREATE_MORTUARY_INTAKE", "MortuaryIntake", intake.id, null, intake);
+      return res.status(201).json(intake);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/mortuary-intakes failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create mortuary intake." : err?.message });
+    }
   });
 
   app.get("/api/mortuary-intakes/:id", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
@@ -3997,7 +4100,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!before) return res.status(404).json({ message: "Mortuary intake not found" });
-    const safeBody = insertMortuaryIntakeSchema.partial().parse(req.body);
+    const patchBody = { ...req.body };
+    for (const f of ["removalDateTime", "receivedAt"]) {
+      if (patchBody[f] && typeof patchBody[f] === "string") { const d = new Date(patchBody[f]); patchBody[f] = isNaN(d.getTime()) ? null : d; }
+      else if (patchBody[f] === "" ) patchBody[f] = null;
+    }
+    const safeBody = insertMortuaryIntakeSchema.partial().parse(patchBody);
     const updated = await storage.updateMortuaryIntake(req.params.id as string, safeBody, user.organizationId);
     await auditLog(req, "UPDATE_MORTUARY_INTAKE", "MortuaryIntake", req.params.id as string, before, updated);
     return res.json(updated);
@@ -4014,8 +4122,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    const dispatchBody = { ...req.body };
+    if (dispatchBody.dispatchedAt && typeof dispatchBody.dispatchedAt === "string") { const d = new Date(dispatchBody.dispatchedAt); dispatchBody.dispatchedAt = isNaN(d.getTime()) ? undefined : d; }
+    else if (!dispatchBody.dispatchedAt) dispatchBody.dispatchedAt = undefined;
     const parsed = insertMortuaryDispatchSchema.parse({
-      ...req.body,
+      ...dispatchBody,
       intakeId: req.params.id as string,
       organizationId: user.organizationId,
       dispatchedByUserId: user.id,
@@ -4042,12 +4153,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       organizationId: user.organizationId,
     });
     const item = await storage.addDeceasedBelonging(parsed);
+    await auditLog(req, "CREATE_BELONGING", "DeceasedBelonging", item.id, null, item);
     return res.status(201).json(item);
   });
 
   app.delete("/api/belongings/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     await storage.deleteDeceasedBelonging(req.params.id as string, user.organizationId);
+    await auditLog(req, "DELETE_BELONGING", "DeceasedBelonging", req.params.id as string, null, null);
     return res.status(204).end();
   });
 
@@ -4062,12 +4175,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    const washBody = { ...req.body };
+    if (washBody.completedAt && typeof washBody.completedAt === "string") { const d = new Date(washBody.completedAt); washBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
+    else if (!washBody.completedAt) washBody.completedAt = undefined;
     const parsed = insertBodyWashRequirementSchema.parse({
-      ...req.body,
+      ...washBody,
       intakeId: req.params.id as string,
       organizationId: user.organizationId,
     });
     const bw = await storage.upsertBodyWashRequirements(req.params.id as string, user.organizationId, parsed);
+    await auditLog(req, "UPSERT_BODY_WASH", "BodyWashRequirement", req.params.id as string, null, bw);
     return res.json(bw);
   });
 
@@ -4100,10 +4217,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/fleet", requireAuth, requireTenantScope, requirePermission("write:fleet"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertFleetVehicleSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const vehicle = await storage.createFleetVehicle(parsed);
-    await auditLog(req, "CREATE_VEHICLE", "FleetVehicle", vehicle.id, null, vehicle);
-    return res.status(201).json(vehicle);
+    try {
+      const parsed = insertFleetVehicleSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const vehicle = await storage.createFleetVehicle(parsed);
+      await auditLog(req, "CREATE_VEHICLE", "FleetVehicle", vehicle.id, null, vehicle);
+      return res.status(201).json(vehicle);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/fleet failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create vehicle." : err?.message });
+    }
   });
 
   // ─── Commissions ────────────────────────────────────────────
@@ -4115,10 +4238,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/commission-plans", requireAuth, requireTenantScope, requirePermission("write:commission"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertCommissionPlanSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const plan = await storage.createCommissionPlan(parsed);
-    await auditLog(req, "CREATE_COMMISSION_PLAN", "CommissionPlan", plan.id, null, plan);
-    return res.status(201).json(plan);
+    try {
+      const parsed = insertCommissionPlanSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const plan = await storage.createCommissionPlan(parsed);
+      await auditLog(req, "CREATE_COMMISSION_PLAN", "CommissionPlan", plan.id, null, plan);
+      return res.status(201).json(plan);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/commission-plans failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create commission plan." : err?.message });
+    }
   });
 
   app.get("/api/commission-ledger", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
@@ -4150,22 +4279,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/leads", requireAuth, requireTenantScope, requirePermission("write:lead"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertLeadSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const lead = await storage.createLead(parsed);
-    await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
-    return res.status(201).json(lead);
+    try {
+      const parsed = insertLeadSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const lead = await storage.createLead(parsed);
+      await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
+      return res.status(201).json(lead);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/leads failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create lead." : err?.message });
+    }
   });
 
   app.patch("/api/leads/:id", requireAuth, requireTenantScope, requirePermission("write:lead"), async (req, res) => {
     const user = req.user as any;
-    const before = await storage.getLead(req.params.id as string, user.organizationId);
-    if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
-    if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
-    const updated = await storage.updateLead(req.params.id as string, req.body, user.organizationId);
-    await auditLog(req, "UPDATE_LEAD", "Lead", req.params.id as string, before, updated);
-    return res.json(updated);
+    try {
+      const before = await storage.getLead(req.params.id as string, user.organizationId);
+      if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+      const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+      const isAgent = isAgentScoped(userRoles);
+      if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+      const updated = await storage.updateLead(req.params.id as string, req.body, user.organizationId);
+      await auditLog(req, "UPDATE_LEAD", "Lead", req.params.id as string, before, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/leads/:id failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update lead." : err?.message });
+    }
   });
 
   // ─── Notifications ─────────────────────────────────────────
@@ -4272,10 +4412,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/expenditures", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertExpenditureSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const exp = await storage.createExpenditure(parsed);
-    await auditLog(req, "CREATE_EXPENDITURE", "Expenditure", exp.id, null, exp);
-    return res.status(201).json(exp);
+    try {
+      const parsed = insertExpenditureSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const exp = await storage.createExpenditure(parsed);
+      await auditLog(req, "CREATE_EXPENDITURE", "Expenditure", exp.id, null, exp);
+      return res.status(201).json(exp);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/expenditures failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create expenditure." : err?.message });
+    }
   });
 
   // ─── FX Rates (USD base for consolidated statements) ────────
@@ -4317,7 +4463,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: submit ? "submitted" : "draft",
       approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
     });
-    const created = await storage.createRequisition(parsed);
+    let created: any;
+    try {
+      created = await storage.createRequisition(parsed);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/requisitions failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create requisition." : err?.message });
+    }
     await auditLog(req, "CREATE_REQUISITION", "Requisition", created.id, null, created);
     return res.status(201).json(created);
   });
@@ -4383,7 +4536,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: "active",
       createdBy: user.id,
     });
-    const created = await storage.createDebitOrder(parsed);
+    let created: any;
+    try {
+      created = await storage.createDebitOrder(parsed);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/debit-orders failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create debit order." : err?.message });
+    }
     await auditLog(req, "CREATE_DEBIT_ORDER", "DebitOrder", created.id, null, created);
     return res.status(201).json(created);
   });
@@ -4466,6 +4626,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!quote || !quote.items?.length) {
       return res.status(422).json({ message: "A quotation with at least one line item must exist before recording a payment." });
     }
+    if (quote.status === "voided" || quote.status === "cancelled") {
+      return res.status(422).json({ message: "Cannot record a payment against a voided or cancelled quotation." });
+    }
 
     if (idempotencyKey) {
       const existing = await storage.getServiceReceiptByIdempotencyKey(user.organizationId, idempotencyKey);
@@ -4540,7 +4703,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
       deceasedSex: req.body.deceasedSex, casketType: req.body.casketType,
       quotationDate: req.body.quotationDate || new Date().toISOString().split("T")[0],
-      vatRate: req.body.vatRate ? parseFloat(req.body.vatRate) : 15,
+      vatRate: req.body.vatRate != null && req.body.vatRate !== "" ? parseFloat(req.body.vatRate) : 0,
       discountAmount: req.body.discountAmount ? parseFloat(req.body.discountAmount) : 0,
       paymentType: req.body.paymentType,
     }, items);
@@ -4768,9 +4931,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/payroll/employees", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertPayrollEmployeeSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const emp = await storage.createPayrollEmployee(parsed);
-    return res.status(201).json(emp);
+    try {
+      const parsed = insertPayrollEmployeeSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const emp = await storage.createPayrollEmployee(parsed);
+      await auditLog(req, "CREATE_PAYROLL_EMPLOYEE", "PayrollEmployee", emp.id, null, emp);
+      return res.status(201).json(emp);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/payroll/employees failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create payroll employee." : err?.message });
+    }
   });
 
   app.get("/api/payroll/runs", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
@@ -4783,15 +4953,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/payroll/runs", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertPayrollRunSchema.parse({
-      ...req.body,
-      organizationId: user.organizationId,
-      preparedBy: user.id,
-      status: "draft",
-    });
-    const run = await storage.createPayrollRun(parsed);
-    await auditLog(req, "CREATE_PAYROLL_RUN", "PayrollRun", run.id, null, run);
-    return res.status(201).json(run);
+    try {
+      const parsed = insertPayrollRunSchema.parse({ ...req.body, organizationId: user.organizationId, preparedBy: user.id, status: "draft" });
+      const run = await storage.createPayrollRun(parsed);
+      await auditLog(req, "CREATE_PAYROLL_RUN", "PayrollRun", run.id, null, run);
+      return res.status(201).json(run);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/payroll/runs failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create payroll run." : err?.message });
+    }
   });
 
   // ─── Security Questions (for client auth) ───────────────────
@@ -5086,21 +5257,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/groups", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
-    const parsed = insertGroupSchema.parse({ ...req.body, organizationId: user.organizationId });
-    const group = await storage.createGroup(parsed);
-    await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
-    return res.status(201).json(group);
+    try {
+      const parsed = insertGroupSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const group = await storage.createGroup(parsed);
+      await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
+      return res.status(201).json(group);
+    } catch (err: any) {
+      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      structuredLog("error", "POST /api/groups failed", { error: err?.message });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create group." : err?.message });
+    }
   });
 
   app.patch("/api/groups/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const id = String(req.params.id);
     const user = req.user as any;
-    const existing = await storage.getGroup(id, user.organizationId);
-    if (!existing) return res.status(404).json({ message: "Group not found" });
-    if (existing.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
-    const updated = await storage.updateGroup(id, req.body, user.organizationId);
-    await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
-    return res.json(updated);
+    try {
+      const existing = await storage.getGroup(id, user.organizationId);
+      if (!existing) return res.status(404).json({ message: "Group not found" });
+      if (existing.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
+      const updated = await storage.updateGroup(id, req.body, user.organizationId);
+      await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/groups/:id failed", { error: err?.message, id });
+      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update group." : err?.message });
+    }
   });
 
   app.get("/api/groups/:id/policies", requireAuth, requireTenantScope, async (req, res) => {

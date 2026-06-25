@@ -1229,6 +1229,9 @@ export const funeralCases = pgTable(
   (t) => [
     index("fc_org_idx").on(t.organizationId),
     index("fc_claim_idx").on(t.claimId),
+    index("fc_policy_idx").on(t.policyId),
+    index("fc_status_idx").on(t.status),
+    index("fc_assigned_idx").on(t.assignedTo),
   ]
 );
 
@@ -2042,6 +2045,7 @@ export const serviceReceipts = pgTable(
   (t) => [
     index("sr_org_idx").on(t.organizationId),
     index("sr_case_idx").on(t.funeralCaseId),
+    index("sr_quot_idx").on(t.quotationId),
     uniqueIndex("sr_receipt_org_idx").on(t.organizationId, t.receiptNumber),
     uniqueIndex("sr_idempotency_org_idx").on(t.organizationId, t.idempotencyKey),
   ]

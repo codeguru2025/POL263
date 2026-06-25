@@ -224,6 +224,7 @@ export function setupClientAuth(app: Express) {
           updateData.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
         }
         await storage.updateClient(client.id, updateData, client.organizationId);
+        structuredLog("warn", "CLIENT_LOGIN_FAILED", { clientId: client.id, email: client.email, ip: req.ip, attempt: attempts, locked: attempts >= LOCKOUT_THRESHOLD });
         return constantTimeResponse(res, 401, { message: "Invalid credentials" });
       }
 

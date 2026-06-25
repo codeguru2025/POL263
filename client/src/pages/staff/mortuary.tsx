@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
@@ -794,16 +794,18 @@ function BodyWashDialog({ open, onOpenChange, existing, onSubmit, isPending }: {
     completedAt: "",
   });
 
-  if (open && existing && !form.washedByName && !form.completedAt) {
-    setForm({
-      clothesProvided: existing.clothesProvided ?? false,
-      blanketProvided: existing.blanketProvided ?? false,
-      wreathProvided: existing.wreathProvided ?? false,
-      otherItems: existing.otherItems ?? "",
-      washedByName: existing.washedByName ?? "",
-      completedAt: existing.completedAt ? new Date(existing.completedAt).toISOString().slice(0, 16) : "",
-    });
-  }
+  useEffect(() => {
+    if (open && existing) {
+      setForm({
+        clothesProvided: existing.clothesProvided ?? false,
+        blanketProvided: existing.blanketProvided ?? false,
+        wreathProvided: existing.wreathProvided ?? false,
+        otherItems: existing.otherItems ?? "",
+        washedByName: existing.washedByName ?? "",
+        completedAt: existing.completedAt ? new Date(existing.completedAt).toISOString().slice(0, 16) : "",
+      });
+    }
+  }, [open, existing]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

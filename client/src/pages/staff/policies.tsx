@@ -140,7 +140,7 @@ export default function StaffPolicies() {
   const [policyDocViewerUrl, setPolicyDocViewerUrl] = useState<string>("");
   const [showReceiptSuccess, setShowReceiptSuccess] = useState(false);
   const [receiptSuccessData, setReceiptSuccessData] = useState<any>(null);
-  const [receiptViewFormat, setReceiptViewFormat] = useState<"a4" | "thermal">("a4");
+  const [receiptViewFormat, setReceiptViewFormat] = useState<"a4" | "thermal48" | "thermal58" | "thermal80">("a4");
 
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showPaymentMethodDialog, setShowPaymentMethodDialog] = useState(false);
@@ -1297,7 +1297,7 @@ export default function StaffPolicies() {
           >
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between min-w-0">
               <div className="flex items-start gap-3 min-w-0">
-                <Button variant="ghost" size="icon" className="shrink-0 mt-0.5" onClick={() => { setShowDetailView(false); setSelectedPolicy(null); }} data-testid="btn-back-policies">
+                <Button variant="ghost" size="icon" aria-label="Back to policies list" className="shrink-0 mt-0.5" onClick={() => { setShowDetailView(false); setSelectedPolicy(null); }} data-testid="btn-back-policies">
                   <ChevronLeft className="h-5 w-5" />
                 </Button>
                 <div className="min-w-0">
@@ -1386,10 +1386,10 @@ export default function StaffPolicies() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" title="Print policy document" onClick={() => printDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang))} data-testid="btn-print-policy-doc">
+                <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" title="Print policy document" aria-label="Print policy document" onClick={() => printDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang))} data-testid="btn-print-policy-doc">
                   <Printer className="h-4 w-4" />
                 </Button>
-                <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" title="Share policy document" onClick={() => shareDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang), `Policy-${displayPolicy.policyNumber}`)}>
+                <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" title="Share policy document" aria-label="Share policy document" onClick={() => shareDocument(staffPolicyDocumentUrl(selectedPolicy.id, docLang), `Policy-${displayPolicy.policyNumber}`)}>
                   <Share2 className="h-4 w-4" />
                 </Button>
                 {canDeletePolicy && (
@@ -2014,7 +2014,7 @@ export default function StaffPolicies() {
                           <TableCell className="text-right pr-6">
                             <div className="flex items-center justify-end gap-1">
                               {canEditPayment && (
-                                <Button variant="ghost" size="icon" title="Edit payment" data-testid={`btn-edit-payment-${p.id}`} onClick={() => {
+                                <Button variant="ghost" size="icon" title="Edit payment" aria-label="Edit payment" data-testid={`btn-edit-payment-${p.id}`} onClick={() => {
                                   setEditPaymentId(p.id);
                                   setEditPaymentForm({ amount: String(p.amount), status: p.status, reference: p.reference || "", notes: p.notes || "" });
                                 }}>
@@ -2022,7 +2022,7 @@ export default function StaffPolicies() {
                                 </Button>
                               )}
                               {canDeletePayment && (
-                                <Button variant="ghost" size="icon" title="Delete payment" data-testid={`btn-delete-payment-${p.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeletePayment(p.id)}>
+                                <Button variant="ghost" size="icon" title="Delete payment" aria-label="Delete payment" data-testid={`btn-delete-payment-${p.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeletePayment(p.id)}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               )}
@@ -2075,19 +2075,19 @@ export default function StaffPolicies() {
                           <TableCell>{new Date(r.issuedAt).toLocaleDateString("en-GB")}</TableCell>
                           <TableCell className="text-right pr-6">
                             <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" title="View receipt" onClick={() => { setReceiptViewFormat("a4"); setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum }); setShowReceiptSuccess(true); }}><Eye className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Thermal (80mm)" onClick={() => { setReceiptViewFormat("thermal"); setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum }); setShowReceiptSuccess(true); }}><ScrollText className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Download" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="View receipt" aria-label="View receipt" onClick={() => { setReceiptViewFormat("a4"); setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum }); setShowReceiptSuccess(true); }}><Eye className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Thermal receipt" aria-label="Print thermal receipt" onClick={() => { setReceiptViewFormat("thermal80"); setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum }); setShowReceiptSuccess(true); }}><ScrollText className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Download" aria-label="Download receipt" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
                               <Button variant="ghost" size="icon" title="Print" onClick={() => printDocument(receiptViewUrl)}><Printer className="h-4 w-4" /></Button>
                               <Button variant="ghost" size="icon" title="Share" onClick={() => shareDocument(receiptDownloadUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
                               {canEditReceipt && (
-                                <Button variant="ghost" size="icon" title="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
+                                <Button variant="ghost" size="icon" title="Edit receipt" aria-label="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
                                   setEditReceiptId(r.id);
                                   setEditReceiptForm({ amount: String(r.amount), status: r.status || "issued", paymentChannel: r.paymentChannel || "" });
                                 }}><Pencil className="h-4 w-4" /></Button>
                               )}
                               {canDeleteReceipt && (
-                                <Button variant="ghost" size="icon" title="Delete receipt" data-testid={`btn-delete-receipt-${r.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeleteReceipt(r.id)}>
+                                <Button variant="ghost" size="icon" title="Delete receipt" aria-label="Delete receipt" data-testid={`btn-delete-receipt-${r.id}`} className="text-destructive hover:text-destructive" onClick={() => setConfirmDeleteReceipt(r.id)}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               )}
@@ -2420,22 +2420,30 @@ export default function StaffPolicies() {
                     {receiptSuccessData.paynow ? "Paynow payment processed. Receipt will appear shortly." : "No receipt ID available."}
                   </div>
                 );
-                const iframeSrc = receiptViewFormat === "thermal"
-                  ? getApiBase() + `/api/receipts/${receiptId}/view?format=thermal`
+                const thermalSize = receiptViewFormat === "thermal48" ? "48" : receiptViewFormat === "thermal58" ? "58" : "80";
+                const isThermal = receiptViewFormat !== "a4";
+                const iframeSrc = isThermal
+                  ? getApiBase() + `/api/receipts/${receiptId}/view?format=thermal&size=${thermalSize}`
                   : getApiBase() + `/api/receipts/${receiptId}/view`;
                 const receiptDownloadUrl = getApiBase() + `/api/receipts/${receiptId}/download`;
-                const receiptDownloadThermalUrl = getApiBase() + `/api/receipts/${receiptId}/download?format=thermal`;
-                const iframeH = receiptViewFormat === "thermal" ? "h-[520px]" : "h-[480px]";
+                const receiptDownloadThermalUrl = getApiBase() + `/api/receipts/${receiptId}/download?format=thermal&size=${thermalSize}`;
+                const iframeH = isThermal ? "h-[600px]" : "h-[480px]";
                 return (
                   <div className="space-y-3">
                     {/* Format toggle */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs text-muted-foreground mr-1">Format:</span>
                       <Button size="sm" variant={receiptViewFormat === "a4" ? "default" : "outline"} className="h-7 text-xs gap-1.5" onClick={() => setReceiptViewFormat("a4")}>
                         <FileText className="h-3 w-3" /> A4
                       </Button>
-                      <Button size="sm" variant={receiptViewFormat === "thermal" ? "default" : "outline"} className="h-7 text-xs gap-1.5" onClick={() => setReceiptViewFormat("thermal")}>
-                        <ScrollText className="h-3 w-3" /> 80mm Thermal
+                      <Button size="sm" variant={receiptViewFormat === "thermal48" ? "default" : "outline"} className="h-7 text-xs gap-1" onClick={() => setReceiptViewFormat("thermal48")}>
+                        <ScrollText className="h-3 w-3" /> 48mm
+                      </Button>
+                      <Button size="sm" variant={receiptViewFormat === "thermal58" ? "default" : "outline"} className="h-7 text-xs gap-1" onClick={() => setReceiptViewFormat("thermal58")}>
+                        <ScrollText className="h-3 w-3" /> 58mm
+                      </Button>
+                      <Button size="sm" variant={receiptViewFormat === "thermal80" ? "default" : "outline"} className="h-7 text-xs gap-1" onClick={() => setReceiptViewFormat("thermal80")}>
+                        <ScrollText className="h-3 w-3" /> 80mm
                       </Button>
                     </div>
                     {/* Inline PDF viewer */}
@@ -2452,12 +2460,12 @@ export default function StaffPolicies() {
                         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => printDocument(iframeSrc)}>
                           <Printer className="h-3.5 w-3.5" /> Print
                         </Button>
-                        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(receiptViewFormat === "thermal" ? receiptDownloadThermalUrl : receiptDownloadUrl, "_blank", "noopener")}>
+                        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(isThermal ? receiptDownloadThermalUrl : receiptDownloadUrl, "_blank", "noopener")}>
                           <Download className="h-3.5 w-3.5" /> Download
                         </Button>
                         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => {
                           const num = receiptSuccessData.receipt?.receiptNumber || receiptSuccessData.receiptNumber || "";
-                          shareDocument(receiptViewFormat === "thermal" ? receiptDownloadThermalUrl : receiptDownloadUrl, `Receipt-${num}`);
+                          shareDocument(isThermal ? receiptDownloadThermalUrl : receiptDownloadUrl, `Receipt-${num}`);
                         }}>
                           <Share2 className="h-3.5 w-3.5" /> Share
                         </Button>

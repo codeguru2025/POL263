@@ -25,13 +25,28 @@ const A4_H = 841.89;
 const MARGIN = 48;
 const COL = A4_W - MARGIN * 2;
 
-// ── 80mm thermal constants ──────────────────────────────────
+// ── Thermal constants ────────────────────────────────────────
 const MM_TO_PT = 2.83465;
-const THERMAL_W_MM = 80;
-const THERMAL_W = Math.round(THERMAL_W_MM * MM_TO_PT); // ≈ 227pt
-const THERMAL_M = 8;   // side margin
-const THERMAL_INNER = THERMAL_W - THERMAL_M * 2;
 const THERMAL_PAGE_H = 2000; // tall enough; thermal cutter trims the rest
+
+export type ThermalSize = 48 | 58 | 80;
+
+function thermalLayout(sizeMm: ThermalSize) {
+  const W = Math.round(sizeMm * MM_TO_PT);
+  // Narrower paper gets tighter margins so more content fits
+  const M = sizeMm === 48 ? 5 : sizeMm === 58 ? 6 : 8;
+  const INNER = W - M * 2;
+  // Label column for the lft() helper
+  const LABEL_W = sizeMm === 48 ? 38 : sizeMm === 58 ? 52 : 68;
+  // Fonts — 48mm gets slightly larger text so it's legible on the narrow roll
+  const F_BODY  = sizeMm === 48 ? 9   : sizeMm === 58 ? 8.5 : 8;
+  const F_SM    = sizeMm === 48 ? 8   : sizeMm === 58 ? 7.5 : 7.5;
+  const F_HEAD  = sizeMm === 48 ? 10  : sizeMm === 58 ? 9.5 : 9;
+  const F_AMT   = sizeMm === 48 ? 13  : sizeMm === 58 ? 12  : 10;
+  // Logo — proportionally larger on narrower paper so it stays visible
+  const LOGO_SZ = sizeMm === 48 ? 56  : sizeMm === 58 ? 48  : 36;
+  return { W, M, INNER, LABEL_W, F_BODY, F_SM, F_HEAD, F_AMT, LOGO_SZ };
+}
 
 // ── Shared colours ──────────────────────────────────────────
 const C_PRIMARY = "#0f766e";
@@ -295,17 +310,19 @@ export async function streamReceiptToResponse(
 }
 
 /**
- * Stream an 80mm thermal receipt PDF.
+ * Stream a thermal receipt PDF for 48mm, 58mm, or 80mm roll printers.
  *
  * Uses PDFKit's natural text flow (no explicit y coordinates) so that
  * wrapped lines on the narrow column never overlap. The page is 2000pt tall;
  * thermal cutters trim at the last line of content.
+ *
+ * Font and logo sizes scale up for narrower paper so the receipt stays legible.
  */
 export async function streamThermalReceiptToResponse(
   receiptId: string,
   orgId: string,
   res: import("express").Response,
-  opts?: { attachment?: boolean }
+  opts?: { attachment?: boolean; size?: ThermalSize }
 ): Promise<void> {
   const receipt = await findPaymentReceiptById(receiptId);
   if (!receipt || receipt.organizationId !== orgId) {
@@ -324,7 +341,10 @@ export async function streamThermalReceiptToResponse(
     ? `RCP-${String(receipt.receiptNumber).padStart(5, "0")}`
     : receipt.receiptNumber;
 
-  const filename = `Thermal-${displayReceiptNum}.pdf`;
+  const sizeMm: ThermalSize = opts?.size ?? 80;
+  const { W, M, INNER, LABEL_W, F_BODY, F_SM, F_HEAD, F_AMT, LOGO_SZ } = thermalLayout(sizeMm);
+
+  const filename = `Thermal-${sizeMm}mm-${displayReceiptNum}.pdf`;
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", opts?.attachment
     ? `attachment; filename="${filename}"`
@@ -332,60 +352,59 @@ export async function streamThermalReceiptToResponse(
 
   const logoData = await resolveImage(org.logoUrl);
 
-  // Use tall page; thermal cutter ignores blank space at the bottom
   const doc = new PDFDocument({
-    size: [THERMAL_W, THERMAL_PAGE_H],
-    margin: THERMAL_M,
+    size: [W, THERMAL_PAGE_H],
+    margin: M,
     bufferPages: false,
     info: { Title: `Receipt ${displayReceiptNum}` },
   });
   doc.pipe(res);
 
   try {
-    // Use PDFKit natural flow — no explicit x/y after the initial margin setup.
-    // This is critical: on a 211pt inner column, most text wraps; explicit y
-    // coordinates would cause the cursor to fall behind and lines to stack.
-    doc.x = THERMAL_M;
-    doc.y = THERMAL_M;
+    doc.x = M;
+    doc.y = M;
 
-    const ctr = (text: string, opts2?: { bold?: boolean; size?: number }) => {
-      if (opts2?.bold) doc.font("Helvetica-Bold"); else doc.font("Helvetica");
-      if (opts2?.size) doc.fontSize(opts2.size); else doc.fontSize(8);
-      doc.text(text, THERMAL_M, doc.y, { width: THERMAL_INNER, align: "center" });
+    const ctr = (text: string, bold = false, size = F_BODY) => {
+      doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(size)
+        .text(text, M, doc.y, { width: INNER, align: "center" });
     };
     const lft = (label: string, value: string) => {
-      doc.font("Helvetica-Bold").fontSize(7.5)
-        .text(label, THERMAL_M, doc.y, { width: 68, lineBreak: false });
-      doc.font("Helvetica").fontSize(7.5)
-        .text(value, THERMAL_M + 70, doc.y - doc.currentLineHeight(), { width: THERMAL_INNER - 70 });
+      const lineY = doc.y;
+      doc.font("Helvetica-Bold").fontSize(F_SM)
+        .text(label, M, lineY, { width: LABEL_W, lineBreak: false });
+      doc.font("Helvetica").fontSize(F_SM)
+        .text(value, M + LABEL_W + 2, lineY, { width: INNER - LABEL_W - 2 });
     };
     const rule = () => {
-      const rY = doc.y + 2;
-      doc.moveTo(THERMAL_M, rY).lineTo(THERMAL_W - THERMAL_M, rY).lineWidth(0.5).strokeColor("#999").stroke();
-      doc.y = rY + 4;
+      const rY = doc.y + 3;
+      doc.moveTo(M, rY).lineTo(W - M, rY).lineWidth(0.5).strokeColor("#888").stroke();
+      doc.y = rY + 5;
     };
     const gap = (n = 4) => { doc.y += n; };
 
     // ── Logo ──────────────────────────────────────────────────
     if (logoData) {
       try {
-        const logoSize = 36;
-        const logoX = Math.round((THERMAL_W - logoSize) / 2);
-        doc.image(logoData, logoX, doc.y, { width: logoSize, height: logoSize });
-        doc.y += logoSize + 3;
+        const logoX = Math.round((W - LOGO_SZ) / 2);
+        doc.image(logoData, logoX, doc.y, { width: LOGO_SZ, height: LOGO_SZ, fit: [LOGO_SZ, LOGO_SZ] });
+        doc.y += LOGO_SZ + 4;
       } catch { /* skip */ }
     }
 
     // ── Header ────────────────────────────────────────────────
-    ctr(org.name || "POL263", { bold: true, size: 9 });
-    if (org.address) ctr(org.address);
-    if (org.phone) ctr(`Tel: ${org.phone}`);
-    if (org.email) ctr(org.email);
-    gap();
+    ctr(org.name || "POL263", true, F_HEAD);
+    if (org.address) ctr(org.address, false, F_SM);
+    if (org.phone) ctr(`Tel: ${org.phone}`, false, F_SM);
+    if (org.email) ctr(org.email, false, F_SM);
+    gap(3);
     rule();
-    ctr("PAYMENT RECEIPT", { bold: true, size: 9 });
-    ctr(displayReceiptNum, { bold: true });
-    ctr(fmtDateTime(new Date(receipt.issuedAt)));
+
+    ctr("PAYMENT RECEIPT", true, F_HEAD);
+    gap(2);
+    ctr(displayReceiptNum, true, F_BODY);
+    gap(1);
+    ctr(fmtDateTime(new Date(receipt.issuedAt)), false, F_SM);
+    gap(2);
     rule();
 
     // ── Client & policy ───────────────────────────────────────
@@ -393,33 +412,38 @@ export async function streamThermalReceiptToResponse(
     if (client.phone) lft("Phone:", client.phone);
     if (client.nationalId) lft("ID:", client.nationalId);
     lft("Policy:", policy.policyNumber);
-    gap(2);
+    gap(3);
     rule();
 
-    // ── Payment ───────────────────────────────────────────────
-    doc.font("Helvetica-Bold").fontSize(10).fillColor(C_PRIMARY)
-      .text(`${receipt.currency} ${Number(receipt.amount).toFixed(2)}`, THERMAL_M, doc.y, { width: THERMAL_INNER, align: "center" });
+    // ── Amount (big and bold) ─────────────────────────────────
+    gap(2);
+    doc.font("Helvetica-Bold").fontSize(F_AMT).fillColor(C_PRIMARY)
+      .text(`${receipt.currency} ${Number(receipt.amount).toFixed(2)}`, M, doc.y, { width: INNER, align: "center" });
     doc.fillColor(C_TEXT);
+    gap(3);
     const channel = String(receipt.paymentChannel || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-    ctr(channel);
+    ctr(channel, false, F_BODY);
+
     const meta = receipt.metadataJson as Record<string, string> | null;
     if (receipt.periodFrom && receipt.periodTo) {
       const pfmtT = (s: string) => fmtDate(new Date(s + "T00:00:00"));
+      gap(2);
       lft("Period:", `${pfmtT(receipt.periodFrom)} – ${pfmtT(receipt.periodTo)}`);
     }
-    if (meta?.paynowReference) lft("Ref:", meta.paynowReference);
-    if (meta?.mobileNumber) lft("Mobile:", meta.mobileNumber);
+    if (meta?.paynowReference) { gap(1); lft("Ref:", meta.paynowReference); }
+    if (meta?.mobileNumber) { gap(1); lft("Mobile:", meta.mobileNumber); }
+    gap(3);
     rule();
 
     // ── Footer ────────────────────────────────────────────────
-    ctr(org.footerText || "Thank you for your payment.", { bold: true });
-    gap(2);
-    ctr(`Printed: ${fmtDateTime(new Date())}`, { size: 7 });
-    gap(8);
+    ctr(org.footerText || "Thank you for your payment.", true, F_BODY);
+    gap(3);
+    ctr(`Printed: ${fmtDateTime(new Date())}`, false, F_SM);
+    gap(10);
 
     doc.end();
   } catch (err: any) {
-    structuredLog("error", "Thermal receipt PDF generation failed", { receiptId, error: err?.message });
+    structuredLog("error", "Thermal receipt PDF generation failed", { receiptId, sizeMm, error: err?.message });
     try { doc.end(); } catch { /* already ended */ }
     res.destroy();
   }

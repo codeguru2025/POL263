@@ -1101,11 +1101,11 @@ export class DatabaseStorage implements IStorage {
   // ─── Dependents ────────────────────────────────────────────
   async getDependentsByClient(clientId: string, orgId: string): Promise<Dependent[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(dependents).where(eq(dependents.clientId, clientId)).orderBy(dependents.createdAt);
+    return tdb.select().from(dependents).where(and(eq(dependents.clientId, clientId), eq(dependents.organizationId, orgId))).orderBy(dependents.createdAt);
   }
   async getDependent(id: string, orgId: string): Promise<Dependent | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [dep] = await tdb.select().from(dependents).where(eq(dependents.id, id)).limit(1);
+    const [dep] = await tdb.select().from(dependents).where(and(eq(dependents.id, id), eq(dependents.organizationId, orgId))).limit(1);
     return dep;
   }
   async createDependent(dep: InsertDependent): Promise<Dependent> {
@@ -1881,11 +1881,11 @@ export class DatabaseStorage implements IStorage {
 
   async getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(policies).where(eq(policies.clientId, clientId));
+    return tdb.select().from(policies).where(and(eq(policies.clientId, clientId), eq(policies.organizationId, orgId))).limit(500);
   }
   async getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(policies).where(and(eq(policies.agentId, agentId), eq(policies.organizationId, orgId)));
+    return tdb.select().from(policies).where(and(eq(policies.agentId, agentId), eq(policies.organizationId, orgId))).limit(500);
   }
   async reassignAgentPolicies(fromAgentId: string, toAgentId: string, orgId: string): Promise<number> {
     const tdb = await getDbForOrg(orgId);
@@ -3287,7 +3287,7 @@ export class DatabaseStorage implements IStorage {
   // ─── Price Book ────────────────────────────────────────────
   async getPriceBookItems(orgId: string): Promise<PriceBookItem[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(priceBookItems).where(eq(priceBookItems.organizationId, orgId));
+    return tdb.select().from(priceBookItems).where(eq(priceBookItems.organizationId, orgId)).limit(500);
   }
   async createPriceBookItem(item: InsertPriceBookItem): Promise<PriceBookItem> {
     const tdb = await getDbForOrg(item.organizationId);
@@ -3411,19 +3411,32 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const dayStart = new Date(date + "T00:00:00.000Z");
     const dayEnd = new Date(date + "T23:59:59.999Z");
-    const rows = await tdb
-      .select({ paymentChannel: paymentReceipts.paymentChannel, amount: paymentReceipts.amount, currency: paymentReceipts.currency })
-      .from(paymentReceipts)
-      .where(and(
-        eq(paymentReceipts.organizationId, orgId),
-        eq(paymentReceipts.issuedByUserId, userId),
-        eq(paymentReceipts.status, "issued"),
-        gte(paymentReceipts.issuedAt, dayStart),
-        lte(paymentReceipts.issuedAt, dayEnd),
-      ));
+    const [policyRows, serviceRows] = await Promise.all([
+      tdb
+        .select({ paymentChannel: paymentReceipts.paymentChannel, amount: paymentReceipts.amount, currency: paymentReceipts.currency })
+        .from(paymentReceipts)
+        .where(and(
+          eq(paymentReceipts.organizationId, orgId),
+          eq(paymentReceipts.issuedByUserId, userId),
+          eq(paymentReceipts.status, "issued"),
+          gte(paymentReceipts.issuedAt, dayStart),
+          lte(paymentReceipts.issuedAt, dayEnd),
+        )),
+      tdb
+        .select({ paymentChannel: serviceReceipts.paymentChannel, amount: serviceReceipts.amount, currency: serviceReceipts.currency })
+        .from(serviceReceipts)
+        .where(and(
+          eq(serviceReceipts.organizationId, orgId),
+          eq(serviceReceipts.issuedByUserId, userId),
+          eq(serviceReceipts.status, "issued"),
+          gte(serviceReceipts.issuedAt, dayStart),
+          lte(serviceReceipts.issuedAt, dayEnd),
+        )),
+    ]);
+    const allRows = [...policyRows, ...serviceRows];
     const amountsByMethod: Record<string, string> = { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
     const currencyCounts: Record<string, number> = {};
-    for (const r of rows) {
+    for (const r of allRows) {
       const ch = (r.paymentChannel || "other").toLowerCase();
       const key = ch === "cash" ? "cash" : ch === "paynow_ecocash" ? "paynow_ecocash" : ch === "paynow_card" ? "paynow_card" : "other";
       const prev = parseFloat(amountsByMethod[key] || "0");
@@ -3432,7 +3445,7 @@ export class DatabaseStorage implements IStorage {
       currencyCounts[cur] = (currencyCounts[cur] || 0) + 1;
     }
     const currency = Object.entries(currencyCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "USD";
-    return { amountsByMethod, transactionCount: rows.length, currency };
+    return { amountsByMethod, transactionCount: allRows.length, currency };
   }
 
   // ─── Security Questions ────────────────────────────────────
@@ -4100,7 +4113,7 @@ export class DatabaseStorage implements IStorage {
     if (opts?.funeralCaseId) conditions.push(eq(serviceReceipts.funeralCaseId, opts.funeralCaseId));
     if (opts?.fromDate) conditions.push(gte(serviceReceipts.issuedAt, new Date(opts.fromDate + "T00:00:00.000Z")));
     if (opts?.toDate) conditions.push(lte(serviceReceipts.issuedAt, new Date(opts.toDate + "T23:59:59.999Z")));
-    return tdb.select().from(serviceReceipts).where(and(...conditions)).orderBy(desc(serviceReceipts.issuedAt));
+    return tdb.select().from(serviceReceipts).where(and(...conditions)).orderBy(desc(serviceReceipts.issuedAt)).limit(500);
   }
   async getServiceReceiptByIdempotencyKey(orgId: string, idempotencyKey: string): Promise<ServiceReceipt | undefined> {
     const tdb = await getDbForOrg(orgId);

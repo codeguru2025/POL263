@@ -391,6 +391,12 @@ function PayingStep({
 
 // ── Step 4: Success ───────────────────────────────────────────────────────────
 
+const THERMAL_SIZES = [
+  { label: "48mm", value: "48" },
+  { label: "58mm", value: "58" },
+  { label: "80mm", value: "80" },
+] as const;
+
 function DoneStep({
   result,
   policy,
@@ -400,6 +406,8 @@ function DoneStep({
   policy: PolicyDetail;
   onNew: () => void;
 }) {
+  const [thermalSize, setThermalSize] = useState<"48" | "58" | "80">("80");
+
   const receiptId = result?.receipt?.id ?? result?.receiptId;
   const receiptNum = result?.receipt?.receiptNumber ?? result?.receiptNumber ?? "—";
   const amount = result?.amount ?? "—";
@@ -409,7 +417,7 @@ function DoneStep({
 
   const base = getApiBase();
   const viewUrl = receiptId ? `${base}/api/receipts/${receiptId}/view` : null;
-  const thermalUrl = receiptId ? `${base}/api/receipts/${receiptId}/view?format=thermal` : null;
+  const thermalUrl = receiptId ? `${base}/api/receipts/${receiptId}/view?format=thermal&size=${thermalSize}` : null;
 
   return (
     <div className="space-y-4">
@@ -434,19 +442,40 @@ function DoneStep({
         ))}
       </dl>
 
-      <div className="grid grid-cols-3 gap-2">
-        {thermalUrl && (
+      {/* Paper size selector + thermal button */}
+      {thermalUrl && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground font-medium">Paper size</p>
+          <div className="flex gap-1.5">
+            {THERMAL_SIZES.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                onClick={() => setThermalSize(s.value)}
+                className={`flex-1 rounded border text-xs py-1 font-medium transition-colors ${
+                  thermalSize === s.value
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-background border-border text-muted-foreground hover:border-primary/60"
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
           <Button
             variant="outline"
             size="sm"
-            className="gap-1.5"
+            className="w-full gap-1.5"
             onClick={() => window.open(thermalUrl, "_blank")}
             data-testid="button-receipt-thermal"
           >
             <Printer className="h-3.5 w-3.5" />
-            Thermal
+            Print Thermal ({thermalSize}mm)
           </Button>
-        )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
         {viewUrl && (
           <Button
             variant="outline"
@@ -463,7 +492,7 @@ function DoneStep({
           size="sm"
           className="gap-1.5"
           onClick={onNew}
-          style={{ gridColumn: thermalUrl || viewUrl ? "auto" : "1 / -1" }}
+          style={{ gridColumn: viewUrl ? "auto" : "1 / -1" }}
           data-testid="button-receipt-new"
         >
           <RefreshCw className="h-3.5 w-3.5" />

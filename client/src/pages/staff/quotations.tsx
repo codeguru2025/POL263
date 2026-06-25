@@ -58,7 +58,7 @@ const BLANK_QUOTE: QuoteForm = {
   deceasedName: "", deceasedAge: "", deceasedSex: "", casketType: "",
   quotationDate: new Date().toISOString().slice(0, 10),
   currency: "USD", paymentType: "full",
-  vatRate: "15", discountAmount: "0", notes: "",
+  vatRate: "0", discountAmount: "0", notes: "",
 };
 
 const BLANK_ITEMS: LineItem[] = STANDARD_ITEMS.map((d) => ({ description: d, qty: "1", unitPrice: "" }));
@@ -96,14 +96,15 @@ function casketLabel(v: string | undefined) {
 }
 
 /* ─── QuoteDialog (new + edit) ─────────────────────────────────── */
-function QuoteDialog({
-  open, onClose, initialData, initialItems, quoteId,
+export function QuoteDialog({
+  open, onClose, initialData, initialItems, quoteId, onSuccess: onSuccessCallback,
 }: {
   open: boolean;
   onClose: () => void;
   initialData?: Partial<QuoteForm>;
   initialItems?: LineItem[];
   quoteId?: string;
+  onSuccess?: () => void;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -134,6 +135,7 @@ function QuoteDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/quotations"] });
       if (quoteId) queryClient.invalidateQueries({ queryKey: ["/api/quotations", quoteId] });
+      onSuccessCallback?.();
       onClose();
       toast({ title: isEdit ? "Quotation updated" : "Quotation created" });
     },
@@ -640,7 +642,7 @@ function QuotationDetailPanel({
               <span>{fmtMoney(parseFloat(quote.subtotal || "0"), currency)}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
-              <span>VAT ({quote.vatRate ?? 15}%)</span>
+              <span>VAT ({quote.vatRate ?? 0}%)</span>
               <span>{fmtMoney(parseFloat(quote.vatAmount || "0"), currency)}</span>
             </div>
             {parseFloat(quote.discountAmount || "0") > 0 && (

@@ -123,7 +123,7 @@ export async function uploadFile(
       Key: key,
       Body: buffer,
       ContentType: contentType,
-      ACL: "public-read",
+      // ACL intentionally omitted — objects are private; served via authenticated proxy route
     }),
   );
 

@@ -608,6 +608,7 @@ export function setupAuth(app: Express) {
       structuredLog("info", "Agent login password check", { userId: user.id, valid });
       if (!valid) {
         recordAgentLoginFailure(email);
+        structuredLog("warn", "AGENT_LOGIN_FAILED", { userId: user.id, email, ip: req.ip, reason: "invalid_password" });
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
