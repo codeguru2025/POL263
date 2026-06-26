@@ -106,6 +106,9 @@ jobs:
         env:
           CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
 
+      - name: Create local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
       - name: Build Android APK (debug)
         run: |
           cd android
@@ -151,6 +154,9 @@ jobs:
         run: npx cap copy android
         env:
           CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
+
+      - name: Create local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: Decode keystore and build release AAB
         env:
