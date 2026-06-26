@@ -26,7 +26,7 @@ jobs:
       - name: Pin npm
         run: npm install -g npm@11.11.0
       - name: Generate lockfile on Linux
-        run: npm install --package-lock-only --include=dev --ignore-scripts
+        run: npm install --package-lock-only
       - name: Upload lockfile
         uses: actions/upload-artifact@v4
         with:
