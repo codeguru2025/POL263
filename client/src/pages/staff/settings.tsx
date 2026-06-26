@@ -387,28 +387,36 @@ export default function StaffSettings() {
     },
   });
 
+  // Fetch full tenant record when edit dialog opens so databaseUrl (and other
+  // fields absent from the control-plane list query) are pre-populated correctly.
+  const { data: editingTenantFull } = useQuery<any>({
+    queryKey: ["/api/organizations", tenantEditId],
+    enabled: !!tenantEditId,
+  });
+
   useEffect(() => {
-    if (tenantEditId && orgsList.length > 0) {
-      const org = orgsList.find((o: any) => o.id === tenantEditId);
-      if (org) {
-        setEditingTenantForm({
-          name: org.name || "",
-          email: org.email || "",
-          phone: org.phone || "",
-          isWhitelabeled: org.isWhitelabeled ?? false,
-          databaseUrl: org.databaseUrl ?? "",
-        });
-      }
+    if (!tenantEditId) return;
+    // Prefer the full record (has databaseUrl); fall back to the list entry.
+    const org = editingTenantFull ?? orgsList.find((o: any) => o.id === tenantEditId);
+    if (org) {
+      setEditingTenantForm({
+        name: org.name || "",
+        email: org.email || "",
+        phone: org.phone || "",
+        isWhitelabeled: org.isWhitelabeled ?? false,
+        databaseUrl: org.databaseUrl ?? "",
+      });
     }
-  }, [tenantEditId, orgsList]);
+  }, [tenantEditId, editingTenantFull, orgsList]);
 
   const updateTenantMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
       const res = await apiRequest("PATCH", `/api/organizations/${id}`, data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations", vars.id] });
       queryClient.invalidateQueries({ queryKey: ["/api/public/branding"] });
       setTenantEditId(null);
       toast({ title: "Tenant updated" });
@@ -482,7 +490,7 @@ export default function StaffSettings() {
     }
     const data = await res.json();
     setLogoUrl(data.url);
-    updateOrgMutation.mutate({ ...currentOrg, logoUrl: data.url });
+    updateOrgMutation.mutate({ logoUrl: data.url });
   };
 
   const handleSignatureUpload = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -510,7 +518,7 @@ export default function StaffSettings() {
     }
     const data = await res.json();
     setSignatureUrl(data.url);
-    updateOrgMutation.mutate({ ...currentOrg, signatureUrl: data.url });
+    updateOrgMutation.mutate({ signatureUrl: data.url });
   };
 
   const openNewTermDialog = () => {
