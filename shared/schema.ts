@@ -2122,6 +2122,26 @@ export const insertRequisitionSchema = createInsertSchema(requisitions).omit({ i
 export type Requisition = typeof requisitions.$inferSelect;
 export type InsertRequisition = z.infer<typeof insertRequisitionSchema>;
 
+// ─── REQUISITION LINE ITEMS ────────────────────────────────
+export const requisitionItems = pgTable(
+  "requisition_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    requisitionId: uuid("requisition_id").notNull().references(() => requisitions.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    description: text("description").notNull(),
+    category: text("category").notNull(),
+    qty: numeric("qty", { precision: 10, scale: 2 }).default("1").notNull(),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+  },
+  (t) => [index("req_item_req_idx").on(t.requisitionId)]
+);
+
+export const insertRequisitionItemSchema = createInsertSchema(requisitionItems).omit({ id: true });
+export type RequisitionItem = typeof requisitionItems.$inferSelect;
+export type InsertRequisitionItem = z.infer<typeof insertRequisitionItemSchema>;
+
 // ── Debit Orders: recurring bank-debit mandates for premium collection ──
 export const DEBIT_ORDER_STATUSES = ["active", "paused", "cancelled"] as const;
 export const DEBIT_ORDER_FREQUENCIES = ["weekly", "biweekly", "monthly", "quarterly"] as const;

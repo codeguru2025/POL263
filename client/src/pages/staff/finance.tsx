@@ -339,17 +339,42 @@ export default function StaffFinance() {
   const { data: rawExpenditures } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
   const { data: rawRequisitions } = useQuery<any[]>({ queryKey: ["/api/requisitions"], enabled: canReadFinance });
   const requisitions = Array.isArray(rawRequisitions) ? rawRequisitions : [];
+  type ReqItem = { description: string; category: string; qty: string; unitPrice: string };
+  const blankItem = (): ReqItem => ({ description: "", category: "", qty: "1", unitPrice: "" });
   const [showRequisitionDialog, setShowRequisitionDialog] = useState(false);
-  const [requisitionForm, setRequisitionForm] = useState({ category: "", description: "", payee: "", amount: "", currency: "USD" });
+  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "" });
+  const [reqItems, setReqItems] = useState<ReqItem[]>([blankItem()]);
+  const reqTotal = reqItems.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.unitPrice) || 0), 0);
+  const reqItemsValid = reqItems.every(it => it.description.trim() && it.category.trim() && Number(it.unitPrice) > 0);
+  const updateReqItem = (idx: number, field: keyof ReqItem, val: string) =>
+    setReqItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
+  const addReqItem = () => setReqItems(prev => [...prev, blankItem()]);
+  const removeReqItem = (idx: number) => setReqItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
+  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "" }); setReqItems([blankItem()]); };
+
   const createRequisitionMutation = useMutation({
     mutationFn: async (submit: boolean) => {
-      const res = await apiRequest("POST", "/api/requisitions", { ...requisitionForm, submit });
+      const items = reqItems.map(it => ({
+        description: it.description.trim(),
+        category: it.category.trim(),
+        qty: Number(it.qty) || 1,
+        unitPrice: Number(it.unitPrice) || 0,
+      }));
+      const res = await apiRequest("POST", "/api/requisitions", {
+        ...reqHeader,
+        // Legacy fields derived from first item as fallback
+        category: items[0]?.category || "",
+        description: items.length === 1 ? items[0].description : `${items.length} items`,
+        amount: reqTotal.toFixed(2),
+        items,
+        submit,
+      });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
       setShowRequisitionDialog(false);
-      setRequisitionForm({ category: "", description: "", payee: "", amount: "", currency: "USD" });
+      resetRequisitionForm();
       toast({ title: "Requisition created" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -1353,24 +1378,41 @@ export default function StaffFinance() {
                   <TableHeader className={dataTableStickyHeaderClass}>
                     <TableRow>
                       <TableHead>Number</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Description</TableHead>
+                      <TableHead>Items</TableHead>
                       <TableHead>Payee</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {requisitions.map((r: any) => (
-                      <TableRow key={r.id} className="hover:bg-muted/40">
-                        <TableCell className="font-mono text-xs">{r.requisitionNumber}</TableCell>
-                        <TableCell><Badge variant="outline">{r.category}</Badge></TableCell>
-                        <TableCell className="max-w-[220px] truncate" title={r.description}>{r.description}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{r.payee || "—"}</TableCell>
-                        <TableCell className="font-semibold text-right tabular-nums">{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
-                        <TableCell><StatusBadge status={r.status} /></TableCell>
-                        <TableCell className="text-right">
+                    {requisitions.map((r: any) => {
+                      const items: any[] = Array.isArray(r.items) ? r.items : [];
+                      return (
+                      <TableRow key={r.id} className="hover:bg-muted/40 align-top">
+                        <TableCell className="font-mono text-xs pt-3">{r.requisitionNumber}</TableCell>
+                        <TableCell>
+                          {items.length > 0 ? (
+                            <div className="space-y-0.5">
+                              {items.map((it: any, idx: number) => (
+                                <div key={idx} className="text-xs flex gap-2 items-baseline">
+                                  <Badge variant="outline" className="text-[10px] shrink-0">{it.category}</Badge>
+                                  <span className="text-muted-foreground truncate max-w-[160px]" title={it.description}>{it.description}</span>
+                                  <span className="tabular-nums shrink-0 ml-auto text-muted-foreground">{Number(it.qty)}× {Number(it.unitPrice).toFixed(2)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs flex gap-2 items-baseline">
+                              <Badge variant="outline" className="text-[10px]">{r.category}</Badge>
+                              <span className="text-muted-foreground truncate max-w-[200px]" title={r.description}>{r.description}</span>
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground pt-3">{r.payee || "—"}</TableCell>
+                        <TableCell className="font-semibold text-right tabular-nums pt-3">{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
+                        <TableCell className="pt-3"><StatusBadge status={r.status} /></TableCell>
+                        <TableCell className="text-right pt-3">
                           <div className="flex justify-end gap-1.5">
                             {r.status === "draft" && canWriteFinance && (
                               <Button size="sm" variant="outline" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "submit" })} data-testid={`btn-submit-req-${r.id}`}>Submit</Button>
@@ -1388,7 +1430,7 @@ export default function StaffFinance() {
                           </div>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    )})}
                   </TableBody>
                 </DataTable>
               )}
@@ -1864,38 +1906,123 @@ export default function StaffFinance() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showRequisitionDialog} onOpenChange={setShowRequisitionDialog}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog open={showRequisitionDialog} onOpenChange={(open) => { setShowRequisitionDialog(open); if (!open) resetRequisitionForm(); }}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>New Requisition</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs">Category *</Label>
-              <Input value={requisitionForm.category} onChange={(e) => setRequisitionForm({ ...requisitionForm, category: e.target.value })} placeholder="e.g. Fuel, Rent, Supplies" data-testid="input-req-category" />
-            </div>
-            <div>
-              <Label className="text-xs">Description *</Label>
-              <Input value={requisitionForm.description} onChange={(e) => setRequisitionForm({ ...requisitionForm, description: e.target.value })} placeholder="What is this for?" data-testid="input-req-description" />
-            </div>
+
+          {/* Header fields */}
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Payee</Label>
-              <Input value={requisitionForm.payee} onChange={(e) => setRequisitionForm({ ...requisitionForm, payee: e.target.value })} placeholder="Who is paid" />
+              <Input value={reqHeader.payee} onChange={(e) => setReqHeader({ ...reqHeader, payee: e.target.value })} placeholder="Who will be paid?" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Amount *</Label>
-                <Input type="number" step="0.01" min="0" value={requisitionForm.amount} onChange={(e) => setRequisitionForm({ ...requisitionForm, amount: e.target.value })} data-testid="input-req-amount" />
-              </div>
-              <div>
-                <Label className="text-xs">Currency</Label>
-                <CurrencySelect value={requisitionForm.currency} onValueChange={(v) => setRequisitionForm({ ...requisitionForm, currency: v })} />
-              </div>
+            <div>
+              <Label className="text-xs">Currency</Label>
+              <CurrencySelect value={reqHeader.currency} onValueChange={(v) => setReqHeader({ ...reqHeader, currency: v })} />
             </div>
           </div>
+
+          {/* Line items */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <Label className="text-xs">Line Items *</Label>
+              <Button type="button" size="sm" variant="outline" onClick={addReqItem}>
+                <Plus className="h-3 w-3 mr-1" />Add Item
+              </Button>
+            </div>
+            <div className="border rounded-md overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left px-2 py-1.5 font-medium w-[28%]">Description *</th>
+                    <th className="text-left px-2 py-1.5 font-medium w-[22%]">Category *</th>
+                    <th className="text-left px-2 py-1.5 font-medium w-[12%]">Qty</th>
+                    <th className="text-left px-2 py-1.5 font-medium w-[20%]">Unit Price *</th>
+                    <th className="text-right px-2 py-1.5 font-medium w-[14%]">Subtotal</th>
+                    <th className="w-[4%]" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {reqItems.map((item, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="px-1 py-1">
+                        <Input
+                          className="h-7 text-xs"
+                          placeholder="What is this?"
+                          value={item.description}
+                          onChange={(e) => updateReqItem(idx, "description", e.target.value)}
+                          data-testid={idx === 0 ? "input-req-description" : undefined}
+                        />
+                      </td>
+                      <td className="px-1 py-1">
+                        <Input
+                          className="h-7 text-xs"
+                          placeholder="e.g. Fuel"
+                          value={item.category}
+                          onChange={(e) => updateReqItem(idx, "category", e.target.value)}
+                          data-testid={idx === 0 ? "input-req-category" : undefined}
+                        />
+                      </td>
+                      <td className="px-1 py-1">
+                        <Input
+                          className="h-7 text-xs"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={item.qty}
+                          onChange={(e) => updateReqItem(idx, "qty", e.target.value)}
+                        />
+                      </td>
+                      <td className="px-1 py-1">
+                        <Input
+                          className="h-7 text-xs"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={item.unitPrice}
+                          onChange={(e) => updateReqItem(idx, "unitPrice", e.target.value)}
+                          data-testid={idx === 0 ? "input-req-amount" : undefined}
+                        />
+                      </td>
+                      <td className="px-2 py-1 text-right tabular-nums font-medium">
+                        {((Number(item.qty) || 0) * (Number(item.unitPrice) || 0)).toFixed(2)}
+                      </td>
+                      <td className="px-1 py-1 text-center">
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-destructive transition-colors"
+                          onClick={() => removeReqItem(idx)}
+                          disabled={reqItems.length === 1}
+                          title="Remove item"
+                        >
+                          ×
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t bg-muted/30">
+                    <td colSpan={4} className="px-2 py-1.5 text-right text-xs font-medium">Total</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums font-bold text-sm">{reqHeader.currency} {reqTotal.toFixed(2)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-xs">Notes</Label>
+            <Input value={reqHeader.notes} onChange={(e) => setReqHeader({ ...reqHeader, notes: e.target.value })} placeholder="Any additional notes…" />
+          </div>
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => createRequisitionMutation.mutate(false)} disabled={createRequisitionMutation.isPending || !requisitionForm.category || !requisitionForm.description || !requisitionForm.amount}>Save Draft</Button>
-            <Button onClick={() => createRequisitionMutation.mutate(true)} disabled={createRequisitionMutation.isPending || !requisitionForm.category || !requisitionForm.description || !requisitionForm.amount} data-testid="button-submit-requisition">
+            <Button variant="outline" onClick={() => createRequisitionMutation.mutate(false)} disabled={createRequisitionMutation.isPending || !reqItemsValid || reqTotal <= 0}>Save Draft</Button>
+            <Button onClick={() => createRequisitionMutation.mutate(true)} disabled={createRequisitionMutation.isPending || !reqItemsValid || reqTotal <= 0} data-testid="button-submit-requisition">
               {createRequisitionMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Submit for Approval
             </Button>
           </DialogFooter>

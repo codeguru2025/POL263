@@ -45,7 +45,7 @@ import {
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertReceiptAdvertSchema,
   insertDependentSchema, insertTermsSchema,
-  insertRequisitionSchema, REQUISITION_STATUSES,
+  insertRequisitionSchema, insertRequisitionItemSchema, REQUISITION_STATUSES,
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases, waitingPeriodWaivers,
@@ -4681,15 +4681,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
-    return res.json(await storage.getRequisitions(user.organizationId, { status, fromDate, toDate }));
+    const reqs = await storage.getRequisitions(user.organizationId, { status, fromDate, toDate });
+    const ids = reqs.map(r => r.id);
+    const allItems = ids.length > 0 ? await storage.getRequisitionItemsByIds(ids, user.organizationId) : [];
+    const itemMap = new Map<string, any[]>();
+    for (const item of allItems) {
+      if (!itemMap.has(item.requisitionId)) itemMap.set(item.requisitionId, []);
+      itemMap.get(item.requisitionId)!.push(item);
+    }
+    return res.json(reqs.map(r => ({ ...r, items: itemMap.get(r.id) ?? [] })));
   });
 
   app.post("/api/requisitions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     const requisitionNumber = `REQ-${Date.now().toString(36).toUpperCase()}`;
     const submit = req.body.submit === true || req.body.status === "submitted";
+
+    // Calculate total from line items if provided.
+    const rawItems: Array<{ description: string; category: string; qty: any; unitPrice: any }> =
+      Array.isArray(req.body.items) ? req.body.items : [];
+    const itemsTotal = rawItems.reduce((sum, it) => sum + Number(it.qty || 1) * Number(it.unitPrice || 0), 0);
+    const amount = rawItems.length > 0 ? itemsTotal.toFixed(2) : req.body.amount;
+
     const parsed = insertRequisitionSchema.parse({
       ...req.body,
+      amount,
       organizationId: user.organizationId,
       requisitionNumber,
       requestedBy: user.id,
@@ -4704,8 +4720,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       structuredLog("error", "POST /api/requisitions failed", { error: err?.message });
       return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create requisition." : err?.message });
     }
-    await auditLog(req, "CREATE_REQUISITION", "Requisition", created.id, null, created);
-    return res.status(201).json(created);
+
+    let savedItems: any[] = [];
+    if (rawItems.length > 0) {
+      try {
+        const toInsert = rawItems.map(it => insertRequisitionItemSchema.parse({
+          requisitionId: created.id,
+          organizationId: user.organizationId,
+          description: String(it.description || "").trim(),
+          category: String(it.category || "").trim(),
+          qty: String(Number(it.qty) > 0 ? Number(it.qty) : 1),
+          unitPrice: String(Number(it.unitPrice)),
+          total: String((Number(it.qty || 1) * Number(it.unitPrice || 0)).toFixed(2)),
+        }));
+        savedItems = await storage.createRequisitionItems(toInsert);
+      } catch (err: any) {
+        structuredLog("error", "POST /api/requisitions items failed", { error: err?.message });
+      }
+    }
+
+    await auditLog(req, "CREATE_REQUISITION", "Requisition", created.id, null, { ...created, items: savedItems });
+    return res.status(201).json({ ...created, items: savedItems });
   });
 
   app.patch("/api/requisitions/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {

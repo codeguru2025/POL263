@@ -24,12 +24,14 @@ import {
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
-  fxRates, requisitions, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  fxRates, requisitions, requisitionItems, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
   quotationGuarantors, quotationCollateral, receiptAdverts,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   userNotifications, userDeviceTokens,
-  type FxRate, type InsertFxRate, type Requisition, type InsertRequisition,
+  type FxRate, type InsertFxRate,
+  type Requisition, type InsertRequisition,
+  type RequisitionItem, type InsertRequisitionItem,
   type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
   type QuotationGuarantor, type InsertQuotationGuarantor,
@@ -526,6 +528,9 @@ export interface IStorage {
   getRequisition(id: string, orgId: string): Promise<Requisition | undefined>;
   createRequisition(req: InsertRequisition): Promise<Requisition>;
   updateRequisition(id: string, orgId: string, data: Partial<Requisition>): Promise<Requisition | undefined>;
+  createRequisitionItems(items: InsertRequisitionItem[]): Promise<RequisitionItem[]>;
+  getRequisitionItemsByOrg(orgId: string): Promise<RequisitionItem[]>;
+  getRequisitionItemsByIds(requisitionIds: string[], orgId: string): Promise<RequisitionItem[]>;
   getDebitOrders(orgId: string, filters?: { status?: string; policyId?: string }): Promise<DebitOrder[]>;
   getDebitOrder(id: string, orgId: string): Promise<DebitOrder | undefined>;
   createDebitOrder(order: InsertDebitOrder): Promise<DebitOrder>;
@@ -3969,6 +3974,21 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(requisitions.id, id), eq(requisitions.organizationId, orgId)))
       .returning();
     return updated;
+  }
+  async createRequisitionItems(items: InsertRequisitionItem[]): Promise<RequisitionItem[]> {
+    if (items.length === 0) return [];
+    const tdb = await getDbForOrg(items[0].organizationId);
+    return tdb.insert(requisitionItems).values(items).returning();
+  }
+  async getRequisitionItemsByOrg(orgId: string): Promise<RequisitionItem[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(requisitionItems).where(eq(requisitionItems.organizationId, orgId));
+  }
+  async getRequisitionItemsByIds(requisitionIds: string[], orgId: string): Promise<RequisitionItem[]> {
+    if (requisitionIds.length === 0) return [];
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(requisitionItems)
+      .where(and(inArray(requisitionItems.requisitionId, requisitionIds), eq(requisitionItems.organizationId, orgId)));
   }
 
   // ── Finance: debit orders (recurring premium-collection mandates) ──
