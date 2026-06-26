@@ -17,7 +17,15 @@ import Home from "@/pages/home";
 import NotFound from "@/pages/not-found";
 
 // Lazily loaded: all other pages (route-based code splitting)
-// Retry chunk load on failure (e.g. transient network) to avoid "error then loads" when navigating
+// After a new deploy, Vite chunk filenames change (content-hash). Any user who still has
+// the old page open will get "Failed to fetch dynamically imported module" for the old URL.
+// Force a hard reload so they get the fresh HTML + new chunk URLs.
+if (typeof window !== "undefined") {
+  window.addEventListener("vite:preloadError", () => { window.location.reload(); });
+}
+
+// Retry chunk load on failure (transient network). After all retries fail on a chunk error,
+// force-reload to recover from a stale-deploy scenario.
 function retryLazy<T>(
   importFn: () => Promise<{ default: T }>,
   retries = 3,
@@ -32,6 +40,9 @@ function retryLazy<T>(
       return new Promise((resolve, reject) => {
         setTimeout(() => retryLazy(importFn, retries - 1, delay).then(resolve).catch(reject), delay);
       });
+    }
+    if (isChunkError) {
+      window.location.reload();
     }
     throw err;
   });
