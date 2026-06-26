@@ -4,9 +4,11 @@
 # lightningcss) based on the OS where `npm install` runs. A lockfile from Windows omits
 # linux-x64 binaries → `npm ci` on DO/Ubuntu fails with "Missing: …".
 #
-# Solution: CI regenerates the lockfile on ubuntu, verifies the build, commits to main,
-# then fast-forwards the `deploy` branch. DigitalOcean tracks `deploy`, not `main`,
-# so it only builds commits that already have a Linux-correct lockfile.
+# Solution: CI regenerates the lockfile on ubuntu, verifies the build, then:
+#   1. ALWAYS force-pushes HEAD (main + lockfile) to the `deploy` branch.
+#      DigitalOcean tracks `deploy`, so this is what gets deployed.
+#   2. Best-effort: also commits the lockfile back to `main` (may fail in a
+#      race; non-fatal — deploy is already updated, main gets it next push).
 #
 # Loop protection: skips runs triggered by github-actions[bot] or [skip ci] commits.
 name: Lockfile (Linux) & Deploy
@@ -74,24 +76,32 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── On push to main: auto-commit the updated lockfile ──
-      - name: Commit lockfile to main
-        if: steps.diff.outputs.changed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "chore: regen package-lock on linux [skip ci]"
-          git push origin main
-
-      # ── Fast-forward deploy branch to current main HEAD ──
+      # ── CRITICAL: always sync deploy branch ──────────────────────────────
+      # This step runs regardless of what happens above.
+      # We locally commit the (possibly updated) lockfile and force-push to deploy.
+      # DigitalOcean tracks deploy — this is what actually gets deployed.
       - name: Sync deploy branch
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          echo "Pushing main HEAD ($(git rev-parse --short HEAD)) → deploy"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Stage lockfile (may or may not have changed)
+          git add package-lock.json
+          # Commit locally only if there are staged changes
+          git diff --staged --quiet || git commit -m "chore: linux lockfile [skip ci]"
+          echo "Pushing $(git rev-parse --short HEAD) → deploy"
           git push origin HEAD:refs/heads/deploy --force
 
-      # ── On PRs: fail so contributor knows to merge main ──
+      # ── Best-effort: also push lockfile to main ───────────────────────────
+      # Uses rebase to handle the race condition where main moved since checkout.
+      # Non-fatal: deploy is already updated above; main gets it on the next push.
+      - name: Update main lockfile (best-effort)
+        if: steps.diff.outputs.changed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git pull --rebase origin main || (git rebase --abort && echo "Rebase conflict skipped — deploy already updated")
+          git push origin HEAD:refs/heads/main || echo "Main lockfile push skipped (race condition) — deploy already updated"
+
+      # ── On PRs: fail so contributor knows to merge main ──────────────────
       - name: Fail PR if lockfile out of sync
         if: steps.diff.outputs.changed == 'true' && github.event_name == 'pull_request'
         run: |
