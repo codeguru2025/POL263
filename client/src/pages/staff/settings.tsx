@@ -128,6 +128,13 @@ export default function StaffSettings() {
     ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) ?? orgs[0] : undefined)
     : orgs?.[0];
 
+  // Fetch the full org record (always includes paynow fields even for admin users
+  // whose /api/organizations list goes through the control-plane path that omits them).
+  const { data: fullOrg } = useQuery<any>({
+    queryKey: ["/api/organizations", currentOrg?.id],
+    enabled: !!currentOrg?.id,
+  });
+
   const [orgName, setOrgName] = useState("");
   const [primaryColor, setPrimaryColor] = useState("");
   const [footerText, setFooterText] = useState("");
@@ -289,14 +296,22 @@ export default function StaffSettings() {
       setPolicyNumberPadding(typeof currentOrg.policyNumberPadding === "number" ? currentOrg.policyNumberPadding : 5);
       setDatabaseUrl(currentOrg.databaseUrl ?? "");
       setIsWhitelabeled(currentOrg.isWhitelabeled ?? false);
-      setPnIntegrationId(currentOrg.paynowIntegrationId ?? "");
-      setPnIntegrationKey(currentOrg.paynowIntegrationKey ?? "");
-      setPnAuthEmail(currentOrg.paynowAuthEmail ?? "");
-      setPnReturnUrl(currentOrg.paynowReturnUrl ?? "");
-      setPnResultUrl(currentOrg.paynowResultUrl ?? "");
-      setPnMode(currentOrg.paynowMode ?? "test");
     }
   }, [currentOrg]);
+
+  // Paynow fields come from fullOrg (single-org endpoint always returns all columns).
+  // The /api/organizations list uses a control-plane query for admins that omits paynow fields.
+  useEffect(() => {
+    const src = fullOrg ?? currentOrg;
+    if (src) {
+      setPnIntegrationId(src.paynowIntegrationId ?? "");
+      setPnIntegrationKey(src.paynowIntegrationKey ?? "");
+      setPnAuthEmail(src.paynowAuthEmail ?? "");
+      setPnReturnUrl(src.paynowReturnUrl ?? "");
+      setPnResultUrl(src.paynowResultUrl ?? "");
+      setPnMode(src.paynowMode ?? "test");
+    }
+  }, [fullOrg, currentOrg]);
 
   const updateOrgMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -305,6 +320,7 @@ export default function StaffSettings() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      if (currentOrg?.id) queryClient.invalidateQueries({ queryKey: ["/api/organizations", currentOrg.id] });
       queryClient.invalidateQueries({ queryKey: ["/api/public/branding"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/product-performance"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });

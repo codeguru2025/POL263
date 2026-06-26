@@ -198,6 +198,14 @@ export async function resolveImage(url: string | null | undefined): Promise<Buff
   const u = url.trim();
 
   if (u.startsWith("http://") || u.startsWith("https://")) {
+    // For our own object storage URLs use the authenticated S3 client so private
+    // bucket ACLs don't block the fetch (e.g. receipt advert / logo images).
+    if (isObjectStorageEnabled && PUBLIC_URL && u.startsWith(PUBLIC_URL + "/")) {
+      const key = u.slice(PUBLIC_URL.length + 1);
+      const buf = await fetchFile(key);
+      if (buf) return buf;
+      // Fall through to direct public fetch if S3 fetch fails
+    }
     // Fix 2: Validate URL against SSRF targets before fetching
     if (!(await isSsrfSafeUrl(u))) {
       structuredLog("warn", "resolveImage: blocked SSRF-risky URL", { url: u });
