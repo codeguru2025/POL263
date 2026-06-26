@@ -87,6 +87,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
       - name: Install dependencies
         run: npm ci
 
@@ -99,12 +105,6 @@ jobs:
         run: npx cap sync android
         env:
           CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "21"
 
       - name: Build Android APK (debug)
         run: |
@@ -133,6 +133,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
       - name: Install dependencies
         run: npm ci
 
@@ -145,12 +151,6 @@ jobs:
         run: npx cap sync android
         env:
           CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "21"
 
       - name: Decode keystore and build release AAB
         env:
