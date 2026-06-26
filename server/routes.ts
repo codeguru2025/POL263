@@ -3557,6 +3557,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         });
         receipted++;
+        // 2.5% platform fee on month-end cleared receipt
+        storage.createPlatformReceivable({
+          organizationId: user.organizationId,
+          amount: (premium * 0.025).toFixed(2),
+          currency: policy.currency || "USD",
+          description: `2.5% on month-end receipt (policy ${policyNumber})`,
+          isSettled: false,
+        }).catch((err: Error) => structuredLog("error", "Platform fee failed (month-end)", { policyId: policy.id, error: err.message }));
         // Post-transaction best-effort side effects
         if (policy.status === "lapsed") {
           if (policy.clientId) {
@@ -3635,7 +3643,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));
     const today = new Date().toISOString().split("T")[0];
-    const results: { policyId: string; policyNumber: string; amount: string; receiptNumber: string }[] = [];
+    const results: { policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string }[] = [];
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
     // Stable lock order avoids deadlocks when multiple group receipts overlap.
     const sortedPolicies = [...valid].sort((a, b) => a.id.localeCompare(b.id));
@@ -3681,9 +3689,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (policy.status === "lapsed") {
           await rollbackClawbacksInTx(txDb, user.organizationId, policy);
         }
-        results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum });
+        results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency });
       }
     });
+    // 2.5% platform fee on each cleared group receipt
+    for (const r of results) {
+      storage.createPlatformReceivable({
+        organizationId: user.organizationId,
+        amount: (parseFloat(r.amount) * 0.025).toFixed(2),
+        currency: r.currency,
+        description: `2.5% on group receipt ${r.receiptNumber} (policy ${r.policyNumber})`,
+        isSettled: false,
+      }).catch((err: Error) => structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err.message }));
+    }
     return res.status(201).json({ receipted: results.length, results });
     } catch (err: any) {
       structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
@@ -4883,20 +4901,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", created.id, null, created);
 
-    // 2.5% platform fee on funeral service payments
-    try {
-      const chibAmount = (amount * 0.025).toFixed(2);
-      await storage.createPlatformReceivable({
-        organizationId: user.organizationId,
-        sourceTransactionId: null,
-        amount: chibAmount,
-        currency,
-        description: `2.5% on service receipt ${created.id}`,
-        isSettled: false,
-      });
-    } catch (feeErr) {
-      structuredLog("error", "Platform fee creation failed for service receipt", { receiptId: created.id, error: (feeErr as Error).message });
-    }
+    // 2.5% platform fee on funeral service (non-policy) payments
+    storage.createPlatformReceivable({
+      organizationId: user.organizationId,
+      amount: (amount * 0.025).toFixed(2),
+      currency,
+      description: `2.5% on service receipt ${created.receiptNumber} (${created.id})`,
+      isSettled: false,
+    }).catch((feeErr: Error) => {
+      structuredLog("error", "Platform fee creation failed for service receipt", { receiptId: created.id, receiptNumber: created.receiptNumber, error: feeErr.message });
+    });
 
     return res.status(201).json(created);
   });

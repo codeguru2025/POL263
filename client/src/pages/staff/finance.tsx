@@ -859,7 +859,7 @@ export default function StaffFinance() {
             {!commissionOnly && !isAgent && <TabsTrigger value="requisitions" data-testid="tab-requisitions" title="Expenditure requests: raise, approve, and mark paid">Requisitions</TabsTrigger>}
             {canManageSettings && !isAgent && <TabsTrigger value="fx-rates" data-testid="tab-fx-rates" title="USD-base exchange rates for consolidated financial statements">FX Rates</TabsTrigger>}
             {!commissionOnly && !isAgent && <TabsTrigger value="expenditures" data-testid="tab-expenditures" title="Operating expenses and outgoing payments">Expenditures</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform" title="Platform revenue owed to POL263 (subscription and per-policy fees)">Platform Fees</TabsTrigger>}
+            {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform" title="Platform revenue owed to POL263 (2.5% on all cleared receipts — policy premiums and funeral service payments)">Platform Fees</TabsTrigger>}
             {canWriteFinance && !isAgent && <TabsTrigger value="month-end" data-testid="tab-month-end" title="Run the month-end close: batch premium collection for overdue policies">Month-End Close</TabsTrigger>}
             {canWriteFinance && !isAgent && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt" title="Receipt a single payment across multiple policies in a group">Group Receipt</TabsTrigger>}
           </TabsList>
@@ -1428,7 +1428,7 @@ export default function StaffFinance() {
             <div className="space-y-6">
               <CardSection
                 title="POL263 Revenue Share (2.5%)"
-                description="Auto-calculated on every cleared payment"
+                description="Auto-calculated on every cleared payment — policy premiums and funeral service receipts"
                 icon={Landmark}
                 headerRight={(
                   <Button onClick={() => setShowSettlementDialog(true)} data-testid="button-new-settlement">

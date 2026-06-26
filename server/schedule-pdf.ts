@@ -285,15 +285,15 @@ export async function streamDailyScheduleToResponse(
   }
 
   // ── Footer on all pages ──────────────────────────────────────
-  const totalPages = (doc.bufferedPageRange().count);
-  for (let p = 0; p < totalPages; p++) {
-    doc.switchToPage(p);
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
     const footerY = A4_H - MARGIN + 6;
     doc.font("Helvetica").fontSize(7).fillColor(C_MUTED)
-      .text(`${org.name || ""} · Confidential — Internal Use Only · Page ${p + 1} of ${totalPages}`, MARGIN, footerY, { width: COL, align: "center" });
+      .text(`${org.name || ""} · Confidential — Internal Use Only · Page ${i + 1} of ${range.count}`, MARGIN, footerY, { width: COL, align: "center", lineBreak: false });
     if (org.footerText) {
       doc.font("Helvetica").fontSize(6.5).fillColor(C_MUTED)
-        .text(org.footerText, MARGIN, footerY + 9, { width: COL, align: "center" });
+        .text(org.footerText, MARGIN, footerY + 9, { width: COL, align: "center", lineBreak: false });
     }
   }
 

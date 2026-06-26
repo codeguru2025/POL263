@@ -18,6 +18,15 @@ import { tenants as cpTenants } from "@shared/control-plane-schema";
 
 const PgSession = connectPgSimple(session);
 
+// One-time tokens for the mobile OAuth flow.
+// On native, we can't use the external-browser session cookie in the WebView,
+// so after OAuth we generate a short-lived token and let the WebView exchange it.
+const mobileAuthTokens = new Map<string, { userId: string; orgId?: string; expiresAt: number }>();
+setInterval(() => {
+  const now = Date.now();
+  mobileAuthTokens.forEach((d, t) => { if (d.expiresAt < now) mobileAuthTokens.delete(t); });
+}, 60_000).unref();
+
 // Per-account lockout for agent (email/password) login. Complements the IP-based
 // authLimiter in index.ts. In-memory only (per-process) — acceptable as defence in
 // depth on top of the network rate limiter; the `users` table has no lockout columns.
@@ -317,11 +326,15 @@ export function setupAuth(app: Express) {
         typeof req.query.returnTo === "string" && req.query.returnTo.startsWith("/")
           ? req.query.returnTo
           : undefined;
+      const isMobile = req.query.returnTo === "mobile";
 
       const origin = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
 
       if (returnTo) {
         (req.session as any).authReturnTo = origin ? `${origin}${returnTo}` : returnTo;
+      }
+      if (isMobile) {
+        (req.session as any).isMobileAuth = true;
       }
 
       // If this request came from a tenant subdomain, remember which tenant so the
@@ -358,6 +371,7 @@ export function setupAuth(app: Express) {
           const sessionAny = req.session as any;
           const returnTo = sessionAny?.authReturnTo as string | undefined;
           const authTenantIdPre = sessionAny?.authTenantId as string | undefined;
+          const isMobileAuth = sessionAny?.isMobileAuth as boolean | undefined;
           const passportData = sessionAny.passport;
           try {
             await new Promise<void>((resolve, reject) =>
@@ -370,6 +384,19 @@ export function setupAuth(app: Express) {
             );
           } catch (e) {
             return next(e as Error);
+          }
+
+          // Mobile OAuth: generate a one-time token and deep-link back into the app.
+          // The WebView can't use the external-browser session cookie, so it exchanges
+          // this token for a fresh session via POST /api/auth/mobile-exchange.
+          if (isMobileAuth) {
+            const token = crypto.randomBytes(32).toString("hex");
+            mobileAuthTokens.set(token, {
+              userId: user.id,
+              orgId: user.organizationId || undefined,
+              expiresAt: Date.now() + 5 * 60_000,
+            });
+            return res.redirect(`pol263://auth/callback?token=${token}`);
           }
 
           // Redirect to home with returnTo so the client can redirect after auth is ready (avoids error page on first load).
@@ -461,6 +488,38 @@ export function setupAuth(app: Express) {
       return res.redirect(`/staff/login?error=${msg}`);
     });
   }
+
+  // Exchange a mobile one-time auth token for a real session.
+  // Called by the native WebView after the OS opens the pol263://auth/callback deep link.
+  app.post("/api/auth/mobile-exchange", async (req: Request, res: Response, next: NextFunction) => {
+    const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+    if (!token) return res.status(400).json({ message: "token required" });
+
+    const data = mobileAuthTokens.get(token);
+    if (!data || data.expiresAt < Date.now()) {
+      mobileAuthTokens.delete(token);
+      return res.status(401).json({ message: "Invalid or expired auth token" });
+    }
+    mobileAuthTokens.delete(token); // single use
+
+    let user: any;
+    if (data.orgId) {
+      try {
+        const tenantDb = await getDbForOrg(data.orgId);
+        const [u] = await tenantDb.select().from(users).where(eq(users.id, data.userId)).limit(1);
+        user = u;
+      } catch { /* fall through */ }
+    }
+    if (!user) user = await storage.getUser(data.userId);
+    if (!user || user.isActive === false) {
+      return res.status(401).json({ message: "User not found or inactive" });
+    }
+
+    req.login(user, (err) => {
+      if (err) return next(err);
+      res.json({ ok: true });
+    });
+  });
 
   const demoLoginEnabled =
     process.env.ENABLE_DEMO_LOGIN === "true" && process.env.NODE_ENV !== "production";

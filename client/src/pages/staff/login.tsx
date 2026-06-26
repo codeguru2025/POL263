@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
+import { isNativeMobile } from "@/lib/mobile-payment";
 import { Loader2 } from "lucide-react";
 import { useBranding } from "@/hooks/use-branding";
 import { resolveAssetUrl } from "@/lib/assetUrl";
@@ -50,21 +51,28 @@ export default function StaffLogin() {
     );
   }
 
-  const handleGoogleLogin = () => {
+  const handleGoogleLogin = async () => {
     try {
       const base = getApiBase() || window.location.origin;
-      const returnTo = "/staff";
       const path = base ? `${base.replace(/\/$/, "")}/api/auth/google` : `${window.location.origin}/api/auth/google`;
-      const url = new URL(path);
-      url.searchParams.set("returnTo", returnTo);
-      url.searchParams.set("origin", window.location.origin);
-      window.location.href = url.toString();
+
+      if (isNativeMobile()) {
+        // Native: open in system browser so Google doesn't block the WebView.
+        // After auth, server redirects to pol263://auth/callback?token=xxx and the
+        // DeepLinkHandler routes to /auth/callback which exchanges the token for a session.
+        const url = new URL(path);
+        url.searchParams.set("returnTo", "mobile");
+        url.searchParams.set("origin", window.location.origin);
+        const { Browser } = await import("@capacitor/browser");
+        await Browser.open({ url: url.toString() });
+      } else {
+        const url = new URL(path);
+        url.searchParams.set("returnTo", "/staff");
+        url.searchParams.set("origin", window.location.origin);
+        window.location.href = url.toString();
+      }
     } catch (e) {
-      console.error("Invalid API base URL", e);
-      const url = new URL("/api/auth/google", window.location.origin);
-      url.searchParams.set("returnTo", "/staff");
-      url.searchParams.set("origin", window.location.origin);
-      window.location.href = url.toString();
+      console.error("Google login error", e);
     }
   };
 

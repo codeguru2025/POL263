@@ -94,6 +94,8 @@ jobs:
 
       - name: Sync Capacitor (Android)
         run: npx cap sync android
+        env:
+          CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -138,6 +140,8 @@ jobs:
 
       - name: Sync Capacitor (Android)
         run: npx cap sync android
+        env:
+          CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -186,6 +190,8 @@ jobs:
 
       - name: Sync Capacitor (iOS)
         run: npx cap sync ios
+        env:
+          CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
 
       - name: Install CocoaPods
         run: |

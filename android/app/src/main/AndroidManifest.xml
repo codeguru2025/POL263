@@ -28,6 +28,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pol263" android:host="client" android:pathPrefix="/payments" />
             </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pol263" android:host="auth" />
+            </intent-filter>
         </activity>
 
         <provider

@@ -91,6 +91,7 @@ const ClientClaims = lazy(() => retryLazy(() => import("@/pages/client/claims"))
 const ClientFeedback = lazy(() => retryLazy(() => import("@/pages/client/feedback")));
 const JoinPage = lazy(() => retryLazy(() => import("@/pages/join")));
 const JoinRegisterPage = lazy(() => retryLazy(() => import("@/pages/join/register")));
+const AuthCallback = lazy(() => retryLazy(() => import("@/pages/auth-callback")));
 
 function PageLoader() {
   return (
@@ -217,6 +218,7 @@ function Router() {
       <SafeRoute path="/staff/admin/underwriters" component={StaffUnderwriters} />
       <SafeRoute path="/staff/admin/undertakers" component={StaffUndertakers} />
 
+      <SafeRoute path="/auth/callback" component={AuthCallback} />
       <SafeRoute path="/join" component={JoinPage} />
       <SafeRoute path="/join/register" component={JoinRegisterPage} />
       

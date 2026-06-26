@@ -118,6 +118,15 @@ export async function applyCreditBalanceToPolicy(
     return { ok: false, error: err?.message || "Failed to apply credit balance" };
   }
 
+  // 2.5% platform fee on cleared credit-balance premium
+  storage.createPlatformReceivable({
+    organizationId: orgId,
+    amount: (premium * 0.025).toFixed(2),
+    currency,
+    description: `2.5% on credit-balance receipt ${receiptNumberForNotify ?? "—"} (policy ${policy.policyNumber})`,
+    isSettled: false,
+  }).catch((err: Error) => structuredLog("error", "Platform fee failed (credit-balance)", { policyId, error: err.message }));
+
   // Post-transaction best-effort side effects
   if (policy.status === "lapsed" && policy.agentId) {
     try {

@@ -481,15 +481,15 @@ export async function streamDepartmentReportToResponse(
   }
 
   // ── Footer on all pages ──────────────────────────────────────
-  const totalPages = doc.bufferedPageRange().count;
-  for (let p = 0; p < totalPages; p++) {
-    doc.switchToPage(p);
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
     const fy = A4_H - M + 6;
     doc.font("Helvetica").fontSize(7).fillColor(C_MUTED)
-      .text(`${org.name || ""}  ·  ${deptLabel}  ·  Confidential  ·  Page ${p + 1} of ${totalPages}`, M, fy, { width: COL, align: "center" });
+      .text(`${org.name || ""}  ·  ${deptLabel}  ·  Confidential  ·  Page ${i + 1} of ${range.count}`, M, fy, { width: COL, align: "center", lineBreak: false });
     if (org.footerText) {
       doc.font("Helvetica").fontSize(6.5).fillColor(C_MUTED)
-        .text(org.footerText, M, fy + 9, { width: COL, align: "center" });
+        .text(org.footerText, M, fy + 9, { width: COL, align: "center", lineBreak: false });
     }
   }
 

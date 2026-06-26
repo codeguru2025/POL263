@@ -910,6 +910,15 @@ export async function applyGroupPaymentToPolicies(
 
       successCount++;
 
+      // 2.5% platform fee on cleared group PayNow receipt
+      storage.createPlatformReceivable({
+        organizationId: orgId,
+        amount: (parseFloat(amount) * 0.025).toFixed(2),
+        currency,
+        description: `2.5% on group PayNow receipt ${receiptNumber} (policy ${policy.policyNumber})`,
+        isSettled: false,
+      }).catch((err: Error) => structuredLog("error", "Platform fee failed (group PayNow)", { policyId: policy.id, error: err.message }));
+
       // Post-transaction best-effort side effects
       if (policy.status === "lapsed") {
         rollbackClawbacks(orgId, policy).catch((err: any) => {
