@@ -7,17 +7,32 @@ export function getDefaultLogoUrl(): string {
 
 /**
  * Resolve a tenant/org asset URL (logo, signature) for use in img src.
- * - Absolute URLs (http/https) are returned as-is.
- * - Relative paths (e.g. /uploads/xxx) are prefixed with the API base so images
- *   load correctly when the app and API are on different origins (e.g. dev proxy, separate API host).
+ *
+ * Old records stored full CDN/Spaces URLs (https://…digitaloceanspaces.com/…).
+ * New uploads return /uploads/<key> proxy paths.
+ *
+ * Both are routed through our /uploads/* proxy so the bucket can stay private
+ * and the browser never needs direct S3 credentials or public ACLs.
  */
 export function resolveAssetUrl(url: string | null | undefined): string {
   if (!url || !url.trim()) return "";
   const u = url.trim();
   if (u.startsWith("//")) return `https:${u}`;
-  if (u.startsWith("http://") || u.startsWith("https://")) return u;
-  const base = getApiBase();
-  return base ? `${base.replace(/\/$/, "")}${u.startsWith("/") ? u : `/${u}`}` : u;
+  const base = getApiBase()?.replace(/\/$/, "") ?? "";
+
+  if (u.startsWith("http://") || u.startsWith("https://")) {
+    // Convert old DO Spaces CDN URLs to our proxy path.
+    // CDN format:  https://<bucket>.<region>.cdn.digitaloceanspaces.com/<key>
+    // Direct format: https://<region>.digitaloceanspaces.com/<bucket>/<key>
+    const cdnMatch = u.match(/https?:\/\/[^/]+\.cdn\.digitaloceanspaces\.com\/(.+)/);
+    if (cdnMatch) return `${base}/uploads/${cdnMatch[1]}`;
+    const directMatch = u.match(/https?:\/\/[^/]+\.digitaloceanspaces\.com\/[^/]+\/(.+)/);
+    if (directMatch) return `${base}/uploads/${directMatch[1]}`;
+    // Non-Spaces absolute URL (external images) — return as-is
+    return u;
+  }
+
+  return `${base}${u.startsWith("/") ? u : `/${u}`}`;
 }
 
 /** Format receipt number for display (e.g. "42" -> "RCP-00042"). */

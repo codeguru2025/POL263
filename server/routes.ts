@@ -408,17 +408,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     });
   } else {
-    app.get("/uploads/*path", (req, res) => {
-      const key = (req.params as any).path;
-      const publicUrl = (
-        process.env.DO_SPACES_CDN_URL ||
-        process.env.DO_SPACES_PUBLIC_URL ||
-        process.env.R2_PUBLIC_URL
-      )?.replace(/\/$/, "");
-      if (publicUrl && key) {
-        return res.redirect(301, `${publicUrl}/${key}`);
+    // Stream files from object storage using server credentials.
+    // The bucket can remain private — the browser never hits the CDN directly.
+    app.get("/uploads/*path", async (req, res) => {
+      const key = decodeURIComponent(String((req.params as any).path || ""));
+      if (!key) return res.status(400).end();
+      try {
+        const buf = await objectStorage.fetchFile(key);
+        if (!buf) return res.status(404).json({ message: "Not found" });
+        const ext = path.extname(key).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+          ".png": "image/png", ".webp": "image/webp",
+          ".gif": "image/gif", ".pdf": "application/pdf",
+        };
+        res.set("Content-Type", mimeTypes[ext] || "application/octet-stream");
+        res.set("Cache-Control", "public, max-age=86400, stale-while-revalidate=3600");
+        return res.send(buf);
+      } catch (err: any) {
+        structuredLog("error", "Proxy fetch from object storage failed", { key, error: err?.message });
+        return res.status(502).json({ message: "Could not fetch file" });
       }
-      return res.status(404).json({ message: "File not found" });
     });
   }
 
@@ -506,7 +516,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
     try {
-      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "logos", true);
+      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "logos");
       return res.json({ url, filename: key });
     } catch (err: any) {
       structuredLog("error", "Logo upload failed", { error: err?.message });
@@ -519,7 +529,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
     try {
-      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "signatures", true);
+      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "signatures");
       return res.json({ url, filename: key });
     } catch (err: any) {
       structuredLog("error", "Signature upload failed", { error: err?.message });
@@ -533,7 +543,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
     try {
-      const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "receipt-adverts", true);
+      const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "receipt-adverts");
       return res.json({ url });
     } catch (err: any) {
       structuredLog("error", "Receipt advert image upload failed", { error: err?.message });

@@ -104,16 +104,15 @@ function generateKey(originalName: string, prefix = ""): string {
  * Upload a file buffer to object storage and return the public URL.
  * Falls back to local disk when object storage is not configured.
  *
- * @param publicAccess  When true, sets ACL=public-read so the CDN URL is directly
- *                      accessible by the browser (logos, signatures, advert images).
- *                      Leave false for private documents served via authenticated proxy.
+ * Returns a /uploads/<key> proxy URL — the server streams the file from S3
+ * using credentials so the bucket can remain private. Browsers hit our proxy
+ * rather than the CDN directly, which avoids ACL / bucket-policy issues.
  */
 export async function uploadFile(
   buffer: Buffer,
   originalName: string,
   contentType: string,
   prefix = "",
-  publicAccess = false,
 ): Promise<{ url: string; key: string }> {
   if (!isObjectStorageEnabled) {
     return uploadLocal(buffer, originalName, prefix);
@@ -128,13 +127,14 @@ export async function uploadFile(
       Key: key,
       Body: buffer,
       ContentType: contentType,
-      ...(publicAccess ? { ACL: "public-read" } : {}),
     }),
   );
 
-  const url = PUBLIC_URL ? `${PUBLIC_URL}/${key}` : `${ENDPOINT}/${BUCKET}/${key}`;
+  // Return a proxy URL so the browser fetches through our server (works with
+  // private buckets). The server-side resolveImage() fetches via S3 credentials.
+  const url = `/uploads/${key}`;
 
-  structuredLog("info", "Uploaded file to object storage", { key, contentType, size: buffer.length, public: publicAccess });
+  structuredLog("info", "Uploaded file to object storage", { key, contentType, size: buffer.length });
   return { url, key };
 }
 
