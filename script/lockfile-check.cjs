@@ -13,7 +13,7 @@ if (!fs.existsSync(lockPath)) {
   process.exit(1);
 }
 const before = fs.readFileSync(lockPath, 'utf8');
-execSync('npm install --package-lock-only', { stdio: 'inherit' });
+execSync('npm install --package-lock-only --ignore-scripts', { stdio: 'inherit' });
 const after = fs.readFileSync(lockPath, 'utf8');
 
 if (before !== after) {
