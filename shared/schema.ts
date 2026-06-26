@@ -1586,6 +1586,7 @@ export const platformReceivables = pgTable(
       .notNull()
       .references(() => organizations.id),
     sourceTransactionId: uuid("source_transaction_id").references(() => paymentTransactions.id),
+    sourceServiceReceiptId: uuid("source_service_receipt_id").references(() => serviceReceipts.id),
     amount: numeric("amount").notNull(),
     currency: text("currency").default("USD").notNull(),
     description: text("description"),

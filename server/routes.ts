@@ -62,6 +62,7 @@ import {
   requestOutboxDrain,
   OUTBOX_TYPE_PAYMENT_STAFF_FOLLOWUP,
   OUTBOX_TYPE_CASH_RECEIPT_FOLLOWUP,
+  OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP,
 } from "./outbox";
 import { isAgentScoped } from "@shared/roles";
 
@@ -5007,16 +5008,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", created.id, null, created);
 
-    // 2.5% platform fee on funeral service (non-policy) payments
-    storage.createPlatformReceivable({
-      organizationId: user.organizationId,
-      amount: (amount * 0.025).toFixed(2),
-      currency,
-      description: `2.5% on service receipt ${created.receiptNumber} (${created.id})`,
-      isSettled: false,
-    }).catch((feeErr: Error) => {
-      structuredLog("error", "Platform fee creation failed for service receipt", { receiptId: created.id, receiptNumber: created.receiptNumber, error: feeErr.message });
+    // Enqueue platform fee via outbox for reliability + idempotency
+    await withOrgTransaction(user.organizationId, async (txDb) => {
+      await insertOutboxMessageInTx(txDb, {
+        organizationId: user.organizationId,
+        type: OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP,
+        dedupeKey: `service_receipt_followup:${created.id}`,
+        payload: { serviceReceiptId: created.id, amount: String(amount), currency, receiptNumber: created.receiptNumber },
+      });
     });
+    requestOutboxDrain(user.organizationId);
 
     return res.status(201).json(created);
   });

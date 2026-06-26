@@ -389,6 +389,8 @@ export interface IStorage {
   getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined>;
   /** True if a platform receivable already exists for this payment transaction (idempotent outbox retries). */
   hasPlatformReceivableForTransaction(orgId: string, transactionId: string): Promise<boolean>;
+  /** True if a platform receivable already exists for this service receipt (idempotent outbox retries). */
+  hasPlatformReceivableForServiceReceipt(orgId: string, serviceReceiptId: string): Promise<boolean>;
   /** True if any commission ledger row references this payment transaction. */
   hasCommissionLedgerForTransaction(orgId: string, transactionId: string): Promise<boolean>;
   getPaymentTransactionByIdempotencyKey(key: string, orgId: string): Promise<PaymentTransaction | undefined>;
@@ -2355,6 +2357,17 @@ export class DatabaseStorage implements IStorage {
       .from(platformReceivables)
       .where(
         and(eq(platformReceivables.organizationId, orgId), eq(platformReceivables.sourceTransactionId, transactionId)),
+      )
+      .limit(1);
+    return !!row;
+  }
+  async hasPlatformReceivableForServiceReceipt(orgId: string, serviceReceiptId: string): Promise<boolean> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb
+      .select({ id: platformReceivables.id })
+      .from(platformReceivables)
+      .where(
+        and(eq(platformReceivables.organizationId, orgId), eq(platformReceivables.sourceServiceReceiptId, serviceReceiptId)),
       )
       .limit(1);
     return !!row;

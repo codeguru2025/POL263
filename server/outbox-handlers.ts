@@ -14,10 +14,12 @@ import {
   OUTBOX_TYPE_PAYMENT_STAFF_FOLLOWUP,
   OUTBOX_TYPE_CASH_RECEIPT_FOLLOWUP,
   OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP,
+  OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP,
 } from "./outbox-constants";
 
 type StaffPayload = { transactionId: string; receiptId: string | null };
 type CashPayload = { transactionId: string; receiptId: string };
+type ServiceReceiptPayload = { serviceReceiptId: string; amount: string; currency: string; receiptNumber: string };
 type PaynowPayload = {
   intentId: string;
   transactionId: string;
@@ -36,6 +38,9 @@ export async function handleOutboxMessage(orgId: string, row: OutboxMessage): Pr
       return;
     case OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP:
       await runPaynowApplyFollowup(orgId, row.payloadJson as PaynowPayload);
+      return;
+    case OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP:
+      await runServiceReceiptFollowup(orgId, row.payloadJson as ServiceReceiptPayload);
       return;
     default:
       structuredLog("warn", "Unknown outbox message type", { orgId, type: row.type, id: row.id });
@@ -254,5 +259,20 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
         structuredLog("error", "Commission calculation failed (Paynow outbox)", { error: (err as Error).message });
       }
     }
+  }
+}
+
+async function runServiceReceiptFollowup(orgId: string, payload: ServiceReceiptPayload): Promise<void> {
+  const hasPr = await storage.hasPlatformReceivableForServiceReceipt(orgId, payload.serviceReceiptId);
+  if (!hasPr) {
+    const fee = (parseFloat(payload.amount) * 0.025).toFixed(2);
+    await storage.createPlatformReceivable({
+      organizationId: orgId,
+      sourceServiceReceiptId: payload.serviceReceiptId,
+      amount: fee,
+      currency: payload.currency,
+      description: `2.5% on service receipt ${payload.receiptNumber} (${payload.serviceReceiptId})`,
+      isSettled: false,
+    });
   }
 }
