@@ -103,12 +103,17 @@ function generateKey(originalName: string, prefix = ""): string {
 /**
  * Upload a file buffer to object storage and return the public URL.
  * Falls back to local disk when object storage is not configured.
+ *
+ * @param publicAccess  When true, sets ACL=public-read so the CDN URL is directly
+ *                      accessible by the browser (logos, signatures, advert images).
+ *                      Leave false for private documents served via authenticated proxy.
  */
 export async function uploadFile(
   buffer: Buffer,
   originalName: string,
   contentType: string,
   prefix = "",
+  publicAccess = false,
 ): Promise<{ url: string; key: string }> {
   if (!isObjectStorageEnabled) {
     return uploadLocal(buffer, originalName, prefix);
@@ -123,13 +128,13 @@ export async function uploadFile(
       Key: key,
       Body: buffer,
       ContentType: contentType,
-      // ACL intentionally omitted — objects are private; served via authenticated proxy route
+      ...(publicAccess ? { ACL: "public-read" } : {}),
     }),
   );
 
   const url = PUBLIC_URL ? `${PUBLIC_URL}/${key}` : `${ENDPOINT}/${BUCKET}/${key}`;
 
-  structuredLog("info", "Uploaded file to object storage", { key, contentType, size: buffer.length });
+  structuredLog("info", "Uploaded file to object storage", { key, contentType, size: buffer.length, public: publicAccess });
   return { url, key };
 }
 

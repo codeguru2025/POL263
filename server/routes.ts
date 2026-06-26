@@ -506,7 +506,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
     try {
-      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "logos");
+      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "logos", true);
       return res.json({ url, filename: key });
     } catch (err: any) {
       structuredLog("error", "Logo upload failed", { error: err?.message });
@@ -515,12 +515,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.use("/api/upload/logo", handleMulterError);
 
+  app.post("/api/upload/signature", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoMemUpload.single("file"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    try {
+      const { url, key } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "signatures", true);
+      return res.json({ url, filename: key });
+    } catch (err: any) {
+      structuredLog("error", "Signature upload failed", { error: err?.message });
+      return res.status(500).json({ message: "Upload failed. Please try again." });
+    }
+  });
+  app.use("/api/upload/signature", handleMulterError);
+
   // Receipt advert image upload
   app.post("/api/upload/receipt-advert-image", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoMemUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
     try {
-      const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "receipt-adverts");
+      const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "receipt-adverts", true);
       return res.json({ url });
     } catch (err: any) {
       structuredLog("error", "Receipt advert image upload failed", { error: err?.message });

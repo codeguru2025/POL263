@@ -144,6 +144,8 @@ export default function StaffSettings() {
   const [website, setWebsite] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [signatureUrl, setSignatureUrl] = useState("");
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [signatureUploading, setSignatureUploading] = useState(false);
   const [policyNumberPrefix, setPolicyNumberPrefix] = useState("");
   const [policyNumberPadding, setPolicyNumberPadding] = useState(5);
   const [databaseUrl, setDatabaseUrl] = useState("");
@@ -468,57 +470,61 @@ export default function StaffSettings() {
   const handleLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentOrg) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    const headers: Record<string, string> = {};
-    const csrf = getCsrfToken();
-    if (csrf) headers["X-XSRF-TOKEN"] = csrf;
-    const res = await fetch(getApiBase() + "/api/upload/logo", {
-      method: "POST",
-      headers,
-      body: formData,
-      credentials: "include",
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast({
-        title: "Upload failed",
-        description: err.message || "Logo must be PNG, WebP, or SVG (transparent background).",
-        variant: "destructive",
+    setLogoUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const headers: Record<string, string> = {};
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
+      const res = await fetch(getApiBase() + "/api/upload/logo", {
+        method: "POST",
+        headers,
+        body: formData,
+        credentials: "include",
       });
-      return;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast({ title: "Upload failed", description: err.message || "Logo must be PNG, JPG, or WebP.", variant: "destructive" });
+        return;
+      }
+      const data = await res.json();
+      setLogoUrl(data.url);
+      updateOrgMutation.mutate({ logoUrl: data.url });
+    } finally {
+      setLogoUploading(false);
+      e.target.value = "";
     }
-    const data = await res.json();
-    setLogoUrl(data.url);
-    updateOrgMutation.mutate({ logoUrl: data.url });
   };
 
   const handleSignatureUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentOrg) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    const headers: Record<string, string> = {};
-    const csrf = getCsrfToken();
-    if (csrf) headers["X-XSRF-TOKEN"] = csrf;
-    const res = await fetch(getApiBase() + "/api/upload/logo", {
-      method: "POST",
-      headers,
-      body: formData,
-      credentials: "include",
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast({
-        title: "Upload failed",
-        description: err.message || "Signature must be PNG, WebP, or SVG (transparent background).",
-        variant: "destructive",
+    setSignatureUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const headers: Record<string, string> = {};
+      const csrf = getCsrfToken();
+      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
+      const res = await fetch(getApiBase() + "/api/upload/signature", {
+        method: "POST",
+        headers,
+        body: formData,
+        credentials: "include",
       });
-      return;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast({ title: "Upload failed", description: err.message || "Signature must be PNG or WebP.", variant: "destructive" });
+        return;
+      }
+      const data = await res.json();
+      setSignatureUrl(data.url);
+      updateOrgMutation.mutate({ signatureUrl: data.url });
+    } finally {
+      setSignatureUploading(false);
+      e.target.value = "";
     }
-    const data = await res.json();
-    setSignatureUrl(data.url);
-    updateOrgMutation.mutate({ signatureUrl: data.url });
   };
 
   const openNewTermDialog = () => {
@@ -1043,10 +1049,12 @@ export default function StaffSettings() {
                 <div className="space-y-4">
                   <Label>Organization Logo</Label>
                   <div className="flex items-center gap-6">
-                    <div className="h-28 w-28 rounded-xl border-2 border-dashed flex items-center justify-center bg-white overflow-hidden shrink-0">
-                      {(logoUrl || currentOrg?.logoUrl) ? (
+                    <div className="h-28 w-28 rounded-xl border-2 border-dashed flex items-center justify-center bg-white overflow-hidden shrink-0 relative">
+                      {logoUploading ? (
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                      ) : (logoUrl || currentOrg?.logoUrl) ? (
                         <img
-                          src={`${resolveAssetUrl(logoUrl || currentOrg?.logoUrl)}?v=${Date.now()}`}
+                          src={resolveAssetUrl(logoUrl || currentOrg?.logoUrl)}
                           alt="Current Logo"
                           className="object-contain max-h-full max-w-full p-1"
                           onError={(e) => { (e.target as HTMLImageElement).src = getDefaultLogoUrl(); }}
@@ -1056,11 +1064,11 @@ export default function StaffSettings() {
                       )}
                     </div>
                     <div className="space-y-2">
-                      <input id="logo-upload" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg" className="hidden" onChange={handleLogoUpload} />
-                      <Button type="button" variant="outline" onClick={() => document.getElementById("logo-upload")?.click()}>
-                        Upload Logo
+                      <input id="logo-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleLogoUpload} />
+                      <Button type="button" variant="outline" disabled={logoUploading} onClick={() => document.getElementById("logo-upload")?.click()}>
+                        {logoUploading ? "Uploading…" : "Upload Logo"}
                       </Button>
-                      <p className="text-xs text-muted-foreground">PNG, JPG, WebP or SVG. Transparent background recommended.</p>
+                      <p className="text-xs text-muted-foreground">PNG, JPG, or WebP. Transparent background recommended.</p>
                     </div>
                   </div>
                 </div>
@@ -1069,9 +1077,11 @@ export default function StaffSettings() {
                   <Label>Authorized Signature (for receipts & policy documents)</Label>
                   <div className="flex items-center gap-6">
                     <div className="h-20 w-48 rounded-lg border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
-                      {(signatureUrl || currentOrg?.signatureUrl) ? (
+                      {signatureUploading ? (
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      ) : (signatureUrl || currentOrg?.signatureUrl) ? (
                         <img
-                          src={`${resolveAssetUrl(signatureUrl || currentOrg?.signatureUrl)}?v=${Date.now()}`}
+                          src={resolveAssetUrl(signatureUrl || currentOrg?.signatureUrl)}
                           alt="Signature"
                           className="object-contain max-h-full max-w-full p-1"
                         />
@@ -1080,11 +1090,11 @@ export default function StaffSettings() {
                       )}
                     </div>
                     <div className="space-y-2">
-                      <input id="sig-upload" type="file" accept="image/png,image/webp,image/svg+xml,.png,.webp,.svg" className="hidden" onChange={handleSignatureUpload} />
-                      <Button type="button" variant="outline" onClick={() => document.getElementById("sig-upload")?.click()}>
-                        Upload Signature
+                      <input id="sig-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleSignatureUpload} />
+                      <Button type="button" variant="outline" disabled={signatureUploading} onClick={() => document.getElementById("sig-upload")?.click()}>
+                        {signatureUploading ? "Uploading…" : "Upload Signature"}
                       </Button>
-                      <p className="text-xs text-muted-foreground">PNG, WebP or SVG. Transparent background recommended.</p>
+                      <p className="text-xs text-muted-foreground">PNG, JPG, or WebP. Transparent background recommended.</p>
                     </div>
                   </div>
                 </div>
