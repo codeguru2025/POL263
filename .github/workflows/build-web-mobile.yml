@@ -101,8 +101,8 @@ jobs:
         with:
           name: web-build
 
-      - name: Sync Capacitor (Android)
-        run: npx cap sync android
+      - name: Copy web assets to Android
+        run: npx cap copy android
         env:
           CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
 
@@ -147,8 +147,8 @@ jobs:
         with:
           name: web-build
 
-      - name: Sync Capacitor (Android)
-        run: npx cap sync android
+      - name: Copy web assets to Android
+        run: npx cap copy android
         env:
           CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
 
@@ -191,8 +191,8 @@ jobs:
         with:
           name: web-build
 
-      - name: Sync Capacitor (iOS)
-        run: npx cap sync ios
+      - name: Copy web assets to iOS
+        run: npx cap copy ios
         env:
           CAPACITOR_SERVER_URL: ${{ vars.CAPACITOR_SERVER_URL || '' }}
 
