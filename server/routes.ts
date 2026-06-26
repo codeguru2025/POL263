@@ -1208,6 +1208,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (maritalStatus !== undefined) updates.maritalStatus = maritalStatus || null;
     if (nextOfKinName !== undefined) updates.nextOfKinName = nextOfKinName || null;
     if (nextOfKinPhone !== undefined) updates.nextOfKinPhone = nextOfKinPhone || null;
+    const { department } = req.body;
+    if (department !== undefined) updates.department = department || null;
     const updated = await storage.updateUser(req.params.id as string, updates);
 
     if (roleIds && Array.isArray(roleIds)) {
@@ -4682,14 +4684,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const reqs = await storage.getRequisitions(user.organizationId, { status, fromDate, toDate });
+
+    // Attach line items and requester profile in one pass.
     const ids = reqs.map(r => r.id);
-    const allItems = ids.length > 0 ? await storage.getRequisitionItemsByIds(ids, user.organizationId) : [];
+    const seen = new Set<string>();
+    const requesterIds: string[] = [];
+    for (const r of reqs) { if (r.requestedBy && !seen.has(r.requestedBy)) { seen.add(r.requestedBy); requesterIds.push(r.requestedBy); } }
+    const [allItems, requesterList] = await Promise.all([
+      ids.length > 0 ? storage.getRequisitionItemsByIds(ids, user.organizationId) : Promise.resolve([]),
+      requesterIds.length > 0 ? storage.getUsersByIds(requesterIds) : Promise.resolve([]),
+    ]);
     const itemMap = new Map<string, any[]>();
     for (const item of allItems) {
       if (!itemMap.has(item.requisitionId)) itemMap.set(item.requisitionId, []);
       itemMap.get(item.requisitionId)!.push(item);
     }
-    return res.json(reqs.map(r => ({ ...r, items: itemMap.get(r.id) ?? [] })));
+    const requesterMap = new Map(requesterList.map((u: any) => [u.id, u]));
+    return res.json(reqs.map(r => {
+      const requester = requesterMap.get(r.requestedBy) as any;
+      return {
+        ...r,
+        items: itemMap.get(r.id) ?? [],
+        requesterName: requester?.displayName || requester?.email || "Unknown",
+        requesterDepartment: requester?.department || null,
+      };
+    }));
   });
 
   app.post("/api/requisitions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -4710,6 +4729,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       requisitionNumber,
       requestedBy: user.id,
       status: submit ? "submitted" : "draft",
+      neededByDate: req.body.neededByDate || null,
       approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
     });
     let created: any;
@@ -4763,6 +4783,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       patch.approvedBy = user.id;
       patch.approvedAt = new Date();
       if (action === "reject") patch.rejectionReason = typeof req.body.rejectionReason === "string" ? req.body.rejectionReason : "Rejected";
+      // Approver may adjust the amount before approving
+      if (action === "approve" && req.body.adjustedAmount !== undefined) {
+        const adj = Number(req.body.adjustedAmount);
+        if (!isNaN(adj) && adj > 0) patch.amount = adj.toFixed(2);
+      }
+      if (typeof req.body.approverNotes === "string" && req.body.approverNotes.trim()) {
+        patch.approverNotes = req.body.approverNotes.trim();
+      }
     } else if (action === "pay") {
       if (existing.status !== "approved") return res.status(400).json({ message: "Only approved requisitions can be marked paid" });
       patch.status = "paid";
@@ -4774,13 +4802,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } else {
       // Plain edit (only while draft)
       if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be edited" });
-      for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes"]) {
+      for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes", "neededByDate"]) {
         if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
       }
     }
 
     const updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
     await auditLog(req, "UPDATE_REQUISITION", "Requisition", existing.id, existing, updated);
+
+    // ── Notifications ──────────────────────────────────────
+    const reqNum = existing.requisitionNumber;
+    const orgId = user.organizationId;
+    if (action === "submit") {
+      // Tell approvers there's a new requisition waiting.
+      notifyUsersWithPermission(orgId, "approve:finance", {
+        type: "APPROVAL_NEEDED",
+        title: "Requisition awaiting approval",
+        body: `${reqNum} submitted by ${user.displayName || user.email} requires your approval.`,
+        metadata: { requisitionId: existing.id },
+      });
+    } else if (action === "approve") {
+      // Tell requester it was approved.
+      notifyUser(orgId, existing.requestedBy, {
+        type: "APPROVAL_RESOLVED",
+        title: "Requisition approved",
+        body: `Your requisition ${reqNum} has been approved${patch.approverNotes ? `: ${patch.approverNotes}` : "."}`,
+        metadata: { requisitionId: existing.id },
+      });
+      // Tell finance team to make the payment.
+      notifyUsersWithPermission(orgId, "write:finance", {
+        type: "GENERAL",
+        title: "Requisition ready for payment",
+        body: `${reqNum} has been approved and is ready to be paid (${existing.currency} ${Number(patch.amount || existing.amount).toFixed(2)}).`,
+        metadata: { requisitionId: existing.id },
+      });
+    } else if (action === "reject") {
+      notifyUser(orgId, existing.requestedBy, {
+        type: "APPROVAL_RESOLVED",
+        title: "Requisition rejected",
+        body: `Your requisition ${reqNum} was rejected${patch.rejectionReason ? `: ${patch.rejectionReason}` : "."}`,
+        metadata: { requisitionId: existing.id },
+      });
+    } else if (action === "pay") {
+      notifyUser(orgId, existing.requestedBy, {
+        type: "PAYMENT_RECEIVED",
+        title: "Requisition paid",
+        body: `Your requisition ${reqNum} has been marked as paid.`,
+        metadata: { requisitionId: existing.id },
+      });
+    }
+
     return res.json(updated);
   });
 

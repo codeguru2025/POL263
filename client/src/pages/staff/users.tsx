@@ -471,6 +471,10 @@ export default function StaffUsers() {
                       <Label htmlFor="edit-address">Address</Label>
                       <Input id="edit-address" placeholder="Physical address" value={editingUser.address || ""} onChange={e => setEditingUser((p: any) => ({ ...p, address: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
                     </div>
+                    <div className="col-span-2 space-y-1">
+                      <Label htmlFor="edit-department">Department</Label>
+                      <Input id="edit-department" placeholder="e.g. Sales, Finance, Claims…" value={editingUser.department || ""} onChange={e => setEditingUser((p: any) => ({ ...p, department: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
                     <div className="space-y-1">
                       <Label htmlFor="edit-dob">Date of Birth</Label>
                       <Input id="edit-dob" type="date" value={editingUser.dateOfBirth || ""} onChange={e => setEditingUser((p: any) => ({ ...p, dateOfBirth: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
@@ -524,7 +528,7 @@ export default function StaffUsers() {
               )}
               <div className="flex gap-2 ml-auto">
                 <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
-                <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined, phone: editingUser.phone || "", address: editingUser.address || "", nationalId: editingUser.nationalId || "", dateOfBirth: editingUser.dateOfBirth || "", gender: editingUser.gender || "", maritalStatus: editingUser.maritalStatus || "", nextOfKinName: editingUser.nextOfKinName || "", nextOfKinPhone: editingUser.nextOfKinPhone || "" } })} disabled={updateMutation.isPending || !canEditUsers} data-testid="button-submit-edit-user">
+                <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined, phone: editingUser.phone || "", address: editingUser.address || "", nationalId: editingUser.nationalId || "", dateOfBirth: editingUser.dateOfBirth || "", gender: editingUser.gender || "", maritalStatus: editingUser.maritalStatus || "", nextOfKinName: editingUser.nextOfKinName || "", nextOfKinPhone: editingUser.nextOfKinPhone || "", department: editingUser.department || "" } })} disabled={updateMutation.isPending || !canEditUsers} data-testid="button-submit-edit-user">
                   {updateMutation.isPending ? "Saving..." : "Save Changes"}
                 </Button>
               </div>

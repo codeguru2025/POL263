@@ -259,6 +259,7 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
   getUserByReferralCode(code: string): Promise<User | undefined>;
+  getUsersByIds(ids: string[]): Promise<User[]>;
   getUsersByOrg(organizationId: string, limit?: number, offset?: number): Promise<User[]>;
   getUsersWithPermission(organizationId: string, permission: string): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
@@ -637,6 +638,10 @@ export class DatabaseStorage implements IStorage {
   async getUserByReferralCode(code: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.referralCode, code));
     return user;
+  }
+  async getUsersByIds(ids: string[]): Promise<User[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(users).where(inArray(users.id, ids));
   }
   async getUsersByOrg(organizationId: string, limit = 500, offset = 0): Promise<User[]> {
     const tdb = await getDbForOrg(organizationId);

@@ -342,15 +342,26 @@ export default function StaffFinance() {
   type ReqItem = { description: string; category: string; qty: string; unitPrice: string };
   const blankItem = (): ReqItem => ({ description: "", category: "", qty: "1", unitPrice: "" });
   const [showRequisitionDialog, setShowRequisitionDialog] = useState(false);
-  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "" });
+  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "", neededByDate: "" });
   const [reqItems, setReqItems] = useState<ReqItem[]>([blankItem()]);
+  // Approve/reject dialog
+  const [approveTarget, setApproveTarget] = useState<any>(null);
+  const [approveAction, setApproveAction] = useState<"approve" | "reject">("approve");
+  const [approveNotes, setApproveNotes] = useState("");
+  const [adjustedAmount, setAdjustedAmount] = useState("");
   const reqTotal = reqItems.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.unitPrice) || 0), 0);
   const reqItemsValid = reqItems.every(it => it.description.trim() && it.category.trim() && Number(it.unitPrice) > 0);
   const updateReqItem = (idx: number, field: keyof ReqItem, val: string) =>
     setReqItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
   const addReqItem = () => setReqItems(prev => [...prev, blankItem()]);
   const removeReqItem = (idx: number) => setReqItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
-  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "" }); setReqItems([blankItem()]); };
+  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "", neededByDate: "" }); setReqItems([blankItem()]); };
+  const openApproveDialog = (r: any, action: "approve" | "reject") => {
+    setApproveTarget(r);
+    setApproveAction(action);
+    setApproveNotes("");
+    setAdjustedAmount(String(Number(r.amount).toFixed(2)));
+  };
 
   const createRequisitionMutation = useMutation({
     mutationFn: async (submit: boolean) => {
@@ -362,6 +373,7 @@ export default function StaffFinance() {
       }));
       const res = await apiRequest("POST", "/api/requisitions", {
         ...reqHeader,
+        neededByDate: reqHeader.neededByDate || null,
         // Legacy fields derived from first item as fallback
         category: items[0]?.category || "",
         description: items.length === 1 ? items[0].description : `${items.length} items`,
@@ -1377,12 +1389,14 @@ export default function StaffFinance() {
                 <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
                   <TableHeader className={dataTableStickyHeaderClass}>
                     <TableRow>
-                      <TableHead>Number</TableHead>
+                      <TableHead className="w-[110px]">Number</TableHead>
+                      <TableHead className="w-[130px]">Requester</TableHead>
                       <TableHead>Items</TableHead>
-                      <TableHead>Payee</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead className="w-[90px]">Raised</TableHead>
+                      <TableHead className="w-[90px]">Needed By</TableHead>
+                      <TableHead className="text-right w-[100px]">Total</TableHead>
+                      <TableHead className="w-[90px]">Status</TableHead>
+                      <TableHead className="text-right w-[140px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1391,6 +1405,11 @@ export default function StaffFinance() {
                       return (
                       <TableRow key={r.id} className="hover:bg-muted/40 align-top">
                         <TableCell className="font-mono text-xs pt-3">{r.requisitionNumber}</TableCell>
+                        <TableCell className="pt-3">
+                          <div className="text-xs font-medium leading-tight">{r.requesterName || "—"}</div>
+                          {r.requesterDepartment && <div className="text-[10px] text-muted-foreground">{r.requesterDepartment}</div>}
+                          {r.payee && <div className="text-[10px] text-muted-foreground">To: {r.payee}</div>}
+                        </TableCell>
                         <TableCell>
                           {items.length > 0 ? (
                             <div className="space-y-0.5">
@@ -1408,19 +1427,25 @@ export default function StaffFinance() {
                               <span className="text-muted-foreground truncate max-w-[200px]" title={r.description}>{r.description}</span>
                             </div>
                           )}
+                          {r.approverNotes && <p className="text-[10px] text-muted-foreground mt-0.5 italic">Approver: {r.approverNotes}</p>}
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground pt-3">{r.payee || "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground pt-3">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : "—"}</TableCell>
+                        <TableCell className="text-xs pt-3">
+                          {r.neededByDate
+                            ? <span className={new Date(r.neededByDate) < new Date() && r.status !== "paid" ? "text-destructive font-medium" : ""}>{new Date(r.neededByDate).toLocaleDateString()}</span>
+                            : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
                         <TableCell className="font-semibold text-right tabular-nums pt-3">{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
                         <TableCell className="pt-3"><StatusBadge status={r.status} /></TableCell>
                         <TableCell className="text-right pt-3">
-                          <div className="flex justify-end gap-1.5">
+                          <div className="flex justify-end gap-1.5 flex-wrap">
                             {r.status === "draft" && canWriteFinance && (
                               <Button size="sm" variant="outline" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "submit" })} data-testid={`btn-submit-req-${r.id}`}>Submit</Button>
                             )}
                             {r.status === "submitted" && canApproveFinance && (
                               <>
-                                <Button size="sm" variant="outline" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "approve" })} data-testid={`btn-approve-req-${r.id}`}>Approve</Button>
-                                <Button size="sm" variant="ghost" className="text-destructive" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "reject", extra: { rejectionReason: "Rejected" } })}>Reject</Button>
+                                <Button size="sm" variant="outline" onClick={() => openApproveDialog(r, "approve")} data-testid={`btn-approve-req-${r.id}`}>Approve</Button>
+                                <Button size="sm" variant="ghost" className="text-destructive" onClick={() => openApproveDialog(r, "reject")}>Reject</Button>
                               </>
                             )}
                             {r.status === "approved" && canWriteFinance && (
@@ -1922,6 +1947,10 @@ export default function StaffFinance() {
               <Label className="text-xs">Currency</Label>
               <CurrencySelect value={reqHeader.currency} onValueChange={(v) => setReqHeader({ ...reqHeader, currency: v })} />
             </div>
+            <div>
+              <Label className="text-xs">Date Funds Needed *</Label>
+              <Input type="date" value={reqHeader.neededByDate} onChange={(e) => setReqHeader({ ...reqHeader, neededByDate: e.target.value })} />
+            </div>
           </div>
 
           {/* Line items */}
@@ -2022,8 +2051,97 @@ export default function StaffFinance() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => createRequisitionMutation.mutate(false)} disabled={createRequisitionMutation.isPending || !reqItemsValid || reqTotal <= 0}>Save Draft</Button>
-            <Button onClick={() => createRequisitionMutation.mutate(true)} disabled={createRequisitionMutation.isPending || !reqItemsValid || reqTotal <= 0} data-testid="button-submit-requisition">
+            <Button onClick={() => createRequisitionMutation.mutate(true)} disabled={createRequisitionMutation.isPending || !reqItemsValid || reqTotal <= 0 || !reqHeader.neededByDate} data-testid="button-submit-requisition">
               {createRequisitionMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Submit for Approval
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approve / Reject dialog */}
+      <Dialog open={!!approveTarget} onOpenChange={(open) => { if (!open) setApproveTarget(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{approveAction === "approve" ? "Approve Requisition" : "Reject Requisition"}</DialogTitle>
+          </DialogHeader>
+          {approveTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md border p-3 space-y-2 bg-muted/30 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Ref</span>
+                  <span className="font-mono font-medium">{approveTarget.requisitionNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Requested by</span>
+                  <span>{approveTarget.requesterName}{approveTarget.requesterDepartment ? ` · ${approveTarget.requesterDepartment}` : ""}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Date raised</span>
+                  <span>{approveTarget.createdAt ? new Date(approveTarget.createdAt).toLocaleDateString() : "—"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Funds needed by</span>
+                  <span className={approveTarget.neededByDate && new Date(approveTarget.neededByDate) < new Date() ? "text-destructive font-medium" : ""}>
+                    {approveTarget.neededByDate ? new Date(approveTarget.neededByDate).toLocaleDateString() : "—"}
+                  </span>
+                </div>
+                {approveTarget.payee && <div className="flex justify-between"><span className="text-muted-foreground">Payee</span><span>{approveTarget.payee}</span></div>}
+                <div className="border-t pt-2">
+                  {(Array.isArray(approveTarget.items) && approveTarget.items.length > 0
+                    ? approveTarget.items
+                    : [{ category: approveTarget.category, description: approveTarget.description, qty: 1, unitPrice: approveTarget.amount, total: approveTarget.amount }]
+                  ).map((it: any, idx: number) => (
+                    <div key={idx} className="flex gap-2 text-xs py-0.5">
+                      <Badge variant="outline" className="text-[10px]">{it.category}</Badge>
+                      <span className="flex-1 truncate">{it.description}</span>
+                      <span className="tabular-nums shrink-0">{Number(it.qty)}× {Number(it.unitPrice).toFixed(2)} = {Number(it.total ?? (Number(it.qty) * Number(it.unitPrice))).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between font-semibold text-sm pt-1 border-t mt-1">
+                    <span>Requested total</span>
+                    <span>{approveTarget.currency} {Number(approveTarget.amount).toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {approveAction === "approve" && (
+                <div>
+                  <Label className="text-xs">Adjusted Amount (leave unchanged to approve as-is)</Label>
+                  <Input type="number" step="0.01" min="0" value={adjustedAmount} onChange={(e) => setAdjustedAmount(e.target.value)} />
+                </div>
+              )}
+
+              <div>
+                <Label className="text-xs">{approveAction === "approve" ? "Notes (optional)" : "Reason for rejection *"}</Label>
+                <Input
+                  value={approveNotes}
+                  onChange={(e) => setApproveNotes(e.target.value)}
+                  placeholder={approveAction === "approve" ? "Any notes for the requester…" : "Why is this being rejected?"}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveTarget(null)}>Cancel</Button>
+            <Button
+              variant={approveAction === "reject" ? "destructive" : "default"}
+              disabled={requisitionActionMutation.isPending || (approveAction === "reject" && !approveNotes.trim())}
+              onClick={() => {
+                if (!approveTarget) return;
+                const extra: any = {};
+                if (approveAction === "approve") {
+                  const adj = Number(adjustedAmount);
+                  if (!isNaN(adj) && adj > 0 && adj !== Number(approveTarget.amount)) extra.adjustedAmount = adj;
+                  if (approveNotes.trim()) extra.approverNotes = approveNotes.trim();
+                } else {
+                  extra.rejectionReason = approveNotes.trim() || "Rejected";
+                }
+                requisitionActionMutation.mutate({ id: approveTarget.id, action: approveAction, extra });
+                setApproveTarget(null);
+              }}
+            >
+              {requisitionActionMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              {approveAction === "approve" ? "Approve" : "Reject"}
             </Button>
           </DialogFooter>
         </DialogContent>

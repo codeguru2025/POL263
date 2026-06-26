@@ -103,6 +103,7 @@ export const users = pgTable(
     maritalStatus: text("marital_status"),
     nextOfKinName: text("next_of_kin_name"),
     nextOfKinPhone: text("next_of_kin_phone"),
+    department: text("department"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("users_org_idx").on(t.organizationId)]
@@ -1987,6 +1988,8 @@ export const requisitions = pgTable(
     paymentMethod: text("payment_method"),
     reference: text("reference"),
     notes: text("notes"),
+    neededByDate: date("needed_by_date"),
+    approverNotes: text("approver_notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
