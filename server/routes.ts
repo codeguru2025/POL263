@@ -13,7 +13,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
+import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
 import { buildIncomeStatement, buildCashFlowStatement } from "./financial-statements";
 import { z } from "zod";
@@ -549,7 +549,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_RECEIPT_ADVERT", "ReceiptAdvert", advert.id, null, advert);
       return res.status(201).json(advert);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       return res.status(500).json({ message: err?.message || "Failed to create advert" });
     }
   });
@@ -874,7 +874,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json([]);
     } catch (err: any) {
       structuredLog("error", "GET /api/organizations failed", { error: err?.message || String(err), stack: err?.stack });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to load organizations." : (err?.message || "Failed to load organizations") });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1074,9 +1074,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_BRANCH", "Branch", branch.id, null, branch);
       return res.status(201).json(branch);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/branches failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create branch." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1177,7 +1177,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     } catch (err: any) {
       structuredLog("error", "POST /api/users failed", { error: err?.message, email });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create user." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
 
     const userRoles = await storage.getUserRoles(newUser.id, currentUser.organizationId);
@@ -1525,7 +1525,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         structuredLog("error", "Client created but lead creation failed — orphaned client record", { clientId: client.id, orgId: user.organizationId });
       }
       structuredLog("error", "Client creation failed (rolled back)", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create client." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
     const org = await storage.getOrganization(user.organizationId);
     await notifyClient(user.organizationId, client.id, "Welcome!", `Welcome to ${org?.name || "our platform"}. Your account has been created.`);
@@ -1594,7 +1594,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       dep = await storage.createDependent(parsed);
     } catch (err: any) {
       structuredLog("error", "POST /api/clients/:clientId/dependents failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create dependent." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
     await auditLog(req, "CREATE_DEPENDENT", "Dependent", dep.id, null, dep);
     return res.status(201).json(dep);
@@ -1822,9 +1822,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_BENEFIT_CATALOG_ITEM", "BenefitCatalogItem", item.id, null, item);
       return res.status(201).json(item);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/benefit-catalog failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create benefit." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1837,7 +1837,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/benefit-catalog/:id failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update benefit." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1854,9 +1854,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_BENEFIT_BUNDLE", "BenefitBundle", bundle.id, null, bundle);
       return res.status(201).json(bundle);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/benefit-bundles failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create bundle." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1869,7 +1869,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/benefit-bundles/:id failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update bundle." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1886,9 +1886,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_ADD_ON", "AddOn", addon.id, null, addon);
       return res.status(201).json(addon);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/add-ons failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create add-on." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1901,7 +1901,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/add-ons/:id failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update add-on." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1949,9 +1949,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_AGE_BAND", "AgeBandConfig", config.id, null, config);
       return res.status(201).json(config);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/age-bands failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create age band." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -1964,7 +1964,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/age-bands/:id failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update age band." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3248,7 +3248,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
       structuredLog("error", "POST /api/payments failed", { error: err?.message || String(err), stack: err?.stack });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Payment failed. Please try again." : (err?.message || "Payment failed") });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3495,7 +3495,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json({ transaction: result.tx, receipt: result.receipt });
     } catch (err: any) {
       structuredLog("error", "POST /api/admin/receipts/cash failed", { error: err?.message || String(err), stack: err?.stack });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Cash receipt failed. Please try again." : (err?.message || "Cash receipt failed") });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3772,7 +3772,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json({ receipted: results.length, results });
     } catch (err: any) {
       structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Group receipt failed. Please try again." : (err?.message || "Group receipt failed") });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -3912,6 +3912,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/cashups", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const body = req.body as any;
     const amountsByMethod = body.amountsByMethod && typeof body.amountsByMethod === "object" ? body.amountsByMethod : { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
     let totalAmount = 0;
@@ -3950,6 +3951,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const cashup = await storage.getCashup(req.params.id as string, user.organizationId);
     if (!cashup) return res.status(404).json({ message: "Not found" });
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const hasFinance = perms.includes("write:finance");
     const body = req.body as any;
@@ -4025,6 +4027,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/claims", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
     const user = req.user as any;
     try {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
       const parsed = insertClaimSchema.parse({
         ...req.body,
         organizationId: user.organizationId,
@@ -4062,9 +4065,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       return res.status(201).json(claim);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid claim data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/claims failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create claim." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4072,6 +4075,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const claim = await storage.getClaim(req.params.id as string, user.organizationId);
     if (!claim || claim.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
 
     const { toStatus, reason } = req.body;
     const allowed = VALID_CLAIM_TRANSITIONS[claim.status];
@@ -4153,6 +4157,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (caseBody[f] && typeof caseBody[f] === "string") { const d = new Date(caseBody[f]); caseBody[f] = isNaN(d.getTime()) ? undefined : d; }
       else if (!caseBody[f]) caseBody[f] = undefined;
     }
+    const userIdsToMirrorFuneralCreate = [user.id, caseBody.removalDriverId, caseBody.burialDriverId, caseBody.attendingAgentId, caseBody.assignedTo]
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    for (const uid of userIdsToMirrorFuneralCreate) {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, uid);
+    }
     const parsed = insertFuneralCaseSchema.parse({
       ...caseBody,
       organizationId: user.organizationId,
@@ -4203,6 +4212,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           sanitized[f] = isNaN(d.getTime()) ? null : d;
         }
       }
+      const userIdsToMirrorFuneralPatch = [sanitized.removalDriverId, sanitized.burialDriverId, sanitized.attendingAgentId, sanitized.assignedTo]
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      for (const uid of userIdsToMirrorFuneralPatch) {
+        await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, uid);
+      }
       const updated = await storage.updateFuneralCase(caseId, sanitized, user.organizationId);
       await auditLog(req, "UPDATE_FUNERAL_CASE", "FuneralCase", caseId, before, updated);
 
@@ -4229,7 +4243,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/funeral-cases/:id failed", { error: err?.message, stack: err?.stack, caseId });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update funeral case. Please try again." : (err?.message || "Update failed") });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4251,14 +4265,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
       if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+      if (req.body.assignedTo && typeof req.body.assignedTo === "string") {
+        await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.assignedTo);
+      }
       const parsed = insertFuneralTaskSchema.parse({ ...req.body, funeralCaseId: req.params.id as string, organizationId: user.organizationId });
       const task = await storage.createFuneralTask(parsed);
       await auditLog(req, "CREATE_FUNERAL_TASK", "FuneralTask", task.id, null, task);
       return res.status(201).json(task);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/funeral-cases/:id/tasks failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create task." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4266,13 +4283,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     try {
+      if (req.body.assignedTo && typeof req.body.assignedTo === "string") {
+        await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.assignedTo);
+      }
       const updated = await storage.updateFuneralTask(id, nullifyEmptyFields(req.body, ["dueDate", "completedAt"]), user.organizationId);
       if (!updated) return res.status(404).json({ message: "Funeral task not found" });
       await auditLog(req, "UPDATE_FUNERAL_TASK", "FuneralTask", id, null, updated);
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/funeral-tasks/:id failed", { error: err?.message, id });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update task." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4290,6 +4310,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!fc) return res.status(404).json({ message: "Funeral case not found" });
       // Mirror the authenticated user into the org DB so the preparedByUserId FK resolves
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+      // Also mirror the selected driver — driverId comes from req.body and is a different user
+      if (req.body.driverId && typeof req.body.driverId === "string") {
+        await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.driverId);
+      }
       const clBody = { ...req.body };
       // Coerce datetime-local string to Date
       if (clBody.completedAt && typeof clBody.completedAt === "string") { const d = new Date(clBody.completedAt); clBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
@@ -4310,7 +4334,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(cl);
     } catch (err: any) {
       structuredLog("error", "POST driver-checklist failed", { error: err?.message, caseId: req.params.id });
-      return res.status(err?.name === "ZodError" ? 400 : 500).json({ message: err?.message || "Failed to save checklist" });
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4378,14 +4403,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (body[f] && typeof body[f] === "string") { const d = new Date(body[f]); body[f] = isNaN(d.getTime()) ? undefined : d; }
         else if (!body[f]) body[f] = undefined;
       }
+      const userIdsToMirrorIntake = [body.removalDriverId, body.receivedByUserId]
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      for (const uid of userIdsToMirrorIntake) {
+        await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, uid);
+      }
       const parsed = insertMortuaryIntakeSchema.parse({ ...body, organizationId: user.organizationId, intakeNumber });
       const intake = await storage.createMortuaryIntake(parsed);
       await auditLog(req, "CREATE_MORTUARY_INTAKE", "MortuaryIntake", intake.id, null, intake);
       return res.status(201).json(intake);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/mortuary-intakes failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create mortuary intake." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4405,6 +4435,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (patchBody[f] && typeof patchBody[f] === "string") { const d = new Date(patchBody[f]); patchBody[f] = isNaN(d.getTime()) ? null : d; }
       else if (patchBody[f] === "" ) patchBody[f] = null;
     }
+    const userIdsToMirrorIntakePatch = [patchBody.removalDriverId, patchBody.receivedByUserId]
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    for (const uid of userIdsToMirrorIntakePatch) {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, uid);
+    }
     const safeBody = insertMortuaryIntakeSchema.partial().parse(patchBody);
     const updated = await storage.updateMortuaryIntake(req.params.id as string, safeBody, user.organizationId);
     await auditLog(req, "UPDATE_MORTUARY_INTAKE", "MortuaryIntake", req.params.id as string, before, updated);
@@ -4422,6 +4457,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const dispatchBody = { ...req.body };
     if (dispatchBody.dispatchedAt && typeof dispatchBody.dispatchedAt === "string") { const d = new Date(dispatchBody.dispatchedAt); dispatchBody.dispatchedAt = isNaN(d.getTime()) ? undefined : d; }
     else if (!dispatchBody.dispatchedAt) dispatchBody.dispatchedAt = undefined;
@@ -4447,6 +4483,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    if (req.body.receivedByUserId && typeof req.body.receivedByUserId === "string") {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.receivedByUserId);
+    }
     const parsed = insertDeceasedBelongingSchema.parse({
       ...req.body,
       intakeId: req.params.id as string,
@@ -4475,6 +4514,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    if (req.body.completedByUserId && typeof req.body.completedByUserId === "string") {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.completedByUserId);
+    }
     const washBody = { ...req.body };
     if (washBody.completedAt && typeof washBody.completedAt === "string") { const d = new Date(washBody.completedAt); washBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
     else if (!washBody.completedAt) washBody.completedAt = undefined;
@@ -4523,9 +4565,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_VEHICLE", "FleetVehicle", vehicle.id, null, vehicle);
       return res.status(201).json(vehicle);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/fleet failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create vehicle." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4544,9 +4586,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_COMMISSION_PLAN", "CommissionPlan", plan.id, null, plan);
       return res.status(201).json(plan);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/commission-plans failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create commission plan." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4585,9 +4627,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_LEAD", "Lead", lead.id, null, lead);
       return res.status(201).json(lead);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/leads failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create lead." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4604,7 +4646,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/leads/:id failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update lead." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4713,14 +4755,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/expenditures", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     try {
+      if (req.body.approvedBy && typeof req.body.approvedBy === "string") {
+        await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.approvedBy);
+      }
       const parsed = insertExpenditureSchema.parse({ ...req.body, organizationId: user.organizationId });
       const exp = await storage.createExpenditure(parsed);
       await auditLog(req, "CREATE_EXPENDITURE", "Expenditure", exp.id, null, exp);
       return res.status(201).json(exp);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/expenditures failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create expenditure." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -4801,9 +4846,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       created = await storage.createRequisition(parsed);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/requisitions failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create requisition." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
 
     let savedItems: any[] = [];
@@ -4944,9 +4989,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       created = await storage.createDebitOrder(parsed);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/debit-orders failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create debit order." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
     await auditLog(req, "CREATE_DEBIT_ORDER", "DebitOrder", created.id, null, created);
     return res.status(201).json(created);
@@ -5291,7 +5336,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/price-book/:id failed", { error: err?.message, itemId });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update item." : (err?.message || "Update failed") });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -5305,6 +5350,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/approvals", requireAuth, requireTenantScope, requireAnyPermission("write:policy", "write:claim", "write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const parsed = insertApprovalRequestSchema.parse({
       ...req.body,
       organizationId: user.organizationId,
@@ -5328,6 +5374,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (approval.initiatedBy === user.id) {
       return res.status(400).json({ message: "Cannot approve own request (maker-checker)" });
     }
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const updated = await storage.updateApprovalRequest(approval.id, {
       status: action === "approve" ? "approved" : "rejected",
       approvedBy: user.id,
@@ -5367,9 +5414,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_PAYROLL_EMPLOYEE", "PayrollEmployee", emp.id, null, emp);
       return res.status(201).json(emp);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/payroll/employees failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create payroll employee." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -5384,14 +5431,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/payroll/runs", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
     const user = req.user as any;
     try {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
       const parsed = insertPayrollRunSchema.parse({ ...req.body, organizationId: user.organizationId, preparedBy: user.id, status: "draft" });
       const run = await storage.createPayrollRun(parsed);
       await auditLog(req, "CREATE_PAYROLL_RUN", "PayrollRun", run.id, null, run);
       return res.status(201).json(run);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/payroll/runs failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create payroll run." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -5455,6 +5503,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const existing = await storage.getAttendanceLogById(req.params.id as string, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Log not found" });
     if (existing.status !== "pending") return res.status(409).json({ message: `Cannot approve a log that is already ${existing.status}.` });
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const updated = await storage.updateAttendanceLog(existing.id, {
       status: "approved",
       approvedBy: user.id,
@@ -5471,6 +5520,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const existing = await storage.getAttendanceLogById(req.params.id as string, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Log not found" });
     if (existing.status !== "pending") return res.status(409).json({ message: `Cannot reject a log that is already ${existing.status}.` });
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const updated = await storage.updateAttendanceLog(existing.id, {
       status: "rejected",
       approvedBy: user.id,
@@ -5666,34 +5716,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
-  app.post("/api/public/register-policy", express.json(), async (req, res) => {
-    const { referralCode, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, premiumAmount, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
-    const missingFields: string[] = [];
-    if (!referralCode) missingFields.push("referralCode");
-    if (!firstName) missingFields.push("firstName");
-    if (!lastName) missingFields.push("lastName");
-    if (!productVersionId) missingFields.push("productVersionId");
-    if (missingFields.length > 0) {
-      return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
-    }
-    const nationalIdNorm = normalizeNationalId(nationalId);
-    if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
-    if (!isValidNationalId(nationalId)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
-    if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
-    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
-    if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
-    const agent = await storage.getUserByReferralCode(referralCode);
-    if (!agent) return res.status(400).json({ message: "Invalid referral code" });
-    if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
-    const orgId = agent.organizationId;
+  // ─── Shared logic for both public registration paths ───────────────────────
+  async function handlePublicPolicyRegistration(
+    req: any,
+    res: any,
+    orgId: string,
+    agentId: string | null,
+    effectiveBranchId: string | null,
+  ): Promise<void> {
+    const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
+    const nationalIdNorm = normalizeNationalId(nationalId)!;
     const normalizedPaymentMethod = normalizePaymentMethodInput(rawPaymentMethod);
     const pv = await storage.getProductVersion(productVersionId, orgId);
-    if (!pv) return res.status(400).json({ message: "Invalid product version" });
+    if (!pv) { res.status(400).json({ message: "Invalid product version" }); return; }
     const product = await storage.getProduct(pv.productId, orgId);
-    if (!product) return res.status(400).json({ message: "Product not found" });
-    const effectiveBranchId = branchId || agent.branchId || null;
+    if (!product) { res.status(400).json({ message: "Product not found" }); return; }
 
-    // Reuse existing client when identified by email or national ID (no duplicate clients)
     let client: Awaited<ReturnType<typeof storage.createClient>>;
     const emailTrim = email ? String(email).trim() : "";
     const nationalIdTrim = nationalIdNorm;
@@ -5706,17 +5744,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
       if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
       if (nationalIdTrim) updates.nationalId = nationalIdTrim;
-      if (!client.activationCode) {
-        updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-      }
-      if (!(client as any).agentId) updates.agentId = agent.id;
+      if (!client.activationCode) updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+      if (agentId && !(client as any).agentId) updates.agentId = agentId;
       if (Object.keys(updates).length > 0) {
         const updated = await storage.updateClient(client.id, updates, orgId);
         if (updated) client = updated;
       }
     } else {
       const activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-      const clientParsed = insertClientSchema.parse({
+      client = await storage.createClient(insertClientSchema.parse({
         organizationId: orgId,
         branchId: effectiveBranchId,
         firstName: toUpperTrim(firstName, false)!,
@@ -5728,9 +5764,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         gender: req.body.gender ? toUpperTrim(req.body.gender, false) : null,
         activationCode,
         isEnrolled: false,
-        agentId: agent.id,
-      });
-      client = await storage.createClient(clientParsed);
+        agentId: agentId || null,
+      }));
     }
 
     try {
@@ -5744,12 +5779,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const dDob = d.dateOfBirth ? String(d.dateOfBirth).trim() : null;
         const dGender = d.gender ? toUpperTrim(d.gender, false) : null;
         const dNationalId = d.nationalId ? normalizeNationalId(d.nationalId) : null;
-        if (!dFirst || !dLast) continue;
-        if (!dRel) continue;
-        if (!dDob) continue;
-        if (!dGender) continue;
+        if (!dFirst || !dLast || !dRel || !dDob || !dGender) continue;
         if (dNationalId && !isValidNationalId(dNationalId)) continue;
-        const dep = await storage.createDependent({
+        createdDeps.push(await storage.createDependent({
           organizationId: orgId,
           clientId: client.id,
           firstName: dFirst,
@@ -5758,43 +5790,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           dateOfBirth: dDob,
           nationalId: dNationalId || null,
           gender: dGender,
-        });
-        createdDeps.push(dep);
+        }));
       }
       const premium = await computePolicyPremium(
-        orgId,
-        productVersionId,
-        currency || "USD",
-        paymentSchedule || "monthly",
-        [],
-        [],
-        undefined,
-        createdDeps.map((d) => d.dateOfBirth || null),
+        orgId, productVersionId, currency || "USD", paymentSchedule || "monthly",
+        [], [], undefined, createdDeps.map((d) => d.dateOfBirth || null),
       );
-
       let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
       if (ben) {
-        const benFirst = toUpperTrim(ben.firstName, false);
-        const benLast = toUpperTrim(ben.lastName, false);
-        const benRel = toUpperTrim(ben.relationship, false);
-        const benNationalId = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
-        const benPhone = toUpperTrim(ben.phone, false);
-        if (!benFirst || !benLast || !benRel || !benNationalId || !benPhone) ben = null;
-        else if (!isValidNationalId(ben.nationalId)) ben = null;
-        else {
-          ben = { firstName: benFirst, lastName: benLast, relationship: benRel, nationalId: benNationalId, phone: benPhone };
-        }
+        const bf = toUpperTrim(ben.firstName, false); const bl = toUpperTrim(ben.lastName, false);
+        const br = toUpperTrim(ben.relationship, false); const bn = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
+        const bp = toUpperTrim(ben.phone, false);
+        if (!bf || !bl || !br || !bn || !bp || !isValidNationalId(ben.nationalId)) ben = null;
+        else ben = { firstName: bf, lastName: bl, relationship: br, nationalId: bn, phone: bp };
       }
       const policyParsed = insertPolicySchema.parse({
-        organizationId: orgId,
-        branchId: effectiveBranchId,
-        policyNumber,
-        clientId: client.id,
-        productVersionId: pv.id,
-        agentId: agent.id,
-        status: "inactive",
-        premiumAmount: premium,
-        currency: currency || "USD",
+        organizationId: orgId, branchId: effectiveBranchId, policyNumber,
+        clientId: client.id, productVersionId: pv.id, agentId: agentId || null,
+        status: "inactive", premiumAmount: premium, currency: currency || "USD",
         paymentSchedule: paymentSchedule || "monthly",
         effectiveDate: new Date().toISOString().split("T")[0],
         beneficiaryFirstName: ben?.firstName ? String(ben.firstName).trim() : null,
@@ -5805,14 +5818,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         beneficiaryDependentId: null,
       });
       const existingForClient = await storage.getPoliciesByClient(client.id, orgId);
-      const duplicate = existingForClient.find(
-        (p) => p.productVersionId === policyParsed.productVersionId && p.status !== "cancelled"
-      );
-      if (duplicate) {
-        res.status(400).json({
-          error: "Duplicate policy",
-          message: "This client already has an active policy for this product.",
-        });
+      if (existingForClient.find((p) => p.productVersionId === policyParsed.productVersionId && p.status !== "cancelled")) {
+        res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
         return;
       }
       const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
@@ -5822,47 +5829,58 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { policy } = await storage.createPolicyWithInitialSetup(orgId, {
         policy: policyParsed,
         statusHistory: {
-          fromStatus: null,
-          toStatus: "inactive",
-          reason: "Registered via agent link",
+          fromStatus: null, toStatus: "inactive",
+          reason: agentId ? "Registered via agent link" : "Walk-in self-registration",
           changedBy: null,
         },
-        members: memberRows,
-        memberAddOns: [],
+        members: memberRows, memberAddOns: [],
       });
       if (normalizedPaymentMethod) {
         await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
-          organizationId: orgId,
-          clientId: client.id,
-          ...normalizedPaymentMethod,
-          isDefault: true,
-          isActive: true,
+          organizationId: orgId, clientId: client.id, ...normalizedPaymentMethod, isDefault: true, isActive: true,
         } as any);
       }
-      const lead = await storage.createLead({
-        organizationId: orgId,
-        branchId: effectiveBranchId || undefined,
-        agentId: agent.id,
-        clientId: client.id,
-        firstName: client.firstName,
-        lastName: client.lastName,
-        phone: client.phone || undefined,
-        email: client.email || undefined,
-        source: "agent_link",
-        stage: "lead",
+      await storage.createLead({
+        organizationId: orgId, branchId: effectiveBranchId || undefined,
+        agentId: agentId || undefined, clientId: client.id,
+        firstName: client.firstName, lastName: client.lastName,
+        phone: client.phone || undefined, email: client.email || undefined,
+        source: agentId ? "agent_link" : "walk_in", stage: "lead",
       });
-      return res.status(201).json({
-        policyNumber: policy.policyNumber,
-        activationCode: client.activationCode,
-        clientId: client.id,
-        message: "Policy registered. Use your policy number and activation code to claim your account, then sign in.",
+      res.status(201).json({
+        policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,
+        message: agentId
+          ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
+          : "Policy registered. Use your policy number and activation code to claim your account.",
       });
     } catch (e) {
-      if (e instanceof z.ZodError) return res.status(400).json({ message: "Validation failed", details: e.errors });
+      if (e instanceof z.ZodError) { res.status(400).json({ message: "Validation failed", details: e.errors }); return; }
       throw e;
     }
+  }
+
+  app.post("/api/public/register-policy", express.json(), async (req, res) => {
+    const { referralCode, firstName, lastName, nationalId, phone, dateOfBirth, productVersionId } = req.body;
+    const missingFields: string[] = [];
+    if (!referralCode) missingFields.push("referralCode");
+    if (!firstName) missingFields.push("firstName");
+    if (!lastName) missingFields.push("lastName");
+    if (!productVersionId) missingFields.push("productVersionId");
+    if (missingFields.length > 0) return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
+    const nationalIdNorm = normalizeNationalId(nationalId);
+    if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
+    if (!isValidNationalId(nationalId)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+    if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
+    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
+    if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
+    const agent = await storage.getUserByReferralCode(referralCode);
+    if (!agent) return res.status(400).json({ message: "Invalid referral code" });
+    if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
+    return handlePublicPolicyRegistration(req, res, agent.organizationId, agent.id, req.body.branchId || agent.branchId || null);
   });
 
+  // ─── (legacy unused block — kept for diff continuity, removed below) ─────
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   // ─── User (staff/agent) notifications ───────────────────
 
   // SSE stream — agent-app and web keep this open for real-time delivery
@@ -5953,7 +5971,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/public/walkin-register", express.json(), async (req, res) => {
-    const { orgId, firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, branchId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
+    const { orgId, firstName, lastName, nationalId, phone, dateOfBirth, productVersionId } = req.body;
     const missingFields: string[] = [];
     if (!orgId) missingFields.push("orgId");
     if (!firstName) missingFields.push("firstName");
@@ -5968,108 +5986,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
     const org = await storage.getOrganization(orgId);
     if (!org) return res.status(400).json({ message: "Organisation not found" });
-    const normalizedPaymentMethod = normalizePaymentMethodInput(rawPaymentMethod);
-    const pv = await storage.getProductVersion(productVersionId, orgId);
-    if (!pv) return res.status(400).json({ message: "Invalid product version" });
-    const product = await storage.getProduct(pv.productId, orgId);
-    if (!product) return res.status(400).json({ message: "Product not found" });
-    const effectiveBranchId = branchId || null;
-    let client: Awaited<ReturnType<typeof storage.createClient>>;
-    const emailTrim = email ? String(email).trim() : "";
-    const nationalIdTrim = nationalIdNorm;
-    let existing = emailTrim ? await storage.getClientByEmail(orgId, emailTrim) : undefined;
-    if (!existing && nationalIdTrim) existing = await storage.getClientByNationalId(orgId, nationalIdTrim);
-    if (existing) {
-      client = existing;
-      const updates: Record<string, unknown> = {};
-      if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
-      if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
-      if (nationalIdTrim) updates.nationalId = nationalIdTrim;
-      if (!client.activationCode) updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-      if (Object.keys(updates).length > 0) { const u = await storage.updateClient(client.id, updates, orgId); if (u) client = u; }
-    } else {
-      const activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-      client = await storage.createClient(insertClientSchema.parse({
-        organizationId: orgId, branchId: effectiveBranchId,
-        firstName: toUpperTrim(firstName, false)!, lastName: toUpperTrim(lastName, false)!,
-        email: emailTrim || null, phone: toUpperTrim(phone, false) || null,
-        dateOfBirth: dateOfBirth || null, nationalId: nationalIdTrim,
-        gender: req.body.gender ? toUpperTrim(req.body.gender, false) : null,
-        activationCode, isEnrolled: false, agentId: null,
-      }));
-    }
-    try {
-      const policyNumber = await storage.generatePolicyNumber(orgId);
-      const depsList = Array.isArray(rawDeps) ? rawDeps : [];
-      const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
-      for (const d of depsList) {
-        const dFirst = toUpperTrim(d.firstName, false); const dLast = toUpperTrim(d.lastName, false);
-        const dRel = toUpperTrim(d.relationship, false); const dDob = d.dateOfBirth ? String(d.dateOfBirth).trim() : null;
-        const dGender = d.gender ? toUpperTrim(d.gender, false) : null;
-        const dNationalId = d.nationalId ? normalizeNationalId(d.nationalId) : null;
-        if (!dFirst || !dLast || !dRel || !dDob || !dGender) continue;
-        if (dNationalId && !isValidNationalId(dNationalId)) continue;
-        createdDeps.push(await storage.createDependent({
-          organizationId: orgId, clientId: client.id,
-          firstName: dFirst, lastName: dLast, relationship: dRel,
-          dateOfBirth: dDob, nationalId: dNationalId || null, gender: dGender,
-        }));
-      }
-      const premium = await computePolicyPremium(orgId, productVersionId, currency || "USD", paymentSchedule || "monthly", [], [], undefined, createdDeps.map((d) => d.dateOfBirth || null));
-      let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
-      if (ben) {
-        const bf = toUpperTrim(ben.firstName, false); const bl = toUpperTrim(ben.lastName, false);
-        const br = toUpperTrim(ben.relationship, false); const bn = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
-        const bp = toUpperTrim(ben.phone, false);
-        if (!bf || !bl || !br || !bn || !bp || !isValidNationalId(ben.nationalId)) ben = null;
-        else ben = { firstName: bf, lastName: bl, relationship: br, nationalId: bn, phone: bp };
-      }
-      const policyParsed = insertPolicySchema.parse({
-        organizationId: orgId, branchId: effectiveBranchId, policyNumber,
-        clientId: client.id, productVersionId: pv.id, agentId: null,
-        status: "inactive", premiumAmount: premium, currency: currency || "USD",
-        paymentSchedule: paymentSchedule || "monthly",
-        effectiveDate: new Date().toISOString().split("T")[0],
-        beneficiaryFirstName: ben?.firstName ? String(ben.firstName).trim() : null,
-        beneficiaryLastName: ben?.lastName ? String(ben.lastName).trim() : null,
-        beneficiaryRelationship: ben?.relationship ? String(ben.relationship).trim() : null,
-        beneficiaryNationalId: ben?.nationalId ? String(ben.nationalId).trim() : null,
-        beneficiaryPhone: ben?.phone ? String(ben.phone).trim() : null,
-        beneficiaryDependentId: null,
-      });
-      const existingForClient = await storage.getPoliciesByClient(client.id, orgId);
-      if (existingForClient.find((p) => p.productVersionId === policyParsed.productVersionId && p.status !== "cancelled")) {
-        return res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
-      }
-      const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
-        { clientId: client.id, role: "policy_holder" },
-        ...createdDeps.map((dep) => ({ dependentId: dep.id, role: "dependent" as const })),
-      ];
-      const { policy } = await storage.createPolicyWithInitialSetup(orgId, {
-        policy: policyParsed,
-        statusHistory: { fromStatus: null, toStatus: "inactive", reason: "Walk-in self-registration", changedBy: null },
-        members: memberRows, memberAddOns: [],
-      });
-      if (normalizedPaymentMethod) {
-        await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
-          organizationId: orgId, clientId: client.id, ...normalizedPaymentMethod, isDefault: true, isActive: true,
-        } as any);
-      }
-      await storage.createLead({
-        organizationId: orgId, branchId: effectiveBranchId || undefined,
-        clientId: client.id, firstName: client.firstName, lastName: client.lastName,
-        phone: client.phone || undefined, email: client.email || undefined,
-        source: "walk_in", stage: "lead",
-      });
-      return res.status(201).json({
-        policyNumber: policy.policyNumber, activationCode: client.activationCode,
-        clientId: client.id,
-        message: "Policy registered. Use your policy number and activation code to claim your account.",
-      });
-    } catch (e) {
-      if (e instanceof z.ZodError) return res.status(400).json({ message: "Validation failed", details: e.errors });
-      throw e;
-    }
+    return handlePublicPolicyRegistration(req, res, orgId, null, req.body.branchId || null);
   });
 
   // ─── Groups ──────────────────────────────────────────────
@@ -6087,9 +6004,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
       return res.status(201).json(group);
     } catch (err: any) {
-      if (err?.name === "ZodError") return res.status(400).json({ message: "Invalid data", errors: err.errors });
+      if (handleZodError(err, res)) return;
       structuredLog("error", "POST /api/groups failed", { error: err?.message });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to create group." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -6105,7 +6022,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json(updated);
     } catch (err: any) {
       structuredLog("error", "PATCH /api/groups/:id failed", { error: err?.message, id });
-      return res.status(500).json({ message: process.env.NODE_ENV === "production" ? "Failed to update group." : err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
