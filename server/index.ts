@@ -43,6 +43,11 @@ app.use(
   })
 );
 
+// TODO(security): Install the `cors` npm package and add explicit CORS configuration:
+//   import cors from "cors";
+//   app.use(cors({ origin: (APP_BASE_URL || "").split(",").map(s => s.trim()).filter(Boolean), credentials: true }));
+// Required for the Capacitor mobile app when VITE_API_BASE points to a remote host.
+
 app.use(compression());
 app.use(cookieParser());
 app.use(requestIdMiddleware);
@@ -73,6 +78,10 @@ if (enableCsrf) {
     "/api/payments/paynow/result",
     "/api/agent-auth/login",
     "/api/agent-auth/logout",
+    // Mobile deep-link exchange and client auth flows are called without a browser session
+    "/api/auth/mobile-exchange",
+    "/api/client-auth/login",
+    "/api/client-auth/logout",
   ];
   app.use((req, res, next) => {
     if (CSRF_EXEMPT_PATHS.includes(req.path)) return next();
@@ -180,6 +189,7 @@ if (enableCsrf) {
   });
   app.use("/api/upload", writeLimiter);
   app.use("/api/public/register-policy", writeLimiter);
+  app.use("/api/public/walkin-register", writeLimiter);
   app.use("/api/admin/run-notifications", writeLimiter);
 
   app.use(
@@ -300,9 +310,9 @@ if (enableCsrf) {
       // Fix 12: Warn in production if platform-owner MFA is not enforced.
       // The PLATFORM_OWNER_EMAIL account bypasses all RBAC — a compromise is catastrophic.
       if (process.env.NODE_ENV === "production" && !process.env.PLATFORM_OWNER_MFA_ENFORCED) {
-        structuredLog("warn", "SECURITY: PLATFORM_OWNER_MFA_ENFORCED is not set. "
-          + "The platform owner account has unrestricted access to all tenant data. "
-          + "Enable MFA via your identity provider and set PLATFORM_OWNER_MFA_ENFORCED=true.");
+        structuredLog("error", "SECURITY CRITICAL: PLATFORM_OWNER_MFA_ENFORCED is not set. "
+          + "The platform owner account has unrestricted cross-tenant access to all tenant data. "
+          + "Enable MFA on the platform owner Google account and set PLATFORM_OWNER_MFA_ENFORCED=true in production.");
       }
     }
   );

@@ -110,7 +110,10 @@ export default function Home() {
   if (isRedirecting || isAuthPending) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden />
+        <div role="status" aria-label="Loading">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden />
+          <span className="sr-only">Loading...</span>
+        </div>
       </div>
     );
   }
@@ -138,9 +141,9 @@ export default function Home() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <Button className="w-full h-10 font-medium" size="default" data-testid="link-staff-portal">
+                  <span className="flex w-full h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90" data-testid="link-staff-portal">
                     Platform Owner Login
-                  </Button>
+                  </span>
                 </CardContent>
               </Card>
             </Link>
@@ -184,13 +187,12 @@ export default function Home() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <Button
-                    className="w-full h-11 font-medium shadow-sm group-hover:shadow-md transition-all bg-primary text-primary-foreground hover:bg-primary/90"
-                    size="lg"
+                  <span
+                    className="flex w-full h-11 items-center justify-center rounded-md bg-primary px-6 text-sm font-medium text-primary-foreground shadow-sm group-hover:shadow-md transition-all hover:bg-primary/90"
                     data-testid={portal.testId}
                   >
                     {portal.buttonLabel}
-                  </Button>
+                  </span>
                 </CardContent>
               </Card>
             </Link>

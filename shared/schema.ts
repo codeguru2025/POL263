@@ -230,6 +230,8 @@ export const clients = pgTable(
     index("clients_org_idx").on(t.organizationId),
     index("clients_branch_idx").on(t.branchId),
     index("clients_agent_idx").on(t.agentId),
+    index("clients_org_email_idx").on(t.organizationId, t.email),
+    index("clients_org_national_id_idx").on(t.organizationId, t.nationalId),
   ]
 );
 
@@ -683,6 +685,7 @@ export const policies = pgTable(
     index("policies_status_idx").on(t.status),
     index("policies_branch_idx").on(t.branchId),
     index("policies_group_idx").on(t.groupId),
+    index("policies_org_status_created_idx").on(t.organizationId, t.status, t.createdAt),
   ]
 );
 
@@ -721,7 +724,10 @@ export const policyStatusHistory = pgTable(
     changedBy: uuid("changed_by").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("psh_policy_idx").on(t.policyId)]
+  (t) => [
+    index("psh_policy_idx").on(t.policyId),
+    index("policy_status_history_policy_to_status_idx").on(t.policyId, t.toStatus, t.createdAt),
+  ]
 );
 
 export const policyAddOns = pgTable(
@@ -910,6 +916,7 @@ export const paymentReceipts = pgTable(
     index("pr_intent_idx").on(t.paymentIntentId),
     index("pr_policy_idx").on(t.policyId),
     uniqueIndex("pr_receipt_org_idx").on(t.receiptNumber, t.organizationId),
+    index("payment_receipts_policy_status_issued_idx").on(t.policyId, t.status, t.issuedAt),
   ]
 );
 
@@ -1573,6 +1580,7 @@ export const commissionLedgerEntries = pgTable(
     index("cle_org_idx").on(t.organizationId),
     index("cle_agent_idx").on(t.agentId),
     index("cle_policy_idx").on(t.policyId),
+    index("commission_ledger_org_agent_created_idx").on(t.organizationId, t.agentId, t.createdAt),
   ]
 );
 
@@ -1782,6 +1790,7 @@ export const notificationLogs = pgTable(
     index("nl_org_idx").on(t.organizationId),
     index("nl_recipient_idx").on(t.recipientId),
     index("nl_policy_idx").on(t.policyId),
+    index("notification_logs_recipient_read_idx").on(t.recipientId, t.readAt),
   ]
 );
 
@@ -2475,6 +2484,33 @@ export const groups = pgTable(
 export const insertGroupSchema = createInsertSchema(groups).omit({ id: true, createdAt: true });
 export type Group = typeof groups.$inferSelect;
 export type InsertGroup = z.infer<typeof insertGroupSchema>;
+
+// ─── REMINDERS ─────────────────────────────────────────────
+// Personal per-user reminders, persisted server-side.
+
+export const reminders = pgTable(
+  "reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    dueDate: text("due_date"),
+    priority: text("priority").default("medium"),
+    isCompleted: boolean("is_completed").default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("reminders_org_idx").on(t.organizationId),
+    index("reminders_user_idx").on(t.userId),
+  ]
+);
+
+export const insertReminderSchema = createInsertSchema(reminders).omit({ id: true, createdAt: true, updatedAt: true });
+export type Reminder = typeof reminders.$inferSelect;
+export type InsertReminder = z.infer<typeof insertReminderSchema>;
 
 // ─── GROUP BULK PAYMENT (executive pays for multiple group policies at once) ───
 export const groupPaymentIntents = pgTable(

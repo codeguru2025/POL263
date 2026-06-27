@@ -4,64 +4,67 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Bell, Trash2 } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
-const STORAGE_KEY = "pol263-staff-reminders";
+type Reminder = {
+  id: string;
+  title: string;
+  description: string | null;
+  dueDate: string | null;
+  priority: string | null;
+  isCompleted: boolean | null;
+  createdAt: string;
+};
 
-type Reminder = { id: string; title: string; note: string; due: string };
-
-function loadReminders(): Reminder[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveReminders(items: Reminder[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+async function apiFetch(url: string, options?: RequestInit) {
+  const res = await fetch(url, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export default function StaffReminders() {
   const { toast } = useToast();
-  const [items, setItems] = useState<Reminder[]>([]);
+  const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [due, setDue] = useState("");
 
-  useEffect(() => {
-    setItems(loadReminders());
-  }, []);
+  const { data: items = [], isLoading } = useQuery<Reminder[]>({
+    queryKey: ["/api/reminders"],
+    queryFn: () => apiFetch("/api/reminders"),
+  });
 
-  const persist = (next: Reminder[]) => {
-    setItems(next);
-    saveReminders(next);
-  };
+  const addMutation = useMutation({
+    mutationFn: (body: { title: string; description: string; dueDate: string }) =>
+      apiFetch("/api/reminders", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/reminders"] });
+      setTitle("");
+      setNote("");
+      setDue("");
+      toast({ title: "Reminder saved" });
+    },
+    onError: () => toast({ title: "Failed to save reminder", variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/api/reminders/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/reminders"] }),
+    onError: () => toast({ title: "Failed to delete reminder", variant: "destructive" }),
+  });
 
   const add = () => {
     if (!title.trim()) {
       toast({ title: "Title required", variant: "destructive" });
       return;
     }
-    const row: Reminder = {
-      id: crypto.randomUUID(),
-      title: title.trim(),
-      note: note.trim(),
-      due: due.trim(),
-    };
-    persist([row, ...items]);
-    setTitle("");
-    setNote("");
-    setDue("");
-    toast({ title: "Reminder saved", description: "Stored on this device only." });
-  };
-
-  const remove = (id: string) => {
-    persist(items.filter((r) => r.id !== id));
+    addMutation.mutate({ title: title.trim(), description: note.trim(), dueDate: due.trim() });
   };
 
   return (
@@ -69,7 +72,7 @@ export default function StaffReminders() {
       <PageShell>
         <PageHeader
           title="Reminders"
-          description="Personal reminders stored in this browser. A lightweight stand-in until server-backed reminders exist."
+          description="Personal reminders synced to your account across all devices."
         />
         <CardSection title="New reminder" icon={Bell}>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -77,12 +80,14 @@ export default function StaffReminders() {
             <Input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
           </div>
           <Textarea className="mt-3 min-h-[80px]" placeholder="Notes (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-          <Button className="mt-3" type="button" onClick={add}>
-            Add reminder
+          <Button className="mt-3" type="button" onClick={add} disabled={addMutation.isPending}>
+            {addMutation.isPending ? "Saving…" : "Add reminder"}
           </Button>
         </CardSection>
         <CardSection title="Your list" icon={Bell}>
-          {items.length === 0 ? (
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : items.length === 0 ? (
             <p className="text-sm text-muted-foreground">No reminders yet.</p>
           ) : (
             <ul className="space-y-3">
@@ -90,10 +95,18 @@ export default function StaffReminders() {
                 <li key={r.id} className="rounded-lg border p-3 flex gap-3 justify-between items-start">
                   <div className="min-w-0">
                     <p className="font-medium">{r.title}</p>
-                    {r.due && <p className="text-xs text-muted-foreground mt-0.5">Due {r.due}</p>}
-                    {r.note && <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">{r.note}</p>}
+                    {r.dueDate && <p className="text-xs text-muted-foreground mt-0.5">Due {r.dueDate}</p>}
+                    {r.description && <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">{r.description}</p>}
                   </div>
-                  <Button type="button" variant="ghost" size="icon" className="shrink-0" onClick={() => remove(r.id)} aria-label="Delete reminder">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0"
+                    onClick={() => deleteMutation.mutate(r.id)}
+                    disabled={deleteMutation.isPending}
+                    aria-label="Delete reminder"
+                  >
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </li>

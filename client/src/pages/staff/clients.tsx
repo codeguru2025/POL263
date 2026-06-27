@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useSearch } from "wouter";
+import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, EnhancedDataTable } from "@/components/ds";
 import { Button } from "@/components/ui/button";
@@ -195,6 +195,7 @@ const RELATIONSHIPS = [
 export default function StaffClients() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -541,7 +542,7 @@ export default function StaffClients() {
                       <Button
                         size="sm"
                         className="gap-2 touch-target sm:h-9 sm:min-h-0"
-                        onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${selectedClient.id}`; }}
+                        onClick={() => { setLocation(`/staff/policies?create=1&clientId=${selectedClient.id}`); }}
                         data-testid="btn-issue-policy-detail"
                       >
                         <ArrowRight className="h-3.5 w-3.5" /> Issue Policy
@@ -1134,7 +1135,7 @@ export default function StaffClients() {
                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`btn-edit-client-${c.id}`} title="Edit lead">
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => { window.location.href = `/staff/policies?create=1&clientId=${c.id}`; }} data-testid={`btn-issue-policy-${c.id}`} title="Issue policy">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => { setLocation(`/staff/policies?create=1&clientId=${c.id}`); }} data-testid={`btn-issue-policy-${c.id}`} title="Issue policy">
                               <ArrowRight className="h-4 w-4" />
                             </Button>
                           </>

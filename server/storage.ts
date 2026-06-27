@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, count, gte, lte, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
+import { eq, and, desc, sql, count, sum, max, gte, lte, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
@@ -25,10 +25,11 @@ import {
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
   fxRates, requisitions, requisitionItems, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
-  quotationGuarantors, quotationCollateral, receiptAdverts,
+  quotationGuarantors, quotationCollateral, receiptAdverts, reminders,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   userNotifications, userDeviceTokens,
+  type Reminder, type InsertReminder,
   type FxRate, type InsertFxRate,
   type Requisition, type InsertRequisition,
   type RequisitionItem, type InsertRequisitionItem,
@@ -958,11 +959,11 @@ export class DatabaseStorage implements IStorage {
   }
   async getClientsByAgent(agentId: string, organizationId: string, limit = 50, offset = 0, search?: string): Promise<Client[]> {
     const tdb = await getDbForOrg(organizationId);
-    const policyRows = await tdb.select({ clientId: policies.clientId }).from(policies).where(eq(policies.agentId, agentId));
-    const leadRows = await tdb.select({ clientId: leads.clientId }).from(leads).where(eq(leads.agentId, agentId));
+    const policyRows = await tdb.select({ clientId: policies.clientId }).from(policies).where(eq(policies.agentId, agentId)).limit(10000);
+    const leadRows = await tdb.select({ clientId: leads.clientId }).from(leads).where(eq(leads.agentId, agentId)).limit(10000);
     let directRows: { id: string }[] = [];
     try {
-      directRows = await tdb.select({ id: clients.id }).from(clients).where(and(eq(clients.agentId, agentId), eq(clients.organizationId, organizationId)));
+      directRows = await tdb.select({ id: clients.id }).from(clients).where(and(eq(clients.agentId, agentId), eq(clients.organizationId, organizationId))).limit(10000);
     } catch { /* agentId column may not exist yet before migration */ }
     const clientIds = Array.from(new Set([
       ...policyRows.map((r) => r.clientId),
@@ -1736,19 +1737,20 @@ export class DatabaseStorage implements IStorage {
     const conditions: SQL[] = [inArray(paymentReceipts.policyId, policyIds), eq(paymentReceipts.status, "issued")];
     if (opts?.issuedFrom) conditions.push(gte(paymentReceipts.issuedAt, opts.issuedFrom));
     if (opts?.issuedTo) conditions.push(lte(paymentReceipts.issuedAt, opts.issuedTo));
-    const receipts = await tdb.select({
+    const rows = await tdb.select({
       policyId: paymentReceipts.policyId,
-      issuedAt: paymentReceipts.issuedAt,
-      amount: paymentReceipts.amount,
-    }).from(paymentReceipts).where(and(...conditions));
+      lastIssuedAt: max(paymentReceipts.issuedAt),
+      receiptCount: count(),
+      totalAmount: sum(paymentReceipts.amount),
+    }).from(paymentReceipts).where(and(...conditions)).groupBy(paymentReceipts.policyId);
     const map = new Map<string, { lastPaymentAt: string; receiptCount: number; totalAmount: string }>();
     for (const p of policyIds) map.set(p, { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" });
-    for (const r of receipts) {
-      const cur = map.get(r.policyId)!;
-      const iso = r.issuedAt ? new Date(r.issuedAt).toISOString() : "";
-      if (!cur.lastPaymentAt || iso > cur.lastPaymentAt) cur.lastPaymentAt = iso;
-      cur.receiptCount += 1;
-      cur.totalAmount = (parseFloat(cur.totalAmount) + parseFloat(String(r.amount ?? 0))).toFixed(2);
+    for (const r of rows) {
+      map.set(r.policyId, {
+        lastPaymentAt: r.lastIssuedAt ? new Date(r.lastIssuedAt).toISOString() : "",
+        receiptCount: Number(r.receiptCount),
+        totalAmount: Number(r.totalAmount ?? 0).toFixed(2),
+      });
     }
     return map;
   }
@@ -2116,7 +2118,8 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(policies, eq(policyStatusHistory.policyId, policies.id))
       .leftJoin(clients, eq(policies.clientId, clients.id))
       .where(and(...conditions))
-      .orderBy(desc(policyStatusHistory.createdAt));
+      .orderBy(desc(policyStatusHistory.createdAt))
+      .limit(1000);
     return rows.map((r) => ({
       policyId: r.policyId,
       policyNumber: r.policyNumber,
@@ -2161,7 +2164,8 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(policies, eq(policyStatusHistory.policyId, policies.id))
       .leftJoin(clients, eq(policies.clientId, clients.id))
       .where(and(...conditions))
-      .orderBy(desc(policyStatusHistory.createdAt));
+      .orderBy(desc(policyStatusHistory.createdAt))
+      .limit(1000);
     return rows.map((r) => ({
       policyId: r.policyId,
       policyNumber: r.policyNumber,
@@ -2205,7 +2209,8 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(policies, eq(policyStatusHistory.policyId, policies.id))
       .leftJoin(clients, eq(policies.clientId, clients.id))
       .where(and(...conditions))
-      .orderBy(desc(policyStatusHistory.createdAt));
+      .orderBy(desc(policyStatusHistory.createdAt))
+      .limit(1000);
     return rows.map((r) => ({
       policyId: r.policyId,
       policyNumber: r.policyNumber,
@@ -3301,9 +3306,9 @@ export class DatabaseStorage implements IStorage {
   }
   async getUnreadNotificationCount(clientId: string, orgId: string): Promise<number> {
     const tdb = await getDbForOrg(orgId);
-    const rows = await tdb.select().from(notificationLogs)
+    const [result] = await tdb.select({ value: count() }).from(notificationLogs)
       .where(and(eq(notificationLogs.recipientId, clientId), eq(notificationLogs.organizationId, orgId), isNull(notificationLogs.readAt)));
-    return rows.length;
+    return Number(result?.value ?? 0);
   }
   async markNotificationRead(id: string, clientId: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
@@ -3324,7 +3329,8 @@ export class DatabaseStorage implements IStorage {
   }
   async getLeadsByAgent(agentId: string, orgId: string): Promise<Lead[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(leads).where(eq(leads.agentId, agentId));
+    return tdb.select().from(leads).where(eq(leads.agentId, agentId))
+      .orderBy(desc(leads.createdAt)).limit(500);
   }
   async getLead(id: string, orgId: string): Promise<Lead | undefined> {
     const tdb = await getDbForOrg(orgId);
@@ -4771,19 +4777,21 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
   async upsertMortuaryDispatch(intakeId: string, orgId: string, data: Omit<InsertMortuaryDispatch, "intakeId" | "organizationId">): Promise<MortuaryDispatch> {
-    const tdb = await getDbForOrg(orgId);
-    const existing = await this.getMortuaryDispatch(intakeId, orgId);
-    if (existing) {
-      const [updated] = await tdb.update(mortuaryDispatches)
-        .set(data)
-        .where(eq(mortuaryDispatches.id, existing.id))
+    return withOrgTransaction(orgId, async (tx) => {
+      const [existing] = await tx.select({ id: mortuaryDispatches.id }).from(mortuaryDispatches)
+        .where(and(eq(mortuaryDispatches.intakeId, intakeId), eq(mortuaryDispatches.organizationId, orgId)));
+      if (existing) {
+        const [updated] = await tx.update(mortuaryDispatches)
+          .set(data)
+          .where(eq(mortuaryDispatches.id, existing.id))
+          .returning();
+        return updated;
+      }
+      const [created] = await tx.insert(mortuaryDispatches)
+        .values({ ...data, intakeId, organizationId: orgId })
         .returning();
-      return updated;
-    }
-    const [created] = await tdb.insert(mortuaryDispatches)
-      .values({ ...data, intakeId, organizationId: orgId })
-      .returning();
-    return created;
+      return created;
+    });
   }
   async dispatchIntake(intakeId: string, orgId: string, data: Omit<InsertMortuaryDispatch, "intakeId" | "organizationId">): Promise<MortuaryDispatch> {
     return withOrgTransaction(orgId, async (tx) => {
@@ -4871,6 +4879,35 @@ export class DatabaseStorage implements IStorage {
       .values({ ...data, funeralCaseId, organizationId: orgId })
       .returning();
     return created;
+  }
+
+  // ─── Reminders ──────────────────────────────────────────────
+  async getReminders(userId: string, orgId: string): Promise<Reminder[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(reminders)
+      .where(and(eq(reminders.userId, userId), eq(reminders.organizationId, orgId)))
+      .orderBy(desc(reminders.createdAt));
+  }
+
+  async createReminder(data: InsertReminder): Promise<Reminder> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [r] = await tdb.insert(reminders).values(data).returning();
+    return r;
+  }
+
+  async updateReminder(id: string, data: Partial<InsertReminder>, userId: string, orgId: string): Promise<Reminder | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [r] = await tdb.update(reminders)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(reminders.id, id), eq(reminders.userId, userId), eq(reminders.organizationId, orgId)))
+      .returning();
+    return r;
+  }
+
+  async deleteReminder(id: string, userId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(reminders)
+      .where(and(eq(reminders.id, id), eq(reminders.userId, userId), eq(reminders.organizationId, orgId)));
   }
 }
 

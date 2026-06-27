@@ -84,3 +84,9 @@ export function toUpperTrim(value: string | null | undefined, allowEmpty = false
   const s = String(value).trim().toUpperCase();
   return allowEmpty || s.length > 0 ? s : null;
 }
+
+/** Converts Drizzle numeric string columns to a finite number, defaulting to 0 on NaN/null. */
+export function toDecimalNumber(v: unknown): number {
+  const n = parseFloat(String(v ?? "0"));
+  return Number.isFinite(n) ? n : 0;
+}

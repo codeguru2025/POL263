@@ -22,6 +22,7 @@ export function auditLog(req: any, action: string, entityType: string, entityId:
     before,
     after,
     requestId: req.requestId,
+    ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
   }).catch((err: any) => {
     structuredLog("error", "auditLog write failed", { error: err?.message, action, entityType, entityId });
   });
@@ -417,6 +418,14 @@ export function nullifyEmptyFields(body: Record<string, any>, fields: string[]):
     if (out[f] === "") out[f] = null;
   }
   return out;
+}
+
+export function handleZodError(err: any, res: any): boolean {
+  if (err?.name === "ZodError") {
+    res.status(400).json({ message: "Invalid data", errors: err.errors });
+    return true;
+  }
+  return false;
 }
 
 export async function enforceAgentScope(req: any, filters: any): Promise<any> {

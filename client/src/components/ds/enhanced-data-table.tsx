@@ -199,6 +199,9 @@ export function EnhancedDataTable<T>({
                     key={c.id}
                     className={cn(c.align === "right" && "text-right", sortable && "cursor-pointer select-none", c.headClassName)}
                     onClick={sortable ? () => toggleSort(c) : undefined}
+                    tabIndex={sortable ? 0 : undefined}
+                    aria-sort={sortable ? (sortId === c.id ? (sortDir === "asc" ? "ascending" : "descending") : "none") : undefined}
+                    onKeyDown={sortable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSort(c); } } : undefined}
                   >
                     <span className={cn("inline-flex items-center gap-1", c.align === "right" && "flex-row-reverse")}>
                       {c.header}
@@ -221,6 +224,9 @@ export function EnhancedDataTable<T>({
                 data-testid={rowTestId?.(row)}
                 className={onRowClick ? "hover:bg-muted/30 transition-colors cursor-pointer" : undefined}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                role={onRowClick ? "button" : undefined}
+                onKeyDown={onRowClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onRowClick(row); } } : undefined}
               >
                 {visibleColumns.map((c) => (
                   <TableCell key={c.id} className={cn(c.align === "right" && "text-right", c.cellClassName)}>

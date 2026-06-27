@@ -46,7 +46,10 @@ export default function StaffLogin() {
   if (isLoading || isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div role="status" aria-label="Loading">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden />
+          <span className="sr-only">Loading...</span>
+        </div>
       </div>
     );
   }

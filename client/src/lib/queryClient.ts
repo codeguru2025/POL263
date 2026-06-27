@@ -97,8 +97,8 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "returnNull", on403ReturnNull: false }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: 5 * 60 * 1000,
+      refetchOnWindowFocus: true,
+      staleTime: 30 * 1000,
       gcTime: 10 * 60 * 1000,
       retry: 1,
       retryDelay: 1000,

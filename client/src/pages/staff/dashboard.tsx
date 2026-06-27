@@ -1,5 +1,6 @@
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, KpiStatCard, EmptyState } from "@/components/ds";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
@@ -423,6 +424,7 @@ export default function StaffDashboard() {
 
   return (
     <StaffLayout>
+      <ErrorBoundary>
       <PageShell>
         <PageHeader
           title="Dashboard"
@@ -658,6 +660,7 @@ export default function StaffDashboard() {
         </div>
 
       </PageShell>
+      </ErrorBoundary>
     </StaffLayout>
   );
 }

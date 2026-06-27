@@ -28,9 +28,10 @@ setInterval(() => {
 }, 60_000).unref();
 
 // Per-account lockout for agent (email/password) login. Complements the IP-based
-// authLimiter in index.ts. In-memory only (per-process) — acceptable as defence in
-// depth on top of the network rate limiter; the `users` table has no lockout columns.
-// TODO(scalability): move to Redis or DB — per-process lockout bypassed under multiple instances
+// authLimiter in index.ts. In-memory only (per-process) — under horizontal scaling each
+// instance tracks its own counter, so an attacker gets AGENT_LOCKOUT_THRESHOLD × N attempts.
+// TODO(scalability): migrate to DB-backed lockout using a lockedUntil column on the users
+// table (mirrors the pattern already used for clients.lockedUntil) and read/write via storage.
 const AGENT_LOCKOUT_THRESHOLD = 5;
 const AGENT_LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const agentLoginAttempts = new Map<string, { count: number; lockedUntil: number }>();
@@ -322,10 +323,14 @@ export function setupAuth(app: Express) {
     );
 
     app.get("/api/auth/google", (req, res, next) => {
-      const returnTo =
-        typeof req.query.returnTo === "string" && req.query.returnTo.startsWith("/")
-          ? req.query.returnTo
-          : undefined;
+      const rawReturnTo = typeof req.query.returnTo === "string" ? req.query.returnTo : undefined;
+      const returnTo = rawReturnTo && (() => {
+        try {
+          const parsed = new URL(rawReturnTo, "http://localhost");
+          // Reject protocol-relative URLs (//evil.com) — origin must match the dummy base
+          return parsed.origin === "http://localhost" ? rawReturnTo : undefined;
+        } catch { return undefined; }
+      })();
       const isMobile = req.query.returnTo === "mobile";
 
       const origin = (process.env.APP_BASE_URL || "").replace(/\/$/, "");

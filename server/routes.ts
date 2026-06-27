@@ -1,6 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import argon2 from "argon2";
+import crypto from "crypto";
 import { storage, findPaymentReceiptById, type ReportFilters } from "./storage";
 import {
   withOrgTransaction,
@@ -13,6 +14,7 @@ import {
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, safeError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
+import { withAdvisoryLock } from "./advisory-lock";
 import { buildIncomeStatement, buildCashFlowStatement } from "./financial-statements";
 import { z } from "zod";
 import multer from "multer";
@@ -70,7 +72,7 @@ import { isAgentScoped } from "@shared/roles";
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
   const DASHBOARD_MAX_ROWS =
-    (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 50000;
+    (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 5000;
   const REPORT_EXPORT_MAX_ROWS =
     (process.env.REPORT_EXPORT_MAX_ROWS && parseInt(process.env.REPORT_EXPORT_MAX_ROWS, 10)) || 15000;
   const premiumBackfillRunning = new Set<string>();
@@ -134,36 +136,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!orgId || premiumBackfillRunning.has(orgId)) return;
     premiumBackfillRunning.add(orgId);
     enqueueJob("policy_premium_backfill", { orgId }, async () => {
-      let lockClient: any = null;
-      let lockAcquired = false;
       try {
-        // Fix 5: acquire per-org pg advisory lock to prevent multi-process duplicate backfill
-        lockClient = await pool.connect();
-        const { rows } = await lockClient.query(
-          "SELECT pg_try_advisory_lock($1, $2) AS ok",
-          [BACKFILL_LOCK_CLASS, orgIdToLockId(orgId)],
-        );
-        lockAcquired = rows[0]?.ok === true;
-        if (!lockAcquired) return; // another replica is already backfilling this org
-
-        let offset = 0;
-        const limit = 200;
-        while (true) {
-          const batch = await storage.getPoliciesByOrg(orgId, limit, offset);
-          if (batch.length === 0) break;
-          for (const policy of batch) {
-            await recalculatePolicyPremiumIfNeeded(policy, orgId);
+        await withAdvisoryLock(BACKFILL_LOCK_CLASS, orgIdToLockId(orgId), async () => {
+          let offset = 0;
+          const limit = 200;
+          while (true) {
+            const batch = await storage.getPoliciesByOrg(orgId, limit, offset);
+            if (batch.length === 0) break;
+            for (const policy of batch) {
+              await recalculatePolicyPremiumIfNeeded(policy, orgId);
+            }
+            if (batch.length < limit) break;
+            offset += batch.length;
           }
-          if (batch.length < limit) break;
-          offset += batch.length;
-        }
+        });
       } catch (err: any) {
         structuredLog("error", "Policy premium backfill failed", { orgId, error: err?.message, stack: err?.stack });
       } finally {
-        if (lockAcquired && lockClient) {
-          await lockClient.query("SELECT pg_advisory_unlock($1, $2)", [BACKFILL_LOCK_CLASS, orgIdToLockId(orgId)]).catch(() => {});
-        }
-        if (lockClient) lockClient.release();
         premiumBackfillRunning.delete(orgId);
       }
     });
@@ -372,23 +361,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const automationTickMs = Math.max(60_000, parseInt(process.env.PAYMENT_AUTOMATION_TICK_MS || "", 10) || (6 * 60 * 60 * 1000));
   setInterval(async () => {
     if (paymentAutomationTickRunning) return;
-    let lockClient: any = null;
-    let lockAcquired = false;
+    paymentAutomationTickRunning = true;
     try {
-      lockClient = await pool.connect();
-      const { rows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS ok", [PAYMENT_AUTO_LOCK_KEY]);
-      lockAcquired = rows[0]?.ok === true;
-      if (!lockAcquired) return; // Another replica is already running
-      paymentAutomationTickRunning = true;
-      const orgs = await storage.getOrganizations();
-      for (const org of orgs) {
-        await runPaymentAutomationForOrg(org.id);
-      }
+      await withAdvisoryLock(PAYMENT_AUTO_LOCK_KEY, async () => {
+        const orgs = await storage.getOrganizations();
+        for (const org of orgs) {
+          await runPaymentAutomationForOrg(org.id);
+        }
+      });
     } catch (err: any) {
       structuredLog("error", "Payment automation scheduler failed", { error: err?.message, stack: err?.stack });
     } finally {
-      if (lockAcquired && lockClient) await lockClient.query("SELECT pg_advisory_unlock($1)", [PAYMENT_AUTO_LOCK_KEY]).catch(() => {});
-      if (lockClient) lockClient.release();
       paymentAutomationTickRunning = false;
     }
   }, automationTickMs);
@@ -410,7 +393,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   } else {
     // Stream files from object storage using server credentials.
     // The bucket can remain private — the browser never hits the CDN directly.
-    app.get("/uploads/*path", async (req, res) => {
+    app.get("/uploads/*path", requireAuth, async (req, res) => {
       const key = decodeURIComponent(String((req.params as any).path || ""));
       if (!key) return res.status(400).end();
       try {
@@ -905,7 +888,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const org = await storage.getOrganization(id);
     if (!org) return res.status(404).json({ message: "Not found" });
-    return res.json(org);
+    const isPlatformOwner = (user as any).isPlatformOwner ?? (user as any).email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+    const { paynowIntegrationKey: _pik, databaseUrl: _du, paynowAuthEmail: _pae, ...safeOrg } = org as any;
+    return res.json(isPlatformOwner ? org : safeOrg);
   });
 
   app.patch("/api/organizations/:id", requireAuth, async (req, res) => {
@@ -939,7 +924,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (Object.keys(sanitizedOrg).length === 0) return res.json(before);
     const updated = await storage.updateOrganization(id, sanitizedOrg as any);
     await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, updated, id);
-    return res.json(updated);
+    const { paynowIntegrationKey: _upik, databaseUrl: _udu, paynowAuthEmail: _upae, ...safeUpdatedOrg } = (updated || {}) as any;
+    return res.json(isPlatformOwner ? updated : safeUpdatedOrg);
   });
 
   app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
@@ -1133,8 +1119,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!targetUser) return res.status(404).json({ message: "User not found" });
     if (targetUser.organizationId !== currentUser.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     const userRoles = await storage.getUserRoles(targetUser.id, currentUser.organizationId);
+    const { passwordHash: _ph, googleId: _gi, ...safeTargetUser } = targetUser as any;
     return res.json({
-      ...targetUser,
+      ...safeTargetUser,
       roles: userRoles.map(r => ({ id: r.id, name: r.name })),
     });
   });
@@ -1194,8 +1181,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const userRoles = await storage.getUserRoles(newUser.id, currentUser.organizationId);
-    await auditLog(req, "CREATE_USER", "User", newUser.id, null, { ...newUser, roles: userRoles.map((r: any) => r.name) });
-    return res.status(201).json({ ...newUser, roles: userRoles.map((r: any) => ({ id: r.id, name: r.name })) });
+    const { passwordHash: _alph, googleId: _algi, ...safeNewUserAudit } = newUser as any;
+    await auditLog(req, "CREATE_USER", "User", newUser.id, null, { ...safeNewUserAudit, roles: userRoles.map((r: any) => r.name) });
+    const { passwordHash: _nph, googleId: _ngi, ...safeNewUser } = newUser as any;
+    return res.status(201).json({ ...safeNewUser, roles: userRoles.map((r: any) => ({ id: r.id, name: r.name })) });
   });
 
   app.patch("/api/users/:id", requireAuth, requireTenantScope, requirePermission("write:user"), async (req, res) => {
@@ -1249,7 +1238,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const userRoles = await storage.getUserRoles(req.params.id as string, currentUser.organizationId);
     await auditLog(req, "UPDATE_USER", "User", req.params.id as string, before, { ...updated, roles: userRoles.map(r => r.name) });
-    return res.json({ ...updated, roles: userRoles.map(r => ({ id: r.id, name: r.name })) });
+    const { passwordHash: _uph, googleId: _ugi, ...safeUpdated } = (updated || {}) as any;
+    return res.json({ ...safeUpdated, roles: userRoles.map(r => ({ id: r.id, name: r.name })) });
   });
 
   app.delete("/api/users/:id", requireAuth, requireTenantScope, requirePermission("delete:user"), async (req, res) => {
@@ -1361,6 +1351,54 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getDashboardStats(user.organizationId, filters, agentId));
   });
 
+  // ─── Reminders ──────────────────────────────────────────────
+
+  app.get("/api/reminders", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    try {
+      const list = await storage.getReminders(user.id, user.organizationId);
+      return res.json(list);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.post("/api/reminders", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    try {
+      if (!req.body.title?.trim()) return res.status(400).json({ message: "Title is required" });
+      const reminder = await storage.createReminder({
+        ...req.body,
+        userId: user.id,
+        organizationId: user.organizationId,
+      });
+      return res.status(201).json(reminder);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/reminders/:id", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    try {
+      const updated = await storage.updateReminder(req.params.id as string, req.body, user.id, user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      return res.json(updated);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.delete("/api/reminders/:id", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    try {
+      await storage.deleteReminder(req.params.id as string, user.id, user.organizationId);
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   // ─── Clients ────────────────────────────────────────────────
 
   app.get("/api/clients", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
@@ -1388,7 +1426,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const hasAccess = await storage.isClientAccessibleByAgent(user.id, client.id, user.organizationId);
       if (!hasAccess) return res.status(403).json({ message: "Access denied" });
     }
-    return res.json(client);
+    const { passwordHash: _cph, securityAnswerHash: _csah, activationCode: _cac, ...safeClient } = client as any;
+    return res.json(safeClient);
   });
 
   app.post("/api/clients", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
@@ -1442,7 +1481,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "Gender is required." });
     }
 
-    const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
     const userRolesForCreate = await storage.getUserRoles(user.id, user.organizationId);
     const creatorHasAgentRole = userRolesForCreate.some((r: { name?: string }) => r?.name === "agent");
     const creatorIsAgentScoped = isAgentScoped(userRolesForCreate);
@@ -1490,7 +1529,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const org = await storage.getOrganization(user.organizationId);
     await notifyClient(user.organizationId, client.id, "Welcome!", `Welcome to ${org?.name || "our platform"}. Your account has been created.`);
-    return res.status(201).json(client);
+    const { passwordHash: _ncph, securityAnswerHash: _ncsah, activationCode: _ncac, ...safeNewClient } = client as any;
+    return res.status(201).json(safeNewClient);
   });
 
   app.patch("/api/clients/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
@@ -1509,7 +1549,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const sanitizedClient = nullifyEmptyFields(req.body, ["dateOfBirth", "branchId", "agentId"]);
     const updated = await storage.updateClient(req.params.id as string, sanitizedClient, user.organizationId);
     await auditLog(req, "UPDATE_CLIENT", "Client", req.params.id as string, before, updated);
-    return res.json(updated);
+    const { passwordHash: _ucph, securityAnswerHash: _ucsah, activationCode: _ucac, ...safeUpdatedClient } = (updated || {}) as any;
+    return res.json(safeUpdatedClient);
   });
 
   // ─── Dependents / Beneficiaries ─────────────────────────────
@@ -5185,7 +5226,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/quotations/collateral/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    await storage.deleteQuotationCollateral(req.params.id as string, user.organizationId);
+    const collateralId = req.params.id as string;
+    await storage.deleteQuotationCollateral(collateralId, user.organizationId);
+    await auditLog(req, "DELETE_QUOTATION_COLLATERAL", "QuotationCollateral", collateralId, { id: collateralId }, null);
     return res.status(204).end();
   });
 
@@ -5664,7 +5707,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
       if (nationalIdTrim) updates.nationalId = nationalIdTrim;
       if (!client.activationCode) {
-        updates.activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       }
       if (!(client as any).agentId) updates.agentId = agent.id;
       if (Object.keys(updates).length > 0) {
@@ -5672,7 +5715,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (updated) client = updated;
       }
     } else {
-      const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      const activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       const clientParsed = insertClientSchema.parse({
         organizationId: orgId,
         branchId: effectiveBranchId,
@@ -5871,11 +5914,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Push token registration — clients
   app.post("/api/client-auth/push-token", async (req, res) => {
-    const client = (req as any).clientUser as { id: string; organizationId: string } | undefined;
-    if (!client) return res.status(401).json({ message: "Unauthorized" });
+    const clientId = (req.session as any)?.clientId as string | undefined;
+    if (!clientId) return res.status(401).json({ message: "Unauthorized" });
+    const orgId = (req.session as any)?.clientOrgId as string | undefined;
+    if (!orgId) return res.status(401).json({ message: "Unauthorized" });
     const { token, platform } = req.body;
     if (!token || typeof token !== "string") return res.status(400).json({ message: "token required" });
-    await storage.addClientDeviceToken(client.organizationId, client.id, token, platform || "unknown");
+    await storage.addClientDeviceToken(orgId, clientId, token, platform || "unknown");
     return res.json({ ok: true });
   });
 
@@ -5940,10 +5985,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
       if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
       if (nationalIdTrim) updates.nationalId = nationalIdTrim;
-      if (!client.activationCode) updates.activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      if (!client.activationCode) updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       if (Object.keys(updates).length > 0) { const u = await storage.updateClient(client.id, updates, orgId); if (u) client = u; }
     } else {
-      const activationCode = `ACT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      const activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       client = await storage.createClient(insertClientSchema.parse({
         organizationId: orgId, branchId: effectiveBranchId,
         firstName: toUpperTrim(firstName, false)!, lastName: toUpperTrim(lastName, false)!,
@@ -6433,7 +6478,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    await storage.deleteTerms(req.params.id as string, user.organizationId);
+    const termsId = req.params.id as string;
+    const termsBefore = (await storage.getTermsByOrg(user.organizationId)).find((t: any) => t.id === termsId) ?? { id: termsId };
+    await storage.deleteTerms(termsId, user.organizationId);
+    await auditLog(req, "DELETE_TERMS", "Terms", termsId, termsBefore, null);
     return res.status(204).send();
   });
 

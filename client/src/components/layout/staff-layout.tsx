@@ -593,6 +593,12 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   return (
     <ReceiptDrawerProvider>
     <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded"
+      >
+        Skip to main content
+      </a>
       <header className="border-b bg-card shrink-0 z-30">
         <div className={cn(APP_SHELL_MAX, "px-3 sm:px-4 py-2.5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between")}>
           <div className="flex items-center gap-2 min-w-0">
@@ -891,7 +897,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         </div>
       </nav>
 
-      <main className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
+      <main id="main-content" tabIndex={-1} className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
         <div className={cn(APP_SHELL_MAX, "px-3 py-4 sm:px-6 sm:py-8 min-h-0")}>{children}</div>
       </main>
 
