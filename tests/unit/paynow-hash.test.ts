@@ -1,4 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../../server/db", () => ({ pool: {}, db: {} }));
+vi.mock("../../server/storage", () => ({ storage: {} }));
+
 import { verifyPaynowHash, generatePaynowHash } from "../../server/paynow-hash";
 
 describe("Paynow hash", () => {

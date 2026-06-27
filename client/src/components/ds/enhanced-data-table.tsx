@@ -136,7 +136,7 @@ export function EnhancedDataTable<T>({
       <div className="flex flex-wrap items-center gap-2">
         {searchable && (
           <div className="relative flex-1 min-w-[200px] max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -151,8 +151,8 @@ export function EnhancedDataTable<T>({
           <span className="text-xs text-muted-foreground tabular-nums hidden sm:inline">{processed.length} of {rows.length}</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9 gap-1.5" data-testid="edt-columns">
-                <SlidersHorizontal className="h-4 w-4" />
+              <Button variant="outline" size="sm" className="h-9 gap-1.5" data-testid="edt-columns" aria-label="Toggle columns">
+                <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
                 <span className="hidden sm:inline">Columns</span>
               </Button>
             </DropdownMenuTrigger>
@@ -178,8 +178,8 @@ export function EnhancedDataTable<T>({
             </DropdownMenuContent>
           </DropdownMenu>
           {canExport && (
-            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={exportCsv} data-testid="edt-export">
-              <Download className="h-4 w-4" />
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={exportCsv} data-testid="edt-export" aria-label="Export CSV">
+              <Download className="h-4 w-4" aria-hidden="true" />
               <span className="hidden sm:inline">Export</span>
             </Button>
           )}
@@ -207,9 +207,9 @@ export function EnhancedDataTable<T>({
                       {c.header}
                       {sortable &&
                         (sortId === c.id ? (
-                          sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />
+                          sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
                         ) : (
-                          <ArrowUpDown className="h-3.5 w-3.5 opacity-40" />
+                          <ArrowUpDown className="h-3.5 w-3.5 opacity-40" aria-hidden="true" />
                         ))}
                     </span>
                   </TableHead>

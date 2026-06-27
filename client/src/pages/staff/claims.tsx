@@ -233,8 +233,8 @@ export default function StaffClaims() {
                       <TableCell className="text-right pr-6">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-actions-claim-${claim.id}`}>
-                              <MoreHorizontal className="h-4 w-4" />
+                            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-actions-claim-${claim.id}`} aria-label="Claim actions">
+                              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">

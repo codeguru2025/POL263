@@ -180,8 +180,8 @@ export function DirectoryPage({ title, description, icon: Icon, type, singularLa
                   </div>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7">
-                        <MoreHorizontal className="h-4 w-4" />
+                      <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" aria-label="Actions">
+                        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">

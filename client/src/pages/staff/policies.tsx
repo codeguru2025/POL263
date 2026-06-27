@@ -1868,6 +1868,7 @@ export default function StaffPolicies() {
                                   size="icon"
                                   className="h-6 w-6 shrink-0"
                                   title="Edit add-ons for this member"
+                                  aria-label="Edit add-ons for this member"
                                   onClick={() => {
                                     setEditAddOnsMemberId(m.id);
                                     setEditAddOnsSelected(memberAoIds);
@@ -2078,8 +2079,8 @@ export default function StaffPolicies() {
                               <Button variant="ghost" size="icon" title="View receipt" aria-label="View receipt" onClick={() => { setReceiptViewFormat("a4"); setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum }); setShowReceiptSuccess(true); }}><Eye className="h-4 w-4" /></Button>
                               <Button variant="ghost" size="icon" title="Thermal receipt" aria-label="Print thermal receipt" onClick={() => { setReceiptViewFormat("thermal80"); setReceiptSuccessData({ viewOnly: true, receiptId: r.id, receiptNumber: displayNum }); setShowReceiptSuccess(true); }}><ScrollText className="h-4 w-4" /></Button>
                               <Button variant="ghost" size="icon" title="Download" aria-label="Download receipt" onClick={() => window.open(receiptDownloadUrl, "_blank", "noopener")}><Download className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Print" onClick={() => printDocument(receiptViewUrl)}><Printer className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" title="Share" onClick={() => shareDocument(receiptDownloadUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" title="Print" aria-label="Print receipt" onClick={() => printDocument(receiptViewUrl)}><Printer className="h-4 w-4" aria-hidden="true" /></Button>
+                              <Button variant="ghost" size="icon" title="Share" aria-label="Share receipt" onClick={() => shareDocument(receiptDownloadUrl, `Receipt-${displayNum}`)}><Share2 className="h-4 w-4" aria-hidden="true" /></Button>
                               {canEditReceipt && (
                                 <Button variant="ghost" size="icon" title="Edit receipt" aria-label="Edit receipt" data-testid={`btn-edit-receipt-${r.id}`} onClick={() => {
                                   setEditReceiptId(r.id);
@@ -2203,13 +2204,13 @@ export default function StaffPolicies() {
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Open document"><Eye className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Open document" aria-label="Open document"><Eye className="h-3.5 w-3.5" aria-hidden="true" /></Button>
                       </a>
                       <a href={doc.fileUrl} download={doc.fileName}>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Download"><Download className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Download" aria-label="Download document"><Download className="h-3.5 w-3.5" aria-hidden="true" /></Button>
                       </a>
                       {canWritePolicy && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="Delete" onClick={() => deletePolicyDoc(doc.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="Delete" aria-label="Delete document" onClick={() => deletePolicyDoc(doc.id)}><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></Button>
                       )}
                     </div>
                   </div>
@@ -2458,16 +2459,16 @@ export default function StaffPolicies() {
                     <div className="flex justify-between gap-2 flex-wrap">
                       <div className="flex gap-2">
                         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => printDocument(iframeSrc)}>
-                          <Printer className="h-3.5 w-3.5" /> Print
+                          <Printer className="h-3.5 w-3.5" aria-hidden="true" /> Print
                         </Button>
                         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(isThermal ? receiptDownloadThermalUrl : receiptDownloadUrl, "_blank", "noopener")}>
-                          <Download className="h-3.5 w-3.5" /> Download
+                          <Download className="h-3.5 w-3.5" aria-hidden="true" /> Download
                         </Button>
                         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => {
                           const num = receiptSuccessData.receipt?.receiptNumber || receiptSuccessData.receiptNumber || "";
                           shareDocument(isThermal ? receiptDownloadThermalUrl : receiptDownloadUrl, `Receipt-${num}`);
                         }}>
-                          <Share2 className="h-3.5 w-3.5" /> Share
+                          <Share2 className="h-3.5 w-3.5" aria-hidden="true" /> Share
                         </Button>
                       </div>
                       <Button variant="outline" size="sm" onClick={() => { setShowReceiptSuccess(false); setReceiptSuccessData(null); }}>
@@ -3317,8 +3318,8 @@ export default function StaffPolicies() {
                       <div onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`btn-actions-${policy.id}`}>
-                              <MoreHorizontal className="h-4 w-4" />
+                            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Policy actions" data-testid={`btn-actions-${policy.id}`}>
+                              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">

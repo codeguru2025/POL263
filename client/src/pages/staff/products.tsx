@@ -384,7 +384,7 @@ export default function ProductBuilder() {
                           <TableCell className="text-muted-foreground">{item.description || "—"}</TableCell>
                           <TableCell>{item.internalCostDefault ? formatAmount(item.internalCostDefault, "USD") : "—"}</TableCell>
                           <TableCell><Badge variant={item.isActive ? "default" : "secondary"} className={item.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{item.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingBenefit(item)}><Edit className="h-4 w-4" /></Button></TableCell>
+                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit benefit item" onClick={() => setEditingBenefit(item)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -421,7 +421,7 @@ export default function ProductBuilder() {
                           <TableCell className="font-medium pl-6">{bundle.name}</TableCell>
                           <TableCell className="text-muted-foreground">{bundle.description || "—"}</TableCell>
                           <TableCell><Badge variant={bundle.isActive ? "default" : "secondary"} className={bundle.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{bundle.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingBundle(bundle)}><Edit className="h-4 w-4" /></Button></TableCell>
+                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit bundle" onClick={() => setEditingBundle(bundle)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -467,7 +467,7 @@ export default function ProductBuilder() {
                           <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceWeekly ? formatAmount(addon.priceWeekly, "USD") : "—")}</TableCell>
                           <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceBiweekly ? formatAmount(addon.priceBiweekly, "USD") : "—")}</TableCell>
                           <TableCell><Badge variant={addon.isActive ? "default" : "secondary"} className={addon.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{addon.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingAddOn(addon)}><Edit className="h-4 w-4" /></Button></TableCell>
+                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit add-on" onClick={() => setEditingAddOn(addon)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -510,7 +510,7 @@ export default function ProductBuilder() {
                           <TableCell><Badge variant="outline" className="font-mono text-[10px]">v{band.version}</Badge></TableCell>
                           <TableCell className="text-muted-foreground">{band.effectiveFrom || "—"}</TableCell>
                           <TableCell><Badge variant={band.isActive ? "default" : "secondary"} className={band.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{band.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingAgeBand(band)}><Edit className="h-4 w-4" /></Button></TableCell>
+                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit age band" onClick={() => setEditingAgeBand(band)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -572,8 +572,8 @@ export default function ProductBuilder() {
                             </TableCell>
                             <TableCell>
                               <div className="flex gap-1">
-                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingTerm(term)}><Edit className="h-4 w-4" /></Button>
-                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => { if (confirm("Delete this term?")) deleteTermMut.mutate(term.id); }}><Trash2 className="h-4 w-4" /></Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit term" onClick={() => setEditingTerm(term)}><Edit className="h-4 w-4" aria-hidden="true" /></Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" aria-label="Delete term" onClick={() => { if (confirm("Delete this term?")) deleteTermMut.mutate(term.id); }}><Trash2 className="h-4 w-4" aria-hidden="true" /></Button>
                               </div>
                             </TableCell>
                           </TableRow>
@@ -658,8 +658,8 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
     <>
       <TableRow className="hover:bg-muted/30 transition-colors" data-testid={`row-product-${product.id}`}>
         <TableCell className="pl-6">
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onToggle} data-testid={`button-expand-product-${product.id}`}>
-            {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onToggle} data-testid={`button-expand-product-${product.id}`} aria-label={isExpanded ? "Collapse product" : "Expand product"}>
+            {isExpanded ? <ChevronUp className="h-4 w-4" aria-hidden="true" /> : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
           </Button>
         </TableCell>
         <TableCell>
@@ -692,9 +692,9 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
         </TableCell>
         <TableCell className="text-right pr-6">
           <div className="flex items-center justify-end gap-1">
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onEdit} data-testid={`button-edit-product-${product.id}`}><Edit className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs" onClick={onCreateVersion} data-testid={`button-new-version-${product.id}`}><Plus className="h-3 w-3" /> Version</Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete} title="Delete product" data-testid={`button-delete-product-${product.id}`}><Trash2 className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit product" onClick={onEdit} data-testid={`button-edit-product-${product.id}`}><Edit className="h-4 w-4" aria-hidden="true" /></Button>
+            <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs" onClick={onCreateVersion} data-testid={`button-new-version-${product.id}`}><Plus className="h-3 w-3" aria-hidden="true" /> Version</Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete} title="Delete product" aria-label="Delete product" data-testid={`button-delete-product-${product.id}`}><Trash2 className="h-4 w-4" aria-hidden="true" /></Button>
           </div>
         </TableCell>
       </TableRow>
@@ -748,8 +748,8 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                         </TableCell>
                         <TableCell><Badge variant={v.isActive ? "default" : "secondary"} className={v.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{v.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEditVersion(v)} data-testid={`button-edit-version-${v.id}`}>
-                            <Edit className="h-3.5 w-3.5" />
+                          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit version" onClick={() => onEditVersion(v)} data-testid={`button-edit-version-${v.id}`}>
+                            <Edit className="h-3.5 w-3.5" aria-hidden="true" />
                           </Button>
                         </TableCell>
                       </TableRow>

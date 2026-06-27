@@ -251,8 +251,8 @@ export function QuoteDialog({
                             {lineTotal.toFixed(2)}
                           </td>
                           <td className="py-1">
-                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(i)}>
-                              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" aria-label="Remove row" onClick={() => removeRow(i)}>
+                              <Trash2 className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />
                             </Button>
                           </td>
                         </tr>
@@ -715,8 +715,8 @@ function QuotationDetailPanel({
                   <TableCell>{fmtDate(c.dueDate)}</TableCell>
                   <TableCell>{fmtDate(c.forfeitureDate)}</TableCell>
                   <TableCell>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteCollateralMutation.mutate(c.id)}>
-                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Delete collateral" onClick={() => deleteCollateralMutation.mutate(c.id)}>
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />
                     </Button>
                   </TableCell>
                 </TableRow>

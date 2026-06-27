@@ -16,6 +16,7 @@ import {
   paymentIntents, paymentEvents, paymentReceipts,
   claims, claimDocuments, claimStatusHistory,
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
+  partnerParlours,
   mortuaryIntakes, mortuaryDispatches, deceasedBelongings, bodyWashRequirements, driverChecklists,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
@@ -76,6 +77,7 @@ import {
   type FuneralCase, type InsertFuneralCase,
   type FuneralTask, type InsertFuneralTask,
   type FleetVehicle, type InsertFleetVehicle,
+  type PartnerParlour, type InsertPartnerParlour,
   type MortuaryIntake, type InsertMortuaryIntake,
   type MortuaryDispatch, type InsertMortuaryDispatch,
   type DeceasedBelonging, type InsertDeceasedBelonging,
@@ -794,9 +796,9 @@ export class DatabaseStorage implements IStorage {
     await tdb.insert(userRoles).values({ userId, roleId, branchId: branchId ?? null });
   }
   async removeUserRole(userId: string, roleId: string): Promise<void> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
+    const [userRow] = await db.select({ organizationId: users.organizationId }).from(users).where(eq(users.id, userId)).limit(1);
+    if (userRow?.organizationId) {
+      const tdb = await getDbForOrg(userRow.organizationId);
       await tdb.delete(userRoles).where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
     }
     await db.delete(userRoles).where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
@@ -1329,7 +1331,7 @@ export class DatabaseStorage implements IStorage {
   // ─── Policies ──────────────────────────────────────────────
   async getPoliciesByOrg(organizationId: string, limit = 50, offset = 0, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]> {
     const tdb = await getDbForOrg(organizationId);
-    const conditions = [eq(policies.organizationId, organizationId)];
+    const conditions = [eq(policies.organizationId, organizationId), isNull(policies.deletedAt)];
     if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
     if (filters?.status) conditions.push(eq(policies.status, filters.status));
@@ -1945,11 +1947,11 @@ export class DatabaseStorage implements IStorage {
 
   async getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(policies).where(and(eq(policies.clientId, clientId), eq(policies.organizationId, orgId))).limit(500);
+    return tdb.select().from(policies).where(and(eq(policies.clientId, clientId), eq(policies.organizationId, orgId), isNull(policies.deletedAt))).limit(500);
   }
   async getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(policies).where(and(eq(policies.agentId, agentId), eq(policies.organizationId, orgId))).limit(500);
+    return tdb.select().from(policies).where(and(eq(policies.agentId, agentId), eq(policies.organizationId, orgId), isNull(policies.deletedAt))).limit(500);
   }
   async reassignAgentPolicies(fromAgentId: string, toAgentId: string, orgId: string): Promise<number> {
     const tdb = await getDbForOrg(orgId);
@@ -2072,14 +2074,11 @@ export class DatabaseStorage implements IStorage {
       await tdb.insert(policyStatusHistory).values({ policyId, fromStatus, toStatus, reason, changedBy });
       return;
     }
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
-      const [p] = await tdb.select().from(policies).where(eq(policies.id, policyId)).limit(1);
-      if (p) {
-        await tdb.insert(policyStatusHistory).values({ policyId, fromStatus, toStatus, reason, changedBy });
-        return;
-      }
+    const [policyRow] = await db.select({ organizationId: policies.organizationId }).from(policies).where(eq(policies.id, policyId)).limit(1);
+    if (policyRow?.organizationId) {
+      const tdb = await getDbForOrg(policyRow.organizationId);
+      await tdb.insert(policyStatusHistory).values({ policyId, fromStatus, toStatus, reason, changedBy });
+      return;
     }
     await db.insert(policyStatusHistory).values({ policyId, fromStatus, toStatus, reason, changedBy });
   }
@@ -2731,14 +2730,14 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
   async createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent> {
-    const orgs = await db.select({ id: organizations.id }).from(organizations);
-    for (const org of orgs) {
-      const tdb = await getDbForOrg(org.id);
-      const [pi] = await tdb.select().from(paymentIntents).where(eq(paymentIntents.id, event.paymentIntentId)).limit(1);
-      if (pi) {
-        const [created] = await tdb.insert(paymentEvents).values(event).returning();
-        return created;
-      }
+    const [intentRow] = await db.select({ organizationId: paymentIntents.organizationId })
+      .from(paymentIntents)
+      .where(eq(paymentIntents.id, event.paymentIntentId))
+      .limit(1);
+    if (intentRow?.organizationId) {
+      const tdb = await getDbForOrg(intentRow.organizationId);
+      const [created] = await tdb.insert(paymentEvents).values(event).returning();
+      return created;
     }
     const [created] = await db.insert(paymentEvents).values(event).returning();
     return created;
@@ -2751,14 +2750,14 @@ export class DatabaseStorage implements IStorage {
   async createPaymentReceipt(receipt: InsertPaymentReceipt): Promise<PaymentReceipt> {
     const intentId = receipt.paymentIntentId ?? undefined;
     if (intentId) {
-      const orgs = await db.select({ id: organizations.id }).from(organizations);
-      for (const org of orgs) {
-        const tdb = await getDbForOrg(org.id);
-        const [pi] = await tdb.select().from(paymentIntents).where(eq(paymentIntents.id, intentId)).limit(1);
-        if (pi) {
-          const [created] = await tdb.insert(paymentReceipts).values(receipt).returning();
-          return created;
-        }
+      const [intentRow] = await db.select({ organizationId: paymentIntents.organizationId })
+        .from(paymentIntents)
+        .where(eq(paymentIntents.id, intentId))
+        .limit(1);
+      if (intentRow?.organizationId) {
+        const tdb = await getDbForOrg(intentRow.organizationId);
+        const [created] = await tdb.insert(paymentReceipts).values(receipt).returning();
+        return created;
       }
     }
     const tdb = await getDbForOrg(receipt.organizationId);
@@ -2813,44 +2812,16 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
   async deletePolicy(id: string, orgId: string): Promise<void> {
-    await withOrgTransaction(orgId, async (tx) => {
-      await tx.delete(costLineItems).where(sql`cost_sheet_id IN (SELECT id FROM cost_sheets WHERE claim_id IN (SELECT id FROM claims WHERE policy_id = ${id}))`);
-      await tx.delete(costSheets).where(sql`claim_id IN (SELECT id FROM claims WHERE policy_id = ${id})`);
-      await tx.delete(driverAssignments).where(sql`funeral_case_id IN (SELECT id FROM funeral_cases WHERE policy_id = ${id})`);
-      await tx.delete(funeralTasks).where(sql`funeral_case_id IN (SELECT id FROM funeral_cases WHERE policy_id = ${id})`);
-      await tx.delete(funeralCases).where(eq(funeralCases.policyId, id));
-      await tx.delete(policyAddOns).where(eq(policyAddOns.policyId, id));
-      await tx.delete(policyMembers).where(eq(policyMembers.policyId, id));
-      await tx.delete(policyStatusHistory).where(eq(policyStatusHistory.policyId, id));
-      await tx.delete(claimStatusHistory).where(sql`claim_id IN (SELECT id FROM claims WHERE policy_id = ${id})`);
-      await tx.delete(claimDocuments).where(sql`claim_id IN (SELECT id FROM claims WHERE policy_id = ${id})`);
-      await tx.delete(claims).where(eq(claims.policyId, id));
-      await tx.delete(commissionLedgerEntries).where(eq(commissionLedgerEntries.policyId, id));
-      await tx.delete(creditNotes).where(eq(creditNotes.policyId, id));
-      await tx.delete(policyCreditBalances).where(eq(policyCreditBalances.policyId, id));
-      await tx.delete(paymentReceipts).where(eq(paymentReceipts.policyId, id));
-      await tx.delete(paymentEvents).where(sql`payment_intent_id IN (SELECT id FROM payment_intents WHERE policy_id = ${id})`);
-      await tx.delete(groupPaymentAllocations).where(sql`policy_id = ${id}`);
-      await tx.delete(paymentIntents).where(eq(paymentIntents.policyId, id));
-      await tx.delete(receipts).where(eq(receipts.policyId, id));
-      await tx.delete(platformReceivables).where(sql`source_transaction_id IN (SELECT id FROM payment_transactions WHERE policy_id = ${id})`);
-      await tx.delete(reversalEntries).where(sql`original_transaction_id IN (SELECT id FROM payment_transactions WHERE policy_id = ${id})`);
-      await tx.delete(reversalEntries).where(sql`reversal_transaction_id IN (SELECT id FROM payment_transactions WHERE policy_id = ${id})`);
-      await tx.delete(paymentTransactions).where(eq(paymentTransactions.policyId, id));
-      await tx.delete(policies).where(eq(policies.id, id));
-    });
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(policies)
+      .set({ deletedAt: new Date() })
+      .where(and(eq(policies.id, id), eq(policies.organizationId, orgId)));
   }
   async deletePaymentTransaction(id: string, orgId: string): Promise<void> {
-    await withOrgTransaction(orgId, async (tx) => {
-      await tx.delete(reversalEntries).where(or(
-        eq(reversalEntries.originalTransactionId, id),
-        eq(reversalEntries.reversalTransactionId, id),
-      ));
-      await tx.delete(commissionLedgerEntries).where(eq(commissionLedgerEntries.transactionId, id));
-      await tx.delete(platformReceivables).where(eq(platformReceivables.sourceTransactionId, id));
-      await tx.delete(receipts).where(eq(receipts.transactionId, id));
-      await tx.delete(paymentTransactions).where(eq(paymentTransactions.id, id));
-    });
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(paymentTransactions)
+      .set({ deletedAt: new Date() })
+      .where(and(eq(paymentTransactions.id, id), eq(paymentTransactions.organizationId, orgId)));
   }
   async deleteReceipt(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
@@ -4817,6 +4788,38 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // ─── Partner Parlours ───────────────────────────────────────
+  async getPartnerParlours(orgId: string): Promise<PartnerParlour[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(partnerParlours)
+      .where(and(eq(partnerParlours.organizationId, orgId), eq(partnerParlours.isActive, true)))
+      .orderBy(partnerParlours.name);
+  }
+
+  async createPartnerParlour(data: InsertPartnerParlour): Promise<PartnerParlour> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(partnerParlours).values(data).returning();
+    return row;
+  }
+
+  async updatePartnerParlour(id: string, data: Partial<InsertPartnerParlour>, orgId: string): Promise<PartnerParlour> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(partnerParlours)
+      .set(data)
+      .where(and(eq(partnerParlours.id, id), eq(partnerParlours.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+
+  async recordStoragePayment(intakeId: string, orgId: string, data: { storageFeePaidBy: string; storageFeePaidAt: Date; storageFeeStatus: string }): Promise<MortuaryIntake> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(mortuaryIntakes)
+      .set(data)
+      .where(and(eq(mortuaryIntakes.id, intakeId), eq(mortuaryIntakes.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+
   // ─── Deceased Belongings ────────────────────────────────────
   async getDeceasedBelongings(intakeId: string, orgId: string): Promise<DeceasedBelonging[]> {
     const tdb = await getDbForOrg(orgId);
@@ -4911,34 +4914,30 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-/** Find a policy by id when orgId is unknown (e.g. public policy document URL). Tries each org's DB. */
+/** Find a policy by id when orgId is unknown (e.g. public policy document URL). Uses organizationId on the policy row to avoid an org-scan. */
 export async function findPolicyById(policyId: string): Promise<Policy | undefined> {
-  const orgs = await db.select({ id: organizations.id }).from(organizations);
-  for (const org of orgs) {
-    const policy = await (await getDbForOrg(org.id)).select().from(policies).where(eq(policies.id, policyId)).limit(1).then((r) => r[0]);
-    if (policy) return policy;
-  }
-  return undefined;
+  const [row] = await db.select({ organizationId: policies.organizationId }).from(policies).where(eq(policies.id, policyId)).limit(1);
+  if (!row?.organizationId) return undefined;
+  const tdb = await getDbForOrg(row.organizationId);
+  return tdb.select().from(policies).where(eq(policies.id, policyId)).limit(1).then((r) => r[0]);
 }
 
-/** Find a payment receipt by id when orgId is unknown. Tries each org's DB. */
+/** Find a payment receipt by id when orgId is unknown. Uses organizationId on the receipt row to avoid an org-scan. */
 export async function findPaymentReceiptById(receiptId: string): Promise<PaymentReceipt | undefined> {
-  const orgs = await db.select({ id: organizations.id }).from(organizations);
-  for (const org of orgs) {
-    const [receipt] = await (await getDbForOrg(org.id)).select().from(paymentReceipts).where(eq(paymentReceipts.id, receiptId)).limit(1);
-    if (receipt) return receipt;
-  }
-  return undefined;
+  const [row] = await db.select({ organizationId: paymentReceipts.organizationId }).from(paymentReceipts).where(eq(paymentReceipts.id, receiptId)).limit(1);
+  if (!row?.organizationId) return undefined;
+  const tdb = await getDbForOrg(row.organizationId);
+  const [receipt] = await tdb.select().from(paymentReceipts).where(eq(paymentReceipts.id, receiptId)).limit(1);
+  return receipt;
 }
 
-/** Find a payment intent by id when orgId is unknown. Tries each org's DB. */
+/** Find a payment intent by id when orgId is unknown. Uses organizationId on the intent row to avoid an org-scan. */
 export async function findPaymentIntentById(intentId: string): Promise<PaymentIntent | undefined> {
-  const orgs = await db.select({ id: organizations.id }).from(organizations);
-  for (const org of orgs) {
-    const [intent] = await (await getDbForOrg(org.id)).select().from(paymentIntents).where(eq(paymentIntents.id, intentId)).limit(1);
-    if (intent) return intent;
-  }
-  return undefined;
+  const [row] = await db.select({ organizationId: paymentIntents.organizationId }).from(paymentIntents).where(eq(paymentIntents.id, intentId)).limit(1);
+  if (!row?.organizationId) return undefined;
+  const tdb = await getDbForOrg(row.organizationId);
+  const [intent] = await tdb.select().from(paymentIntents).where(eq(paymentIntents.id, intentId)).limit(1);
+  return intent;
 }
 
 export const storage = new DatabaseStorage();

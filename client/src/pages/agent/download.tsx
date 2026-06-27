@@ -28,7 +28,7 @@ export default function AgentDownload() {
           <div className="mx-auto px-4 py-3 bg-white rounded-2xl flex items-center justify-center mb-6 ring-1 ring-border max-w-full">
             <img
               src={resolveAssetUrl(displayLogo)}
-              alt={displayName}
+              alt={displayName || "Organization logo"}
               className="h-10 w-auto max-w-[min(280px,85vw)] object-contain object-center"
             />
           </div>

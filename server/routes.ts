@@ -36,6 +36,7 @@ import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
   insertClaimSchema, insertFuneralCaseSchema, insertFuneralTaskSchema,
+  insertPartnerParlourSchema,
   insertMortuaryIntakeSchema, insertMortuaryDispatchSchema,
   insertDeceasedBelongingSchema, insertBodyWashRequirementSchema, insertDriverChecklistSchema,
   insertFleetVehicleSchema, insertCommissionPlanSchema,
@@ -4384,6 +4385,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(intakes[0] ?? null);
   });
 
+  // ─── Partner Parlours ─────────────────────────────────────────────────────────
+
+  app.get("/api/partner-parlours", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getPartnerParlours(user.organizationId));
+  });
+
+  app.post("/api/partner-parlours", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const parsed = insertPartnerParlourSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const parlour = await storage.createPartnerParlour(parsed);
+      await auditLog(req, "CREATE_PARTNER_PARLOUR", "PartnerParlour", parlour.id, null, parlour);
+      return res.status(201).json(parlour);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/partner-parlours/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const parsed = insertPartnerParlourSchema.partial().parse(req.body);
+      const parlour = await storage.updatePartnerParlour(req.params.id as string, parsed, user.organizationId);
+      await auditLog(req, "UPDATE_PARTNER_PARLOUR", "PartnerParlour", parlour.id, null, parlour);
+      return res.json(parlour);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   // ─── Mortuary Register ──────────────────────────────────────
 
   app.get("/api/mortuary-intakes", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
@@ -4407,6 +4441,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .filter((id): id is string => typeof id === "string" && id.length > 0);
       for (const uid of userIdsToMirrorIntake) {
         await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, uid);
+      }
+      // Auto-calculate storage fee for partner parlour intakes
+      if (body.partnerParlourId) {
+        body.storageFeeAmount = body.storageCategory === "child" ? "10.00" : "20.00";
+        body.storageFeeCurrency = "USD";
+        if (!body.storageFeeStatus) body.storageFeeStatus = "unpaid";
+        if (body.storageFeeStatus === "paid_at_admission" && !body.storageFeePaidAt) {
+          body.storageFeePaidAt = new Date();
+        }
       }
       const parsed = insertMortuaryIntakeSchema.parse({ ...body, organizationId: user.organizationId, intakeNumber });
       const intake = await storage.createMortuaryIntake(parsed);
@@ -4446,6 +4489,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  // Storage payment
+  app.post("/api/mortuary-intakes/:id/storage-payment", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
+    if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    if (!intake.partnerParlourId) return res.status(400).json({ message: "This intake is not attributed to a partner parlour" });
+    if (intake.storageFeeStatus !== "unpaid") return res.status(400).json({ message: "Storage fee is already paid" });
+    const { paidBy, paidAt, status } = req.body;
+    if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
+    if (!["paid_at_admission", "paid_at_collection"].includes(status)) return res.status(400).json({ message: "status must be paid_at_admission or paid_at_collection" });
+    const before = intake;
+    const updated = await storage.recordStoragePayment(req.params.id as string, user.organizationId, {
+      storageFeePaidBy: paidBy,
+      storageFeePaidAt: paidAt ? new Date(paidAt) : new Date(),
+      storageFeeStatus: status,
+    });
+    await auditLog(req, "RECORD_STORAGE_PAYMENT", "MortuaryIntake", req.params.id as string, before, updated);
+    return res.json(updated);
+  });
+
   // Dispatch
   app.get("/api/mortuary-intakes/:id/dispatch", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
@@ -4457,6 +4520,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    // Block release if partner parlour storage fee is unpaid
+    if (intake.partnerParlourId && intake.storageFeeStatus === "unpaid") {
+      return res.status(400).json({ message: "Storage fee must be paid before this body can be released. Record payment first." });
+    }
     await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const dispatchBody = { ...req.body };
     if (dispatchBody.dispatchedAt && typeof dispatchBody.dispatchedAt === "string") { const d = new Date(dispatchBody.dispatchedAt); dispatchBody.dispatchedAt = isNaN(d.getTime()) ? undefined : d; }

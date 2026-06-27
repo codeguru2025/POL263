@@ -85,7 +85,7 @@ function OtherAllowancesEditor({ value, onChange }: { value: { name: string; amo
         <div key={i} className="flex gap-2 items-center">
           <Input value={a.name} onChange={(e) => { const v = [...value]; v[i] = { ...v[i], name: e.target.value }; onChange(v); }} className="flex-1" />
           <Input type="number" step="0.01" min="0" value={a.amount} onChange={(e) => { const v = [...value]; v[i] = { ...v[i], amount: e.target.value }; onChange(v); }} className="w-28" />
-          <Button type="button" size="icon" variant="ghost" className="text-destructive h-8 w-8" onClick={() => onChange(value.filter((_, j) => j !== i))}>×</Button>
+          <Button type="button" size="icon" variant="ghost" className="text-destructive h-8 w-8" aria-label="Remove allowance" onClick={() => onChange(value.filter((_, j) => j !== i))}>×</Button>
         </div>
       ))}
       <Button type="button" size="sm" variant="outline" onClick={() => onChange([...value, { name: "", amount: "" }])}>
@@ -639,8 +639,8 @@ export default function StaffPayroll() {
                           <TableCell className="text-xs text-muted-foreground">{taxes || "None"}</TableCell>
                           <TableCell><Badge variant={emp.isActive ? "default" : "secondary"}>{emp.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                           <TableCell>
-                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingEmployee(emp); setShowEmployeeDialog(true); }}>
-                              <Pencil className="h-3.5 w-3.5" />
+                            <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Edit employee" onClick={() => { setEditingEmployee(emp); setShowEmployeeDialog(true); }}>
+                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                             </Button>
                           </TableCell>
                         </TableRow>

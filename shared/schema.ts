@@ -676,6 +676,7 @@ export const policies = pgTable(
     version: integer("version").default(1).notNull(),
     isLegacy: boolean("is_legacy").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
   },
   (t) => [
     uniqueIndex("policy_number_org_idx").on(t.policyNumber, t.organizationId),
@@ -778,6 +779,7 @@ export const paymentTransactions = pgTable(
     periodTo: date("period_to"),
     recordedBy: uuid("recorded_by").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
   },
   (t) => [
     index("pt_org_idx").on(t.organizationId),
@@ -909,6 +911,7 @@ export const paymentReceipts = pgTable(
     status: text("status").default("issued").notNull(), // issued | voided
     metadataJson: jsonb("metadata_json"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at"),
   },
   (t) => [
     index("pr_org_idx").on(t.organizationId),
@@ -1269,6 +1272,17 @@ export const funeralTasks = pgTable(
   (t) => [index("ft_case_idx").on(t.funeralCaseId)]
 );
 
+export const partnerParlours = pgTable("partner_parlours", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+  name: text("name").notNull(),
+  phone: text("phone"),
+  contactPerson: text("contact_person"),
+  address: text("address"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const mortuaryIntakes = pgTable(
   "mortuary_intakes",
   {
@@ -1303,6 +1317,14 @@ export const mortuaryIntakes = pgTable(
     receiverAcknowledgedName: text("receiver_acknowledged_name"),
     receiverAcknowledgedIdNumber: text("receiver_acknowledged_id_number"),
     notes: text("notes"),
+    // Partner parlour storage receipting
+    partnerParlourId: uuid("partner_parlour_id").references(() => partnerParlours.id),
+    storageCategory: text("storage_category"), // 'adult' | 'child'
+    storageFeeAmount: numeric("storage_fee_amount", { precision: 10, scale: 2 }),
+    storageFeeCurrency: text("storage_fee_currency").default("USD"),
+    storageFeeStatus: text("storage_fee_status").default("unpaid"), // 'unpaid' | 'paid_at_admission' | 'paid_at_collection'
+    storageFeePaidAt: timestamp("storage_fee_paid_at"),
+    storageFeePaidBy: text("storage_fee_paid_by"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -2260,6 +2282,7 @@ export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, cre
 export const insertClaimDocumentSchema = createInsertSchema(claimDocuments).omit({ id: true, uploadedAt: true });
 export const insertFuneralCaseSchema = createInsertSchema(funeralCases).omit({ id: true, createdAt: true });
 export const insertFuneralTaskSchema = createInsertSchema(funeralTasks).omit({ id: true, createdAt: true });
+export const insertPartnerParlourSchema = createInsertSchema(partnerParlours).omit({ id: true, createdAt: true });
 export const insertMortuaryIntakeSchema = createInsertSchema(mortuaryIntakes).omit({ id: true, createdAt: true });
 export const insertMortuaryDispatchSchema = createInsertSchema(mortuaryDispatches).omit({ id: true, createdAt: true });
 export const insertDeceasedBelongingSchema = createInsertSchema(deceasedBelongings).omit({ id: true, createdAt: true });
@@ -2377,6 +2400,8 @@ export type FuneralCase = typeof funeralCases.$inferSelect;
 export type InsertFuneralCase = z.infer<typeof insertFuneralCaseSchema>;
 export type FuneralTask = typeof funeralTasks.$inferSelect;
 export type InsertFuneralTask = z.infer<typeof insertFuneralTaskSchema>;
+export type PartnerParlour = typeof partnerParlours.$inferSelect;
+export type InsertPartnerParlour = z.infer<typeof insertPartnerParlourSchema>;
 export type MortuaryIntake = typeof mortuaryIntakes.$inferSelect;
 export type InsertMortuaryIntake = z.infer<typeof insertMortuaryIntakeSchema>;
 export type MortuaryDispatch = typeof mortuaryDispatches.$inferSelect;

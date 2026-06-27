@@ -13,6 +13,22 @@ const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const CONSTANT_DELAY_MS = 200;
 
+// In-memory TTL cache for org id list — avoids a full table scan (returning
+// sensitive fields like databaseUrl and paynowIntegrationKey) on every
+// unauthenticated auth attempt. 60-second TTL; invalidated on restart.
+let _orgListCache: { data: { id: string; slug?: string | null }[]; expiresAt: number } | null = null;
+
+async function getCachedOrgIds(): Promise<{ id: string; slug?: string | null }[]> {
+  const now = Date.now();
+  if (_orgListCache && _orgListCache.expiresAt > now) return _orgListCache.data;
+  const orgs = await storage.getOrganizations();
+  _orgListCache = {
+    data: orgs.map((o: any) => ({ id: o.id, slug: o.slug ?? null })),
+    expiresAt: now + 60_000,
+  };
+  return _orgListCache.data;
+}
+
 async function constantTimeResponse(res: Response, status: number, body: any) {
   await new Promise((resolve) => setTimeout(resolve, CONSTANT_DELAY_MS));
   return res.status(status).json(body);
@@ -45,6 +61,7 @@ async function findAcrossOrgs<T>(
   lookup: (orgId: string) => Promise<T | undefined | null>,
   context: string,
 ): Promise<T | null> {
+  structuredLog("info", "CLIENT_CROSS_ORG_SEARCH", { orgCount: orgs.length, context });
   const results = await Promise.allSettled(orgs.map((o) => lookup(o.id)));
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
@@ -86,7 +103,7 @@ export function setupClientAuth(app: Express) {
     }
 
     try {
-      const orgs = await storage.getOrganizations();
+      const orgs = await getCachedOrgIds();
       if (orgs.length === 0) {
         return constantTimeResponse(res, 400, { message: "System not configured" });
       }
@@ -135,7 +152,7 @@ export function setupClientAuth(app: Express) {
     }
 
     try {
-      const orgs = await storage.getOrganizations();
+      const orgs = await getCachedOrgIds();
       const client = await findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-enroll");
       if (!client || client.isEnrolled) {
         return res.status(400).json({ message: "Invalid enrollment request" });
@@ -196,7 +213,7 @@ export function setupClientAuth(app: Express) {
     }
 
     try {
-      const orgs = await storage.getOrganizations();
+      const orgs = await getCachedOrgIds();
       if (orgs.length === 0) {
         return constantTimeResponse(res, 400, { message: "Invalid credentials" });
       }
@@ -230,9 +247,14 @@ export function setupClientAuth(app: Express) {
 
       await storage.updateClient(client.id, { failedLoginAttempts: 0, lockedUntil: null }, client.organizationId);
 
+      // SHA-256 is not a password KDF (no salt, fast to brute-force).
+      // Block login and force a password reset via the security-question flow.
       if (isLegacySha256Hash(client.passwordHash)) {
-        const newHash = await hashSecret(password);
-        await storage.updateClient(client.id, { passwordHash: newHash }, client.organizationId);
+        structuredLog("warn", "CLIENT_LOGIN_LEGACY_HASH_BLOCKED", { clientId: client.id, orgId: client.organizationId });
+        return constantTimeResponse(res, 403, {
+          message: "Your account requires a password reset for security compliance. Please use the 'Forgot Password' option.",
+          code: "LEGACY_PASSWORD_RESET_REQUIRED",
+        });
       }
 
       // Regenerate the session id on successful login to prevent session fixation.
@@ -265,7 +287,7 @@ export function setupClientAuth(app: Express) {
 
     const client = clientOrgId
       ? await storage.getClient(clientId, clientOrgId)
-      : await storage.getOrganizations().then((orgs) =>
+      : await getCachedOrgIds().then((orgs) =>
           findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-me-fallback")
         );
     if (!client) {
@@ -360,7 +382,7 @@ export function setupClientAuth(app: Express) {
     }
 
     if (!clientOrgId) {
-      const orgs = await storage.getOrganizations();
+      const orgs = await getCachedOrgIds();
       const foundClient = await findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-policies-fallback");
       if (foundClient) {
         const rawPolicies = await storage.getPoliciesByClient(clientId, foundClient.organizationId);
@@ -548,7 +570,7 @@ export function setupClientAuth(app: Express) {
     }
 
     try {
-      const orgs = await storage.getOrganizations();
+      const orgs = await getCachedOrgIds();
       if (orgs.length === 0) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }

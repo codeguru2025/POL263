@@ -502,8 +502,9 @@ export default function StaffClients() {
                   className="shrink-0 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
                   onClick={() => { setViewMode("list"); setSelectedClientId(null); }}
                   data-testid="btn-back-to-list"
+                  aria-label="Back to client list"
                 >
-                  <ChevronLeft className="h-5 w-5" />
+                  <ChevronLeft className="h-5 w-5" aria-hidden="true" />
                 </Button>
                 <div className="min-w-0">
                   <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight" data-testid="text-client-name">
@@ -735,6 +736,7 @@ export default function StaffClients() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8"
+                                  aria-label="Edit dependent"
                                   onClick={() => {
                                     setEditingDep(dep);
                                     setDepForm({
@@ -754,6 +756,7 @@ export default function StaffClients() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8 text-destructive hover:text-destructive"
+                                  aria-label="Remove dependent"
                                   onClick={() => {
                                     if (confirm(`Remove ${dep.firstName} ${dep.lastName} as a dependent?`)) {
                                       deleteDepMutation.mutate(dep.id);
@@ -828,15 +831,16 @@ export default function StaffClients() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8" asChild aria-label="View document">
                                 <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
-                                  <ExternalLink className="h-4 w-4" />
+                                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
                                 </a>
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-destructive hover:text-destructive"
+                                aria-label="Delete document"
                                 onClick={() => {
                                   if (confirm(`Delete "${doc.label || doc.fileName}"?`)) {
                                     deleteDocMutation.mutate({ clientId: selectedClientId!, docId: doc.id });
@@ -1127,15 +1131,15 @@ export default function StaffClients() {
                     sortable: false,
                     cell: (c) => (
                       <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openDetail(c.id)} data-testid={`btn-view-client-${c.id}`} title="View details">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openDetail(c.id)} data-testid={`btn-view-client-${c.id}`} title="View details" aria-label="View client details">
                           <Eye className="h-4 w-4" />
                         </Button>
                         {!clientsWithPolicies.has(c.id) && (
                           <>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`btn-edit-client-${c.id}`} title="Edit lead">
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`btn-edit-client-${c.id}`} title="Edit lead" aria-label="Edit lead">
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => { setLocation(`/staff/policies?create=1&clientId=${c.id}`); }} data-testid={`btn-issue-policy-${c.id}`} title="Issue policy">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => { setLocation(`/staff/policies?create=1&clientId=${c.id}`); }} data-testid={`btn-issue-policy-${c.id}`} title="Issue policy" aria-label="Issue policy">
                               <ArrowRight className="h-4 w-4" />
                             </Button>
                           </>

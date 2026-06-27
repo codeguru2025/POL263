@@ -472,11 +472,11 @@ export default function JoinRegisterPage() {
                   ) : (
                     <span className="text-xs text-amber-600 font-medium">Beneficiary</span>
                   )}
-                  <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => {
+                  <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" aria-label="Remove dependent" onClick={() => {
                     setDependentsList((prev) => prev.filter((_, idx) => idx !== i));
                     if (beneficiary.fromDependentIndex === i) setBeneficiary({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null });
                   }}>
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="h-3 w-3" aria-hidden="true" />
                   </Button>
                 </div>
               ))}
@@ -536,8 +536,8 @@ export default function JoinRegisterPage() {
               {beneficiary.firstName && beneficiary.lastName ? (
                 <div className="flex items-center gap-2 p-3 border rounded-md bg-amber-50/50 border-amber-200 text-sm">
                   <span className="flex-1 font-medium">{beneficiary.firstName} {beneficiary.lastName} <span className="text-muted-foreground capitalize">({beneficiary.relationship || "Beneficiary"})</span></span>
-                  <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => setBeneficiary({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null })}>
-                    <Trash2 className="h-3 w-3" />
+                  <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" aria-label="Remove beneficiary" onClick={() => setBeneficiary({ firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null })}>
+                    <Trash2 className="h-3 w-3" aria-hidden="true" />
                   </Button>
                 </div>
               ) : !showBenForm ? (

@@ -386,8 +386,9 @@ export default function StaffGroups() {
                               onClick={() => openAssign(group.id)}
                               data-testid={`btn-assign-policy-${group.id}`}
                               title="Assign policies"
+                              aria-label="Assign policies to group"
                             >
-                              <LinkIcon className="h-4 w-4" />
+                              <LinkIcon className="h-4 w-4" aria-hidden="true" />
                             </Button>
                             <Button
                               variant="ghost"
@@ -395,8 +396,9 @@ export default function StaffGroups() {
                               className="h-8 w-8"
                               onClick={() => openEdit(group)}
                               data-testid={`btn-edit-group-${group.id}`}
+                              aria-label="Edit group"
                             >
-                              <Pencil className="h-4 w-4" />
+                              <Pencil className="h-4 w-4" aria-hidden="true" />
                             </Button>
                           </div>
                         </TableCell>

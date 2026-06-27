@@ -86,7 +86,7 @@ export default function AgentLogin() {
         <Card className="w-full max-w-md rounded-xl border-border/70 shadow-lg shadow-primary/5">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto px-4 py-3 bg-white rounded-2xl flex items-center justify-center mb-6 ring-1 ring-border max-w-full">
-            <img src={resolveAssetUrl(displayLogo)} alt={displayName} className="h-10 w-auto max-w-[min(280px,85vw)] object-contain object-center" fetchPriority="high" />
+            <img src={resolveAssetUrl(displayLogo)} alt={displayName || "Organization logo"} className="h-10 w-auto max-w-[min(280px,85vw)] object-contain object-center" fetchPriority="high" />
           </div>
           <CardTitle className="text-2xl font-display">
             {isWhitelabeled ? `${displayName} — Agent Login` : "Agent Login"}

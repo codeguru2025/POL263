@@ -168,11 +168,13 @@ function ReferralLinkBox({ referralCode }: { referralCode: string }) {
           value={referralUrl}
           className="flex-1 text-xs bg-background border rounded px-2 py-1.5 font-mono truncate"
           data-testid="input-referral-link"
+          aria-label="Referral link URL"
           onClick={(e) => (e.target as HTMLInputElement).select()}
         />
-        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={copyLink} data-testid="button-copy-referral-link">
-          {copied ? <span className="text-green-600 text-xs font-medium">OK</span> : <Copy className="h-3.5 w-3.5" />}
+        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={copyLink} data-testid="button-copy-referral-link" aria-label={copied ? "Copied to clipboard" : "Copy referral link"}>
+          {copied ? <span className="text-green-600 text-xs font-medium" aria-hidden="true">OK</span> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
         </Button>
+        <span role="status" aria-live="polite" className="sr-only">{copied ? "Copied to clipboard" : ""}</span>
       </div>
       <p className="text-[10px] text-muted-foreground">Share this link with clients to track referrals</p>
     </div>
@@ -604,7 +606,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           <div className="flex items-center gap-2 min-w-0">
             <img
               src={resolveAssetUrl((currentOrg?.logoUrl && String(currentOrg.logoUrl).trim()) || brandLogo)}
-              alt={brandName}
+              alt={brandName || "Organization logo"}
               className="h-8 w-auto max-w-[160px] sm:max-w-[200px] rounded-md object-contain object-left shrink-0 bg-white p-0.5"
               loading="lazy"
             />

@@ -1240,11 +1240,11 @@ export default function StaffSettings() {
                                 Set Active
                               </Button>
                             )}
-                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEditAdvert(advert)}>
-                              <Pencil className="h-3.5 w-3.5" />
+                            <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="Edit advert" onClick={() => openEditAdvert(advert)}>
+                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                             </Button>
-                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setAdvertDeleteId(advert.id)}>
-                              <Trash2 className="h-3.5 w-3.5" />
+                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" aria-label="Delete advert" onClick={() => setAdvertDeleteId(advert.id)}>
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                             </Button>
                           </div>
                         </div>

@@ -452,8 +452,8 @@ export default function StaffNotifications() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(t)}><Pencil className="h-4 w-4" /></Button>
-                          <Button variant="ghost" size="icon" onClick={() => { if (confirm("Delete this template?")) deleteMutation.mutate(t.id); }}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                          <Button variant="ghost" size="icon" aria-label="Edit template" onClick={() => openEdit(t)}><Pencil className="h-4 w-4" aria-hidden="true" /></Button>
+                          <Button variant="ghost" size="icon" aria-label="Delete template" onClick={() => { if (confirm("Delete this template?")) deleteMutation.mutate(t.id); }}><Trash2 className="h-4 w-4 text-destructive" aria-hidden="true" /></Button>
                         </div>
                       </TableCell>
                     </TableRow>

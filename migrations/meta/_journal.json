@@ -15,6 +15,20 @@
       "when": 1782422853279,
       "tag": "0001_per_tenant_paynow",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782581085123,
+      "tag": "0002_oval_bullseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782583636588,
+      "tag": "0003_living_cloak",
+      "breakpoints": true
     }
   ]
 }

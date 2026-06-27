@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Loader2, ChevronRight, Archive, FileDown, Box } from "lucide-react";
+import { Plus, Search, Loader2, ChevronRight, Archive, FileDown, Box, DollarSign } from "lucide-react";
 import type { FleetVehicle } from "@shared/schema";
 
 type IntakeForm = {
@@ -40,6 +40,10 @@ type IntakeForm = {
   receiverAcknowledgedIdNumber: string;
   funeralCaseId: string;
   notes: string;
+  partnerParlourId: string;
+  storageCategory: string;
+  storageFeeStatus: string;
+  storageFeePaidBy: string;
 };
 
 const BLANK_INTAKE: IntakeForm = {
@@ -65,6 +69,10 @@ const BLANK_INTAKE: IntakeForm = {
   receiverAcknowledgedIdNumber: "",
   funeralCaseId: "",
   notes: "",
+  partnerParlourId: "",
+  storageCategory: "adult",
+  storageFeeStatus: "unpaid",
+  storageFeePaidBy: "",
 };
 
 function fmtDateTime(v: string | Date | null | undefined): string {
@@ -85,6 +93,13 @@ function statusColor(s: string) {
   return "bg-blue-500/15 text-blue-700 border-blue-200";
 }
 
+function feeStatusBadge(status: string | null | undefined) {
+  if (!status || status === "unpaid") return <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200">Unpaid</Badge>;
+  if (status === "paid_at_admission") return <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Paid — Admission</Badge>;
+  if (status === "paid_at_collection") return <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Paid — Collection</Badge>;
+  return <Badge variant="outline" className="text-[10px]">{status}</Badge>;
+}
+
 export default function StaffMortuary() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -95,6 +110,7 @@ export default function StaffMortuary() {
   const [showDispatch, setShowDispatch] = useState(false);
   const [showAddBelonging, setShowAddBelonging] = useState(false);
   const [showBodyWash, setShowBodyWash] = useState(false);
+  const [showRecordPayment, setShowRecordPayment] = useState(false);
 
   const { data: intakes = [], isLoading: intakesLoading } = useQuery<any[]>({
     queryKey: ["/api/mortuary-intakes"],
@@ -104,6 +120,9 @@ export default function StaffMortuary() {
   });
   const { data: users = [] } = useQuery<any[]>({
     queryKey: ["/api/users"],
+  });
+  const { data: partnerParlours = [] } = useQuery<any[]>({
+    queryKey: ["/api/partner-parlours"],
   });
 
   const selectedIntake = intakes.find((i) => i.id === selectedIntakeId) ?? null;
@@ -182,6 +201,19 @@ export default function StaffMortuary() {
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const recordPaymentMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = await apiRequest("POST", `/api/mortuary-intakes/${selectedIntakeId}/storage-payment`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/mortuary-intakes"] });
+      setShowRecordPayment(false);
+      toast({ title: "Payment recorded" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const filteredIntakes = intakes.filter((i) => {
     const q = search.toLowerCase();
     const matchesSearch = !search
@@ -193,6 +225,7 @@ export default function StaffMortuary() {
 
   const inStorage = intakes.filter((i) => i.status === "in_storage").length;
   const dispatched = intakes.filter((i) => i.status === "dispatched").length;
+  const unpaidFees = intakes.filter((i) => i.partnerParlourId && i.storageFeeStatus === "unpaid").length;
 
   const vehicleOptions: SearchableOption[] = fleetVehicles.map((v) => ({
     value: v.id,
@@ -211,6 +244,11 @@ export default function StaffMortuary() {
     if (!id) return "—";
     const u = (users as any[]).find((x) => x.id === id);
     return u ? `${u.displayName || u.email}${u.phone ? ` · ${u.phone}` : ""}` : "—";
+  };
+  const parlourLabel = (id: string | null | undefined) => {
+    if (!id) return "—";
+    const p = (partnerParlours as any[]).find((x) => x.id === id);
+    return p ? p.name : "—";
   };
 
   const apiBase = getApiBase();
@@ -235,10 +273,11 @@ export default function StaffMortuary() {
           )}
         />
 
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
+        <div className="grid md:grid-cols-4 gap-4 mb-8">
           <KpiStatCard label="In Storage" value={inStorage} hint="Bodies currently in mortuary" icon={Archive} />
           <KpiStatCard label="Dispatched" value={dispatched} hint="Bodies collected / released" icon={Box} />
           <KpiStatCard label="Total Intakes" value={intakes.length} hint="All time" icon={Box} />
+          <KpiStatCard label="Unpaid Fees" value={unpaidFees} hint="Partner parlour fees outstanding" icon={DollarSign} />
         </div>
 
         {selectedIntakeId && selectedIntake ? (
@@ -250,6 +289,7 @@ export default function StaffMortuary() {
                 {selectedIntake.status?.replace(/_/g, " ").toUpperCase()}
               </Badge>
               <Badge variant="outline" className="text-[10px]">{scopeLabel(selectedIntake.serviceScope)}</Badge>
+              {selectedIntake.partnerParlourId && feeStatusBadge(selectedIntake.storageFeeStatus)}
               <div className="ml-auto flex gap-2 flex-wrap">
                 <a href={`${apiBase}/api/mortuary-intakes/${selectedIntake.id}/receipt-pdf?download=1`} target="_blank" rel="noopener noreferrer">
                   <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Print Receipt</Button>
@@ -304,6 +344,42 @@ export default function StaffMortuary() {
                   <DetailRow label="Acknowledged ID" value={selectedIntake.receiverAcknowledgedIdNumber} />
                 </div>
               </CardSection>
+
+              {/* Storage fee card — only for partner parlour intakes */}
+              {selectedIntake.partnerParlourId && (
+                <CardSection
+                  title="Storage Fee"
+                  icon={DollarSign}
+                  headerRight={
+                    selectedIntake.storageFeeStatus === "unpaid" ? (
+                      <Button size="sm" className="gap-1.5" onClick={() => setShowRecordPayment(true)}>
+                        <DollarSign className="h-3.5 w-3.5" /> Record Payment
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <div className="space-y-0.5">
+                    <DetailRow label="Partner parlour" value={parlourLabel(selectedIntake.partnerParlourId)} />
+                    <DetailRow label="Category" value={selectedIntake.storageCategory === "child" ? "Child" : "Adult"} />
+                    <DetailRow label="Fee" value={`USD ${parseFloat(selectedIntake.storageFeeAmount || "0").toFixed(2)}`} />
+                    <div className="flex justify-between py-1 border-b border-border/40">
+                      <span className="text-muted-foreground text-xs">Payment status</span>
+                      <span>{feeStatusBadge(selectedIntake.storageFeeStatus)}</span>
+                    </div>
+                    {selectedIntake.storageFeeStatus !== "unpaid" && (
+                      <>
+                        <DetailRow label="Paid by" value={selectedIntake.storageFeePaidBy} />
+                        <DetailRow label="Paid at" value={fmtDateTime(selectedIntake.storageFeePaidAt)} />
+                      </>
+                    )}
+                  </div>
+                  {selectedIntake.storageFeeStatus === "unpaid" && (
+                    <div className="mt-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                      This body cannot be released until the storage fee is paid.
+                    </div>
+                  )}
+                </CardSection>
+              )}
 
               {/* Belongings */}
               <CardSection title="Belongings Submitted" icon={Box}
@@ -407,6 +483,7 @@ export default function StaffMortuary() {
                     <TableHead>Scope</TableHead>
                     <TableHead>Received At</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Fee</TableHead>
                     <TableHead className="text-right pr-6">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -422,9 +499,12 @@ export default function StaffMortuary() {
                           {i.status?.replace(/_/g, " ").toUpperCase()}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        {i.partnerParlourId ? feeStatusBadge(i.storageFeeStatus) : <span className="text-xs text-muted-foreground">—</span>}
+                      </TableCell>
                       <TableCell className="text-right pr-6">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <ChevronRight className="h-4 w-4" />
+                        <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="View mortuary case details">
+                          <ChevronRight className="h-4 w-4" aria-hidden="true" />
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -442,8 +522,10 @@ export default function StaffMortuary() {
         onOpenChange={setShowCreateIntake}
         vehicleOptions={vehicleOptions}
         userOptions={userOptions}
+        partnerParlours={partnerParlours}
         onSubmit={(data) => createIntakeMutation.mutate(data)}
         isPending={createIntakeMutation.isPending}
+        onParlourCreated={() => queryClient.invalidateQueries({ queryKey: ["/api/partner-parlours"] })}
       />
 
       {/* Dispatch Dialog */}
@@ -451,6 +533,7 @@ export default function StaffMortuary() {
         <DispatchDialog
           open={showDispatch}
           onOpenChange={setShowDispatch}
+          intake={selectedIntake}
           onSubmit={(data) => upsertDispatchMutation.mutate(data)}
           isPending={upsertDispatchMutation.isPending}
         />
@@ -476,25 +559,42 @@ export default function StaffMortuary() {
           isPending={upsertBodyWashMutation.isPending}
         />
       )}
+
+      {/* Record Payment Dialog */}
+      {selectedIntakeId && selectedIntake?.partnerParlourId && (
+        <RecordPaymentDialog
+          open={showRecordPayment}
+          onOpenChange={setShowRecordPayment}
+          feeAmount={selectedIntake.storageFeeAmount}
+          onSubmit={(data) => recordPaymentMutation.mutate(data)}
+          isPending={recordPaymentMutation.isPending}
+        />
+      )}
     </StaffLayout>
   );
 }
 
 // ─── New Intake Dialog ────────────────────────────────────────────────────────
 
-function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, onSubmit, isPending }: {
+function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, onSubmit, isPending, onParlourCreated }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   vehicleOptions: SearchableOption[];
   userOptions: SearchableOption[];
+  partnerParlours: any[];
   onSubmit: (data: Record<string, any>) => void;
   isPending: boolean;
+  onParlourCreated: () => void;
 }) {
   const [form, setForm] = useState<IntakeForm>({ ...BLANK_INTAKE });
+  const [showCreateParlour, setShowCreateParlour] = useState(false);
+
   const set = (k: keyof IntakeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const setSel = (k: keyof IntakeForm) => (v: string) =>
     setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
+
+  const isPartnerScope = form.serviceScope === "storage_only" || form.serviceScope === "removal_only";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -504,148 +604,354 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, onSu
       data[k] = v || null;
     });
     if (form.deceasedAge) data.deceasedAge = parseInt(form.deceasedAge);
+    // Only send partner parlour fields when applicable
+    if (!isPartnerScope) {
+      data.partnerParlourId = null;
+      data.storageCategory = null;
+      data.storageFeeStatus = null;
+      data.storageFeePaidBy = null;
+    }
+    // Only send paidBy when paid at admission
+    if (data.storageFeeStatus !== "paid_at_admission") {
+      data.storageFeePaidBy = null;
+    }
     onSubmit(data);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Record Mortuary Intake</DialogTitle>
-          <DialogDescription>Document the body being received into the mortuary.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Service Scope *</Label>
-            <Select value={form.serviceScope} onValueChange={setSel("serviceScope")}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="full_service">Full Service (we handle burial)</SelectItem>
-                <SelectItem value="storage_only">Storage Only (another parlour does burial)</SelectItem>
-                <SelectItem value="removal_only">Removal Only (we collected, they bury)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs">Deceased Full Name *</Label>
-            <Input value={form.deceasedName} onChange={set("deceasedName")} required placeholder="Full name" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Record Mortuary Intake</DialogTitle>
+            <DialogDescription>Document the body being received into the mortuary.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label className="text-xs">Gender</Label>
-              <Select value={form.deceasedGender || "__none__"} onValueChange={setSel("deceasedGender")}>
-                <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+              <Label className="text-xs">Service Scope *</Label>
+              <Select value={form.serviceScope} onValueChange={setSel("serviceScope")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">— Not set —</SelectItem>
-                  <SelectItem value="male">Male</SelectItem>
-                  <SelectItem value="female">Female</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
+                  <SelectItem value="full_service">Full Service (we handle burial)</SelectItem>
+                  <SelectItem value="storage_only">Storage Only (another parlour does burial)</SelectItem>
+                  <SelectItem value="removal_only">Removal Only (we collected, they bury)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Age</Label>
-              <Input type="number" min="0" value={form.deceasedAge} onChange={set("deceasedAge")} placeholder="e.g. 65" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">National ID</Label>
-              <Input value={form.deceasedNationalId} onChange={set("deceasedNationalId")} placeholder="ID / Passport" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Date of Death</Label>
-              <Input type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Cause of Death</Label>
-              <Input value={form.causeOfDeath} onChange={set("causeOfDeath")} placeholder="e.g. Natural causes" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Place of Death</Label>
-              <Input value={form.placeOfDeath} onChange={set("placeOfDeath")} placeholder="Hospital, home, etc." />
-            </div>
-          </div>
 
-          {(form.serviceScope === "storage_only" || form.serviceScope === "removal_only") && (
             <div className="space-y-1.5">
-              <Label className="text-xs">Referring Organisation</Label>
-              <Input value={form.clientOrganizationName} onChange={set("clientOrganizationName")} placeholder="Other parlour / hospital name" />
+              <Label className="text-xs">Deceased Full Name *</Label>
+              <Input value={form.deceasedName} onChange={set("deceasedName")} required placeholder="Full name" />
             </div>
-          )}
 
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Next of Kin / Informant</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Informant Name</Label>
-              <Input value={form.informantName} onChange={set("informantName")} />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Gender</Label>
+                <Select value={form.deceasedGender || "__none__"} onValueChange={setSel("deceasedGender")}>
+                  <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Not set —</SelectItem>
+                    <SelectItem value="male">Male</SelectItem>
+                    <SelectItem value="female">Female</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Age</Label>
+                <Input type="number" min="0" value={form.deceasedAge} onChange={set("deceasedAge")} placeholder="e.g. 65" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">National ID</Label>
+                <Input value={form.deceasedNationalId} onChange={set("deceasedNationalId")} placeholder="ID / Passport" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Date of Death</Label>
+                <Input type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Cause of Death</Label>
+                <Input value={form.causeOfDeath} onChange={set("causeOfDeath")} placeholder="e.g. Natural causes" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Place of Death</Label>
+                <Input value={form.placeOfDeath} onChange={set("placeOfDeath")} placeholder="Hospital, home, etc." />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Informant Phone</Label>
-              <Input value={form.informantPhone} onChange={set("informantPhone")} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Relationship</Label>
-              <Input value={form.informantRelationship} onChange={set("informantRelationship")} placeholder="e.g. Spouse, Son" />
-            </div>
-          </div>
 
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Removal Details</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2 space-y-1.5">
-              <Label className="text-xs">Removal Location</Label>
-              <Input value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where body was collected from" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Date & Time of Removal</Label>
-              <Input type="datetime-local" value={form.removalDateTime} onChange={set("removalDateTime")} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Removal Driver</Label>
-              <SearchableSelect options={userOptions} value={form.removalDriverId} onChange={setSel("removalDriverId")} placeholder="Select driver…" searchPlaceholder="Search…" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Removal Vehicle</Label>
-              <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setSel("removalVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search…" />
-            </div>
-          </div>
+            {/* Partner parlour section — only for storage_only / removal_only */}
+            {isPartnerScope && (
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/20 p-3">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Partner Parlour & Storage Fee</p>
 
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Mortuary Receipt</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Received By (Staff)</Label>
-              <SearchableSelect options={userOptions} value={form.receivedByUserId} onChange={setSel("receivedByUserId")} placeholder="Select staff member…" searchPlaceholder="Search…" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Received At</Label>
-              <Input type="datetime-local" value={form.receivedAt} onChange={set("receivedAt")} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Receiver Acknowledged Name (printed)</Label>
-              <Input value={form.receiverAcknowledgedName} onChange={set("receiverAcknowledgedName")} placeholder="Printed name at sign-off" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Receiver ID Number</Label>
-              <Input value={form.receiverAcknowledgedIdNumber} onChange={set("receiverAcknowledgedIdNumber")} placeholder="ID / Passport number" />
-            </div>
-          </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Partner Parlour *</Label>
+                  <Select value={form.partnerParlourId || "__none__"} onValueChange={setSel("partnerParlourId")}>
+                    <SelectTrigger><SelectValue placeholder="Select partner parlour…" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— Select parlour —</SelectItem>
+                      {partnerParlours.map((p: any) => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">
+                    Not listed?{" "}
+                    <button type="button" className="underline text-primary" onClick={() => setShowCreateParlour(true)}>
+                      Add new parlour
+                    </button>
+                  </p>
+                </div>
 
-          {form.serviceScope === "full_service" && (
-            <div className="space-y-1.5">
-              <Label className="text-xs">Funeral Case ID (optional — link to existing case)</Label>
-              <Input value={form.funeralCaseId} onChange={set("funeralCaseId")} placeholder="Paste funeral case UUID to link" />
-            </div>
-          )}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Deceased Category *</Label>
+                    <Select value={form.storageCategory} onValueChange={setSel("storageCategory")}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="adult">Adult — USD 20.00</SelectItem>
+                        <SelectItem value="child">Child — USD 10.00</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Payment at Admission?</Label>
+                    <Select value={form.storageFeeStatus} onValueChange={setSel("storageFeeStatus")}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unpaid">Pay on Collection</SelectItem>
+                        <SelectItem value="paid_at_admission">Paid Now (Admission)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {form.storageFeeStatus === "paid_at_admission" && (
+                    <div className="col-span-2 space-y-1.5">
+                      <Label className="text-xs">Received From (Name)</Label>
+                      <Input value={form.storageFeePaidBy} onChange={set("storageFeePaidBy")} placeholder="Name of person who paid" />
+                    </div>
+                  )}
+                </div>
 
+                <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                  Storage fee: <strong>USD {form.storageCategory === "child" ? "10.00" : "20.00"}</strong>{" "}
+                  — {form.storageFeeStatus === "paid_at_admission" ? "Paid at admission" : "To be collected on dispatch"}
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Next of Kin / Informant</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Informant Name</Label>
+                <Input value={form.informantName} onChange={set("informantName")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Informant Phone</Label>
+                <Input value={form.informantPhone} onChange={set("informantPhone")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Relationship</Label>
+                <Input value={form.informantRelationship} onChange={set("informantRelationship")} placeholder="e.g. Spouse, Son" />
+              </div>
+            </div>
+
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Removal Details</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2 space-y-1.5">
+                <Label className="text-xs">Removal Location</Label>
+                <Input value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where body was collected from" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Date & Time of Removal</Label>
+                <Input type="datetime-local" value={form.removalDateTime} onChange={set("removalDateTime")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Removal Driver</Label>
+                <SearchableSelect options={userOptions} value={form.removalDriverId} onChange={setSel("removalDriverId")} placeholder="Select driver…" searchPlaceholder="Search…" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Removal Vehicle</Label>
+                <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setSel("removalVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search…" />
+              </div>
+            </div>
+
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Mortuary Receipt</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Received By (Staff)</Label>
+                <SearchableSelect options={userOptions} value={form.receivedByUserId} onChange={setSel("receivedByUserId")} placeholder="Select staff member…" searchPlaceholder="Search…" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Received At</Label>
+                <Input type="datetime-local" value={form.receivedAt} onChange={set("receivedAt")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Receiver Acknowledged Name (printed)</Label>
+                <Input value={form.receiverAcknowledgedName} onChange={set("receiverAcknowledgedName")} placeholder="Printed name at sign-off" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Receiver ID Number</Label>
+                <Input value={form.receiverAcknowledgedIdNumber} onChange={set("receiverAcknowledgedIdNumber")} placeholder="ID / Passport number" />
+              </div>
+            </div>
+
+            {form.serviceScope === "full_service" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Funeral Case ID (optional — link to existing case)</Label>
+                <Input value={form.funeralCaseId} onChange={set("funeralCaseId")} placeholder="Paste funeral case UUID to link" />
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Notes</Label>
+              <Textarea value={form.notes} onChange={set("notes")} rows={2} placeholder="Any additional information…" />
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button type="submit" disabled={isPending || !form.deceasedName || (isPartnerScope && !form.partnerParlourId)}>
+                {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Record Intake
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <CreateParlourDialog
+        open={showCreateParlour}
+        onOpenChange={setShowCreateParlour}
+        onCreated={(parlour) => {
+          onParlourCreated();
+          setForm((f) => ({ ...f, partnerParlourId: parlour.id }));
+          setShowCreateParlour(false);
+        }}
+      />
+    </>
+  );
+}
+
+// ─── Create Parlour Dialog ────────────────────────────────────────────────────
+
+function CreateParlourDialog({ open, onOpenChange, onCreated }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onCreated: (parlour: any) => void;
+}) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ name: "", phone: "", contactPerson: "", address: "" });
+  const [isPending, setIsPending] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsPending(true);
+    try {
+      const res = await apiRequest("POST", "/api/partner-parlours", {
+        name: form.name,
+        phone: form.phone || null,
+        contactPerson: form.contactPerson || null,
+        address: form.address || null,
+      });
+      const parlour = await res.json();
+      onCreated(parlour);
+      setForm({ name: "", phone: "", contactPerson: "", address: "" });
+      toast({ title: "Partner parlour added" });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Add Partner Parlour</DialogTitle>
+          <DialogDescription>Register a new funeral parlour that stores bodies with you.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">Notes</Label>
-            <Textarea value={form.notes} onChange={set("notes")} rows={2} placeholder="Any additional information…" />
+            <Label className="text-xs">Parlour Name *</Label>
+            <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required placeholder="e.g. ABC Funerals" />
           </div>
-
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Phone</Label>
+              <Input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="+263…" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Contact Person</Label>
+              <Input value={form.contactPerson} onChange={(e) => setForm((f) => ({ ...f, contactPerson: e.target.value }))} placeholder="Full name" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Address</Label>
+            <Textarea value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} rows={2} placeholder="Physical address" />
+          </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={isPending || !form.deceasedName}>
-              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Record Intake
+            <Button type="submit" disabled={isPending || !form.name}>
+              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Add Parlour
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Record Payment Dialog ────────────────────────────────────────────────────
+
+function RecordPaymentDialog({ open, onOpenChange, feeAmount, onSubmit, isPending }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  feeAmount?: string | null;
+  onSubmit: (data: Record<string, any>) => void;
+  isPending: boolean;
+}) {
+  const [form, setForm] = useState({
+    paidBy: "",
+    paidAt: new Date().toISOString().slice(0, 16),
+    status: "paid_at_collection",
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit({ paidBy: form.paidBy, paidAt: form.paidAt || null, status: form.status });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Record Storage Payment</DialogTitle>
+          <DialogDescription>
+            Fee due: <strong>USD {parseFloat(feeAmount || "0").toFixed(2)}</strong>
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Payment Type *</Label>
+            <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="paid_at_collection">Paid on Collection</SelectItem>
+                <SelectItem value="paid_at_admission">Paid at Admission (backdating)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Received From (Name) *</Label>
+            <Input value={form.paidBy} onChange={(e) => setForm((f) => ({ ...f, paidBy: e.target.value }))} required placeholder="Name of person who paid" />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Date & Time</Label>
+            <Input type="datetime-local" value={form.paidAt} onChange={(e) => setForm((f) => ({ ...f, paidAt: e.target.value }))} />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={isPending || !form.paidBy}>
+              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Record Payment
             </Button>
           </DialogFooter>
         </form>
@@ -656,8 +962,9 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, onSu
 
 // ─── Dispatch Dialog ──────────────────────────────────────────────────────────
 
-function DispatchDialog({ open, onOpenChange, onSubmit, isPending }: {
+function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
   open: boolean; onOpenChange: (v: boolean) => void;
+  intake?: any;
   onSubmit: (data: Record<string, any>) => void; isPending: boolean;
 }) {
   const [form, setForm] = useState({
@@ -681,6 +988,9 @@ function DispatchDialog({ open, onOpenChange, onSubmit, isPending }: {
       notes: form.notes || null,
     });
   };
+
+  const feeUnpaid = intake?.partnerParlourId && intake?.storageFeeStatus === "unpaid";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
@@ -688,44 +998,57 @@ function DispatchDialog({ open, onOpenChange, onSubmit, isPending }: {
           <DialogTitle>Record Dispatch</DialogTitle>
           <DialogDescription>Document who collected the body and when.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Date & Time of Dispatch</Label>
-            <Input type="datetime-local" value={form.dispatchedAt} onChange={(e) => setForm((f) => ({ ...f, dispatchedAt: e.target.value }))} />
+        {feeUnpaid ? (
+          <div className="rounded-md bg-red-50 border border-red-200 px-4 py-4 text-sm text-red-800">
+            <p className="font-semibold">Storage fee unpaid</p>
+            <p className="mt-1">
+              The storage fee of <strong>USD {parseFloat(intake.storageFeeAmount || "0").toFixed(2)}</strong> must be paid before this body can be released.
+              Go back and record payment first.
+            </p>
+            <DialogFooter className="mt-4">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+            </DialogFooter>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Collected By (Name) *</Label>
-              <Input value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} required placeholder="Person collecting" />
+              <Label className="text-xs">Date & Time of Dispatch</Label>
+              <Input type="datetime-local" value={form.dispatchedAt} onChange={(e) => setForm((f) => ({ ...f, dispatchedAt: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Collected By (Name) *</Label>
+                <Input value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} required placeholder="Person collecting" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Collector ID Number</Label>
+                <Input value={form.collectedByIdNumber} onChange={(e) => setForm((f) => ({ ...f, collectedByIdNumber: e.target.value }))} placeholder="ID / Passport" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Collector Organisation</Label>
+                <Input value={form.collectedByOrganization} onChange={(e) => setForm((f) => ({ ...f, collectedByOrganization: e.target.value }))} placeholder="Other parlour / hospital" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Destination</Label>
+                <Input value={form.destination} onChange={(e) => setForm((f) => ({ ...f, destination: e.target.value }))} placeholder="Cemetery, other parlour, etc." />
+              </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Collector ID Number</Label>
-              <Input value={form.collectedByIdNumber} onChange={(e) => setForm((f) => ({ ...f, collectedByIdNumber: e.target.value }))} placeholder="ID / Passport" />
+              <Label className="text-xs">Collector Acknowledged Name (printed)</Label>
+              <Input value={form.collectorAcknowledgedName} onChange={(e) => setForm((f) => ({ ...f, collectorAcknowledgedName: e.target.value }))} placeholder="Printed name at sign-off" />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Collector Organisation</Label>
-              <Input value={form.collectedByOrganization} onChange={(e) => setForm((f) => ({ ...f, collectedByOrganization: e.target.value }))} placeholder="Other parlour / hospital" />
+              <Label className="text-xs">Notes</Label>
+              <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Destination</Label>
-              <Input value={form.destination} onChange={(e) => setForm((f) => ({ ...f, destination: e.target.value }))} placeholder="Cemetery, other parlour, etc." />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">Collector Acknowledged Name (printed)</Label>
-            <Input value={form.collectorAcknowledgedName} onChange={(e) => setForm((f) => ({ ...f, collectorAcknowledgedName: e.target.value }))} placeholder="Printed name at sign-off" />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">Notes</Label>
-            <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={isPending || !form.collectedByName}>
-              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Record Dispatch
-            </Button>
-          </DialogFooter>
-        </form>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button type="submit" disabled={isPending || !form.collectedByName}>
+                {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Record Dispatch
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

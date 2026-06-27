@@ -979,6 +979,7 @@ function DependentsSection({ clientId }: { clientId: string }) {
                   size="icon"
                   variant="ghost"
                   className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  aria-label="Remove dependent"
                   onClick={() => removeMutation.mutate(dep.id)}
                   disabled={removeMutation.isPending}
                   data-testid={`btn-remove-dep-${dep.id}`}
