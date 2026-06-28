@@ -96,6 +96,8 @@ import {
   type Payslip, type InsertPayslip,
   type AttendanceLog, type InsertAttendanceLog,
   type Cashup, type InsertCashup,
+  vehicleTripLogs,
+  type VehicleTripLog, type InsertVehicleTripLog,
   type Group, type InsertGroup,
   type PlatformReceivable, type InsertPlatformReceivable,
   type Settlement, type InsertSettlement,
@@ -449,6 +451,9 @@ export interface IStorage {
   getFleetVehicleById(id: string, orgId: string): Promise<FleetVehicle | undefined>;
   createFleetVehicle(vehicle: InsertFleetVehicle): Promise<FleetVehicle>;
   updateFleetVehicle(id: string, data: Partial<InsertFleetVehicle>, orgId: string): Promise<FleetVehicle | undefined>;
+  getFuelLogs(orgId: string, vehicleId?: string): Promise<any[]>;
+  getMaintenanceRecords(orgId: string, vehicleId?: string): Promise<any[]>;
+  getDriverAssignments(orgId: string): Promise<any[]>;
   getCommissionPlans(orgId: string): Promise<CommissionPlan[]>;
   createCommissionPlan(plan: InsertCommissionPlan): Promise<CommissionPlan>;
   getCommissionLedgerByAgent(agentId: string, orgId: string): Promise<CommissionLedgerEntry[]>;
@@ -493,6 +498,8 @@ export interface IStorage {
   getPayslipsForRun(runId: string, orgId: string): Promise<(Payslip & { employee: PayrollEmployee })[]>;
   upsertPayslip(runId: string, employeeId: string, orgId: string, data: Omit<InsertPayslip, "payrollRunId" | "employeeId">): Promise<Payslip>;
   updatePayrollRunTotals(runId: string, orgId: string): Promise<void>;
+  getVehicleTripLogs(orgId: string, vehicleId?: string): Promise<VehicleTripLog[]>;
+  createVehicleTripLog(data: InsertVehicleTripLog): Promise<VehicleTripLog>;
   getCashups(orgId: string, limit?: number, filters?: ReportFilters & { preparedBy?: string; status?: string }): Promise<Cashup[]>;
   getCashup(id: string, orgId: string): Promise<Cashup | undefined>;
   createCashup(cashup: InsertCashup): Promise<Cashup>;
@@ -3010,6 +3017,25 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await tdb.update(fleetVehicles).set(data).where(eq(fleetVehicles.id, id)).returning();
     return updated;
   }
+  async getFuelLogs(orgId: string, vehicleId?: string): Promise<any[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions = [eq(fleetFuelLogs.organizationId, orgId)];
+    if (vehicleId) conditions.push(eq(fleetFuelLogs.vehicleId, vehicleId));
+    return tdb.select().from(fleetFuelLogs).where(and(...conditions)).orderBy(desc(fleetFuelLogs.filledAt));
+  }
+  async getMaintenanceRecords(orgId: string, vehicleId?: string): Promise<any[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions = [eq(fleetMaintenance.organizationId, orgId)];
+    if (vehicleId) conditions.push(eq(fleetMaintenance.vehicleId, vehicleId));
+    return tdb.select().from(fleetMaintenance).where(and(...conditions)).orderBy(desc(fleetMaintenance.scheduledDate));
+  }
+  async getDriverAssignments(orgId: string): Promise<any[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(driverAssignments)
+      .innerJoin(fleetVehicles, eq(driverAssignments.vehicleId, fleetVehicles.id))
+      .where(eq(fleetVehicles.organizationId, orgId))
+      .orderBy(desc(driverAssignments.startDate));
+  }
 
   // ─── Commissions ───────────────────────────────────────────
   async getCommissionPlans(orgId: string): Promise<CommissionPlan[]> {
@@ -4911,6 +4937,21 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(reminders)
       .where(and(eq(reminders.id, id), eq(reminders.userId, userId), eq(reminders.organizationId, orgId)));
+  }
+
+  // ─── Vehicle Trip Logs ──────────────────────────────────────
+  async getVehicleTripLogs(orgId: string, vehicleId?: string): Promise<VehicleTripLog[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions = [eq(vehicleTripLogs.organizationId, orgId)];
+    if (vehicleId) conditions.push(eq(vehicleTripLogs.vehicleId, vehicleId));
+    return tdb.select().from(vehicleTripLogs)
+      .where(and(...conditions))
+      .orderBy(desc(vehicleTripLogs.tripDate));
+  }
+  async createVehicleTripLog(data: InsertVehicleTripLog): Promise<VehicleTripLog> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(vehicleTripLogs).values(data).returning();
+    return created;
   }
 }
 

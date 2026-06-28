@@ -22,6 +22,10 @@ import path from "path";
 import fs from "fs";
 import express from "express";
 import { registerPolicyDocumentRoute } from "./policy-document";
+import { registerMortuaryFormRoutes } from "./routes-pdf-mortuary";
+import { registerPolicyFormRoutes } from "./routes-pdf-policy";
+import { registerFinanceFormRoutes } from "./routes-pdf-finance";
+import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import * as objectStorage from "./object-storage";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
@@ -6470,6 +6474,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   registerPolicyDocumentRoute(app);
+  registerMortuaryFormRoutes(app);
+  registerPolicyFormRoutes(app);
+  registerFinanceFormRoutes(app);
+  registerHrFleetFormRoutes(app);
 
   // ─── Reports CSV Export ────────────────────────────────────
 

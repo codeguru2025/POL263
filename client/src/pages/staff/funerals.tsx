@@ -621,10 +621,16 @@ function CaseDetailView({
         {fc.serviceType && (
           <Badge variant="outline" className="text-[10px]">{fc.serviceType === "claim" ? "Policy Claim" : "Cash Service"}</Badge>
         )}
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex gap-2 flex-wrap">
           <Button size="sm" variant="outline" className="gap-1.5" onClick={onEdit}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onExport(false)}><Share2 className="h-3.5 w-3.5" /> Share</Button>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onExport(true)}><FileDown className="h-3.5 w-3.5" /> Download PDF</Button>
+          <a href={`${getApiBase()}/api/funeral-cases/${fc.id}/worksheet-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+            <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Worksheet</Button>
+          </a>
+          <a href={`${getApiBase()}/api/funeral-cases/${fc.id}/tasks-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+            <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Task Sheet</Button>
+          </a>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={onOpenDriverChecklist}><FileDown className="h-3.5 w-3.5" /> Driver Checklist</Button>
         </div>
       </div>

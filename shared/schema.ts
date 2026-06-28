@@ -1493,6 +1493,31 @@ export const fleetMaintenance = pgTable(
   (t) => [index("fm_vehicle_idx").on(t.vehicleId)]
 );
 
+export const vehicleTripLogs = pgTable("vehicle_trip_logs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+  vehicleId: uuid("vehicle_id").notNull().references(() => fleetVehicles.id),
+  driverId: uuid("driver_id").references(() => users.id),
+  funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+  tripDate: date("trip_date").notNull(),
+  purpose: text("purpose"),
+  startLocation: text("start_location"),
+  destination: text("destination"),
+  startOdometer: integer("start_odometer"),
+  endOdometer: integer("end_odometer"),
+  distanceKm: integer("distance_km"),
+  timeDeparted: text("time_departed"),
+  timeReturned: text("time_returned"),
+  fuelUsedLitres: numeric("fuel_used_litres", { precision: 6, scale: 2 }),
+  driverNotes: text("driver_notes"),
+  authorizedBy: text("authorized_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+},
+(t) => [index("vtl_vehicle_idx").on(t.vehicleId), index("vtl_org_idx").on(t.organizationId)]
+);
+
+export const insertVehicleTripLogSchema = createInsertSchema(vehicleTripLogs).omit({ id: true, createdAt: true });
+
 // ─── PRICE BOOK & COSTING ───────────────────────────────────
 
 export const priceBookItems = pgTable(
@@ -2441,6 +2466,8 @@ export type Payslip = typeof payslips.$inferSelect;
 export type InsertPayslip = z.infer<typeof insertPayslipSchema>;
 export type Cashup = typeof cashups.$inferSelect;
 export type InsertCashup = z.infer<typeof insertCashupSchema>;
+export type VehicleTripLog = typeof vehicleTripLogs.$inferSelect;
+export type InsertVehicleTripLog = z.infer<typeof insertVehicleTripLogSchema>;
 
 // ─── POLICY STATUS ENUM ────────────────────────────────────
 

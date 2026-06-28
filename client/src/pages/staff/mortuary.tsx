@@ -294,6 +294,17 @@ export default function StaffMortuary() {
                 <a href={`${apiBase}/api/mortuary-intakes/${selectedIntake.id}/receipt-pdf?download=1`} target="_blank" rel="noopener noreferrer">
                   <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Print Receipt</Button>
                 </a>
+                <a href={`${apiBase}/api/mortuary-intakes/${selectedIntake.id}/belongings-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+                  <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Belongings</Button>
+                </a>
+                <a href={`${apiBase}/api/mortuary-intakes/${selectedIntake.id}/body-wash-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+                  <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Body Wash Form</Button>
+                </a>
+                {selectedIntake.partnerParlourId && (
+                  <a href={`${apiBase}/api/mortuary-intakes/${selectedIntake.id}/storage-receipt-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+                    <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Storage Receipt</Button>
+                  </a>
+                )}
                 {selectedIntake.status === "dispatched" && (
                   <a href={`${apiBase}/api/mortuary-intakes/${selectedIntake.id}/dispatch-pdf?download=1`} target="_blank" rel="noopener noreferrer">
                     <Button size="sm" variant="outline" className="gap-1.5"><FileDown className="h-3.5 w-3.5" /> Print Dispatch Note</Button>
