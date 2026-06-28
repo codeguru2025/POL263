@@ -384,7 +384,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-  // Serve local uploads with auth check; when object storage is enabled, /uploads/* is proxied below
+  // Helper to serve a file from object storage or local disk (no auth required for public assets)
+  const serveUpload = async (req: any, res: any, requiresAuth: boolean) => {
+    const key = decodeURIComponent(String((req.params as any).path || ""));
+    if (!key) return res.status(400).end();
+    if (!objectStorage.isObjectStorageEnabled) {
+      const filePath = path.join(uploadsDir, key);
+      if (!filePath.startsWith(uploadsDir + path.sep) && filePath !== uploadsDir) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      return res.sendFile(filePath, { maxAge: requiresAuth ? 0 : 86400 }, (err: any) => {
+        if (err) res.status(404).json({ message: "File not found" });
+      });
+    }
+    try {
+      const buf = await objectStorage.fetchFile(key);
+      if (!buf) return res.status(404).json({ message: "Not found" });
+      const ext = path.extname(key).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".webp": "image/webp",
+        ".gif": "image/gif", ".pdf": "application/pdf",
+      };
+      res.set("Content-Type", mimeTypes[ext] || "application/octet-stream");
+      res.set("Cache-Control", requiresAuth ? "private, no-store" : "public, max-age=86400, stale-while-revalidate=3600");
+      return res.send(buf);
+    } catch (err: any) {
+      structuredLog("error", "Proxy fetch from object storage failed", { key, error: err?.message });
+      return res.status(502).json({ message: "Could not fetch file" });
+    }
+  };
+
+  // Logos and signatures are brand assets — publicly accessible so <img> tags load
+  // them without a session cookie (required on login page and in Capacitor mobile).
+  app.get("/uploads/logos/*path", (req, res) => serveUpload(req, res, false));
+  app.get("/uploads/signatures/*path", (req, res) => serveUpload(req, res, false));
+
+  // All other uploads (documents, PDFs, receipts) require authentication.
   if (!objectStorage.isObjectStorageEnabled) {
     app.get("/uploads/*path", requireAuth, (req, res) => {
       const filePath = path.join(uploadsDir, String((req.params as any).path || ""));
@@ -399,24 +435,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Stream files from object storage using server credentials.
     // The bucket can remain private — the browser never hits the CDN directly.
     app.get("/uploads/*path", requireAuth, async (req, res) => {
-      const key = decodeURIComponent(String((req.params as any).path || ""));
-      if (!key) return res.status(400).end();
-      try {
-        const buf = await objectStorage.fetchFile(key);
-        if (!buf) return res.status(404).json({ message: "Not found" });
-        const ext = path.extname(key).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-          ".png": "image/png", ".webp": "image/webp",
-          ".gif": "image/gif", ".pdf": "application/pdf",
-        };
-        res.set("Content-Type", mimeTypes[ext] || "application/octet-stream");
-        res.set("Cache-Control", "public, max-age=86400, stale-while-revalidate=3600");
-        return res.send(buf);
-      } catch (err: any) {
-        structuredLog("error", "Proxy fetch from object storage failed", { key, error: err?.message });
-        return res.status(502).json({ message: "Could not fetch file" });
-      }
+      return serveUpload(req, res, true);
     });
   }
 

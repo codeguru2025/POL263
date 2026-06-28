@@ -141,6 +141,11 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     // and the fleet they are dispatched with, but not edit them.
     "read:funeral_ops", "read:fleet",
   ],
+  mortuary_attendant: [
+    // Mortuary attendants handle the physical care of the deceased: intake,
+    // body washing, belongings, and dispatch. They do not access finance or policy.
+    "read:funeral_ops", "write:funeral_ops", "read:client", "read:fleet",
+  ],
   staff: [
     "read:organization", "read:branch", "read:policy", "read:claim",
     "read:client", "read:product", "read:funeral_ops", "read:report",

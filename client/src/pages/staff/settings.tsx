@@ -88,8 +88,10 @@ export default function StaffSettings() {
       setActiveTab("tenants");
       return;
     }
+    const canSeePayments = isPlatformOwner || permissions.includes("write:organization");
     if (t === "tenants" && canManageTenants) setActiveTab(t);
-    else if (t === "terms" || t === "rbac" || t === "branding" || t === "account" || t === "payments") setActiveTab(t);
+    else if (t === "payments" && canSeePayments) setActiveTab(t);
+    else if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
     else setActiveTab("branding");
   }, [search, canManageTenants, isControlPlaneMode]);
 
@@ -646,13 +648,18 @@ export default function StaffSettings() {
             className={`grid w-full max-w-3xl ${
               isControlPlaneMode
                 ? (canManageTenants ? "grid-cols-2" : "grid-cols-1")
-                : (canManageTenants ? "grid-cols-6" : "grid-cols-5")
+                : (() => {
+                    const canSeePayments = isPlatformOwner || permissions.includes("write:organization");
+                    if (canManageTenants && canSeePayments) return "grid-cols-6";
+                    if (canManageTenants || canSeePayments) return "grid-cols-5";
+                    return "grid-cols-4";
+                  })()
             }`}
           >
             {canManageTenants && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="branding">Branding</TabsTrigger>}
             <TabsTrigger value="account">Account</TabsTrigger>
-            {!isControlPlaneMode && <TabsTrigger value="payments">Payments</TabsTrigger>}
+            {!isControlPlaneMode && (isPlatformOwner || permissions.includes("write:organization")) && <TabsTrigger value="payments">Payments</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
           </TabsList>
