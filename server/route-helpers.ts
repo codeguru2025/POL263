@@ -118,9 +118,8 @@ export async function computePolicyPremium(
   if (product) {
     const includedAdults = Number(product.maxAdults ?? 2);
     const includedChildren = Number(product.maxChildren ?? 4);
+    const includedExtended = Number(product.maxExtendedMembers ?? 0);
     const childThresholdAge = Number(pv.dependentMaxAge ?? 20);
-    const adultRateMonthly = parseFloat(String(pv.underwriterAmountAdult ?? 0));
-    const childRateMonthly = parseFloat(String(pv.underwriterAmountChild ?? pv.underwriterAmountAdult ?? 0));
 
     let adults = 1; // Policy holder.
     let children = 0;
@@ -130,10 +129,26 @@ export async function computePolicyPremium(
       else children += 1;
     }
 
-    const extraAdults = Math.max(0, adults - includedAdults);
-    const extraChildren = Math.max(0, children - includedChildren);
-    const monthlySurcharge = (extraAdults * adultRateMonthly) + (extraChildren * childRateMonthly);
-    dependantSurcharge = monthlySurcharge * monthlyToScheduleFactor(paymentSchedule);
+    // Dedicated client-facing additional-member rates (set by admin on product version)
+    const additionalRateUsd = parseFloat(String((pv as any).additionalMemberPremiumMonthlyUsd ?? 0));
+    const additionalRateZar = parseFloat(String((pv as any).additionalMemberPremiumMonthlyZar ?? 0));
+    const additionalRate = currency === "ZAR" ? additionalRateZar : additionalRateUsd;
+
+    if (additionalRate > 0) {
+      // New behaviour: flat per-additional-member rate, counting ALL excess over the
+      // product's covered count (adults + children + extended family).
+      const totalIncluded = includedAdults + includedChildren + includedExtended;
+      const extraTotal = Math.max(0, (adults + children) - totalIncluded);
+      dependantSurcharge = extraTotal * additionalRate * monthlyToScheduleFactor(paymentSchedule);
+    } else {
+      // Legacy behaviour: use underwriter rates per member type (backwards compatible).
+      const adultRateMonthly = parseFloat(String(pv.underwriterAmountAdult ?? 0));
+      const childRateMonthly = parseFloat(String(pv.underwriterAmountChild ?? pv.underwriterAmountAdult ?? 0));
+      const extraAdults = Math.max(0, adults - includedAdults);
+      const extraChildren = Math.max(0, children - includedChildren);
+      const monthlySurcharge = (extraAdults * adultRateMonthly) + (extraChildren * childRateMonthly);
+      dependantSurcharge = monthlySurcharge * monthlyToScheduleFactor(paymentSchedule);
+    }
   }
 
   const totalRaw = base + addOnTotal + dependantSurcharge;

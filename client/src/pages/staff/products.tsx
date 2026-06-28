@@ -81,6 +81,8 @@ type ProductVersion = {
   underwriterAmountAdult: string | null;
   underwriterAmountChild: string | null;
   underwriterAdvanceMonths: number;
+  additionalMemberPremiumMonthlyUsd: string | null;
+  additionalMemberPremiumMonthlyZar: string | null;
   reinstatementRequiresArrears: boolean | null;
   reinstatementNewWaitingPeriod: boolean | null;
   isActive: boolean;
@@ -719,6 +721,8 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                       <TableHead>Weekly (ZAR)</TableHead>
                       <TableHead>Bi-wk (USD)</TableHead>
                       <TableHead>Bi-wk (ZAR)</TableHead>
+                      <TableHead>+Member/mo (USD)</TableHead>
+                      <TableHead>+Member/mo (ZAR)</TableHead>
                       <TableHead>Waiting</TableHead>
                       <TableHead>Grace</TableHead>
                       <TableHead>Age Range</TableHead>
@@ -738,6 +742,8 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                         <TableCell>{v.premiumWeeklyZar ? formatAmount(v.premiumWeeklyZar, "ZAR") : "—"}</TableCell>
                         <TableCell>{v.premiumBiweeklyUsd ? formatAmount(v.premiumBiweeklyUsd, "USD") : "—"}</TableCell>
                         <TableCell>{v.premiumBiweeklyZar ? formatAmount(v.premiumBiweeklyZar, "ZAR") : "—"}</TableCell>
+                        <TableCell className="text-xs">{v.additionalMemberPremiumMonthlyUsd ? formatAmount(v.additionalMemberPremiumMonthlyUsd, "USD") : "—"}</TableCell>
+                        <TableCell className="text-xs">{v.additionalMemberPremiumMonthlyZar ? formatAmount(v.additionalMemberPremiumMonthlyZar, "ZAR") : "—"}</TableCell>
                         <TableCell>{v.waitingPeriodDays != null ? `${v.waitingPeriodDays}d` : "—"}</TableCell>
                         <TableCell>{v.gracePeriodDays != null ? `${v.gracePeriodDays}d` : "—"}</TableCell>
                         <TableCell>{v.eligibilityMinAge ?? "—"} – {v.eligibilityMaxAge ?? "—"}</TableCell>
@@ -1084,6 +1090,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [underwriterAmountChild, setUnderwriterAmountChild] = useState("");
   const [underwriterSameAmount, setUnderwriterSameAmount] = useState(true);
   const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState("0");
+  const [additionalMemberPremiumMonthlyUsd, setAdditionalMemberPremiumMonthlyUsd] = useState("");
+  const [additionalMemberPremiumMonthlyZar, setAdditionalMemberPremiumMonthlyZar] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1115,6 +1123,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       underwriterAmountAdult: underwriterAmountAdult.trim() ? underwriterAmountAdult : undefined,
       underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult.trim() ? underwriterAmountAdult : undefined) : (underwriterAmountChild.trim() ? underwriterAmountChild : undefined),
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
+      additionalMemberPremiumMonthlyUsd: additionalMemberPremiumMonthlyUsd.trim() || undefined,
+      additionalMemberPremiumMonthlyZar: additionalMemberPremiumMonthlyZar.trim() || undefined,
     });
   };
 
@@ -1298,6 +1308,23 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             <p className="text-xs text-muted-foreground">e.g. 3 = tenant pays 3 months ahead; total payable = monthly × (1 + advance months).</p>
           </div>
 
+          <Separator />
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Additional / Extended Members</h3>
+          <p className="text-sm text-muted-foreground">
+            Per-member premium charged for each member beyond the product's included count (max adults + max children + max extended).
+            Leave blank if no extra charge applies.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Per additional member / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-version-additional-member-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>Per additional member / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-version-additional-member-zar" />
+            </div>
+          </div>
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={isPending || !effectiveFrom} data-testid="button-submit-version">
@@ -1340,6 +1367,8 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [underwriterAmountChild, setUnderwriterAmountChild] = useState(version.underwriterAmountChild || "");
   const [underwriterSameAmount, setUnderwriterSameAmount] = useState(version.underwriterAmountChild == null || version.underwriterAmountChild === version.underwriterAmountAdult);
   const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState(String(version.underwriterAdvanceMonths ?? 0));
+  const [additionalMemberPremiumMonthlyUsd, setAdditionalMemberPremiumMonthlyUsd] = useState(version.additionalMemberPremiumMonthlyUsd || "");
+  const [additionalMemberPremiumMonthlyZar, setAdditionalMemberPremiumMonthlyZar] = useState(version.additionalMemberPremiumMonthlyZar || "");
   const [reinstatementRequiresArrears, setReinstatementRequiresArrears] = useState(version.reinstatementRequiresArrears ?? true);
   const [reinstatementNewWaitingPeriod, setReinstatementNewWaitingPeriod] = useState(version.reinstatementNewWaitingPeriod ?? true);
 
@@ -1374,6 +1403,8 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       underwriterAmountAdult: underwriterAmountAdult.trim() ? underwriterAmountAdult : null,
       underwriterAmountChild: underwriterSameAmount ? (underwriterAmountAdult.trim() ? underwriterAmountAdult : null) : (underwriterAmountChild.trim() ? underwriterAmountChild : null),
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
+      additionalMemberPremiumMonthlyUsd: additionalMemberPremiumMonthlyUsd.trim() || null,
+      additionalMemberPremiumMonthlyZar: additionalMemberPremiumMonthlyZar.trim() || null,
     });
   };
 
@@ -1546,6 +1577,23 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <div className="space-y-2">
             <Label>Pay underwriter in advance (months)</Label>
             <Input type="number" min={0} value={underwriterAdvanceMonths} onChange={(e) => setUnderwriterAdvanceMonths(e.target.value)} placeholder="e.g. 3" data-testid="input-edit-version-underwriter-advance" />
+          </div>
+
+          <Separator />
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Additional / Extended Members</h3>
+          <p className="text-sm text-muted-foreground">
+            Per-member premium charged for each member beyond the product's included count (max adults + max children + max extended).
+            Leave blank if no extra charge applies.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Per additional member / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-edit-version-additional-member-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>Per additional member / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-edit-version-additional-member-zar" />
+            </div>
           </div>
 
           <DialogFooter>

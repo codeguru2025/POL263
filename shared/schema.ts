@@ -537,6 +537,10 @@ export const productVersions = pgTable(
     underwriterAmountChild: numeric("underwriter_amount_child"),
     /** Months to pay underwriter in advance (e.g. 3 = tenant pays 3 months ahead). Total payable = monthly × (1 + advance). */
     underwriterAdvanceMonths: integer("underwriter_advance_months").default(0).notNull(),
+    /** Client-facing premium per additional member (per month, USD) for members beyond the product's included count. */
+    additionalMemberPremiumMonthlyUsd: numeric("additional_member_premium_monthly_usd"),
+    /** Client-facing premium per additional member (per month, ZAR) for members beyond the product's included count. */
+    additionalMemberPremiumMonthlyZar: numeric("additional_member_premium_monthly_zar"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
