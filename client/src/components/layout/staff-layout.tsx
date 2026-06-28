@@ -605,7 +605,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         <div className={cn(APP_SHELL_MAX, "px-3 sm:px-4 py-2.5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between")}>
           <div className="flex items-center gap-2 min-w-0">
             <img
-              src={resolveAssetUrl((currentOrg?.logoUrl && String(currentOrg.logoUrl).trim()) || brandLogo)}
+              src={resolveAssetUrl(brandLogo)}
               alt={brandName || "Organization logo"}
               className="h-8 w-auto max-w-[160px] sm:max-w-[200px] rounded-md object-contain object-left shrink-0 bg-white p-0.5"
               loading="lazy"

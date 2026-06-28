@@ -385,8 +385,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
   // Helper to serve a file from object storage or local disk (no auth required for public assets)
-  const serveUpload = async (req: any, res: any, requiresAuth: boolean) => {
-    const key = decodeURIComponent(String((req.params as any).path || ""));
+  const serveUpload = async (req: any, res: any, requiresAuth: boolean, keyPrefix = "") => {
+    const key = keyPrefix + decodeURIComponent(String((req.params as any).path || ""));
     if (!key) return res.status(400).end();
     if (!objectStorage.isObjectStorageEnabled) {
       const filePath = path.join(uploadsDir, key);
@@ -415,10 +415,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   };
 
-  // Logos and signatures are brand assets — publicly accessible so <img> tags load
-  // them without a session cookie (required on login page and in Capacitor mobile).
-  app.get("/uploads/logos/*path", (req, res) => serveUpload(req, res, false));
-  app.get("/uploads/signatures/*path", (req, res) => serveUpload(req, res, false));
+  // Brand assets — publicly accessible (no session cookie) for <img> tags on the
+  // login page and in Capacitor mobile where cookies aren't sent cross-origin.
+  // NOTE: *path captures everything AFTER the folder segment, so we re-prefix the
+  // storage key (e.g. "logo.jpg" → "logos/logo.jpg") before calling fetchFile.
+  app.get("/uploads/logos/*path", (req, res) => serveUpload(req, res, false, "logos/"));
+  app.get("/uploads/signatures/*path", (req, res) => serveUpload(req, res, false, "signatures/"));
+  app.get("/uploads/receipt-adverts/*path", (req, res) => serveUpload(req, res, false, "receipt-adverts/"));
 
   // All other uploads (documents, PDFs, receipts) require authentication.
   if (!objectStorage.isObjectStorageEnabled) {

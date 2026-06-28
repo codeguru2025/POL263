@@ -1070,6 +1070,7 @@ export default function StaffSettings() {
                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                       ) : (logoUrl || currentOrg?.logoUrl) ? (
                         <img
+                          key={logoUrl || currentOrg?.logoUrl}
                           src={resolveAssetUrl(logoUrl || currentOrg?.logoUrl)}
                           alt="Current Logo"
                           className="object-contain max-h-full max-w-full p-1"
@@ -1097,9 +1098,11 @@ export default function StaffSettings() {
                         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                       ) : (signatureUrl || currentOrg?.signatureUrl) ? (
                         <img
+                          key={signatureUrl || currentOrg?.signatureUrl}
                           src={resolveAssetUrl(signatureUrl || currentOrg?.signatureUrl)}
                           alt="Signature"
                           className="object-contain max-h-full max-w-full p-1"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                         />
                       ) : (
                         <span className="text-xs text-muted-foreground italic">No signature uploaded</span>
@@ -1237,7 +1240,7 @@ export default function StaffSettings() {
                       {advertsList.map((advert: any) => (
                         <div key={advert.id} className="flex items-start gap-4 rounded-lg border p-4 bg-muted/20">
                           {advert.imageUrl && (
-                            <img src={advert.imageUrl} alt="" className="h-16 w-24 object-contain rounded border bg-white shrink-0" />
+                            <img src={resolveAssetUrl(advert.imageUrl)} alt="" className="h-16 w-24 object-contain rounded border bg-white shrink-0" />
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -1284,7 +1287,7 @@ export default function StaffSettings() {
                     <div className="flex items-center gap-4">
                       <div className="h-20 w-32 rounded border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
                         {advertImageUrl ? (
-                          <img src={advertImageUrl} alt="Advert" className="object-contain max-h-full max-w-full p-1" />
+                          <img key={advertImageUrl} src={resolveAssetUrl(advertImageUrl)} alt="Advert" className="object-contain max-h-full max-w-full p-1" />
                         ) : (
                           <span className="text-xs text-muted-foreground text-center px-2">No image</span>
                         )}

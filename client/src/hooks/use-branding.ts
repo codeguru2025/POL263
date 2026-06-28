@@ -49,8 +49,12 @@ export function useBranding(orgId?: string | null) {
 
   const branding = data ?? FALLBACK;
   const displayName = branding.isWhitelabeled ? branding.name : "POL263";
-  /** Use tenant logo whenever the API returns a real URL (e.g. Spaces CDN), not only when isWhitelabeled is true. */
-  const displayLogo = !isStockOrEmptyLogoUrl(branding.logoUrl) ? branding.logoUrl!.trim() : getDefaultLogoUrl();
+  // Only show the tenant's own logo when the org is whitelabeled.
+  // Non-whitelabeled orgs always show the POL263 platform logo.
+  const displayLogo =
+    branding.isWhitelabeled && !isStockOrEmptyLogoUrl(branding.logoUrl)
+      ? branding.logoUrl!.trim()
+      : getDefaultLogoUrl();
 
   return {
     branding,
