@@ -65,6 +65,8 @@ export default function StaffSettings() {
   const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
   const canCreateTenant = permissions.includes("create:tenant");
   const canDeleteTenant = permissions.includes("delete:tenant");
+  // Only administrators (write:organization) and platform owner can change org/branding/payments settings.
+  const canOrgAdmin = isPlatformOwner || permissions.includes("write:organization");
   const search = useSearch();
   const [, setLocation] = useLocation();
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
@@ -73,13 +75,15 @@ export default function StaffSettings() {
       ? "tenants"
       : tabParam === "tenants" && canManageTenants
       ? "tenants"
+      : (tabParam === "branding" || tabParam === "payments") && canOrgAdmin
+      ? tabParam
       : tabParam === "terms"
         ? "terms"
         : tabParam === "rbac"
           ? "rbac"
           : tabParam === "account"
             ? "account"
-            : "branding";
+            : canOrgAdmin ? "branding" : "account";
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   useEffect(() => {
@@ -88,12 +92,11 @@ export default function StaffSettings() {
       setActiveTab("tenants");
       return;
     }
-    const canSeePayments = isPlatformOwner || permissions.includes("write:organization");
     if (t === "tenants" && canManageTenants) setActiveTab(t);
-    else if (t === "payments" && canSeePayments) setActiveTab(t);
-    else if (t === "terms" || t === "rbac" || t === "branding" || t === "account") setActiveTab(t);
-    else setActiveTab("branding");
-  }, [search, canManageTenants, isControlPlaneMode]);
+    else if ((t === "branding" || t === "payments") && canOrgAdmin) setActiveTab(t);
+    else if (t === "terms" || t === "rbac" || t === "account") setActiveTab(t);
+    else setActiveTab(canOrgAdmin ? "branding" : "account");
+  }, [search, canManageTenants, isControlPlaneMode, canOrgAdmin]);
 
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -649,17 +652,23 @@ export default function StaffSettings() {
               isControlPlaneMode
                 ? (canManageTenants ? "grid-cols-2" : "grid-cols-1")
                 : (() => {
-                    const canSeePayments = isPlatformOwner || permissions.includes("write:organization");
-                    if (canManageTenants && canSeePayments) return "grid-cols-6";
-                    if (canManageTenants || canSeePayments) return "grid-cols-5";
-                    return "grid-cols-4";
+                    // Visible tabs: Tenants? | Branding? | Account | Payments? | Terms | RBAC
+                    // Branding and Payments both require canOrgAdmin
+                    const orgAdminTabs = canOrgAdmin ? 2 : 0; // branding + payments
+                    const baseTabs = 3; // account + terms + rbac
+                    const tenantTab = canManageTenants ? 1 : 0;
+                    const total = tenantTab + orgAdminTabs + baseTabs;
+                    if (total === 6) return "grid-cols-6";
+                    if (total === 5) return "grid-cols-5";
+                    if (total === 4) return "grid-cols-4";
+                    return "grid-cols-3";
                   })()
             }`}
           >
             {canManageTenants && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
-            {!isControlPlaneMode && <TabsTrigger value="branding">Branding</TabsTrigger>}
+            {!isControlPlaneMode && canOrgAdmin && <TabsTrigger value="branding">Branding</TabsTrigger>}
             <TabsTrigger value="account">Account</TabsTrigger>
-            {!isControlPlaneMode && (isPlatformOwner || permissions.includes("write:organization")) && <TabsTrigger value="payments">Payments</TabsTrigger>}
+            {!isControlPlaneMode && canOrgAdmin && <TabsTrigger value="payments">Payments</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
           </TabsList>
@@ -1045,8 +1054,8 @@ export default function StaffSettings() {
             </TabsContent>
           )}
 
-          {/* Branding */}
-          <TabsContent value="branding" className="mt-6">
+          {/* Branding — only admins with write:organization */}
+          {canOrgAdmin && <TabsContent value="branding" className="mt-6">
             <CardSection
               title="Organization branding"
               description="Customize the look and feel for this specific tenant."
@@ -1325,7 +1334,7 @@ export default function StaffSettings() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-          </TabsContent>
+          </TabsContent>}
 
           {/* Account */}
           <TabsContent value="account" className="mt-6">
