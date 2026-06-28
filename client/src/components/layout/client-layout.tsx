@@ -198,7 +198,7 @@ export default function ClientLayout({ children, clientName = "Client", onLogout
         <div className={cn(APP_SHELL_MAX, "px-3 sm:px-4 py-2.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between")}>
           <div className="flex items-center gap-2 min-w-0">
             <img
-              src={resolveAssetUrl(tenant?.logoUrl?.trim() ? tenant.logoUrl : getDefaultLogoUrl())}
+              src={resolveAssetUrl(tenant?.isWhitelabeled && tenant.logoUrl?.trim() ? tenant.logoUrl : getDefaultLogoUrl())}
               alt={tenant?.name || "Logo"}
               className="h-8 w-auto max-w-[160px] sm:max-w-[220px] rounded-md object-contain object-left shrink-0 bg-white p-0.5"
               loading="lazy"
