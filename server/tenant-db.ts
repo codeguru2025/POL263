@@ -26,6 +26,7 @@ import { organizations, users } from "@shared/schema";
 import { structuredLog } from "./logger";
 import { PLATFORM_OWNER_EMAIL } from "./constants";
 import { cpDb } from "./control-plane-db";
+import { applyPendingMigrations } from "./migrate-tenant-db";
 import { tenantDatabases } from "@shared/control-plane-schema";
 
 /** Drizzle DB bound to shared schema (pool or transaction client). */
@@ -140,6 +141,15 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
       poolCache.delete(orgId);
       dbCache.delete(orgId);
     });
+
+    // Auto-apply any pending migrations so a DB restored from a backup cannot
+    // silently fall behind the schema even if schema_migrations claims it's current.
+    try {
+      await applyPendingMigrations(tenantPool, `tenant:${orgId.slice(0, 8)}`);
+    } catch (err: any) {
+      structuredLog("warn", "Tenant DB auto-migration failed — pool still usable", { orgId, host: urlHost, error: err.message });
+    }
+
     poolCache.set(orgId, tenantPool);
     poolLastAccess.set(orgId, Date.now());
     return tenantPool;
