@@ -3,8 +3,10 @@
  * Tracks applied migrations in schema_migrations so each file runs only once per database.
  *
  * - Always runs against DATABASE_URL (required).
- * - Also runs against DATABASE_URL_TENANT when set and different from DATABASE_URL
- *   (e.g. isolated tenant DB that must receive the same migrations).
+ * - After migrating the main DB, reads all organizations that have a dedicated
+ *   databaseUrl and migrates each one automatically — no per-tenant env vars needed.
+ * - DATABASE_URL_TENANT (optional) is still honoured for backward compatibility.
+ * - SUPABASE_BACKUP_URL (optional) migrates a backup DB if set.
  *
  * Usage: npx tsx script/run-migrations.ts
  */
@@ -102,9 +104,7 @@ async function migrateOneDatabase(label: string, pool: pg.Pool): Promise<number>
 
   let ran = 0;
   for (const file of files) {
-    if (appliedSet.has(file)) {
-      continue;
-    }
+    if (appliedSet.has(file)) continue;
     const filePath = path.join(migrationsDir, file);
     const sql = fs.readFileSync(filePath, "utf-8");
     try {
@@ -128,6 +128,37 @@ async function migrateOneDatabase(label: string, pool: pg.Pool): Promise<number>
   return ran;
 }
 
+/** Read all distinct dedicated databaseUrls stored in the organizations table. */
+async function loadTenantUrls(mainPool: pg.Pool): Promise<{ name: string; url: string }[]> {
+  try {
+    const { rows } = await mainPool.query<{ name: string; database_url: string }>(`
+      SELECT name, database_url
+      FROM organizations
+      WHERE database_url IS NOT NULL AND database_url <> ''
+      ORDER BY name
+    `);
+    return rows.map((r) => ({ name: r.name, url: r.database_url.trim() }));
+  } catch {
+    // organizations table may not exist yet on a brand-new DB
+    return [];
+  }
+}
+
+async function migrateWithPool(label: string, url: string, mainUrl: string): Promise<void> {
+  if (!url || normalizeConn(url) === mainUrl) return;
+  console.log(`\nMigrating tenant DB: ${label}…`);
+  let pool: pg.Pool | undefined;
+  try {
+    pool = await connectPool(url);
+    await migrateOneDatabase(label, pool);
+  } catch (err: any) {
+    console.warn(`  [${label}] WARNING: skipped — ${err?.message || err}`);
+    console.warn(`  [${label}] The auto-migration on first connection will retry at runtime.`);
+  } finally {
+    await pool?.end().catch(() => {});
+  }
+}
+
 async function run() {
   if (!process.env.DATABASE_URL?.trim()) {
     console.error("DATABASE_URL is not set.");
@@ -136,44 +167,40 @@ async function run() {
 
   const mainUrl = normalizeConn(process.env.DATABASE_URL);
   const mainPool = await connectPool(mainUrl);
+
+  // 1. Migrate the main / shared registry database first.
   try {
     await migrateOneDatabase("DATABASE_URL", mainPool);
-  } finally {
-    await mainPool.end();
+  } catch (err) {
+    await mainPool.end().catch(() => {});
+    throw err;
   }
 
+  // 2. Discover every tenant that has a dedicated database by reading the
+  //    organizations table — no per-tenant env vars needed.
+  const tenants = await loadTenantUrls(mainPool);
+  await mainPool.end();
+
+  if (tenants.length > 0) {
+    console.log(`\nFound ${tenants.length} tenant DB(s) to migrate…`);
+    for (const { name, url } of tenants) {
+      await migrateWithPool(name, url, mainUrl);
+    }
+  }
+
+  // 3. DATABASE_URL_TENANT — backward-compat for CI / manual overrides.
   const tenantRaw = process.env.DATABASE_URL_TENANT?.trim();
-  if (tenantRaw && normalizeConn(tenantRaw) !== mainUrl) {
-    console.log("\nRunning migrations on DATABASE_URL_TENANT (isolated tenant DB)…");
-    const tenantPool = await connectPool(tenantRaw);
-    try {
-      await migrateOneDatabase("DATABASE_URL_TENANT", tenantPool);
-    } finally {
-      await tenantPool.end();
+  if (tenantRaw) {
+    const alreadyCovered = tenants.some((t) => normalizeConn(t.url) === normalizeConn(tenantRaw));
+    if (!alreadyCovered) {
+      await migrateWithPool("DATABASE_URL_TENANT", tenantRaw, mainUrl);
     }
   }
 
-  // Migrate all known dedicated tenant databases (FALAKHE_DATABASE_URL, etc.)
-  // These must receive the same migrations as the shared DB since they hold tenant data.
-  // Failures here are non-fatal: a temporarily unreachable tenant DB must not block deployment.
-  const dedicatedTenantEnvs = [
-    { key: "FALAKHE_DATABASE_URL", label: "FALAKHE_DATABASE_URL" },
-    { key: "SUPABASE_BACKUP_URL", label: "SUPABASE_BACKUP_URL (backup)" },
-  ];
-  for (const { key, label } of dedicatedTenantEnvs) {
-    const raw = process.env[key]?.trim();
-    if (!raw || normalizeConn(raw) === mainUrl) continue;
-    console.log(`\nRunning migrations on ${label}…`);
-    let tenantPool: pg.Pool | undefined;
-    try {
-      tenantPool = await connectPool(raw);
-      await migrateOneDatabase(label, tenantPool);
-    } catch (err: any) {
-      console.warn(`[${label}] WARNING: migrations skipped — ${err?.message || err}`);
-      console.warn(`[${label}] Run migrations manually once the database is reachable.`);
-    } finally {
-      await tenantPool?.end().catch(() => {});
-    }
+  // 4. SUPABASE_BACKUP_URL — optional off-site backup DB.
+  const backupRaw = process.env.SUPABASE_BACKUP_URL?.trim();
+  if (backupRaw) {
+    await migrateWithPool("SUPABASE_BACKUP_URL (backup)", backupRaw, mainUrl);
   }
 }
 

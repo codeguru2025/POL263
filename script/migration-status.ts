@@ -79,9 +79,38 @@ async function status(label: string, connectionString: string | undefined) {
   await pool.end();
 }
 
+async function loadTenantUrls(mainConnStr: string): Promise<{ name: string; url: string }[]> {
+  const pool = new pg.Pool(poolConfig(mainConnStr));
+  try {
+    const { rows } = await pool.query<{ name: string; database_url: string }>(`
+      SELECT name, database_url FROM organizations
+      WHERE database_url IS NOT NULL AND database_url <> ''
+      ORDER BY name
+    `);
+    return rows.map((r) => ({ name: r.name, url: r.database_url.trim() }));
+  } catch {
+    return [];
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
 async function main() {
-  await status("DATABASE_URL - main / shared registry", process.env.DATABASE_URL);
-  await status("DATABASE_URL_TENANT - optional second DB", process.env.DATABASE_URL_TENANT);
+  const mainUrl = process.env.DATABASE_URL;
+  await status("DATABASE_URL - main / shared registry", mainUrl);
+
+  // Show status for every tenant with a dedicated DB — no env vars needed.
+  if (mainUrl?.trim()) {
+    const tenants = await loadTenantUrls(mainUrl.trim());
+    for (const { name, url } of tenants) {
+      await status(`tenant: ${name}`, url);
+    }
+  }
+
+  // Backward-compat: DATABASE_URL_TENANT if not already covered above.
+  const tenantEnv = process.env.DATABASE_URL_TENANT?.trim();
+  if (tenantEnv) await status("DATABASE_URL_TENANT - optional second DB", tenantEnv);
+
   console.log("\nTip: do not paste this report back into the terminal; only run: npm run db:migrate:status");
 }
 
