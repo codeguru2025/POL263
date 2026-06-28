@@ -205,14 +205,15 @@ export async function streamClientRegistrationPDF(
   doc.end();
 }
 
-export function streamClientRegistrationBlankPDF(res: Response, opts?: { attachment?: boolean }): void {
+export async function streamClientRegistrationBlankPDF(orgId: string, res: Response, opts?: { attachment?: boolean }): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="blank-client-registration.pdf"`);
 
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = buildBlankHeader(doc, "CLIENT REGISTRATION FORM", "Complete all fields in block capitals · For official use");
+  let y = await buildHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "CLIENT REGISTRATION FORM", "Complete all fields in block capitals · For official use");
 
   y = sectionHeader(doc, "Personal Details", y);
   y = fieldLine(doc, "Title", y, 60);
@@ -250,7 +251,7 @@ export function streamClientRegistrationBlankPDF(res: Response, opts?: { attachm
   sigBlock(doc, "Client Signature", MARGIN, sigW, y);
   sigBlock(doc, "Agent / Sales Rep Signature", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, null, "Client Registration", "BLANK");
+  footer(doc, org?.name ?? null, "Client Registration", "BLANK");
   doc.end();
 }
 
@@ -320,14 +321,15 @@ export async function streamPolicyApplicationPDF(
   doc.end();
 }
 
-export function streamPolicyApplicationBlankPDF(res: Response, opts?: { attachment?: boolean }): void {
+export async function streamPolicyApplicationBlankPDF(orgId: string, res: Response, opts?: { attachment?: boolean }): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="blank-policy-application.pdf"`);
 
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = buildBlankHeader(doc, "POLICY APPLICATION FORM", "Complete all fields in block capitals · For official use");
+  let y = await buildHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "POLICY APPLICATION FORM", "Complete all fields in block capitals · For official use");
 
   y = sectionHeader(doc, "Policy Details", y);
   y = fieldLine(doc, "Policy Number", y, 180);
@@ -364,7 +366,7 @@ export function streamPolicyApplicationBlankPDF(res: Response, opts?: { attachme
   sigBlock(doc, "Client / Policyholder Signature", MARGIN, sigW, y);
   sigBlock(doc, "Agent / Issuing Officer Signature", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, null, "Policy Application", "BLANK");
+  footer(doc, org?.name ?? null, "Policy Application", "BLANK");
   doc.end();
 }
 
@@ -447,14 +449,15 @@ export async function streamDependentRegistrationPDF(
   doc.end();
 }
 
-export function streamDependentRegistrationBlankPDF(res: Response, opts?: { attachment?: boolean }): void {
+export async function streamDependentRegistrationBlankPDF(orgId: string, res: Response, opts?: { attachment?: boolean }): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="blank-dependent-registration.pdf"`);
 
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = buildBlankHeader(doc, "DEPENDENT REGISTRATION FORM", "Complete all fields in block capitals · For official use");
+  let y = await buildHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "DEPENDENT REGISTRATION FORM", "Complete all fields in block capitals · For official use");
 
   y = sectionHeader(doc, "Policyholder Details", y);
   y = fieldLine(doc, "Full Name", y, 250);
@@ -490,7 +493,7 @@ export function streamDependentRegistrationBlankPDF(res: Response, opts?: { atta
   sigBlock(doc, "Policyholder Signature", MARGIN, sigW, y);
   sigBlock(doc, "Authorising Officer", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, null, "Dependent Registration", "BLANK");
+  footer(doc, org?.name ?? null, "Dependent Registration", "BLANK");
   doc.end();
 }
 
@@ -570,14 +573,15 @@ export async function streamWaiverRequestPDF(
   doc.end();
 }
 
-export function streamWaiverRequestBlankPDF(res: Response, opts?: { attachment?: boolean }): void {
+export async function streamWaiverRequestBlankPDF(orgId: string, res: Response, opts?: { attachment?: boolean }): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="blank-waiver-request.pdf"`);
 
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = buildBlankHeader(doc, "WAITING PERIOD WAIVER REQUEST", "For official use · Submit to authorised officer for approval");
+  let y = await buildHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "WAITING PERIOD WAIVER REQUEST", "For official use · Submit to authorised officer for approval");
 
   y = sectionHeader(doc, "Request Details", y);
   y = fieldLine(doc, "Policy Number", y, 200);
@@ -613,20 +617,21 @@ export function streamWaiverRequestBlankPDF(res: Response, opts?: { attachment?:
   sigBlock(doc, "Requester Signature", MARGIN, sigW, y);
   sigBlock(doc, "Approver / Manager Signature", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, null, "Waiting Period Waiver Request", "BLANK");
+  footer(doc, org?.name ?? null, "Waiting Period Waiver Request", "BLANK");
   doc.end();
 }
 
 // ── FORM 14: DEBIT ORDER MANDATE (BLANK ONLY) ────────────────
 
-export function streamDebitOrderMandateBlankPDF(res: Response, orgName?: string | null, opts?: { attachment?: boolean }): void {
+export async function streamDebitOrderMandateBlankPDF(orgId: string, res: Response, opts?: { attachment?: boolean }): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="debit-order-mandate.pdf"`);
 
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = buildBlankHeader(doc, "DEBIT ORDER MANDATE", "Authority to debit bank account for recurring premium payments");
+  let y = await buildHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "DEBIT ORDER MANDATE", "Authority to debit bank account for recurring premium payments");
 
   y = sectionHeader(doc, "Account Holder Details", y);
   y = fieldLine(doc, "Client Name", y, 250);
@@ -651,7 +656,7 @@ export function streamDebitOrderMandateBlankPDF(res: Response, orgName?: string 
   y += 4;
 
   y = sectionHeader(doc, "Declaration", y);
-  const orgDisplay = orgName ? `"${orgName}"` : "the insurer";
+  const orgDisplay = org?.name ? `"${org.name}"` : "the insurer";
   doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
     .text(`I/We hereby authorise ${orgDisplay} to debit my/our account with the amount specified above at the frequency indicated, commencing on the date specified. This authority shall remain in force until cancelled in writing.`, MARGIN + 8, y, { width: COL - 16 });
   y += 36;
@@ -661,7 +666,7 @@ export function streamDebitOrderMandateBlankPDF(res: Response, orgName?: string 
   doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("ID Number", MARGIN + sigW + 40, y + 83, { width: sigW });
   doc.moveTo(MARGIN + sigW + 40, y + 80).lineTo(MARGIN + COL, y + 80).lineWidth(0.5).strokeColor(C_BORDER).stroke();
 
-  footer(doc, orgName ?? null, "Debit Order Mandate", "BLANK");
+  footer(doc, org?.name ?? null, "Debit Order Mandate", "BLANK");
   doc.end();
 }
 
@@ -757,14 +762,15 @@ export async function streamClaimSubmissionPDF(
   doc.end();
 }
 
-export function streamClaimSubmissionBlankPDF(res: Response, opts?: { attachment?: boolean }): void {
+export async function streamClaimSubmissionBlankPDF(orgId: string, res: Response, opts?: { attachment?: boolean }): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="blank-claim-submission.pdf"`);
 
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = buildBlankHeader(doc, "CLAIM SUBMISSION FORM", "Complete all fields in block capitals · For official use");
+  let y = await buildHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "CLAIM SUBMISSION FORM", "Complete all fields in block capitals · For official use");
 
   y = sectionHeader(doc, "Claim Details", y);
   y = fieldLine(doc, "Claim Number", y, 180);
@@ -810,6 +816,6 @@ export function streamClaimSubmissionBlankPDF(res: Response, opts?: { attachment
   sigBlock(doc, "Submitting Staff", MARGIN + sigW + 18, sigW, y);
   sigBlock(doc, "Verifying Manager", MARGIN + (sigW + 18) * 2, sigW, y);
 
-  footer(doc, null, "Claim Submission", "BLANK");
+  footer(doc, org?.name ?? null, "Claim Submission", "BLANK");
   doc.end();
 }

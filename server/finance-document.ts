@@ -2,7 +2,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
-import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_LIGHT_BG } from "./pdf-utils";
+import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, buildLetterheadHeader, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_LIGHT_BG } from "./pdf-utils";
 
 function fmt(v: string | number | null | undefined): string {
   return v != null && String(v).trim() ? String(v).trim() : "—";
@@ -247,9 +247,10 @@ export async function streamPaymentReceiptPDF(
   doc.end();
 }
 
-export async function streamPaymentReceiptBlankPDF(res: Response): Promise<void> {
+export async function streamPaymentReceiptBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", 'inline; filename="blank-payment-receipt.pdf"');
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
@@ -282,7 +283,8 @@ export async function streamPaymentReceiptBlankPDF(res: Response): Promise<void>
     return y + 18;
   };
 
-  renderBlankHalf("ORIGINAL — CUSTOMER COPY", MARGIN);
+  const letterheadH = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "PAYMENT RECEIPT", "Blank receipt form — issue on collection of premium");
+  renderBlankHalf("ORIGINAL — CUSTOMER COPY", letterheadH);
   const midY = A4_H / 2 - 10;
   doc.moveTo(MARGIN, midY).lineTo(A4_W - MARGIN, midY).dash(4, { space: 4 }).lineWidth(0.5).strokeColor(C_MUTED).stroke();
   doc.undash();
@@ -291,7 +293,7 @@ export async function streamPaymentReceiptBlankPDF(res: Response): Promise<void>
 
   const footerY = A4_H - MARGIN - 24;
   doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
-  doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("POL263 — Payment Receipt (Blank) · For official use only", MARGIN, footerY + 6, { width: COL, align: "center" });
+  doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text(`${org?.name || "POL263"} — Payment Receipt (Blank) · For official use only`, MARGIN, footerY + 6, { width: COL, align: "center" });
   doc.end();
 }
 
@@ -431,18 +433,14 @@ export async function streamCashupSheetPDF(
   doc.end();
 }
 
-export async function streamCashupSheetBlankPDF(res: Response): Promise<void> {
+export async function streamCashupSheetBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", 'inline; filename="blank-cashup-sheet.pdf"');
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  // Minimal header
-  let y = MARGIN;
-  doc.font("Helvetica-Bold").fontSize(16).fillColor(C_PRIMARY).text("DAILY CASH RECONCILIATION SHEET", MARGIN, y, { width: COL, align: "center" });
-  y += 24;
-  doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
-  y += 16;
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "DAILY CASH RECONCILIATION SHEET", "Complete at end of each business day");
 
   const fields = ["Date", "Branch", "Prepared By", "Currency", "Transaction Count"];
   for (const f of fields) y = blankUnderline(doc, f, y);
@@ -596,17 +594,14 @@ export async function streamRequisitionFormPDF(
   doc.end();
 }
 
-export async function streamRequisitionBlankPDF(res: Response): Promise<void> {
+export async function streamRequisitionBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", 'inline; filename="blank-requisition.pdf"');
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = MARGIN;
-  doc.font("Helvetica-Bold").fontSize(16).fillColor(C_PRIMARY).text("REQUISITION FORM", MARGIN, y, { width: COL, align: "center" });
-  y += 24;
-  doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
-  y += 16;
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "REQUISITION FORM", "Complete and submit to Finance for approval");
 
   const headerFields = ["Requisition No.", "Date", "Branch", "Category", "Description", "Payee", "Needed By Date", "Payment Method", "Reference", "Notes"];
   for (const f of headerFields) y = blankUnderline(doc, f, y);
@@ -709,17 +704,14 @@ export async function streamExpenditureVoucherPDF(
   doc.end();
 }
 
-export async function streamExpenditureVoucherBlankPDF(res: Response): Promise<void> {
+export async function streamExpenditureVoucherBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", 'inline; filename="blank-expenditure-voucher.pdf"');
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
   doc.pipe(res);
 
-  let y = MARGIN;
-  doc.font("Helvetica-Bold").fontSize(16).fillColor(C_PRIMARY).text("EXPENDITURE VOUCHER", MARGIN, y, { width: COL, align: "center" });
-  y += 24;
-  doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
-  y += 16;
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "EXPENDITURE VOUCHER", "For all approved cash expenditures");
 
   const fields = ["Voucher No.", "Date", "Branch", "Category", "Description", "Amount", "Currency", "Receipt / Invoice Ref", "Linked Funeral Case No."];
   for (const f of fields) {

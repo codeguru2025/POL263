@@ -2,7 +2,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
-import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_LIGHT_BG } from "./pdf-utils";
+import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, buildLetterheadHeader, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_LIGHT_BG } from "./pdf-utils";
 
 function fmt(v: string | number | null | undefined): string {
   return v != null && String(v).trim() ? String(v).trim() : "—";
@@ -92,7 +92,7 @@ function footer(
   signatureBuffer: Buffer | null = null,
   qrBuffer: Buffer | null = null,
 ): void {
-  const footerTop = A4_H - MARGIN - 115;
+  const footerTop = A4_H - MARGIN - 130;
   drawDocumentFooter(
     doc,
     signatureBuffer,
@@ -318,12 +318,13 @@ function tableRow(
 
 // ── BLANK: MORTUARY INTAKE ────────────────────────────────────
 
-export async function streamMortuaryIntakeBlankPDF(res: Response): Promise<void> {
+export async function streamMortuaryIntakeBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Mortuary-Intake-Form-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "MORTUARY INTAKE FORM", "Complete in full. All starred fields (*) are required.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "MORTUARY INTAKE FORM", "Complete in full. All starred fields (*) are required.");
 
   y = sectionHeader(doc, "1. Service Details", y);
   y = blankField(doc, "Intake Number *", MARGIN + 8, y, 200);
@@ -395,12 +396,13 @@ export async function streamMortuaryIntakeBlankPDF(res: Response): Promise<void>
 
 // ── BLANK: MORTUARY DISPATCH ──────────────────────────────────
 
-export async function streamMortuaryDispatchBlankPDF(res: Response): Promise<void> {
+export async function streamMortuaryDispatchBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Mortuary-Dispatch-Form-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "MORTUARY DISPATCH / BODY RELEASE FORM", "No body may be released until this form is fully completed and signed.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "MORTUARY DISPATCH / BODY RELEASE FORM", "No body may be released until this form is fully completed and signed.");
 
   y = sectionHeader(doc, "1. Deceased Details", y);
   const half = (COL - 16) / 2;
@@ -508,12 +510,13 @@ export async function streamBelongingsFormPDF(
   doc.end();
 }
 
-export async function streamBelongingsBlankPDF(res: Response): Promise<void> {
+export async function streamBelongingsBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Deceased-Belongings-Register-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "DECEASED BELONGINGS REGISTER", "Complete for every body received. Each item must be signed for.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "DECEASED BELONGINGS REGISTER", "Complete for every body received. Each item must be signed for.");
   const half = (COL - 16) / 2;
   y = blankField(doc, "Intake Number", MARGIN + 8, y, half);
   y = blankField(doc, "Deceased Full Name", MARGIN + 8, y, COL - 16);
@@ -600,12 +603,13 @@ export async function streamBodyWashFormPDF(
   doc.end();
 }
 
-export async function streamBodyWashBlankPDF(res: Response): Promise<void> {
+export async function streamBodyWashBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Body-Wash-Form-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "BODY WASH REQUIREMENTS FORM", "Complete and retain for each body washed.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "BODY WASH REQUIREMENTS FORM", "Complete and retain for each body washed.");
   const half = (COL - 16) / 2;
   y = blankField(doc, "Intake Number", MARGIN + 8, y, half);
   y = blankField(doc, "Deceased Full Name", MARGIN + 8, y, COL - 16);
@@ -630,12 +634,13 @@ export async function streamBodyWashBlankPDF(res: Response): Promise<void> {
 
 // ── BLANK: DRIVER CHECKLIST ───────────────────────────────────
 
-export async function streamDriverChecklistBlankPDF(res: Response): Promise<void> {
+export async function streamDriverChecklistBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Driver-Checklist-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "DRIVER CHECKLIST", "Complete before departure for each funeral. Driver must sign.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "DRIVER CHECKLIST", "Complete before departure for each funeral. Driver must sign.");
   const half = (COL - 16) / 2;
   y = blankField(doc, "Funeral Case Number", MARGIN + 8, y, half);
   y = blankField(doc, "Driver Name", MARGIN + 8, y, half);
@@ -764,12 +769,13 @@ export async function streamFuneralCaseWorksheetPDF(
   doc.end();
 }
 
-export async function streamFuneralCaseWorksheetBlankPDF(res: Response): Promise<void> {
+export async function streamFuneralCaseWorksheetBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Funeral-Case-Worksheet-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "FUNERAL CASE WORKSHEET", "Complete for each new funeral case.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "FUNERAL CASE WORKSHEET", "Complete for each new funeral case.");
   const half = (COL - 16) / 2;
 
   y = sectionHeader(doc, "1. Deceased Details", y);
@@ -964,12 +970,13 @@ export async function streamStorageReceiptPDF(
   doc.end();
 }
 
-export async function streamStorageReceiptBlankPDF(res: Response): Promise<void> {
+export async function streamStorageReceiptBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Storage-Receipt-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "MORTUARY STORAGE RECEIPT", "Issue to partner parlour on payment of storage fee.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "MORTUARY STORAGE RECEIPT", "Issue to partner parlour on payment of storage fee.");
   const half = (COL - 16) / 2;
   const third = (COL - 16) / 3;
   y = blankField(doc, "Receipt No", MARGIN + 8, y, half);
@@ -998,12 +1005,13 @@ export async function streamStorageReceiptBlankPDF(res: Response): Promise<void>
 
 // ── BLANK: FUNERAL QUOTATION ──────────────────────────────────
 
-export async function streamFuneralQuotationBlankPDF(res: Response): Promise<void> {
+export async function streamFuneralQuotationBlankPDF(orgId: string, res: Response): Promise<void> {
   res.setHeader("Content-Disposition", 'attachment; filename="Funeral-Quotation-BLANK.pdf"');
   res.setHeader("Content-Type", "application/pdf");
+  const org = await storage.getOrganization(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
-  let y = blankHeader(doc, "FUNERAL QUOTATION / SERVICE AGREEMENT", "Obtain client signature to confirm acceptance of quoted services.");
+  let y = await buildLetterheadHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "FUNERAL QUOTATION / SERVICE AGREEMENT", "Obtain client signature to confirm acceptance of quoted services.");
   const half = (COL - 16) / 2;
 
   const r0 = y; blankField(doc, "Quotation Number", MARGIN + 8, r0, half); y = blankField(doc, "Date", MARGIN + 8 + half + 8, r0, half);

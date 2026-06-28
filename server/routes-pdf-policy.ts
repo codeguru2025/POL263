@@ -107,36 +107,33 @@ export function registerPolicyFormRoutes(app: Express): void {
   );
 
   // ── Blank Forms ───────────────────────────────────────────────
-  app.get("/api/forms/blank/client-registration", requireAuth, (_req, res) => {
-    try { streamClientRegistrationBlankPDF(res, { attachment: true }); }
+  app.get("/api/forms/blank/client-registration", requireAuth, async (req, res) => {
+    try { await streamClientRegistrationBlankPDF((req.user as any).organizationId, res, { attachment: true }); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/forms/blank/policy-application", requireAuth, (_req, res) => {
-    try { streamPolicyApplicationBlankPDF(res, { attachment: true }); }
+  app.get("/api/forms/blank/policy-application", requireAuth, async (req, res) => {
+    try { await streamPolicyApplicationBlankPDF((req.user as any).organizationId, res, { attachment: true }); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/forms/blank/dependent-registration", requireAuth, (_req, res) => {
-    try { streamDependentRegistrationBlankPDF(res, { attachment: true }); }
+  app.get("/api/forms/blank/dependent-registration", requireAuth, async (req, res) => {
+    try { await streamDependentRegistrationBlankPDF((req.user as any).organizationId, res, { attachment: true }); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/forms/blank/waiver-request", requireAuth, (_req, res) => {
-    try { streamWaiverRequestBlankPDF(res, { attachment: true }); }
+  app.get("/api/forms/blank/waiver-request", requireAuth, async (req, res) => {
+    try { await streamWaiverRequestBlankPDF((req.user as any).organizationId, res, { attachment: true }); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
   app.get("/api/forms/blank/debit-order-mandate", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as any;
-      const org = await storage.getOrganization(user.organizationId);
-      streamDebitOrderMandateBlankPDF(res, org?.name ?? null, { attachment: true });
-    } catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
+    try { await streamDebitOrderMandateBlankPDF((req.user as any).organizationId, res, { attachment: true }); }
+    catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/forms/blank/claim-submission", requireAuth, (_req, res) => {
-    try { streamClaimSubmissionBlankPDF(res, { attachment: true }); }
+  app.get("/api/forms/blank/claim-submission", requireAuth, async (req, res) => {
+    try { await streamClaimSubmissionBlankPDF((req.user as any).organizationId, res, { attachment: true }); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 }

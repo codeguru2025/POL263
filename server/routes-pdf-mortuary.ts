@@ -3,44 +3,44 @@ import { requireAuth, requireTenantScope, requirePermission } from "./auth";
 
 export function registerMortuaryFormRoutes(app: Express): void {
   // ── Blank forms (no record needed) ───────────────────────────
-  app.get("/api/forms/blank/mortuary-intake", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/mortuary-intake", requireAuth, async (req, res) => {
     const { streamMortuaryIntakeBlankPDF } = await import("./mortuary-document");
-    await streamMortuaryIntakeBlankPDF(res);
+    await streamMortuaryIntakeBlankPDF((req.user as any).organizationId, res);
   });
 
-  app.get("/api/forms/blank/mortuary-dispatch", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/mortuary-dispatch", requireAuth, async (req, res) => {
     const { streamMortuaryDispatchBlankPDF } = await import("./mortuary-document");
-    await streamMortuaryDispatchBlankPDF(res);
+    await streamMortuaryDispatchBlankPDF((req.user as any).organizationId, res);
   });
 
-  app.get("/api/forms/blank/deceased-belongings", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/deceased-belongings", requireAuth, async (req, res) => {
     const { streamBelongingsBlankPDF } = await import("./mortuary-document");
-    await streamBelongingsBlankPDF(res);
+    await streamBelongingsBlankPDF((req.user as any).organizationId, res);
   });
 
-  app.get("/api/forms/blank/body-wash", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/body-wash", requireAuth, async (req, res) => {
     const { streamBodyWashBlankPDF } = await import("./mortuary-document");
-    await streamBodyWashBlankPDF(res);
+    await streamBodyWashBlankPDF((req.user as any).organizationId, res);
   });
 
-  app.get("/api/forms/blank/driver-checklist", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/driver-checklist", requireAuth, async (req, res) => {
     const { streamDriverChecklistBlankPDF } = await import("./mortuary-document");
-    await streamDriverChecklistBlankPDF(res);
+    await streamDriverChecklistBlankPDF((req.user as any).organizationId, res);
   });
 
-  app.get("/api/forms/blank/funeral-case-worksheet", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/funeral-case-worksheet", requireAuth, async (req, res) => {
     const { streamFuneralCaseWorksheetBlankPDF } = await import("./mortuary-document");
-    await streamFuneralCaseWorksheetBlankPDF(res);
+    await streamFuneralCaseWorksheetBlankPDF((req.user as any).organizationId, res);
   });
 
-  app.get("/api/forms/blank/storage-receipt", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/storage-receipt", requireAuth, async (req, res) => {
     const { streamStorageReceiptBlankPDF } = await import("./mortuary-document");
-    await streamStorageReceiptBlankPDF(res);
+    await streamStorageReceiptBlankPDF((req.user as any).organizationId, res);
   });
 
-  app.get("/api/forms/blank/funeral-quotation", requireAuth, async (_req, res) => {
+  app.get("/api/forms/blank/funeral-quotation", requireAuth, async (req, res) => {
     const { streamFuneralQuotationBlankPDF } = await import("./mortuary-document");
-    await streamFuneralQuotationBlankPDF(res);
+    await streamFuneralQuotationBlankPDF((req.user as any).organizationId, res);
   });
 
   // ── Pre-filled forms (from record) ────────────────────────────

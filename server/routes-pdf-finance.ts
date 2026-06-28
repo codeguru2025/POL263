@@ -85,23 +85,23 @@ export function registerFinanceFormRoutes(app: Express): void {
   );
 
   // ── Blank Forms ───────────────────────────────────────────────
-  app.get("/api/forms/blank/payment-receipt", requireAuth, async (_req, res) => {
-    try { await streamPaymentReceiptBlankPDF(res); }
+  app.get("/api/forms/blank/payment-receipt", requireAuth, async (req, res) => {
+    try { await streamPaymentReceiptBlankPDF((req.user as any).organizationId, res); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/forms/blank/cashup-sheet", requireAuth, async (_req, res) => {
-    try { await streamCashupSheetBlankPDF(res); }
+  app.get("/api/forms/blank/cashup-sheet", requireAuth, async (req, res) => {
+    try { await streamCashupSheetBlankPDF((req.user as any).organizationId, res); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/forms/blank/requisition-form", requireAuth, async (_req, res) => {
-    try { await streamRequisitionBlankPDF(res); }
+  app.get("/api/forms/blank/requisition-form", requireAuth, async (req, res) => {
+    try { await streamRequisitionBlankPDF((req.user as any).organizationId, res); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 
-  app.get("/api/forms/blank/expenditure-voucher", requireAuth, async (_req, res) => {
-    try { await streamExpenditureVoucherBlankPDF(res); }
+  app.get("/api/forms/blank/expenditure-voucher", requireAuth, async (req, res) => {
+    try { await streamExpenditureVoucherBlankPDF((req.user as any).organizationId, res); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 }
