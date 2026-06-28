@@ -16,7 +16,7 @@ import { storage, findPaymentReceiptById } from "./storage";
 import { resolveImage } from "./object-storage";
 import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
-import { buildVerifyUrl, buildVerifyQrBuffer, drawCompanyStamp, drawVerifyQrPanel } from "./pdf-utils";
+import { buildVerifyUrl, buildEnrollUrl, buildVerifyQrBuffer, drawCompanyStamp, drawVerifyQrPanel } from "./pdf-utils";
 
 /** Exported for tests. */
 export const RECEIPT_PDF_WIDTH_PT = 226; // 80mm in points (kept for tests)
@@ -102,9 +102,13 @@ async function loadReceiptContext(receipt: any, orgId: string) {
   return { policy, client, org, productName, issuedByName, activeAdvert, advertImageData };
 }
 
-/** Build a document-verification QR for the receipt (B&W, larger, more scannable). */
-async function buildReceiptVerifyQr(receiptId: string): Promise<Buffer | null> {
-  const url = buildVerifyUrl("receipt", receiptId);
+/**
+ * Build a QR for the receipt pointing to the org-level walk-in registration
+ * page.  Clients who scan register as walk-in clients belonging to the company
+ * — no agent is attributed regardless of who issued the receipt.
+ */
+async function buildReceiptQr(orgId: string): Promise<Buffer | null> {
+  const url = buildEnrollUrl(orgId);
   if (!url) return null;
   return buildVerifyQrBuffer(url, 180);
 }
@@ -198,7 +202,7 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
   const orgId = receipt.organizationId;
   const { policy, client, org, productName, issuedByName, activeAdvert, advertImageData } = await loadReceiptContext(receipt, orgId);
   if (!policy || !client || !org) return null;
-  const qrBuffer = await buildReceiptVerifyQr(receipt.id);
+  const qrBuffer = await buildReceiptQr(orgId);
 
   const displayReceiptNum = /^\d+$/.test(String(receipt.receiptNumber).trim())
     ? `RCP-${String(receipt.receiptNumber).padStart(5, "0")}`
@@ -331,8 +335,8 @@ export async function streamReceiptToResponse(
   res: import("express").Response,
   opts?: { attachment?: boolean }
 ): Promise<void> {
-  const receipt = await findPaymentReceiptById(receiptId);
-  if (!receipt || receipt.organizationId !== orgId) {
+  const receipt = await storage.getPaymentReceiptById(receiptId, orgId);
+  if (!receipt) {
     res.status(404).json({ message: "Receipt not found" });
     return;
   }
@@ -353,7 +357,7 @@ export async function streamReceiptToResponse(
     : `inline; filename="${filename}"`);
 
   const logoData = await resolveImage(org.logoUrl);
-  const qrBuffer = await buildReceiptVerifyQr(receipt.id);
+  const qrBuffer = await buildReceiptQr(orgId);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
 
@@ -464,8 +468,8 @@ export async function streamThermalReceiptToResponse(
   res: import("express").Response,
   opts?: { attachment?: boolean; size?: ThermalSize }
 ): Promise<void> {
-  const receipt = await findPaymentReceiptById(receiptId);
-  if (!receipt || receipt.organizationId !== orgId) {
+  const receipt = await storage.getPaymentReceiptById(receiptId, orgId);
+  if (!receipt) {
     res.status(404).json({ message: "Receipt not found" });
     return;
   }
@@ -489,7 +493,7 @@ export async function streamThermalReceiptToResponse(
     : `inline; filename="${filename}"`);
 
   const logoData = await resolveImage(org.logoUrl);
-  const qrBuffer = await buildReceiptVerifyQr(receipt.id);
+  const qrBuffer = await buildReceiptQr(orgId);
 
   const doc = new PDFDocument({
     size: [W, THERMAL_PAGE_H],

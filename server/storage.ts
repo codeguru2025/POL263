@@ -360,6 +360,7 @@ export interface IStorage {
   getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]>;
   getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]>;
   getPolicy(id: string, orgId: string): Promise<Policy | undefined>;
+  getPoliciesByProductVersion(productVersionId: string, orgId: string): Promise<Policy[]>;
   getPoliciesByIds(ids: string[], orgId: string): Promise<Policy[]>;
   getPolicyByNumber(policyNumber: string, orgId: string): Promise<Policy | undefined>;
   updatePolicy(id: string, data: Partial<InsertPolicy>, orgId: string): Promise<Policy | undefined>;
@@ -1969,6 +1970,10 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [policy] = await tdb.select().from(policies).where(and(eq(policies.id, id), eq(policies.organizationId, orgId)));
     return policy;
+  }
+  async getPoliciesByProductVersion(productVersionId: string, orgId: string): Promise<Policy[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(policies).where(and(eq(policies.productVersionId, productVersionId), eq(policies.organizationId, orgId)));
   }
   /** Batch fetch policies by ids (avoids N+1 when resolving many policy ids). */
   async getPoliciesByIds(ids: string[], orgId: string): Promise<Policy[]> {

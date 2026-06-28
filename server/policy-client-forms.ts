@@ -315,7 +315,7 @@ export async function streamPolicyApplicationPDF(
 
   const [sigBuf2, qrBuf2] = await Promise.all([
     resolveImage((org as any).signatureUrl),
-    (async () => { const u = buildVerifyUrl("policy", policy.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+    (async () => { const u = buildVerifyUrl("policy", policy.id, policy.organizationId); return u ? buildVerifyQrBuffer(u) : null; })(),
   ]);
   footer(doc, org.name, "Policy Application", policy.policyNumber, sigBuf2, qrBuf2);
   doc.end();

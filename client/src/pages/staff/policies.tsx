@@ -469,10 +469,9 @@ export default function StaffPolicies() {
     const childThresholdAge = Number(selectedVersion.dependentMaxAge ?? 20);
     const maxAdults = Number(selectedProduct?.maxAdults ?? 2);
     const maxChildren = Number(selectedProduct?.maxChildren ?? 4);
-    const adultRateMonthly = parseFloat(String(selectedVersion.underwriterAmountAdult || "0"));
-    const childRateMonthly = parseFloat(String(selectedVersion.underwriterAmountChild || selectedVersion.underwriterAmountAdult || "0"));
+    const maxExtended = Number((selectedProduct as any)?.maxExtendedMembers ?? 0);
 
-    let adults = 1; // Policy holder.
+    let adults = 1; // Policy holder always counts as one adult.
     let children = 0;
     const selectedDependentSet = new Set(createForm.beneficiaryDependentIds);
     for (const dep of dependents || []) {
@@ -490,11 +489,30 @@ export default function StaffPolicies() {
       else children += 1;
     }
 
-    const extraAdults = Math.max(0, adults - maxAdults);
-    const extraChildren = Math.max(0, children - maxChildren);
-    const dependantSurcharge = ((extraAdults * adultRateMonthly) + (extraChildren * childRateMonthly)) * scheduleFactor;
+    // Use the dedicated additional-member rate if set; otherwise fall back to
+    // underwriter rates (mirrors the backend computePolicyPremium logic exactly).
+    const additionalRateMonthly = parseFloat(String(
+      createForm.currency === "ZAR"
+        ? (selectedVersion as any).additionalMemberPremiumMonthlyZar || "0"
+        : (selectedVersion as any).additionalMemberPremiumMonthlyUsd || "0"
+    ));
 
-    return (base + addOnTotal + dependantSurcharge).toFixed(2);
+    let dependantSurcharge = 0;
+    let additionalMemberCount = 0;
+    const totalIncluded = maxAdults + maxChildren + maxExtended;
+    if (additionalRateMonthly > 0) {
+      additionalMemberCount = Math.max(0, (adults + children) - totalIncluded);
+      dependantSurcharge = additionalMemberCount * additionalRateMonthly * scheduleFactor;
+    } else {
+      const adultRateMonthly = parseFloat(String(selectedVersion.underwriterAmountAdult || "0"));
+      const childRateMonthly = parseFloat(String(selectedVersion.underwriterAmountChild || selectedVersion.underwriterAmountAdult || "0"));
+      const extraAdults = Math.max(0, adults - maxAdults);
+      const extraChildren = Math.max(0, children - maxChildren);
+      dependantSurcharge = ((extraAdults * adultRateMonthly) + (extraChildren * childRateMonthly)) * scheduleFactor;
+    }
+
+    const total = (base + addOnTotal + dependantSurcharge).toFixed(2);
+    return { total, base, addOnTotal, dependantSurcharge, additionalMemberCount, totalIncluded, additionalRateMonthly, totalMembers: adults + children };
   }, [selectedVersion, selectedProduct, createForm.currency, createForm.paymentSchedule, createForm.memberAddOns, createForm.beneficiaryDependentIds, dependents, addOns]);
 
   const { data: policyDetail } = useQuery<any>({
@@ -1713,8 +1731,28 @@ export default function StaffPolicies() {
             title="Policy members"
             description="All lives covered (policy holder + dependants). Filter by age band."
             icon={Users}
-            headerRight={(
+            headerRight={(() => {
+              const limits = displayPolicy?.productMemberLimits;
+              const activeMembers = (policyMembers ?? []).filter((m: any) => m.isActive !== false);
+              const activeMemberCount = activeMembers.length;
+              const includedCount = limits?.includedCount ?? null;
+              const maxAdditional = limits?.maxAdditional ?? null;
+              const totalLimit = includedCount != null && maxAdditional != null ? includedCount + maxAdditional : null;
+              const additionalCount = includedCount != null ? Math.max(0, activeMemberCount - includedCount) : 0;
+              const limitReached = totalLimit != null && activeMemberCount >= totalLimit;
+              return (
               <>
+                {limits && (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-muted-foreground">{activeMemberCount} member{activeMemberCount !== 1 ? "s" : ""}</span>
+                    {includedCount != null && (
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${activeMemberCount > includedCount ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                        {activeMemberCount <= includedCount ? `${activeMemberCount}/${includedCount} included` : `${includedCount} included + ${additionalCount} additional`}
+                      </span>
+                    )}
+                    {limitReached && <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Limit reached</span>}
+                  </div>
+                )}
                   <Select value={membersAgeFilter} onValueChange={(v: "all" | "adult" | "child") => setMembersAgeFilter(v)}>
                     <SelectTrigger className="w-[140px] h-8">
                       <SelectValue placeholder="Age band" />
@@ -1739,6 +1777,8 @@ export default function StaffPolicies() {
                     size="sm"
                     variant="outline"
                     className="gap-1"
+                    disabled={limitReached}
+                    title={limitReached ? `Maximum member limit reached (${totalLimit} total)` : "Add a new dependent to this policy"}
                     onClick={() => {
                       setDetailAddDepOpen(true);
                       setDetailDepForm({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
@@ -1747,7 +1787,8 @@ export default function StaffPolicies() {
                     <UserPlus className="h-3.5 w-3.5" /> Add Dependent
                   </Button>
               </>
-            )}
+              );
+            })()}
             flush
           >
               {membersLoading ? (
@@ -3922,14 +3963,24 @@ export default function StaffPolicies() {
             })()}
             {createStep === 4 && (
               <>
-                <div className="rounded-md bg-muted/50 p-3">
+                <div className="rounded-md bg-muted/50 p-3 space-y-1">
                   <p className="text-sm font-medium">
-                    Premium (from product & add-ons): {createForm.currency} {calculatedPremium ?? "—"}
+                    Premium: {createForm.currency} {calculatedPremium?.total ?? "—"}
                   </p>
+                  {calculatedPremium && calculatedPremium.additionalMemberCount > 0 && (
+                    <p className="text-xs text-amber-700 font-medium">
+                      Includes {calculatedPremium.additionalMemberCount} additional member{calculatedPremium.additionalMemberCount !== 1 ? "s" : ""} beyond the {calculatedPremium.totalIncluded} included (@ {createForm.currency} {calculatedPremium.additionalRateMonthly.toFixed(2)}/mo each)
+                    </p>
+                  )}
+                  {calculatedPremium && calculatedPremium.totalMembers > calculatedPremium.totalIncluded && (
+                    <p className="text-xs text-muted-foreground">
+                      Base: {createForm.currency} {calculatedPremium.base.toFixed(2)} · Add-ons: {createForm.currency} {calculatedPremium.addOnTotal.toFixed(2)} · Additional: {createForm.currency} {calculatedPremium.dependantSurcharge.toFixed(2)}
+                    </p>
+                  )}
                   {canEditPremium ? (
-                    <p className="text-xs text-muted-foreground mt-1">Auto-calculated above. Enter an override below only if needed.</p>
+                    <p className="text-xs text-muted-foreground">Auto-calculated above. Enter an override below only if needed.</p>
                   ) : (
-                    <p className="text-xs text-muted-foreground mt-1">Premium is calculated from the selected product version and add-ons.</p>
+                    <p className="text-xs text-muted-foreground">Premium is calculated from the selected product version, members, and add-ons.</p>
                   )}
                 </div>
                 {canEditPremium && (
@@ -3940,7 +3991,7 @@ export default function StaffPolicies() {
                         type="number"
                         step="0.01"
                         min="0"
-                        placeholder={calculatedPremium ?? "Leave blank to use calculated"}
+                        placeholder={calculatedPremium?.total ?? "Leave blank to use calculated"}
                         value={createForm.premiumAmount}
                         onChange={(e) => setCreateForm({ ...createForm, premiumAmount: e.target.value })}
                         data-testid="input-create-premium-override"
@@ -4063,7 +4114,7 @@ export default function StaffPolicies() {
               else if (!createForm.productVersionId) missing.push("a product version");
             } else if (createStep === 4) {
               if (!createForm.productVersionId) missing.push("a product version");
-              if (!calculatedPremium) missing.push("a calculated premium (check product & add-ons)");
+              if (!calculatedPremium?.total) missing.push("a calculated premium (check product & add-ons)");
             }
             if (missing.length === 0) return null;
             return (
@@ -4110,7 +4161,7 @@ export default function StaffPolicies() {
               <Button
                 onClick={() => createMutation.mutate({
                   ...createForm,
-                  premiumAmount: (canEditPremium && createForm.premiumAmount) ? createForm.premiumAmount : (calculatedPremium ?? ""),
+                  premiumAmount: (canEditPremium && createForm.premiumAmount) ? createForm.premiumAmount : (calculatedPremium?.total ?? ""),
                 })}
                 disabled={
                   createMutation.isPending ||
@@ -4124,7 +4175,7 @@ export default function StaffPolicies() {
                     !createForm.newClient.gender
                   )) ||
                   !createForm.productVersionId ||
-                  !calculatedPremium
+                  !calculatedPremium?.total
                 }
                 data-testid="btn-submit-policy"
               >

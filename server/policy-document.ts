@@ -33,6 +33,7 @@ import { resolveImage } from "./object-storage";
 import {
   buildVerifyUrl, buildVerifyQrBuffer,
   drawCompanyStamp, drawVerifyQrPanel, renderFormattedTermContent,
+  drawSectionHeader, drawTwoColFields,
   C_PRIMARY, C_MUTED, C_BORDER, C_TEXT,
 } from "./pdf-utils";
 
@@ -163,143 +164,68 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     .fontSize(16)
     .font("Helvetica-Bold")
     .text("Policy Certificate", 50, y);
-  y += 25;
+  y += 22;
   doc
-    .fontSize(9)
+    .fontSize(8.5)
     .font("Helvetica")
-    .fillColor("#666666")
+    .fillColor(C_MUTED)
     .text(`Date Issued: ${new Date().toLocaleDateString("en-GB")} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`, 50, y);
-  y += 20;
-  doc
-    .fillColor(docBlack)
-    .fontSize(12)
-    .font("Helvetica-Bold")
-    .text("Policy Details", 50, y);
-  y += 5;
-  doc
-    .moveTo(50, y + 12)
-    .lineTo(545, y + 12)
-    .strokeColor(docBlack)
-    .lineWidth(1)
-    .stroke();
-  y += 20;
-  const policyFields = [
-    ["Policy Number", policy.policyNumber],
+  y += 16;
+
+  // ── Policy Details ─────────────────────────────────────────────
+  y = drawSectionHeader(doc, "Policy Details", y);
+  y = drawTwoColFields(doc, [
+    ["Policy No.", policy.policyNumber],
     ["Status", (policy.status || "inactive").toUpperCase()],
     ["Product", productName],
     ["Currency", policy.currency],
-    ["Premium Amount", `${policy.currency} ${parseFloat(policy.premiumAmount).toFixed(2)}`],
-    [
-      "Payment Schedule",
-      (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() +
-        (policy.paymentSchedule || "monthly").slice(1),
-    ],
+    ["Premium", `${policy.currency} ${parseFloat(policy.premiumAmount || "0").toFixed(2)}`],
+    ["Schedule", (policy.paymentSchedule || "monthly").charAt(0).toUpperCase() + (policy.paymentSchedule || "monthly").slice(1)],
     ["Capture Date", policy.createdAt ? new Date(policy.createdAt).toLocaleDateString("en-GB") : "—"],
     ["Effective Date", policy.effectiveDate || "Not set"],
     ["Inception Date", policy.inceptionDate || "Not set"],
-    ["Waiting Period", (policy as any).isLegacy ? "Waived (Legacy Policy)" : `${waitingPeriodDays} days`],
+    ["Waiting Period", (policy as any).isLegacy ? "Waived (Legacy)" : `${waitingPeriodDays} days`],
     ["Waiting Period End", (policy as any).isLegacy ? "Waived" : (policy.waitingPeriodEndDate || "N/A")],
-  ];
-  doc.font("Helvetica").fontSize(9).fillColor("#000000");
-  for (const [label, value] of policyFields) {
-    doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-    doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-    y += 15;
-  }
-  y += 10;
+    ["Policy Group", (policy as any).groupId ? "Yes" : "Individual"],
+  ], y);
+
+  // ── Agent ──────────────────────────────────────────────────────
   const agentId = (policy as any).agentId;
   if (agentId) {
     const agent = await storage.getUser(agentId);
     if (agent) {
-      if (y > 620) {
-        doc.addPage();
-        y = 50;
-      }
-      doc
-        .fillColor(docBlack)
-        .fontSize(12)
-        .font("Helvetica-Bold")
-        .text("Agent", 50, y);
-      y += 5;
-      doc
-        .moveTo(50, y + 12)
-        .lineTo(545, y + 12)
-        .strokeColor(docBlack)
-        .lineWidth(1)
-        .stroke();
-      y += 20;
-      const agentFields = [
-        ["Name", agent.displayName || agent.email || "—"],
+      if (y > 680) { doc.addPage(); y = 50; }
+      y = drawSectionHeader(doc, "Servicing Agent", y);
+      y = drawTwoColFields(doc, [
+        ["Agent Name", agent.displayName || agent.email || "—"],
         ["Email", agent.email || "—"],
-      ];
-      doc.font("Helvetica").fontSize(9).fillColor("#000000");
-      for (const [label, value] of agentFields) {
-        doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-        doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-        y += 15;
-      }
-      y += 10;
+      ], y);
     }
   }
+
+  // ── Principal Member ───────────────────────────────────────────
   if (client) {
-    doc
-      .fillColor(docBlack)
-      .fontSize(12)
-      .font("Helvetica-Bold")
-      .text("Principal Member", 50, y);
-    y += 5;
-    doc
-      .moveTo(50, y + 12)
-      .lineTo(545, y + 12)
-      .strokeColor(docBlack)
-      .lineWidth(1)
-      .stroke();
-    y += 20;
-    const fullName = [client.title, client.firstName, client.lastName]
-      .filter(Boolean)
-      .join(" ");
-    const clientFields = [
+    if (y > 640) { doc.addPage(); y = 50; }
+    y = drawSectionHeader(doc, "Principal Member", y);
+    const fullName = [client.title, client.firstName, client.lastName].filter(Boolean).join(" ");
+    y = drawTwoColFields(doc, [
       ["Full Name", fullName],
       ["National ID", client.nationalId || "—"],
       ["Date of Birth", client.dateOfBirth || "—"],
-      ["Age", ageFromDob(client.dateOfBirth) != null ? String(ageFromDob(client.dateOfBirth)) : "—"],
-      [
-        "Gender",
-        client.gender
-          ? client.gender.charAt(0).toUpperCase() + client.gender.slice(1)
-          : "—",
-      ],
+      ["Age", ageFromDob(client.dateOfBirth) != null ? String(ageFromDob(client.dateOfBirth)) + " years" : "—"],
+      ["Gender", client.gender ? client.gender.charAt(0).toUpperCase() + client.gender.slice(1) : "—"],
       ["Marital Status", client.maritalStatus || "—"],
       ["Phone", client.phone || "—"],
       ["Email", client.email || "—"],
       ["Address", client.address || "—"],
-    ];
-    doc.font("Helvetica").fontSize(9).fillColor("#000000");
-    for (const [label, value] of clientFields) {
-      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-      doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-      y += 15;
-    }
-    y += 10;
+    ], y);
   }
   if (enrichedMembers.length > 0) {
-    if (y > 550) {
+    if (y > 600) {
       doc.addPage();
       y = 50;
     }
-    doc
-      .fillColor(docBlack)
-      .fontSize(12)
-      .font("Helvetica-Bold")
-      .text("Policy Members", 50, y);
-    y += 5;
-    doc
-      .moveTo(50, y + 12)
-      .lineTo(545, y + 12)
-      .strokeColor(docBlack)
-      .lineWidth(1)
-      .stroke();
-    y += 20;
+    y = drawSectionHeader(doc, `Covered Members (${enrichedMembers.length})`, y);
     doc.font("Helvetica-Bold").fontSize(7).fillColor("#333333");
     doc.text("Name", 50, y, { width: 85 });
     doc.text("Role", 138, y, { width: 55 });
@@ -337,61 +263,31 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     }
     y += 10;
   }
+  // ── Designated Beneficiary ─────────────────────────────────────
   const bp = policy as any;
   if (bp.beneficiaryFirstName) {
     if (y > 680) { doc.addPage(); y = 50; }
-    doc.fillColor(docBlack).fontSize(12).font("Helvetica-Bold").text("Designated Beneficiary", 50, y);
-    y += 5;
-    doc.moveTo(50, y + 12).lineTo(545, y + 12).strokeColor(docBlack).lineWidth(1).stroke();
-    y += 20;
-    const bFields = [
-      ["Name", `${bp.beneficiaryFirstName} ${bp.beneficiaryLastName || ""}`],
+    y = drawSectionHeader(doc, "Designated Beneficiary", y);
+    y = drawTwoColFields(doc, [
+      ["Full Name", `${bp.beneficiaryFirstName} ${bp.beneficiaryLastName || ""}`.trim()],
       ["Relationship", bp.beneficiaryRelationship || "—"],
       ["National ID", bp.beneficiaryNationalId || "—"],
       ["Phone", bp.beneficiaryPhone || "—"],
-    ];
-    doc.font("Helvetica").fontSize(9).fillColor("#000000");
-    for (const [label, value] of bFields) {
-      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-      doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-      y += 15;
-    }
-    y += 10;
+    ], y);
   }
+
+  // ── Coverage Details ───────────────────────────────────────────
   if (productVersion) {
-    if (y > 620) {
-      doc.addPage();
-      y = 50;
-    }
-    doc
-      .fillColor(docBlack)
-      .fontSize(12)
-      .font("Helvetica-Bold")
-      .text("Coverage Details", 50, y);
-    y += 5;
-    doc
-      .moveTo(50, y + 12)
-      .lineTo(545, y + 12)
-      .strokeColor(docBlack)
-      .lineWidth(1)
-      .stroke();
-    y += 20;
-    const covFields = [
-      ["Waiting Period", (policy as any).isLegacy ? "Waived (Legacy Policy)" : `${productVersion.waitingPeriodDays} days`],
+    if (y > 680) { doc.addPage(); y = 50; }
+    y = drawSectionHeader(doc, "Coverage Details", y);
+    y = drawTwoColFields(doc, [
+      ["Waiting Period", (policy as any).isLegacy ? "Waived (Legacy)" : `${productVersion.waitingPeriodDays} days`],
       ["Grace Period", `${productVersion.gracePeriodDays} days`],
-      [
-        "Eligible Age Range",
-        `${productVersion.eligibilityMinAge} - ${productVersion.eligibilityMaxAge} years`,
-      ],
+      ["Min Eligible Age", `${productVersion.eligibilityMinAge} years`],
+      ["Max Eligible Age", `${productVersion.eligibilityMaxAge} years`],
       ["Dependent Max Age", `${productVersion.dependentMaxAge} years`],
-    ];
-    doc.font("Helvetica").fontSize(9).fillColor("#000000");
-    for (const [label, value] of covFields) {
-      doc.font("Helvetica-Bold").text(`${label}:`, 50, y, { continued: true, width: 150 });
-      doc.font("Helvetica").text(`  ${value}`, { width: 350 });
-      y += 15;
-    }
-    y += 10;
+      ["Product Version", `v${productVersion.version}`],
+    ], y);
   }
   if (terms.length > 0) {
     if (y > 500) {
@@ -463,8 +359,8 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   }
   const footerTop = y + 10;
 
-  // Build verification QR for this policy
-  const policyVerifyUrl = buildVerifyUrl("policy", policy.id);
+  // Build verification QR for this policy (include orgId for tenant-DB routing)
+  const policyVerifyUrl = buildVerifyUrl("policy", policy.id, policy.organizationId);
   const policyQrBuffer  = policyVerifyUrl ? await buildVerifyQrBuffer(policyVerifyUrl, 180) : null;
 
   const QR_SIZE    = 90;

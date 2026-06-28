@@ -31,7 +31,7 @@ import {
 import {
   Plus, Box, Search, Loader2, Package, Layers, Puzzle, BarChart3,
   Edit, ChevronDown, ChevronUp, Upload, Image, Users, Baby, Crown,
-  FileText, Trash2,
+  FileText, Trash2, RefreshCw,
 } from "lucide-react";
 
 type Product = {
@@ -43,6 +43,7 @@ type Product = {
   maxAdults: number | null;
   maxChildren: number | null;
   maxExtendedMembers: number | null;
+  maxAdditionalMembers: number | null;
   casketType: string | null;
   casketImageUrl: string | null;
   coverAmount: string | null;
@@ -204,6 +205,18 @@ export default function ProductBuilder() {
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const recalcPremiumsMut = useMutation({
+    mutationFn: async (versionId: string) => {
+      const res = await apiRequest("POST", `/api/product-versions/${versionId}/recalculate-premiums`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      toast({ title: `Premiums recalculated`, description: `${data.updated} of ${data.total} policies updated.` });
+    },
+    onError: (err: Error) => toast({ title: "Recalculate failed", description: err.message, variant: "destructive" }),
+  });
+
   const createBenefitMut = useMutation({
     mutationFn: async (data: Record<string, unknown>) => { const res = await apiRequest("POST", "/api/benefit-catalog", data); return res.json(); },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/benefit-catalog"] }); setShowCreateBenefit(false); toast({ title: "Benefit item created" }); },
@@ -347,6 +360,7 @@ export default function ProductBuilder() {
                           onEdit={() => setEditingProduct(product)}
                           onCreateVersion={() => setShowCreateVersion(product.id)}
                           onEditVersion={(v) => setEditingVersion(v)}
+                          onRecalcPremiums={(vId) => recalcPremiumsMut.mutate(vId)}
                           onDelete={() => setProductToDelete(product)}
                         />
                       ))}
@@ -648,8 +662,8 @@ export default function ProductBuilder() {
   );
 }
 
-function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, onEditVersion, onDelete }: {
-  product: Product; isExpanded: boolean; onToggle: () => void; onEdit: () => void; onCreateVersion: () => void; onEditVersion: (v: ProductVersion) => void; onDelete: () => void;
+function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, onEditVersion, onRecalcPremiums, onDelete }: {
+  product: Product; isExpanded: boolean; onToggle: () => void; onEdit: () => void; onCreateVersion: () => void; onEditVersion: (v: ProductVersion) => void; onRecalcPremiums: (versionId: string) => void; onDelete: () => void;
 }) {
   const { data: versions = [], isLoading } = useQuery<ProductVersion[]>({
     queryKey: [`/api/products/${product.id}/versions`],
@@ -683,6 +697,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
             <span className="flex items-center gap-0.5" title="Adults"><Users className="h-3 w-3" />{product.maxAdults ?? 2}</span>
             <span className="flex items-center gap-0.5" title="Children"><Baby className="h-3 w-3" />{product.maxChildren ?? 4}</span>
             {(product.maxExtendedMembers || 0) > 0 && <span className="flex items-center gap-0.5" title="Extended"><Crown className="h-3 w-3" />{product.maxExtendedMembers}</span>}
+            {product.maxAdditionalMembers != null && <span className="flex items-center gap-0.5 text-amber-600" title={`Max ${product.maxAdditionalMembers} additional`}>+{product.maxAdditionalMembers}</span>}
           </div>
         </TableCell>
         <TableCell className="text-sm">{product.casketType || "—"}</TableCell>
@@ -754,9 +769,14 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                         </TableCell>
                         <TableCell><Badge variant={v.isActive ? "default" : "secondary"} className={v.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{v.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit version" onClick={() => onEditVersion(v)} data-testid={`button-edit-version-${v.id}`}>
-                            <Edit className="h-3.5 w-3.5" aria-hidden="true" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit version" onClick={() => onEditVersion(v)} data-testid={`button-edit-version-${v.id}`}>
+                              <Edit className="h-3.5 w-3.5" aria-hidden="true" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600 hover:text-amber-700" aria-label="Recalculate all policy premiums for this version" title="Recalculate premiums for all policies on this version" onClick={() => onRecalcPremiums(v.id)}>
+                              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -780,6 +800,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
   const [maxAdults, setMaxAdults] = useState("2");
   const [maxChildren, setMaxChildren] = useState("4");
   const [maxExtended, setMaxExtended] = useState("0");
+  const [maxAdditional, setMaxAdditional] = useState("");
   const [casketType, setCasketType] = useState("");
   const [casketImageUrl, setCasketImageUrl] = useState("");
   const [coverAmount, setCoverAmount] = useState("");
@@ -817,6 +838,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
       maxAdults: maxAdults ? parseInt(maxAdults) : 2,
       maxChildren: maxChildren ? parseInt(maxChildren) : 4,
       maxExtendedMembers: maxExtended ? parseInt(maxExtended) : 0,
+      maxAdditionalMembers: maxAdditional.trim() ? parseInt(maxAdditional) : null,
       casketType: casketType || undefined,
       casketImageUrl: casketImageUrl || undefined,
       coverAmount: coverAmount || undefined,
@@ -863,6 +885,10 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
               <Label className="flex items-center gap-1.5"><Crown className="h-3.5 w-3.5" />Max Extended</Label>
               <Input type="number" min="0" max="20" value={maxExtended} onChange={(e) => setMaxExtended(e.target.value)} data-testid="input-max-extended" />
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5">Max Additional Members <span className="text-xs text-muted-foreground font-normal">(beyond included count — leave blank for unlimited)</span></Label>
+            <Input type="number" min="0" max="50" value={maxAdditional} onChange={(e) => setMaxAdditional(e.target.value)} placeholder="e.g. 5 (blank = unlimited)" data-testid="input-max-additional" />
           </div>
 
           <Separator />
@@ -934,6 +960,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
   const [maxAdults, setMaxAdults] = useState(String(product.maxAdults ?? 2));
   const [maxChildren, setMaxChildren] = useState(String(product.maxChildren ?? 4));
   const [maxExtended, setMaxExtended] = useState(String(product.maxExtendedMembers ?? 0));
+  const [maxAdditional, setMaxAdditional] = useState(product.maxAdditionalMembers != null ? String(product.maxAdditionalMembers) : "");
   const [casketType, setCasketType] = useState(product.casketType || "");
   const [casketImageUrl, setCasketImageUrl] = useState(product.casketImageUrl || "");
   const [coverAmount, setCoverAmount] = useState(product.coverAmount || "");
@@ -975,6 +1002,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
       maxAdults: parseLimit(maxAdults, 1),
       maxChildren: parseLimit(maxChildren, 0),
       maxExtendedMembers: parseLimit(maxExtended, 0),
+      maxAdditionalMembers: maxAdditional.trim() ? parseInt(maxAdditional, 10) : null,
       casketType: casketType || null,
       casketImageUrl: casketImageUrl || null,
       coverAmount: coverAmount || null,
@@ -1003,6 +1031,10 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
             <div className="space-y-2"><Label>Max Adults</Label><Input type="number" min="1" max="10" value={maxAdults} onChange={(e) => setMaxAdults(e.target.value)} /></div>
             <div className="space-y-2"><Label>Max Children</Label><Input type="number" min="0" max="20" value={maxChildren} onChange={(e) => setMaxChildren(e.target.value)} /></div>
             <div className="space-y-2"><Label>Max Extended</Label><Input type="number" min="0" max="20" value={maxExtended} onChange={(e) => setMaxExtended(e.target.value)} /></div>
+          </div>
+          <div className="space-y-2">
+            <Label>Max Additional Members <span className="text-xs text-muted-foreground font-normal">(beyond included count — blank = unlimited)</span></Label>
+            <Input type="number" min="0" max="50" value={maxAdditional} onChange={(e) => setMaxAdditional(e.target.value)} placeholder="blank = unlimited" />
           </div>
 
           <Separator />

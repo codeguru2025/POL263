@@ -2043,13 +2043,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let productName = "";
     let productVersionLabel = "";
     let waitingPeriodDays: number | null = null;
+    let productMemberLimits: { maxAdults: number; maxChildren: number; maxExtended: number; maxAdditional: number | null; includedCount: number } | null = null;
     if (policy.productVersionId) {
       const pv = await storage.getProductVersion(policy.productVersionId, user.organizationId);
       if (pv) {
         waitingPeriodDays = pv.waitingPeriodDays ?? 90;
         productVersionLabel = `v${pv.version}`;
         const prod = await storage.getProduct(pv.productId, user.organizationId);
-        if (prod) productName = prod.name;
+        if (prod) {
+          productName = prod.name;
+          const maxAdults = Number(prod.maxAdults ?? 2);
+          const maxChildren = Number(prod.maxChildren ?? 4);
+          const maxExtended = Number(prod.maxExtendedMembers ?? 0);
+          const maxAdditional = prod.maxAdditionalMembers != null ? Number(prod.maxAdditionalMembers) : null;
+          productMemberLimits = { maxAdults, maxChildren, maxExtended, maxAdditional, includedCount: maxAdults + maxChildren + maxExtended };
+        }
       }
     }
 
@@ -2097,6 +2105,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       productName,
       productVersionLabel,
       waitingPeriodDays,
+      productMemberLimits,
       clientActivationCode,
       totalPaid: totalPaid.toFixed(2),
       totalDue: totalDue.toFixed(2),
@@ -2920,6 +2929,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { dependentId, clientId, role } = req.body;
     if (!dependentId && !clientId) return res.status(400).json({ message: "dependentId or clientId is required" });
 
+    // Enforce per-product member limits before adding.
+    if (policy.productVersionId) {
+      const pv = await storage.getProductVersion(policy.productVersionId, user.organizationId);
+      if (pv) {
+        const prod = await storage.getProduct(pv.productId, user.organizationId);
+        if (prod) {
+          const includedCount = Number(prod.maxAdults ?? 2) + Number(prod.maxChildren ?? 4) + Number(prod.maxExtendedMembers ?? 0);
+          const maxAdditional = prod.maxAdditionalMembers != null ? Number(prod.maxAdditionalMembers) : null;
+          const existingMembers = await storage.getPolicyMembers(policy.id, user.organizationId);
+          const activeCount = existingMembers.filter((m: any) => m.isActive !== false).length;
+          if (maxAdditional !== null && activeCount >= includedCount + maxAdditional) {
+            return res.status(400).json({
+              message: `Policy has reached its maximum member limit (${includedCount} included + ${maxAdditional} additional = ${includedCount + maxAdditional} total). Remove a member before adding another.`,
+              limitReached: true,
+              totalLimit: includedCount + maxAdditional,
+            });
+          }
+        }
+      }
+    }
+
     const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
     const member = await storage.createPolicyMember({
       policyId: policy.id,
@@ -3075,6 +3105,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
 
     return res.json({ synced: added, total: existingMembers.length + added + (existingClientIds.has(policy.clientId) ? 0 : 1) });
+  });
+
+  // Batch-recalculate premiums for all active policies on a product version.
+  // Called by admins after changing additionalMemberPremiumMonthly on a version.
+  app.post("/api/product-versions/:id/recalculate-premiums", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const pvId = req.params.id as string;
+    const pv = await storage.getProductVersion(pvId, user.organizationId);
+    if (!pv) return res.status(404).json({ message: "Product version not found" });
+
+    const allPolicies = await storage.getPoliciesByProductVersion(pvId, user.organizationId);
+    let updated = 0;
+    let skipped = 0;
+    for (const p of allPolicies) {
+      if (p.status === "cancelled") continue;
+      try {
+        const before = parseFloat(String(p.premiumAmount ?? "0"));
+        const recalced = await recalculatePolicyPremiumIfNeeded(p, user.organizationId);
+        const after = parseFloat(String(recalced?.premiumAmount ?? before));
+        if (Math.abs(after - before) >= 0.01) updated++;
+      } catch (err: any) {
+        skipped++;
+        structuredLog("warn", "recalculate-premiums: skipped policy", { policyId: p.id, error: err?.message });
+      }
+    }
+    await auditLog(req, "BATCH_RECALCULATE_PREMIUMS", "ProductVersion", pvId, null, { pvId, total: allPolicies.length, updated, skipped });
+    return res.json({ total: allPolicies.length, updated, skipped });
   });
 
   // ─── Payments ───────────────────────────────────────────────
@@ -7663,14 +7720,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Called when a user scans the QR code on any generated document.
   // No auth required — returns just enough info to confirm authenticity.
   app.get("/api/public/verify", async (req, res) => {
-    const { type, id } = req.query;
+    const { type, id, org: orgParam } = req.query;
     if (!type || !id || typeof type !== "string" || typeof id !== "string") {
       return res.status(400).json({ valid: false, message: "type and id are required" });
     }
+    const hintOrgId = typeof orgParam === "string" ? orgParam : undefined;
     try {
       if (type === "receipt") {
-        const { findPaymentReceiptById } = await import("./storage");
-        const receipt = await findPaymentReceiptById(id);
+        // Try tenant-aware lookup first (using orgId hint from QR URL), then main DB fallback
+        let receipt: any = null;
+        if (hintOrgId) {
+          receipt = await storage.getPaymentReceiptById(id, hintOrgId);
+        }
+        if (!receipt) {
+          const { findPaymentReceiptById } = await import("./storage");
+          receipt = await findPaymentReceiptById(id);
+        }
         if (!receipt) return res.json({ valid: false });
         const org = await storage.getOrganization(receipt.organizationId);
         return res.json({
@@ -7682,9 +7747,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
       if (type === "policy") {
-        // Look up orgId first to route to the correct tenant DB
-        const [policyRow] = await db.select({ organizationId: policies.organizationId, policyNumber: policies.policyNumber, status: policies.status, inceptionDate: policies.inceptionDate })
-          .from(policies).where(eq(policies.id, id)).limit(1);
+        // Try tenant DB first using orgId hint, then fall back to main DB
+        let policyRow: any = null;
+        if (hintOrgId) {
+          policyRow = await storage.getPolicy(id, hintOrgId);
+        }
+        if (!policyRow) {
+          const [row] = await db.select({ organizationId: policies.organizationId, policyNumber: policies.policyNumber, status: policies.status, inceptionDate: policies.inceptionDate })
+            .from(policies).where(eq(policies.id, id)).limit(1);
+          policyRow = row;
+        }
         if (!policyRow) return res.json({ valid: false });
         const org = await storage.getOrganization(policyRow.organizationId);
         return res.json({

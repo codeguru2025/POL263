@@ -130,8 +130,8 @@ export async function computePolicyPremium(
     }
 
     // Dedicated client-facing additional-member rates (set by admin on product version)
-    const additionalRateUsd = parseFloat(String((pv as any).additionalMemberPremiumMonthlyUsd ?? 0));
-    const additionalRateZar = parseFloat(String((pv as any).additionalMemberPremiumMonthlyZar ?? 0));
+    const additionalRateUsd = parseFloat(String(pv.additionalMemberPremiumMonthlyUsd ?? 0));
+    const additionalRateZar = parseFloat(String(pv.additionalMemberPremiumMonthlyZar ?? 0));
     const additionalRate = currency === "ZAR" ? additionalRateZar : additionalRateUsd;
 
     if (additionalRate > 0) {

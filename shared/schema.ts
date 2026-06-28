@@ -480,6 +480,7 @@ export const products = pgTable(
     maxAdults: integer("max_adults").default(2),
     maxChildren: integer("max_children").default(4),
     maxExtendedMembers: integer("max_extended_members").default(0),
+    maxAdditionalMembers: integer("max_additional_members"),
     casketType: text("casket_type"),
     casketImageUrl: text("casket_image_url"),
     coverAmount: numeric("cover_amount"),
