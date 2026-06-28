@@ -12,8 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown } from "lucide-react";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 
 function statusBadge(status: string) {
   if (status === "approved") return <Badge className="bg-emerald-600 text-white text-xs">Approved</Badge>;
@@ -106,6 +106,13 @@ export default function StaffAttendance() {
           title="Attendance"
           description="Log daily attendance and manage approvals"
           titleDataTestId="text-attendance-title"
+          actions={(
+            <Button variant="outline" className="gap-1.5 shadow-sm" asChild>
+              <a href={getApiBase() + "/api/forms/blank/attendance-log"} target="_blank" rel="noopener noreferrer">
+                <FileDown className="h-4 w-4" /> Blank Attendance Log
+              </a>
+            </Button>
+          )}
         />
 
         <Tabs defaultValue="my">

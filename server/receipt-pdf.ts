@@ -16,6 +16,7 @@ import { storage, findPaymentReceiptById } from "./storage";
 import { resolveImage } from "./object-storage";
 import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
+import { buildVerifyUrl, buildVerifyQrBuffer, drawCompanyStamp, drawVerifyQrPanel } from "./pdf-utils";
 
 /** Exported for tests. */
 export const RECEIPT_PDF_WIDTH_PT = 226; // 80mm in points (kept for tests)
@@ -101,18 +102,22 @@ async function loadReceiptContext(receipt: any, orgId: string) {
   return { policy, client, org, productName, issuedByName, activeAdvert, advertImageData };
 }
 
-async function buildQrBuffer(orgId: string): Promise<Buffer | null> {
-  const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
-  if (!appBase) return null;
-  const url = `${appBase}/join/register?org=${orgId}`;
-  try {
-    return await QRCode.toBuffer(url, { type: "png", width: 110, margin: 1, color: { dark: "#0f766e", light: "#ffffff" } });
-  } catch {
-    return null;
-  }
+/** Build a document-verification QR for the receipt (B&W, larger, more scannable). */
+async function buildReceiptVerifyQr(receiptId: string): Promise<Buffer | null> {
+  const url = buildVerifyUrl("receipt", receiptId);
+  if (!url) return null;
+  return buildVerifyQrBuffer(url, 180);
 }
 
-/** Render the Refer & Earn advert + QR code panel. Works with both generateReceiptPdf and streamReceiptToResponse. */
+/**
+ * Render the advert + verification QR + company stamp panel.
+ *
+ * Layout (left→right within the panel):
+ *   [advert image + text]   [company stamp]   [verification QR]
+ *
+ * Height is bounded so content never bleeds into the footer zone.
+ * footerTop is the absolute y where the footer divider line sits.
+ */
 function drawAdvertAndQr(
   doc: InstanceType<typeof PDFDocument>,
   y: number,
@@ -120,47 +125,70 @@ function drawAdvertAndQr(
   advertImageData: Buffer | null,
   qrBuffer: Buffer | null,
   footerTop: number,
+  orgName: string,
 ): void {
+  const PANEL_MIN = 120; // minimum pt needed for a useful panel
   const hasAdvert = !!(activeAdvert && (activeAdvert.title || activeAdvert.body || advertImageData));
   if (!hasAdvert && !qrBuffer) return;
-  if (y + 44 >= footerTop) return;
+  if (y + PANEL_MIN > footerTop) return; // not enough room — skip entirely
 
-  let ay = y + 10;
+  // ── divider ──────────────────────────────────────────────────
+  const ay = y + 10;
   doc.moveTo(MARGIN, ay).lineTo(A4_W - MARGIN, ay).lineWidth(0.4).strokeColor(C_BORDER).stroke();
-  ay += 10;
 
-  const QR_SIZE = 74;
-  const qrX = A4_W - MARGIN - QR_SIZE;
-  const advW = COL - QR_SIZE - 14;
+  const panelTop  = ay + 10;
+  const panelBot  = footerTop - 8;       // usable bottom edge
+  const panelH    = panelBot - panelTop; // available height
 
-  // QR code — right column
-  if (qrBuffer && ay + QR_SIZE < footerTop) {
-    try {
-      doc.image(qrBuffer, qrX, ay, { width: QR_SIZE, height: QR_SIZE });
-      doc.font("Helvetica-Bold").fontSize(6.5).fillColor(C_PRIMARY)
-        .text("SCAN TO JOIN", qrX, ay + QR_SIZE + 4, { width: QR_SIZE, align: "center" });
-      doc.font("Helvetica").fontSize(5.5).fillColor(C_MUTED)
-        .text("Register for a policy", qrX, ay + QR_SIZE + 13, { width: QR_SIZE, align: "center" });
-    } catch { /* skip */ }
+  const QR_SIZE   = Math.min(90, panelH - 20); // QR never taller than available space
+  const STAMP_R   = 32;                  // stamp radius
+  const STAMP_D   = STAMP_R * 2;
+
+  const qrX    = A4_W - MARGIN - QR_SIZE;
+  const stampCx = qrX - STAMP_D - 12 + STAMP_R; // stamp sits left of QR
+  const stampCy = panelTop + panelH / 2;
+
+  const advW = stampCx - STAMP_R - 14 - MARGIN; // advert left column width
+
+  // ── verification QR (right) ───────────────────────────────────
+  if (qrBuffer && QR_SIZE >= 50) {
+    drawVerifyQrPanel(doc, qrBuffer, qrX, panelTop, QR_SIZE);
   }
 
-  // Advert — left column
-  let ly = ay;
-  if (advertImageData && ly + 55 < footerTop) {
-    try {
-      const imgW = Math.min(advW, 190);
-      doc.image(advertImageData, MARGIN, ly, { width: imgW, fit: [imgW, 55] });
-      ly += 60;
-    } catch { /* skip */ }
+  // ── company stamp (centre-right) ─────────────────────────────
+  if (panelH >= STAMP_D + 10) {
+    drawCompanyStamp(doc, orgName, stampCx, stampCy, STAMP_R);
   }
-  if (activeAdvert?.title && ly < footerTop) {
-    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(C_PRIMARY)
-      .text(activeAdvert.title, MARGIN, ly, { width: advW });
-    ly = doc.y + 2;
+
+  // ── advert content (left column) ─────────────────────────────
+  // Strictly clip content to panelBot so it never touches the footer.
+  let ly = panelTop;
+
+  if (advertImageData) {
+    const imgMaxH = Math.min(55, panelH - 30);
+    if (ly + imgMaxH <= panelBot) {
+      try {
+        const imgW = Math.min(advW, 180);
+        doc.image(advertImageData, MARGIN, ly, { width: imgW, height: imgMaxH, fit: [imgW, imgMaxH] });
+        ly += imgMaxH + 5;
+      } catch { /* skip */ }
+    }
   }
-  if (activeAdvert?.body && ly < footerTop) {
+
+  if (activeAdvert?.title) {
+    const titleH = 14;
+    if (ly + titleH <= panelBot) {
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(C_PRIMARY)
+        .text(activeAdvert.title, MARGIN, ly, { width: advW, lineBreak: false });
+      ly += titleH + 2;
+    }
+  }
+
+  if (activeAdvert?.body && ly + 12 <= panelBot) {
+    // Calculate how many pt are left and clip the body text to fit
+    const bodyH = panelBot - ly - 2;
     doc.font("Helvetica").fontSize(7.5).fillColor(C_TEXT)
-      .text(activeAdvert.body, MARGIN, ly, { width: advW });
+      .text(activeAdvert.body, MARGIN, ly, { width: advW, height: bodyH, ellipsis: true });
   }
 }
 
@@ -170,7 +198,7 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
   const orgId = receipt.organizationId;
   const { policy, client, org, productName, issuedByName, activeAdvert, advertImageData } = await loadReceiptContext(receipt, orgId);
   if (!policy || !client || !org) return null;
-  const qrBuffer = await buildQrBuffer(orgId);
+  const qrBuffer = await buildReceiptVerifyQr(receipt.id);
 
   const displayReceiptNum = /^\d+$/.test(String(receipt.receiptNumber).trim())
     ? `RCP-${String(receipt.receiptNumber).padStart(5, "0")}`
@@ -268,7 +296,7 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     y += 6;
 
     // ── Advert + QR ─────────────────────────────────────────────
-    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55);
+    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55, org.name || "POL263");
 
     // ── Footer ──────────────────────────────────────────────────
     const footerY = A4_H - MARGIN - 28;
@@ -325,7 +353,7 @@ export async function streamReceiptToResponse(
     : `inline; filename="${filename}"`);
 
   const logoData = await resolveImage(org.logoUrl);
-  const qrBuffer = await buildQrBuffer(orgId);
+  const qrBuffer = await buildReceiptVerifyQr(receipt.id);
   const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
   doc.pipe(res);
 
@@ -404,7 +432,7 @@ export async function streamReceiptToResponse(
     y += 6;
 
     // ── Advert + QR ─────────────────────────────────────────────
-    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55);
+    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55, org.name || "POL263");
 
     const footerY = A4_H - MARGIN - 28;
     doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
@@ -461,7 +489,7 @@ export async function streamThermalReceiptToResponse(
     : `inline; filename="${filename}"`);
 
   const logoData = await resolveImage(org.logoUrl);
-  const qrBuffer = await buildQrBuffer(orgId);
+  const qrBuffer = await buildReceiptVerifyQr(receipt.id);
 
   const doc = new PDFDocument({
     size: [W, THERMAL_PAGE_H],
@@ -594,11 +622,11 @@ export async function streamThermalReceiptToResponse(
           doc.image(qrBuffer, qrX, doc.y, { width: QR_SZ, height: QR_SZ });
           doc.y += QR_SZ + 4;
           doc.font("Helvetica-Bold").fontSize(F_BODY).fillColor(C_PRIMARY)
-            .text("SCAN TO JOIN", M, doc.y, { width: INNER, align: "center" });
+            .text("SCAN TO VERIFY", M, doc.y, { width: INNER, align: "center" });
           doc.fillColor(C_TEXT);
           gap(2);
           doc.font("Helvetica").fontSize(F_SM).fillColor(C_MUTED)
-            .text("Register for a policy", M, doc.y, { width: INNER, align: "center" });
+            .text("Verify document authenticity", M, doc.y, { width: INNER, align: "center" });
           gap(4);
         } catch { /* skip */ }
       }

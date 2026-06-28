@@ -102,6 +102,7 @@ const ClientClaims = lazy(() => retryLazy(() => import("@/pages/client/claims"))
 const ClientFeedback = lazy(() => retryLazy(() => import("@/pages/client/feedback")));
 const JoinPage = lazy(() => retryLazy(() => import("@/pages/join")));
 const JoinRegisterPage = lazy(() => retryLazy(() => import("@/pages/join/register")));
+const VerifyPage = lazy(() => retryLazy(() => import("@/pages/verify")));
 const AuthCallback = lazy(() => retryLazy(() => import("@/pages/auth-callback")));
 
 function PageLoader() {
@@ -232,6 +233,7 @@ function Router() {
       <SafeRoute path="/auth/callback" component={AuthCallback} />
       <SafeRoute path="/join" component={JoinPage} />
       <SafeRoute path="/join/register" component={JoinRegisterPage} />
+      <SafeRoute path="/verify" component={VerifyPage} />
       
       <SafeRoute path="/client/login" component={ClientLogin} />
       <SafeRoute path="/client/claim" component={ClientClaim} />

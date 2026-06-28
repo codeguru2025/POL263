@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, apiFetch, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText, FileDown, ChevronDown } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
 import { isAgentScoped } from "@shared/roles";
@@ -3220,9 +3220,32 @@ export default function StaffPolicies() {
           title={<span className="font-display font-bold">Policies</span>}
           description="Manage policy lifecycles, billing cycles, and status transitions."
           actions={
-            <Button className="gap-2 shadow-sm" onClick={() => setShowCreateDialog(true)} data-testid="btn-create-policy">
-              <Plus className="h-4 w-4" /> Issue New Policy
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="gap-1.5 shadow-sm">
+                    <FileDown className="h-4 w-4" /> Blank Forms <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/policy-application"} target="_blank" rel="noopener noreferrer">Policy Application Form</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/waiver-request"} target="_blank" rel="noopener noreferrer">Waiver Request Form</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/debit-order-mandate"} target="_blank" rel="noopener noreferrer">Debit Order Mandate</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/claim-submission"} target="_blank" rel="noopener noreferrer">Claim Submission Form</a>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button className="gap-2 shadow-sm" onClick={() => setShowCreateDialog(true)} data-testid="btn-create-policy">
+                <Plus className="h-4 w-4" /> Issue New Policy
+              </Button>
+            </div>
           }
         />
 

@@ -9,12 +9,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Loader2, ChevronRight, Archive, FileDown, Box, DollarSign } from "lucide-react";
+import { Plus, Search, Loader2, ChevronRight, Archive, FileDown, Box, DollarSign, ChevronDown } from "lucide-react";
 import type { FleetVehicle } from "@shared/schema";
 
 type IntakeForm = {
@@ -267,9 +268,35 @@ export default function StaffMortuary() {
           title="Mortuary Register"
           description="Track every body received into and dispatched from the mortuary."
           actions={(
-            <Button className="gap-2 shadow-sm" onClick={() => setShowCreateIntake(true)}>
-              <Plus className="h-4 w-4" /> Record Intake
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="gap-1.5 shadow-sm">
+                    <FileDown className="h-4 w-4" /> Blank Forms <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem asChild>
+                    <a href={`${apiBase}/api/forms/blank/mortuary-intake`} target="_blank" rel="noopener noreferrer">Intake Form</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${apiBase}/api/forms/blank/mortuary-dispatch`} target="_blank" rel="noopener noreferrer">Dispatch Note</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${apiBase}/api/forms/blank/deceased-belongings`} target="_blank" rel="noopener noreferrer">Deceased Belongings</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${apiBase}/api/forms/blank/body-wash`} target="_blank" rel="noopener noreferrer">Body Wash Form</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${apiBase}/api/forms/blank/storage-receipt`} target="_blank" rel="noopener noreferrer">Storage Receipt</a>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button className="gap-2 shadow-sm" onClick={() => setShowCreateIntake(true)}>
+                <Plus className="h-4 w-4" /> Record Intake
+              </Button>
+            </div>
           )}
         />
 

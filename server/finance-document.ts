@@ -2,17 +2,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
-
-const A4_W = 595.28;
-const A4_H = 841.89;
-const MARGIN = 48;
-const COL = A4_W - MARGIN * 2;
-
-const C_PRIMARY = "#0f766e";
-const C_TEXT = "#111827";
-const C_MUTED = "#6b7280";
-const C_BORDER = "#e5e7eb";
-const C_LIGHT_BG = "#f9fafb";
+import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_LIGHT_BG } from "./pdf-utils";
 
 function fmt(v: string | number | null | undefined): string {
   return v != null && String(v).trim() ? String(v).trim() : "—";
@@ -99,11 +89,23 @@ function sigBlock(doc: InstanceType<typeof PDFDocument>, label: string, xStart: 
   doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("Date & Time", xStart, y + 83, { width });
 }
 
-function footer(doc: InstanceType<typeof PDFDocument>, orgName: string | null, docType: string, refNo: string): void {
-  const footerY = A4_H - MARGIN - 24;
-  doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
-  doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED)
-    .text(`${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`, MARGIN, footerY + 6, { width: COL, align: "center" });
+function footer(
+  doc: InstanceType<typeof PDFDocument>,
+  orgName: string | null,
+  docType: string,
+  refNo: string,
+  signatureBuffer: Buffer | null = null,
+  qrBuffer: Buffer | null = null,
+): void {
+  const footerTop = A4_H - MARGIN - 115;
+  drawDocumentFooter(
+    doc,
+    signatureBuffer,
+    qrBuffer,
+    orgName || "POL263",
+    `${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`,
+    footerTop,
+  );
 }
 
 function blankUnderline(doc: InstanceType<typeof PDFDocument>, label: string, y: number, lineWidth = 200): number {
@@ -237,7 +239,11 @@ export async function streamPaymentReceiptPDF(
   // Bottom half — office copy
   renderReceiptHalf(doc, { name: org.name, phone: org.phone, email: org.email, address: org.address, logoUrl: org.logoUrl }, tx, policy, client, "DUPLICATE — OFFICE COPY", midY + 16);
 
-  footer(doc, org.name, "Payment Receipt", tx.reference || tx.id.slice(0, 8).toUpperCase());
+  const [sigBufR, qrBufR] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("receipt", tx.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Payment Receipt", tx.reference || tx.id.slice(0, 8).toUpperCase(), sigBufR, qrBufR);
   doc.end();
 }
 
@@ -417,7 +423,11 @@ export async function streamCashupSheetPDF(
     if (cashup.confirmedAt) y = infoRow(doc, "Confirmed At", fmtDateTime(cashup.confirmedAt), y);
   }
 
-  footer(doc, org.name, "Cash Reconciliation", cashupId.slice(0, 8).toUpperCase());
+  const [sigBufC, qrBufC] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", cashupId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Cash Reconciliation", cashupId.slice(0, 8).toUpperCase(), sigBufC, qrBufC);
   doc.end();
 }
 
@@ -578,7 +588,11 @@ export async function streamRequisitionFormPDF(
   sigBlock(doc, "Approved By", MARGIN + 20 + sw, sw, y);
   sigBlock(doc, "Paid By / Date", MARGIN + 32 + sw * 2, sw, y);
 
-  footer(doc, org.name, "Requisition", req.requisitionNumber);
+  const [sigBufReq, qrBufReq] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", req.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Requisition", req.requisitionNumber, sigBufReq, qrBufReq);
   doc.end();
 }
 
@@ -687,7 +701,11 @@ export async function streamExpenditureVoucherPDF(
   sigBlock(doc, "Approved By", MARGIN + 20 + halfW, halfW, y);
   y += 100;
 
-  footer(doc, org.name, "Expenditure Voucher", expenditureId.slice(0, 8).toUpperCase());
+  const [sigBufE, qrBufE] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", expenditureId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Expenditure Voucher", expenditureId.slice(0, 8).toUpperCase(), sigBufE, qrBufE);
   doc.end();
 }
 

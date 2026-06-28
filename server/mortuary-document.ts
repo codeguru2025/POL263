@@ -2,17 +2,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
-
-const A4_W = 595.28;
-const A4_H = 841.89;
-const MARGIN = 48;
-const COL = A4_W - MARGIN * 2;
-
-const C_PRIMARY = "#0f766e";
-const C_TEXT = "#111827";
-const C_MUTED = "#6b7280";
-const C_BORDER = "#e5e7eb";
-const C_LIGHT_BG = "#f9fafb";
+import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_LIGHT_BG } from "./pdf-utils";
 
 function fmt(v: string | number | null | undefined): string {
   return v != null && String(v).trim() ? String(v).trim() : "—";
@@ -94,11 +84,23 @@ function sigBlock(doc: InstanceType<typeof PDFDocument>, label: string, xStart: 
   doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("Date & Time", xStart, y + 83, { width });
 }
 
-function footer(doc: InstanceType<typeof PDFDocument>, orgName: string | null, docType: string, refNo: string): void {
-  const footerY = A4_H - MARGIN - 24;
-  doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
-  doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED)
-    .text(`${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`, MARGIN, footerY + 6, { width: COL, align: "center" });
+function footer(
+  doc: InstanceType<typeof PDFDocument>,
+  orgName: string | null,
+  docType: string,
+  refNo: string,
+  signatureBuffer: Buffer | null = null,
+  qrBuffer: Buffer | null = null,
+): void {
+  const footerTop = A4_H - MARGIN - 115;
+  drawDocumentFooter(
+    doc,
+    signatureBuffer,
+    qrBuffer,
+    orgName || "POL263",
+    `${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`,
+    footerTop,
+  );
 }
 
 // ── MORTUARY RECEIPT PDF ──────────────────────────────────────
@@ -184,7 +186,11 @@ export async function streamMortuaryReceiptPDF(
   sigBlock(doc, "Handed Over By (Family / Referring Party)", MARGIN + half + 16, half, y);
   y += 100;
 
-  footer(doc, org.name, "Mortuary Receipt", intake.intakeNumber);
+  const [sigBufMR, qrBufMR] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", intake.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Mortuary Receipt", intake.intakeNumber, sigBufMR, qrBufMR);
   doc.end();
 }
 
@@ -251,7 +257,11 @@ export async function streamMortuaryDispatchPDF(
   sigBlock(doc, "Collected By (Receiving Party)", MARGIN + half + 16, half, y);
   y += 100;
 
-  footer(doc, org.name, "Mortuary Dispatch Note", intake.intakeNumber);
+  const [sigBufMD, qrBufMD] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", intake.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Mortuary Dispatch Note", intake.intakeNumber, sigBufMD, qrBufMD);
   doc.end();
 }
 
@@ -490,7 +500,11 @@ export async function streamBelongingsFormPDF(
   sigBlock(doc, "Receiving Staff Member", MARGIN + half + 16, half, y);
   y += 100;
 
-  footer(doc, org.name, "Belongings Register", intake.intakeNumber);
+  const [sigBufBR, qrBufBR] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", intake.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Belongings Register", intake.intakeNumber, sigBufBR, qrBufBR);
   doc.end();
 }
 
@@ -578,7 +592,11 @@ export async function streamBodyWashFormPDF(
   sigBlock(doc, "Date", MARGIN + half + 16, half, y);
   y += 100;
 
-  footer(doc, org.name, "Body Wash Requirements", intake.intakeNumber);
+  const [sigBufBW, qrBufBW] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", intake.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Body Wash Requirements", intake.intakeNumber, sigBufBW, qrBufBW);
   doc.end();
 }
 
@@ -738,7 +756,11 @@ export async function streamFuneralCaseWorksheetPDF(
   sigBlock(doc, "Case Officer Signature", MARGIN, half, y);
   sigBlock(doc, "Date", MARGIN + half + 16, half, y);
 
-  footer(doc, org.name, "Funeral Case Worksheet", fc.caseNumber);
+  const [sigBufFC, qrBufFC] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", fc.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Funeral Case Worksheet", fc.caseNumber, sigBufFC, qrBufFC);
   doc.end();
 }
 
@@ -853,7 +875,11 @@ export async function streamFuneralTaskSheetPDF(
   sigBlock(doc, "Case Officer", MARGIN, half, y);
   sigBlock(doc, "Date", MARGIN + half + 16, half, y);
 
-  footer(doc, org.name, "Funeral Task Sheet", fc.caseNumber);
+  const [sigBufFT, qrBufFT] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", fc.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Funeral Task Sheet", fc.caseNumber, sigBufFT, qrBufFT);
   doc.end();
 }
 
@@ -930,7 +956,11 @@ export async function streamStorageReceiptPDF(
   doc.font("Helvetica-Bold").fontSize(11).fillColor(C_PRIMARY)
     .text("RECEIVED WITH THANKS", MARGIN, y, { width: COL, align: "center" });
 
-  footer(doc, org.name, "Storage Receipt", intake.intakeNumber);
+  const [sigBufSR, qrBufSR] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", intake.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Storage Receipt", intake.intakeNumber, sigBufSR, qrBufSR);
   doc.end();
 }
 

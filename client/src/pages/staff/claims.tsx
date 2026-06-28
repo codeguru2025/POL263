@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useSearch } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
 import { PageHeader, PageShell, CardSection, FilterBar, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
@@ -14,7 +14,7 @@ import { ClientSearchInput } from "@/components/client-search-input";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye, FileDown } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { formatAmountWithCode } from "@shared/validation";
 import type { Claim } from "@shared/schema";
@@ -146,9 +146,16 @@ export default function StaffClaims() {
           description="Manage claim submissions, document verification, and adjudication."
           titleDataTestId="text-claims-title"
           actions={(
-            <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => setShowCreateDialog(true)} data-testid="button-new-claim">
-              <Plus className="h-4 w-4" /> Log New Claim
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <Button variant="outline" className="gap-1.5 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" asChild>
+                <a href={getApiBase() + "/api/forms/blank/claim-submission"} target="_blank" rel="noopener noreferrer">
+                  <FileDown className="h-4 w-4" /> Blank Claim Form
+                </a>
+              </Button>
+              <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => setShowCreateDialog(true)} data-testid="button-new-claim">
+                <Plus className="h-4 w-4" /> Log New Claim
+              </Button>
+            </div>
           )}
         />
 

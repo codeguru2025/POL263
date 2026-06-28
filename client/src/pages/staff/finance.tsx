@@ -12,8 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw } from "lucide-react";
+import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown } from "lucide-react";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import { PolicySearchInput } from "@/components/policy-search-input";
@@ -871,11 +872,37 @@ export default function StaffFinance() {
           title={commissionOnly ? "My Commissions" : "Finance"}
           description={commissionOnly ? "View your commission earnings and history" : "Payments, receipts, cashups, and commissions"}
           titleDataTestId="text-finance-title"
-          actions={canWriteFinance ? (
-            <Button onClick={handleOpenPaymentDialog} data-testid="button-new-payment">
-              <Plus className="h-4 w-4 mr-2" />Receipt a Policy
-            </Button>
-          ) : undefined}
+          actions={(
+            <div className="flex gap-2 flex-wrap">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="gap-1.5 shadow-sm">
+                    <FileDown className="h-4 w-4" /> Blank Forms <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/payment-receipt"} target="_blank" rel="noopener noreferrer">Payment Receipt</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/cashup-sheet"} target="_blank" rel="noopener noreferrer">Daily Cashup Sheet</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/requisition-form"} target="_blank" rel="noopener noreferrer">Requisition Form</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/expenditure-voucher"} target="_blank" rel="noopener noreferrer">Expenditure Voucher</a>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {canWriteFinance && (
+                <Button onClick={handleOpenPaymentDialog} data-testid="button-new-payment">
+                  <Plus className="h-4 w-4 mr-2" />Receipt a Policy
+                </Button>
+              )}
+            </div>
+          )}
         />
 
         {!commissionOnly && (

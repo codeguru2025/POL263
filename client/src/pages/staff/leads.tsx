@@ -10,8 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { PageHeader, PageShell } from "@/components/ds";
-import { Plus, Loader2, FileText, Phone, Mail, User, Calendar, Tag, MessageSquare, X } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { Plus, Loader2, FileText, Phone, Mail, User, Calendar, Tag, MessageSquare, X, FileDown } from "lucide-react";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useLocation, useSearch } from "wouter";
 import { cn } from "@/lib/utils";
 
@@ -211,6 +211,12 @@ export default function StaffLeads() {
           title="Lead Pipeline"
           description="Drag cards between stages or click a card to edit."
           actions={
+            <div className="flex gap-2 flex-wrap items-center">
+              <Button variant="outline" className="gap-1.5" asChild>
+                <a href={getApiBase() + "/api/forms/blank/lead-capture"} target="_blank" rel="noopener noreferrer">
+                  <FileDown className="h-4 w-4" /> Blank Lead Form
+                </a>
+              </Button>
             <Dialog open={showCreate} onOpenChange={setShowCreate}>
               <DialogTrigger asChild>
                 <Button data-testid="button-new-lead">
@@ -264,6 +270,7 @@ export default function StaffLeads() {
                 </form>
               </DialogContent>
             </Dialog>
+            </div>
           }
         />
 

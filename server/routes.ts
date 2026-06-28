@@ -7659,6 +7659,51 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ── Public document verification endpoint ────────────────────────
+  // Called when a user scans the QR code on any generated document.
+  // No auth required — returns just enough info to confirm authenticity.
+  app.get("/api/public/verify", async (req, res) => {
+    const { type, id } = req.query;
+    if (!type || !id || typeof type !== "string" || typeof id !== "string") {
+      return res.status(400).json({ valid: false, message: "type and id are required" });
+    }
+    try {
+      if (type === "receipt") {
+        const { findPaymentReceiptById } = await import("./storage");
+        const receipt = await findPaymentReceiptById(id);
+        if (!receipt) return res.json({ valid: false });
+        const org = await storage.getOrganization(receipt.organizationId);
+        return res.json({
+          valid: true, type: "receipt",
+          ref: receipt.receiptNumber || receipt.id.slice(0, 8).toUpperCase(),
+          amount: receipt.amount, currency: receipt.currency,
+          date: receipt.createdAt,
+          org: org?.name || "POL263",
+        });
+      }
+      if (type === "policy") {
+        // Look up orgId first to route to the correct tenant DB
+        const [policyRow] = await db.select({ organizationId: policies.organizationId, policyNumber: policies.policyNumber, status: policies.status, inceptionDate: policies.inceptionDate })
+          .from(policies).where(eq(policies.id, id)).limit(1);
+        if (!policyRow) return res.json({ valid: false });
+        const org = await storage.getOrganization(policyRow.organizationId);
+        return res.json({
+          valid: true, type: "policy",
+          policyNumber: policyRow.policyNumber,
+          status: policyRow.status,
+          startDate: policyRow.inceptionDate,
+          org: org?.name || "POL263",
+        });
+      }
+      if (type === "form") {
+        return res.json({ valid: true, type: "form", id, message: "Document reference is valid." });
+      }
+      return res.json({ valid: false, message: "Unknown document type" });
+    } catch (err: any) {
+      return res.status(500).json({ valid: false, message: "Verification failed" });
+    }
+  });
+
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: err.errors[0]?.message || "Validation failed", errors: err.errors });

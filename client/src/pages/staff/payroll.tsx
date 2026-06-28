@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { Users, Plus, Loader2, Banknote, Calendar, FileSpreadsheet, Play, Pencil, ChevronDown, ChevronUp, Printer, Download, Send, Mail } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 
 // ── Payroll calculation (mirrored server-side in the PUT route) ──────────────
 interface EmpDefaults {
@@ -555,6 +555,11 @@ export default function StaffPayroll() {
           titleDataTestId="text-payroll-title"
           actions={(
             <div className="flex flex-wrap gap-2">
+              <Button variant="outline" className="gap-1.5" asChild>
+                <a href={getApiBase() + "/api/forms/blank/employee-enrollment"} target="_blank" rel="noopener noreferrer">
+                  <Download className="h-4 w-4" /> Blank Enrollment Form
+                </a>
+              </Button>
               <Button variant="outline" onClick={() => { resetEmployeeForm(); setShowEmployeeDialog(true); }} data-testid="button-add-employee">
                 <Plus className="h-4 w-4 mr-2" />Add Employee
               </Button>

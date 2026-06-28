@@ -2,17 +2,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
-
-const A4_W = 595.28;
-const A4_H = 841.89;
-const MARGIN = 48;
-const COL = A4_W - MARGIN * 2;
-
-const C_PRIMARY = "#0f766e";
-const C_TEXT = "#111827";
-const C_MUTED = "#6b7280";
-const C_BORDER = "#e5e7eb";
-const C_LIGHT_BG = "#f9fafb";
+import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_LIGHT_BG, A4_W, A4_H, MARGIN, COL } from "./pdf-utils";
 
 function fmt(v: string | number | null | undefined): string {
   return v != null && String(v).trim() ? String(v).trim() : "—";
@@ -111,11 +101,23 @@ function sigBlock(doc: InstanceType<typeof PDFDocument>, label: string, xStart: 
   doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("Date & Time", xStart, y + 83, { width });
 }
 
-function footer(doc: InstanceType<typeof PDFDocument>, orgName: string | null, docType: string, refNo: string): void {
-  const footerY = A4_H - MARGIN - 24;
-  doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
-  doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED)
-    .text(`${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`, MARGIN, footerY + 6, { width: COL, align: "center" });
+function footer(
+  doc: InstanceType<typeof PDFDocument>,
+  orgName: string | null,
+  docType: string,
+  refNo: string,
+  signatureBuffer: Buffer | null = null,
+  qrBuffer: Buffer | null = null,
+): void {
+  const footerTop = A4_H - MARGIN - 115;
+  drawDocumentFooter(
+    doc,
+    signatureBuffer,
+    qrBuffer,
+    orgName || "POL263",
+    `${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`,
+    footerTop,
+  );
 }
 
 function fieldLine(doc: InstanceType<typeof PDFDocument>, label: string, y: number, lineWidth = 300): number {
@@ -195,7 +197,11 @@ export async function streamClientRegistrationPDF(
   sigBlock(doc, "Client Signature", MARGIN, sigW, y);
   sigBlock(doc, "Agent / Sales Rep Signature", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, org.name, "Client Registration", client.id.slice(0, 8).toUpperCase());
+  const [sigBuf, qrBuf] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", client.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Client Registration", client.id.slice(0, 8).toUpperCase(), sigBuf, qrBuf);
   doc.end();
 }
 
@@ -306,7 +312,11 @@ export async function streamPolicyApplicationPDF(
   sigBlock(doc, "Client / Policyholder Signature", MARGIN, sigW, y);
   sigBlock(doc, "Agent / Issuing Officer Signature", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, org.name, "Policy Application", policy.policyNumber);
+  const [sigBuf2, qrBuf2] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("policy", policy.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Policy Application", policy.policyNumber, sigBuf2, qrBuf2);
   doc.end();
 }
 
@@ -429,7 +439,11 @@ export async function streamDependentRegistrationPDF(
   sigBlock(doc, "Policyholder Signature", MARGIN, sigW, y);
   sigBlock(doc, "Authorising Officer", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, org.name, "Dependent Registration", client.id.slice(0, 8).toUpperCase());
+  const [sigBuf3, qrBuf3] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", client.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Dependent Registration", client.id.slice(0, 8).toUpperCase(), sigBuf3, qrBuf3);
   doc.end();
 }
 
@@ -548,7 +562,11 @@ export async function streamWaiverRequestPDF(
   sigBlock(doc, "Requester Signature", MARGIN, sigW, y);
   sigBlock(doc, "Approver / Manager Signature", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, org.name, "Waiting Period Waiver Request", waiverId.slice(0, 8).toUpperCase());
+  const [sigBuf4, qrBuf4] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", waiverId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Waiting Period Waiver Request", waiverId.slice(0, 8).toUpperCase(), sigBuf4, qrBuf4);
   doc.end();
 }
 
@@ -731,7 +749,11 @@ export async function streamClaimSubmissionPDF(
   sigBlock(doc, "Submitting Staff", MARGIN + sigW + 18, sigW, y);
   sigBlock(doc, "Verifying Manager", MARGIN + (sigW + 18) * 2, sigW, y);
 
-  footer(doc, org.name, "Claim Submission", claim.claimNumber);
+  const [sigBuf5, qrBuf5] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", claim.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Claim Submission", claim.claimNumber, sigBuf5, qrBuf5);
   doc.end();
 }
 

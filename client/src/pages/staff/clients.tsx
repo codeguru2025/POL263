@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,6 +39,8 @@ import {
   FileText,
   Upload,
   ExternalLink,
+  FileDown,
+  ChevronDown,
 } from "lucide-react";
 
 interface Client {
@@ -1008,9 +1011,26 @@ export default function StaffClients() {
           title="Leads & Clients"
           description="Track prospects and conversions. Clients are your leads — policies are your source of truth."
           actions={(
-            <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }} data-testid="btn-add-client">
-              <Plus className="h-4 w-4" /> Capture Lead
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="gap-1.5 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0">
+                    <FileDown className="h-4 w-4" /> Blank Forms <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/client-registration"} target="_blank" rel="noopener noreferrer">Client Registration Form</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={getApiBase() + "/api/forms/blank/dependent-registration"} target="_blank" rel="noopener noreferrer">Dependent Registration Form</a>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }} data-testid="btn-add-client">
+                <Plus className="h-4 w-4" /> Capture Lead
+              </Button>
+            </div>
           )}
         />
 

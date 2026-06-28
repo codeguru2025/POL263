@@ -2,17 +2,7 @@ import PDFDocument from "pdfkit";
 import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
-
-// ── Constants ─────────────────────────────────────────────────
-const A4_W = 595.28;
-const A4_H = 841.89;
-const MARGIN = 48;
-const COL = A4_W - MARGIN * 2;
-
-const C_PRIMARY = "#0f766e";
-const C_TEXT = "#111827";
-const C_MUTED = "#6b7280";
-const C_BORDER = "#e5e7eb";
+import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER } from "./pdf-utils";
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -88,11 +78,23 @@ function sigBlock(doc: InstanceType<typeof PDFDocument>, label: string, xStart: 
   doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED).text("Printed Name & Date", xStart, y + 58, { width });
 }
 
-function footer(doc: InstanceType<typeof PDFDocument>, orgName: string | null, docType: string, refNo: string): void {
-  const footerY = A4_H - MARGIN - 24;
-  doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
-  doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED)
-    .text(`${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`, MARGIN, footerY + 6, { width: COL, align: "center" });
+function footer(
+  doc: InstanceType<typeof PDFDocument>,
+  orgName: string | null,
+  docType: string,
+  refNo: string,
+  signatureBuffer: Buffer | null = null,
+  qrBuffer: Buffer | null = null,
+): void {
+  const footerTop = A4_H - MARGIN - 115;
+  drawDocumentFooter(
+    doc,
+    signatureBuffer,
+    qrBuffer,
+    orgName || "POL263",
+    `${orgName || "POL263"} — ${docType} · Ref: ${refNo} · For official use only`,
+    footerTop,
+  );
 }
 
 function checkboxRow(doc: InstanceType<typeof PDFDocument>, label: string, checked: boolean | null | undefined, y: number): number {
@@ -164,7 +166,11 @@ export async function streamAttendanceLogPDF(
   sigBlock(doc, "Prepared by (HR / Manager)", MARGIN, 220, y);
   sigBlock(doc, "Approved by", MARGIN + 270, 220, y);
 
-  footer(doc, org.name, "Attendance Log", `ATT-${new Date().getFullYear()}`);
+  const [sigBufAtt, qrBufAtt] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", `att-${orgId}-${new Date().getFullYear()}`); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Attendance Log", `ATT-${new Date().getFullYear()}`, sigBufAtt, qrBufAtt);
   doc.end();
 }
 
@@ -263,7 +269,11 @@ export async function streamEmployeeEnrollmentPDF(
   sigBlock(doc, "Employee Signature", MARGIN, 220, y);
   sigBlock(doc, "HR Officer", MARGIN + 270, 220, y);
 
-  footer(doc, org.name, "Employee Enrollment Form", emp.employeeNumber || employeeId);
+  const [sigBufEmp, qrBufEmp] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", employeeId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Employee Enrollment Form", emp.employeeNumber || employeeId, sigBufEmp, qrBufEmp);
   doc.end();
 }
 
@@ -420,7 +430,11 @@ export async function streamVehicleRegistrationPDF(
   sigBlock(doc, "Fleet Manager", MARGIN, 220, y);
   sigBlock(doc, "Authorised by", MARGIN + 270, 220, y);
 
-  footer(doc, org.name, "Vehicle Registration Record", vehicle.registration || vehicleId);
+  const [sigBufVR, qrBufVR] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", vehicleId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Vehicle Registration Record", vehicle.registration || vehicleId, sigBufVR, qrBufVR);
   doc.end();
 }
 
@@ -518,7 +532,11 @@ export async function streamFuelLogPDF(
 
   y += 20;
   sigBlock(doc, "Fleet Manager", MARGIN, 220, y);
-  footer(doc, org.name, "Fuel Log", vehicle.registration || vehicleId);
+  const [sigBufFL, qrBufFL] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", vehicleId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Fuel Log", vehicle.registration || vehicleId, sigBufFL, qrBufFL);
   doc.end();
 }
 
@@ -608,7 +626,11 @@ export async function streamMaintenanceRecordPDF(
 
   y += 20;
   sigBlock(doc, "Fleet Manager", MARGIN, 220, y);
-  footer(doc, org.name, "Maintenance Record", vehicle.registration || vehicleId);
+  const [sigBufMaint, qrBufMaint] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", vehicleId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Maintenance Record", vehicle.registration || vehicleId, sigBufMaint, qrBufMaint);
   doc.end();
 }
 
@@ -688,7 +710,11 @@ export async function streamDriverAssignmentPDF(
   sigBlock(doc, "Driver Signature", MARGIN, 220, y);
   sigBlock(doc, "Authorised by", MARGIN + 270, 220, y);
 
-  footer(doc, org.name, "Driver Assignment Slip", `DA-${assignmentId.slice(0, 8).toUpperCase()}`);
+  const [sigBufDA, qrBufDA] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", assignmentId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Driver Assignment Slip", `DA-${assignmentId.slice(0, 8).toUpperCase()}`, sigBufDA, qrBufDA);
   doc.end();
 }
 
@@ -782,7 +808,11 @@ export async function streamLeadCapturePDF(
   sigBlock(doc, "Agent Signature", MARGIN, 220, y);
   sigBlock(doc, "Supervisor", MARGIN + 270, 220, y);
 
-  footer(doc, org.name, "Lead Capture Form", `LEAD-${leadId.slice(0, 8).toUpperCase()}`);
+  const [sigBufLead, qrBufLead] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", leadId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Lead Capture Form", `LEAD-${leadId.slice(0, 8).toUpperCase()}`, sigBufLead, qrBufLead);
   doc.end();
 }
 

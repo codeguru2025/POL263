@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -18,7 +19,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User } from "lucide-react";
+import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User, ChevronDown } from "lucide-react";
 import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 import { QuoteDialog } from "./quotations";
 
@@ -248,9 +249,45 @@ export default function StaffFunerals() {
           description="Manage funeral cases, logistics, fleet dispatch, and resource allocation."
           titleDataTestId="text-page-title"
           actions={(
-            <Button className="gap-2 shadow-sm" data-testid="button-new-case" onClick={() => setShowCreateCase(true)}>
-              <Plus className="h-4 w-4" /> New Case
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="gap-1.5 shadow-sm">
+                    <FileDown className="h-4 w-4" /> Blank Forms <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/funeral-case-worksheet`} target="_blank" rel="noopener noreferrer">Case Worksheet</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/funeral-quotation`} target="_blank" rel="noopener noreferrer">Funeral Quotation</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/driver-checklist`} target="_blank" rel="noopener noreferrer">Driver Checklist</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/vehicle-registration`} target="_blank" rel="noopener noreferrer">Vehicle Registration</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/fuel-log`} target="_blank" rel="noopener noreferrer">Fuel Log</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/maintenance-record`} target="_blank" rel="noopener noreferrer">Maintenance Record</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/driver-assignment`} target="_blank" rel="noopener noreferrer">Driver Assignment</a>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <a href={`${getApiBase()}/api/forms/blank/vehicle-trip-log`} target="_blank" rel="noopener noreferrer">Vehicle Trip Log</a>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button className="gap-2 shadow-sm" data-testid="button-new-case" onClick={() => setShowCreateCase(true)}>
+                <Plus className="h-4 w-4" /> New Case
+              </Button>
+            </div>
           )}
         />
 
