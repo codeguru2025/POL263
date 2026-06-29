@@ -468,8 +468,10 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           title: "Reports",
           items: filterNav([
             { href: "/staff/schedule-reports", label: "Schedule & Dept Reports", icon: CalendarDays, permission: "read:report" },
-            { href: "/staff/reports?section=policies", label: "Operational Reports", icon: FileStack, permission: "read:report" },
+            { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
             { href: "/staff/reports?section=finance", label: "Financial Reports", icon: Receipt, permission: "read:report" },
+            { href: "/staff/reports?section=agents", label: "Agent Reports", icon: UserCircle, permission: "read:report" },
+            { href: "/staff/reports?section=claims", label: "Claims Reports", icon: Shield, permission: "read:report" },
             { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
             { href: "/staff/employee-reports", label: "Employee Reports", icon: Users, permission: "read:report", agentHidden: true },
             { href: "/staff/diagnostics", label: "System Issue Reports", icon: Stethoscope, permission: "read:audit_log" },
