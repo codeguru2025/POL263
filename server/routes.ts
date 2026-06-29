@@ -7262,67 +7262,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "new-joinings": {
           const issued = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
-            "Franchise_ID",
-            "Branch_ID",
-            "Franchise",
-            "BranchName",
-            "MarketingManager",
-            "Member_ID",
-            "Policy_number",
-            "Inception_Date",
-            "ID_Number",
-            "First_Name",
-            "Surname",
-            "PolicyHolder",
-            "Title",
-            "Initials",
-            "UsualPremium",
-            "Cell_Number",
-            "PhysicalAddress",
-            "PostalAddress",
-            "EasyPayNumber",
-            "Payment_Method",
-            "StopOrderNumber",
-            "Product_Name",
-            "Waiting_Period",
-            "InternalReferenceNumber",
-            "AgentName",
-            "MaturityTerm",
-            "GroupName",
-            "fdate",
-            "tdate",
+            "Franchise_ID", "Branch_ID", "Franchise", "BranchName", "MarketingManager",
+            "Member_ID", "Policy_Number", "Inception_Date", "Date_Captured", "currstatus",
+            "ID_Number", "Date_Of_Birth", "First_Name", "Surname", "PolicyHolder", "Title", "Initials",
+            "UsualPremium", "Currency", "Cell_Number", "EmailAddress", "PhysicalAddress", "PostalAddress",
+            "EasyPayNumber", "Payment_Method", "StopOrderNumber", "Product_Name",
+            "Waiting_Period", "InternalReferenceNumber", "AgentName", "MaturityTerm", "GroupName",
+            "fdate", "tdate",
           ];
           currencyTotals = null;
           rows = issued.map((r: any) => [
-            r.Franchise_ID ?? "",
-            r.Branch_ID ?? "",
-            r.Franchise ?? "",
-            r.BranchName ?? "",
-            r.MarketingManager ?? "",
-            r.Member_ID ?? "",
-            r.Policy_number ?? "",
-            r.Inception_Date ?? "",
-            r.ID_Number ?? "",
-            r.First_Name ?? "",
-            r.Surname ?? "",
-            r.PolicyHolder ?? "",
-            r.Title ?? "",
-            r.Initials ?? "",
-            r.UsualPremium ?? "",
-            r.Cell_Number ?? "",
-            r.PhysicalAddress ?? "",
-            r.PostalAddress ?? "",
-            r.EasyPayNumber ?? "",
-            r.Payment_Method ?? "",
-            r.StopOrderNumber ?? "",
-            r.Product_Name ?? "",
-            r.Waiting_Period ?? "",
-            r.InternalReferenceNumber ?? "",
-            r.AgentName ?? "",
-            r.MaturityTerm ?? "",
-            r.GroupName ?? "",
-            r.fdate ?? "",
-            r.tdate ?? "",
+            r.Franchise_ID ?? "", r.Branch_ID ?? "", r.Franchise ?? "", r.BranchName ?? "", r.MarketingManager ?? "",
+            r.Member_ID ?? "", r.Policy_number ?? "", r.Inception_Date ?? "", r.Date_Captured ?? "", r.currstatus ?? "",
+            r.ID_Number ?? "", r.Date_Of_Birth ?? "", r.First_Name ?? "", r.Surname ?? "", r.PolicyHolder ?? "", r.Title ?? "", r.Initials ?? "",
+            r.UsualPremium ?? "", r.Currency ?? "", r.Cell_Number ?? "", r.EmailAddress ?? "", r.PhysicalAddress ?? "", r.PostalAddress ?? "",
+            r.EasyPayNumber ?? "", r.Payment_Method ?? "", r.StopOrderNumber ?? "", r.Product_Name ?? "",
+            r.Waiting_Period ?? "", r.InternalReferenceNumber ?? "", r.AgentName ?? "", r.MaturityTerm ?? "", r.GroupName ?? "",
+            r.fdate ?? "", r.tdate ?? "",
           ]);
           break;
         }
@@ -7392,13 +7348,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         // ─── Employee Report types ────────────────────────────────
         case "policies-per-agent": {
-          const joinRaw = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Client Name", "Client Phone", "Product", "Branch", "Group", "Agent", "Inception Date", "Capture Date"];
-          rows = joinRaw.map((r: any) => [
-            r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule,
-            `${r.clientFirstName || ""} ${r.clientLastName || ""}`.trim(), r.clientPhone || "",
-            r.productName || "", r.branchName || "", r.groupName || "",
-            r.agentDisplayName || r.agentEmail || "", r.inceptionDate || "", r.policyCreatedAt || "",
+          const ppaRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          ppaRaw.sort((a: any, b: any) => {
+            const ag = (a.AgentsName || "").localeCompare(b.AgentsName || "");
+            return ag !== 0 ? ag : (a.Inception_Date || "").localeCompare(b.Inception_Date || "");
+          });
+          headers = [
+            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
+            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Passport_Number",
+            "Date_Of_Birth", "ProductName", "physicalAddress", "postalAddress", "Cell_Number",
+            "EmailAddress", "UsualPremium", "Currency", "AgentsName", "Payment_Method",
+            "IsDebiCheck", "User_Code", "currstatus", "agentCode", "ApplicationComplete",
+            "Notes", "Date_Captured", "maturityTerm", "GroupName", "EasyPayNumber",
+            "ConfidentialNotes", "OverrideNAEDOWithEFT", "EmployeeID", "UserID", "LanguageId",
+            "SalaryScaleID", "PayAtNumber", "Debit_day", "IsNaedo", "CapturerName",
+            "LanguageName", "SalaryScale", "HomeTelephone", "Exclude Escalation", "WhatsappNumber",
+          ];
+          rows = ppaRaw.map((r: any) => [
+            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
+            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Passport_Number,
+            r.Date_Of_Birth, r.ProductName, r.physicalAddress, r.postalAddress, r.Cell_Number,
+            r.EmailAddress, r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method,
+            r.IsDebiCheck, r.User_Code, r.currstatus, r.agentCode, r.ApplicationComplete,
+            r.Notes, r.Date_Captured, r.maturityTerm, r.GroupName, r.EasyPayNumber,
+            r.ConfidentialNotes, r.OverrideNAEDOWithEFT, r.EmployeeID, r.UserID, r.LanguageId,
+            r.SalaryScaleID, r.PayAtNumber, r.Debit_day, r.IsNaedo, r.CapturerName,
+            r.LanguageName, r.SalaryScale, r.HomeTelephone, r["Exclude Escalation"], r.WhatsappNumber,
           ]);
           break;
         }
@@ -7459,20 +7434,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "arrears-breakdown": {
-          const graceRaw = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters });
-          const graceOnly = graceRaw.filter((r: any) => r.status === "grace");
-          headers = ["Policy Number", "Client", "Phone", "Status", "Currency", "Premium", "Agent", "Branch", "Grace End", "Days Overdue"];
-          rows = graceOnly.map((r: any) => {
-            const graceEnd = r.graceEndDate ? new Date(r.graceEndDate) : null;
-            const daysOverdue = graceEnd ? Math.max(0, Math.floor((Date.now() - graceEnd.getTime()) / 86400000)) : 0;
-            return [r.policyNumber, `${r.clientFirstName || ""} ${r.clientLastName || ""}`.trim(), r.clientPhone || "", r.status, r.currency, r.premiumAmount, r.agentDisplayName || "", r.branchName || "", r.graceEndDate || "", daysOverdue];
-          });
+          const graceRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
+          headers = [
+            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
+            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Date_Of_Birth",
+            "ProductName", "Cell_Number", "EmailAddress", "physicalAddress", "postalAddress",
+            "UsualPremium", "Currency", "AgentsName", "Payment_Method", "currstatus",
+            "Date_Captured", "GroupName", "Debit_day",
+          ];
+          rows = graceRaw.map((r: any) => [
+            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
+            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Date_Of_Birth,
+            r.ProductName, r.Cell_Number, r.EmailAddress, r.physicalAddress, r.postalAddress,
+            r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method, r.currstatus,
+            r.Date_Captured, r.GroupName, r.Debit_day,
+          ]);
           break;
         }
         case "outstanding-payments": {
-          const awaitingRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
-          rows = awaitingRaw.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          const awaitingRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
+          headers = [
+            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
+            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Date_Of_Birth",
+            "ProductName", "Cell_Number", "EmailAddress", "physicalAddress", "postalAddress",
+            "UsualPremium", "Currency", "AgentsName", "Payment_Method", "currstatus",
+            "Date_Captured", "GroupName", "Debit_day",
+          ];
+          rows = awaitingRaw.map((r: any) => [
+            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
+            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Date_Of_Birth,
+            r.ProductName, r.Cell_Number, r.EmailAddress, r.physicalAddress, r.postalAddress,
+            r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method, r.currstatus,
+            r.Date_Captured, r.GroupName, r.Debit_day,
+          ]);
           break;
         }
         case "captured-per-employee": {
@@ -7565,9 +7559,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "broker-policies": {
-          const bpRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Policy Number", "Status", "Currency", "Premium", "Payment Schedule", "Created"];
-          rows = bpRaw.map((r: any) => [r.policyNumber, r.status, r.currency, r.premiumAmount, r.paymentSchedule, r.createdAt]);
+          const bpRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = [
+            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
+            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Passport_Number",
+            "Date_Of_Birth", "ProductName", "physicalAddress", "postalAddress", "Cell_Number",
+            "EmailAddress", "UsualPremium", "Currency", "AgentsName", "Payment_Method",
+            "IsDebiCheck", "User_Code", "currstatus", "agentCode", "ApplicationComplete",
+            "Notes", "Date_Captured", "maturityTerm", "GroupName", "EasyPayNumber",
+            "ConfidentialNotes", "OverrideNAEDOWithEFT", "EmployeeID", "UserID", "LanguageId",
+            "SalaryScaleID", "PayAtNumber", "Debit_day", "IsNaedo", "CapturerName",
+            "LanguageName", "SalaryScale", "HomeTelephone", "Exclude Escalation", "WhatsappNumber",
+          ];
+          rows = bpRaw.map((r: any) => [
+            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
+            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Passport_Number,
+            r.Date_Of_Birth, r.ProductName, r.physicalAddress, r.postalAddress, r.Cell_Number,
+            r.EmailAddress, r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method,
+            r.IsDebiCheck, r.User_Code, r.currstatus, r.agentCode, r.ApplicationComplete,
+            r.Notes, r.Date_Captured, r.maturityTerm, r.GroupName, r.EasyPayNumber,
+            r.ConfidentialNotes, r.OverrideNAEDOWithEFT, r.EmployeeID, r.UserID, r.LanguageId,
+            r.SalaryScaleID, r.PayAtNumber, r.Debit_day, r.IsNaedo, r.CapturerName,
+            r.LanguageName, r.SalaryScale, r.HomeTelephone, r["Exclude Escalation"], r.WhatsappNumber,
+          ]);
           break;
         }
         case "branch-report": {
@@ -7683,25 +7697,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/diagnostics/unallocated-payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
-    try {
-      const user = req.user as any;
-      const { pool } = await import("./db");
-      const result = await pool.query(
-        `SELECT id, amount, method, reference, status, received_at, created_at
-         FROM payment_transactions
-         WHERE organization_id = $1 AND policy_id IS NULL
-         ORDER BY created_at DESC LIMIT 50`,
-        [user.organizationId]
-      );
-      const rows = result.rows.map((r: any) => ({
-        id: r.id, amount: r.amount, method: r.method, reference: r.reference,
-        status: r.status, receivedAt: r.received_at, createdAt: r.created_at,
-      }));
-      return res.json(rows);
-    } catch (err: any) {
-      return res.status(500).json({ message: safeError(err) });
-    }
+  app.get("/api/diagnostics/unallocated-payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (_req, res) => {
+    return res.json([]);
   });
 
   app.get("/api/diagnostics/recent-errors", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {

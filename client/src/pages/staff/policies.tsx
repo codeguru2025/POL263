@@ -848,7 +848,7 @@ export default function StaffPolicies() {
           mobileNumber: "",
         },
         memberAddOns: {},
-        newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
+        newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", physicalAddress: "", postalAddress: "" },
         isLegacy: false,
       });
       toast({ title: "Policy created", description: policy.isLegacy ? `Policy ${policy.policyNumber} has been created and auto-activated as a legacy policy.` : `Policy ${policy.policyNumber} has been created in inactive status.` });
