@@ -23,6 +23,28 @@ import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, Fil
 import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 import { QuoteDialog } from "./quotations";
 
+// Convert a UTC timestamp from the DB into a value suitable for <input type="datetime-local">.
+// datetime-local expects local time; .toISOString() gives UTC, so we offset by the browser's TZ.
+function utcToDatetimeLocal(utcStr: string): string {
+  const d = new Date(utcStr);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+// Convert a datetime-local string (local time, no TZ) to a UTC ISO string for the server.
+// The browser parses "YYYY-MM-DDTHH:mm" as LOCAL time, so .toISOString() correctly gives UTC.
+function datetimeLocalToUtc(local: string): string {
+  return new Date(local).toISOString();
+}
+
+const TIME_FIELDS: (keyof CaseForm)[] = ["bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd"];
+
+// Add/subtract hours from a datetime-local string.
+function shiftTime(local: string, hours: number): string {
+  const d = new Date(local);
+  d.setMinutes(d.getMinutes() + hours * 60);
+  return utcToDatetimeLocal(d.toISOString());
+}
+
 type CaseForm = {
   deceasedName: string;
   deceasedDob: string;
@@ -742,10 +764,10 @@ function CaseDetailView({
             <>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4 mb-1.5">Timeline</p>
               <div className="space-y-0.5">
-                <DetailRow label="Body wash" value={(fc as any).bodyWashTime ? new Date((fc as any).bodyWashTime).toLocaleString("en-ZA") : undefined} />
-                <DetailRow label="Departure for burial" value={(fc as any).burialDepartureTime ? new Date((fc as any).burialDepartureTime).toLocaleString("en-ZA") : undefined} />
-                <DetailRow label="Memorial start" value={(fc as any).memorialServiceStart ? new Date((fc as any).memorialServiceStart).toLocaleString("en-ZA") : undefined} />
-                <DetailRow label="Memorial end" value={(fc as any).memorialServiceEnd ? new Date((fc as any).memorialServiceEnd).toLocaleString("en-ZA") : undefined} />
+                <DetailRow label="Body wash" value={(fc as any).bodyWashTime ? new Date((fc as any).bodyWashTime).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
+                <DetailRow label="Departure for burial" value={(fc as any).burialDepartureTime ? new Date((fc as any).burialDepartureTime).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
+                <DetailRow label="Memorial start" value={(fc as any).memorialServiceStart ? new Date((fc as any).memorialServiceStart).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
+                <DetailRow label="Memorial end" value={(fc as any).memorialServiceEnd ? new Date((fc as any).memorialServiceEnd).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
               </div>
             </>
           )}
@@ -994,10 +1016,10 @@ function CaseFormDialog({
         burialVehicleId: initial.burialVehicleId ?? "",
         burialDriverId: initial.burialDriverId ?? "",
         attendingAgentId: initial.attendingAgentId ?? "",
-        bodyWashTime: (initial as any).bodyWashTime ? new Date((initial as any).bodyWashTime).toISOString().slice(0, 16) : "",
-        burialDepartureTime: (initial as any).burialDepartureTime ? new Date((initial as any).burialDepartureTime).toISOString().slice(0, 16) : "",
-        memorialServiceStart: (initial as any).memorialServiceStart ? new Date((initial as any).memorialServiceStart).toISOString().slice(0, 16) : "",
-        memorialServiceEnd: (initial as any).memorialServiceEnd ? new Date((initial as any).memorialServiceEnd).toISOString().slice(0, 16) : "",
+        bodyWashTime: (initial as any).bodyWashTime ? utcToDatetimeLocal((initial as any).bodyWashTime) : "",
+        burialDepartureTime: (initial as any).burialDepartureTime ? utcToDatetimeLocal((initial as any).burialDepartureTime) : "",
+        memorialServiceStart: (initial as any).memorialServiceStart ? utcToDatetimeLocal((initial as any).memorialServiceStart) : "",
+        memorialServiceEnd: (initial as any).memorialServiceEnd ? utcToDatetimeLocal((initial as any).memorialServiceEnd) : "",
         bodyIdentifierName: (initial as any).bodyIdentifierName ?? "",
         bodyIdentifierIdNumber: (initial as any).bodyIdentifierIdNumber ?? "",
         notes: initial.notes ?? "",
@@ -1081,12 +1103,36 @@ function CaseFormDialog({
     }
   };
 
+  // Auto-fill empty time fields when a key anchor time is set.
+  const autoFillTimes = (field: keyof CaseForm, value: string) => {
+    if (!value) return;
+    setForm((f) => {
+      const next = { ...f, [field]: value };
+      if (field === "burialDepartureTime") {
+        if (!next.memorialServiceEnd)   next.memorialServiceEnd   = shiftTime(value, -0.5);
+        if (!next.memorialServiceStart) next.memorialServiceStart = shiftTime(value, -2);
+        if (!next.bodyWashTime)         next.bodyWashTime         = shiftTime(value, -4);
+      }
+      if (field === "memorialServiceStart") {
+        if (!next.bodyWashTime)         next.bodyWashTime         = shiftTime(value, -2);
+        if (!next.memorialServiceEnd)   next.memorialServiceEnd   = shiftTime(value, 1.5);
+        if (!next.burialDepartureTime)  next.burialDepartureTime  = shiftTime(value, 2.5);
+      }
+      return next;
+    });
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const data: Partial<CaseForm> = {};
     (Object.keys(form) as (keyof CaseForm)[]).forEach((k) => {
       const v = form[k];
-      (data as any)[k] = v || null;
+      // Convert datetime-local strings (local time) to UTC ISO before sending to server
+      if (TIME_FIELDS.includes(k) && typeof v === "string" && v) {
+        (data as any)[k] = datetimeLocalToUtc(v);
+      } else {
+        (data as any)[k] = v || null;
+      }
     });
     onSubmit(data);
   };
@@ -1350,15 +1396,24 @@ function CaseFormDialog({
             <AccordionItem value="timing">
               <AccordionTrigger>Service Timing</AccordionTrigger>
               <AccordionContent>
+                <p className="text-xs text-muted-foreground mb-3">Set the burial departure time or memorial start time first — the other fields will auto-fill based on a typical 4-hour service window.</p>
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <Field label="Time of Body Wash">
                     <Input type="datetime-local" value={form.bodyWashTime} onChange={set("bodyWashTime")} />
                   </Field>
                   <Field label="Departure Time for Burial">
-                    <Input type="datetime-local" value={form.burialDepartureTime} onChange={set("burialDepartureTime")} />
+                    <Input
+                      type="datetime-local"
+                      value={form.burialDepartureTime}
+                      onChange={(e) => autoFillTimes("burialDepartureTime", e.target.value)}
+                    />
                   </Field>
                   <Field label="Memorial / Church Service Start">
-                    <Input type="datetime-local" value={form.memorialServiceStart} onChange={set("memorialServiceStart")} />
+                    <Input
+                      type="datetime-local"
+                      value={form.memorialServiceStart}
+                      onChange={(e) => autoFillTimes("memorialServiceStart", e.target.value)}
+                    />
                   </Field>
                   <Field label="Memorial / Church Service End">
                     <Input type="datetime-local" value={form.memorialServiceEnd} onChange={set("memorialServiceEnd")} />

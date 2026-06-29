@@ -35,10 +35,12 @@ function fmtDate(v: string | Date | null | undefined): string {
   } catch { return String(v); }
 }
 
+const TZ = "Africa/Harare"; // CAT = UTC+2, no DST
+
 function fmtTime(v: Date | string | null | undefined): string {
   if (!v) return "—";
   try {
-    return new Date(v).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
+    return new Date(v).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
   } catch { return String(v); }
 }
 
@@ -46,8 +48,8 @@ function fmtDateTime(v: Date | string | null | undefined): string {
   if (!v) return "—";
   try {
     const d = new Date(v);
-    return d.toLocaleDateString("en-ZA", { day: "2-digit", month: "short" }) + " " +
-      d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("en-ZA", { day: "2-digit", month: "short", timeZone: TZ }) + " " +
+      d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
   } catch { return String(v); }
 }
 
