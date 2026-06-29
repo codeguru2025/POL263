@@ -647,24 +647,7 @@ export default function StaffSettings() {
         />
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-          <TabsList
-            className={`grid w-full max-w-3xl ${
-              isControlPlaneMode
-                ? (canManageTenants ? "grid-cols-2" : "grid-cols-1")
-                : (() => {
-                    // Visible tabs: Tenants? | Branding? | Account | Payments? | Terms | RBAC
-                    // Branding and Payments both require canOrgAdmin
-                    const orgAdminTabs = canOrgAdmin ? 2 : 0; // branding + payments
-                    const baseTabs = 3; // account + terms + rbac
-                    const tenantTab = canManageTenants ? 1 : 0;
-                    const total = tenantTab + orgAdminTabs + baseTabs;
-                    if (total === 6) return "grid-cols-6";
-                    if (total === 5) return "grid-cols-5";
-                    if (total === 4) return "grid-cols-4";
-                    return "grid-cols-3";
-                  })()
-            }`}
-          >
+          <TabsList>
             {canManageTenants && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
             {!isControlPlaneMode && canOrgAdmin && <TabsTrigger value="branding">Branding</TabsTrigger>}
             <TabsTrigger value="account">Account</TabsTrigger>

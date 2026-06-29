@@ -1490,7 +1490,7 @@ export default function StaffPolicies() {
           </section>
 
           <Tabs defaultValue="overview" className="space-y-4">
-            <TabsList className="flex flex-wrap h-auto">
+            <TabsList>
               <TabsTrigger value="overview" data-testid="tab-policy-overview">Overview</TabsTrigger>
               <TabsTrigger value="members" data-testid="tab-policy-members">Members</TabsTrigger>
               <TabsTrigger value="financials" data-testid="tab-policy-financials">Financials</TabsTrigger>

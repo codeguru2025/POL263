@@ -134,7 +134,7 @@ export default function StaffDiagnostics() {
         </div>
 
         <Tabs defaultValue="health" className="w-full">
-          <TabsList className="grid w-full grid-cols-4 max-w-2xl">
+          <TabsList>
             <TabsTrigger value="health" data-testid="tab-health">
               <Server className="mr-2 h-4 w-4" />
               System Health

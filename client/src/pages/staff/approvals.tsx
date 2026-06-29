@@ -248,7 +248,7 @@ export default function StaffApprovals() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="flex flex-wrap h-auto max-w-md">
+          <TabsList>
             <TabsTrigger value="pending" data-testid="tab-pending">
               Pending {pendingApprovals.length > 0 && <Badge variant="secondary" className="ml-2 h-5 px-1.5">{pendingApprovals.length}</Badge>}
             </TabsTrigger>

@@ -480,7 +480,7 @@ export default function ClientDashboard() {
         )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList>
             <TabsTrigger value="overview" data-testid="tab-overview">
               <Shield className="h-4 w-4 mr-2" />Overview
             </TabsTrigger>
