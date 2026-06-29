@@ -10,7 +10,6 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/compon
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ClientSearchInput } from "@/components/client-search-input";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -31,6 +30,20 @@ const CLAIM_TRANSITIONS: Record<string, string[]> = {
 
 const CLAIM_TYPES = ["death", "accidental_death", "disability", "repatriation", "cash_in_lieu"];
 
+const BLANK_CLAIM = {
+  policyId: "",
+  clientId: "",
+  claimType: "",
+  deceasedName: "",
+  deceasedRelationship: "",
+  dateOfDeath: "",
+  causeOfDeath: "",
+  cashInLieuAmount: "",
+  currency: "USD",
+  assessmentNotes: "",
+  recommendation: "",
+};
+
 export default function StaffClaims() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -49,30 +62,50 @@ export default function StaffClaims() {
   const [transitionTarget, setTransitionTarget] = useState("");
   const [transitionReason, setTransitionReason] = useState("");
 
-  const [newClaim, setNewClaim] = useState({
-    policyId: "",
-    clientId: "",
-    claimType: "",
-    deceasedName: "",
-    deceasedRelationship: "",
-    dateOfDeath: "",
-    causeOfDeath: "",
-  });
+  const [newClaim, setNewClaim] = useState({ ...BLANK_CLAIM });
+
+  // Policy + member state for the create form
+  const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
+  const [policyMembers, setPolicyMembers] = useState<any[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState("");
+
+  const handlePolicySelect = (id: string, policy: any) => {
+    setNewClaim((p) => ({ ...p, policyId: id, clientId: policy?.clientId || "" }));
+    setSelectedPolicy(policy || null);
+    setSelectedMemberId("");
+    setPolicyMembers([]);
+    if (id) {
+      setLoadingMembers(true);
+      fetch(getApiBase() + `/api/policies/${id}/members`, { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => setPolicyMembers(Array.isArray(data) ? data : []))
+        .catch(() => setPolicyMembers([]))
+        .finally(() => setLoadingMembers(false));
+    }
+  };
+
+  const resetCreateForm = () => {
+    setNewClaim({ ...BLANK_CLAIM });
+    setSelectedPolicy(null);
+    setPolicyMembers([]);
+    setSelectedMemberId("");
+  };
 
   const { data: claims = [], isLoading } = useQuery<Claim[]>({
     queryKey: ["/api/claims"],
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: typeof newClaim) => {
+    mutationFn: async (data: Record<string, any>) => {
       const res = await apiRequest("POST", "/api/claims", data);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/claims"] });
       setShowCreateDialog(false);
-      setNewClaim({ policyId: "", clientId: "", claimType: "", deceasedName: "", deceasedRelationship: "", dateOfDeath: "", causeOfDeath: "" });
-      toast({ title: "Claim created", description: "New claim has been submitted successfully." });
+      resetCreateForm();
+      toast({ title: "Claim submitted", description: "Claim has been submitted to the approvals queue." });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -121,11 +154,27 @@ export default function StaffClaims() {
   };
 
   const handleCreate = () => {
-    if (!newClaim.policyId || !newClaim.clientId || !newClaim.claimType) {
-      toast({ title: "Validation", description: "Policy, client, and claim type are required.", variant: "destructive" });
+    if (!newClaim.policyId || !newClaim.claimType) {
+      toast({ title: "Validation", description: "Policy and claim type are required.", variant: "destructive" });
       return;
     }
-    createMutation.mutate(newClaim);
+    const approvalNotes = [
+      newClaim.assessmentNotes ? `Assessment: ${newClaim.assessmentNotes}` : "",
+      newClaim.recommendation ? `Recommendation: ${newClaim.recommendation.replace(/_/g, " ")}` : "",
+    ].filter(Boolean).join("\n\n") || undefined;
+
+    createMutation.mutate({
+      policyId: newClaim.policyId,
+      clientId: newClaim.clientId || undefined,
+      claimType: newClaim.claimType,
+      deceasedName: newClaim.deceasedName || undefined,
+      deceasedRelationship: newClaim.deceasedRelationship || undefined,
+      dateOfDeath: newClaim.dateOfDeath || undefined,
+      causeOfDeath: newClaim.causeOfDeath || undefined,
+      cashInLieuAmount: newClaim.cashInLieuAmount || undefined,
+      currency: newClaim.currency,
+      approvalNotes,
+    });
   };
 
   const handleTransition = () => {
@@ -136,6 +185,18 @@ export default function StaffClaims() {
   const formatDate = (d: string | null | undefined) => {
     if (!d) return "—";
     return new Date(d).toLocaleDateString();
+  };
+
+  // Parse structured approvalNotes back into sections for display
+  const parseApprovalNotes = (notes: string | null | undefined) => {
+    if (!notes) return { assessment: "", recommendation: "", raw: "" };
+    const assessmentMatch = notes.match(/^Assessment:\s*([\s\S]*?)(?=\n\nRecommendation:|$)/m);
+    const recommendationMatch = notes.match(/Recommendation:\s*([\s\S]*)$/m);
+    return {
+      assessment: assessmentMatch?.[1]?.trim() || "",
+      recommendation: recommendationMatch?.[1]?.trim() || "",
+      raw: notes,
+    };
   };
 
   return (
@@ -267,35 +328,83 @@ export default function StaffClaims() {
         </CardSection>
       </PageShell>
 
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-lg">
+      {/* ── Create claim dialog ── */}
+      <Dialog open={showCreateDialog} onOpenChange={(v) => { if (!v) resetCreateForm(); setShowCreateDialog(v); }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Log New Claim</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+
+            {/* Step 1: Find the policy */}
             <div className="space-y-2">
-              <Label htmlFor="claim-policy">Policy</Label>
+              <Label htmlFor="claim-policy">Policy <span className="text-destructive">*</span></Label>
               <PolicySearchInput
                 value={newClaim.policyId}
-                onChange={(id) => setNewClaim((p) => ({ ...p, policyId: id }))}
-                placeholder="Search policy number or client..."
+                onChange={handlePolicySelect}
+                placeholder="Search by policy number or client name…"
                 data-testid="select-claim-policy"
               />
             </div>
+
+            {/* Policy summary + member picker */}
+            {selectedPolicy && (
+              <div className="rounded-md border bg-muted/30 p-3 space-y-3 text-sm">
+                <div>
+                  <p className="font-medium font-mono">{selectedPolicy.policyNumber}</p>
+                  <p className="text-xs text-muted-foreground capitalize">
+                    {selectedPolicy.status} · {selectedPolicy.currency} {Number(selectedPolicy.premiumAmount || 0).toFixed(2)}/mo
+                  </p>
+                </div>
+                {loadingMembers ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Loading covered members…
+                  </div>
+                ) : policyMembers.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">Deceased Covered Member</Label>
+                    <Select
+                      value={selectedMemberId || "__none__"}
+                      onValueChange={(v) => {
+                        if (v === "__none__") { setSelectedMemberId(""); return; }
+                        setSelectedMemberId(v);
+                        const m = policyMembers.find((x: any) => String(x.id) === v);
+                        if (m) {
+                          setNewClaim((p) => ({
+                            ...p,
+                            deceasedName: m.memberName || p.deceasedName,
+                            deceasedRelationship: m.relationship && m.relationship !== "Policy Holder" ? m.relationship : p.deceasedRelationship,
+                          }));
+                        }
+                      }}
+                    >
+                      <SelectTrigger data-testid="select-deceased-member">
+                        <SelectValue placeholder="Select covered member…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">— Select member —</SelectItem>
+                        {policyMembers.map((m: any) => (
+                          <SelectItem key={m.id} value={String(m.id)}>
+                            {m.memberName || "Member"} · {(m.role || m.relationship || "member").replace(/_/g, " ")}
+                            {m.age != null ? ` · ${m.age}y` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[10px] text-muted-foreground">Selecting a member auto-fills the deceased name and relationship below.</p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No covered members found on this policy — fill in deceased details manually.</p>
+                )}
+              </div>
+            )}
+
+            {/* Claim type */}
             <div className="space-y-2">
-              <Label htmlFor="claim-client">Client</Label>
-              <ClientSearchInput
-                value={newClaim.clientId}
-                onChange={(id) => setNewClaim((p) => ({ ...p, clientId: id }))}
-                placeholder="Search client by name, email, or phone..."
-                data-testid="select-claim-client"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="claim-type">Claim Type</Label>
+              <Label htmlFor="claim-type">Claim Type <span className="text-destructive">*</span></Label>
               <Select value={newClaim.claimType} onValueChange={(v) => setNewClaim((p) => ({ ...p, claimType: v }))}>
                 <SelectTrigger data-testid="select-claim-type">
-                  <SelectValue placeholder="Select type..." />
+                  <SelectValue placeholder="Select type…" />
                 </SelectTrigger>
                 <SelectContent>
                   {CLAIM_TYPES.map((t) => (
@@ -306,6 +415,8 @@ export default function StaffClaims() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Deceased details */}
             <div className="space-y-2">
               <Label htmlFor="claim-deceased">Deceased Name</Label>
               <Input
@@ -317,7 +428,7 @@ export default function StaffClaims() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="claim-relationship">Relationship</Label>
+              <Label htmlFor="claim-relationship">Relationship to Policyholder</Label>
               <Input
                 id="claim-relationship"
                 value={newClaim.deceasedRelationship}
@@ -343,24 +454,82 @@ export default function StaffClaims() {
                   id="claim-cause"
                   value={newClaim.causeOfDeath}
                   onChange={(e) => setNewClaim((p) => ({ ...p, causeOfDeath: e.target.value }))}
-                  placeholder="Cause of death"
+                  placeholder="e.g. Natural causes"
                   data-testid="input-claim-cause"
                 />
               </div>
             </div>
+
+            {/* Cash-in-lieu */}
+            <div className="space-y-2">
+              <Label>Cash-in-Lieu Amount <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <div className="flex gap-2">
+                <Select value={newClaim.currency} onValueChange={(v) => setNewClaim((p) => ({ ...p, currency: v }))}>
+                  <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="ZAR">ZAR</SelectItem>
+                    <SelectItem value="ZIG">ZIG</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={newClaim.cashInLieuAmount}
+                  onChange={(e) => setNewClaim((p) => ({ ...p, cashInLieuAmount: e.target.value }))}
+                  data-testid="input-claim-cash-in-lieu"
+                />
+              </div>
+            </div>
+
+            {/* Assessment */}
+            <div className="space-y-2">
+              <Label>Assessment Notes</Label>
+              <Textarea
+                placeholder="Document your assessment of this claim — supporting documents received, waiting period status, fraud indicators, etc."
+                value={newClaim.assessmentNotes}
+                onChange={(e) => setNewClaim((p) => ({ ...p, assessmentNotes: e.target.value }))}
+                rows={3}
+                data-testid="input-claim-assessment"
+              />
+            </div>
+
+            {/* Recommendation */}
+            <div className="space-y-2">
+              <Label>Recommendation</Label>
+              <Select
+                value={newClaim.recommendation || "__none__"}
+                onValueChange={(v) => setNewClaim((p) => ({ ...p, recommendation: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger data-testid="select-claim-recommendation">
+                  <SelectValue placeholder="Select recommendation…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— No recommendation yet —</SelectItem>
+                  <SelectItem value="approve">Recommend Approval</SelectItem>
+                  <SelectItem value="reject">Recommend Rejection</SelectItem>
+                  <SelectItem value="investigate">Further Investigation Required</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Your recommendation is submitted to the approvals queue for a senior officer to act on.</p>
+            </div>
           </div>
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)} data-testid="button-cancel-claim">
+            <Button variant="outline" onClick={() => { resetCreateForm(); setShowCreateDialog(false); }} data-testid="button-cancel-claim">
               Cancel
             </Button>
             <Button onClick={handleCreate} disabled={createMutation.isPending} data-testid="button-submit-claim">
               {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Submit Claim
+              Submit to Approvals
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      {/* ── Transition dialog ── */}
       <Dialog open={showTransitionDialog} onOpenChange={setShowTransitionDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -380,7 +549,7 @@ export default function StaffClaims() {
                 <Label>Transition To</Label>
                 <Select value={transitionTarget} onValueChange={setTransitionTarget}>
                   <SelectTrigger data-testid="select-transition-target">
-                    <SelectValue placeholder="Select new status..." />
+                    <SelectValue placeholder="Select new status…" />
                   </SelectTrigger>
                   <SelectContent>
                     {(CLAIM_TRANSITIONS[selectedClaim.status] || []).map((s) => (
@@ -396,7 +565,7 @@ export default function StaffClaims() {
                 <Textarea
                   value={transitionReason}
                   onChange={(e) => setTransitionReason(e.target.value)}
-                  placeholder="Reason for this transition..."
+                  placeholder="Reason for this transition…"
                   data-testid="input-transition-reason"
                 />
               </div>
@@ -414,65 +583,81 @@ export default function StaffClaims() {
         </DialogContent>
       </Dialog>
 
+      {/* ── Detail dialog ── */}
       <Dialog open={showDetailDialog} onOpenChange={setShowDetailDialog}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Claim Details</DialogTitle>
           </DialogHeader>
-          {selectedClaim && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <p className="text-muted-foreground">Claim Number</p>
-                  <p className="font-medium" data-testid="text-detail-claim-number">{selectedClaim.claimNumber}</p>
+          {selectedClaim && (() => {
+            const { assessment, recommendation } = parseApprovalNotes(selectedClaim.approvalNotes);
+            return (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Claim Number</p>
+                    <p className="font-medium" data-testid="text-detail-claim-number">{selectedClaim.claimNumber}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Status</p>
+                    <StatusBadge variant="claim" status={selectedClaim.status} />
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Claim Type</p>
+                    <p className="font-medium capitalize">{selectedClaim.claimType?.replace(/_/g, " ")}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Date of Death</p>
+                    <p className="font-medium">{formatDate(selectedClaim.dateOfDeath)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Deceased Name</p>
+                    <p className="font-medium">{selectedClaim.deceasedName || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Relationship</p>
+                    <p className="font-medium">{selectedClaim.deceasedRelationship || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Cause of Death</p>
+                    <p className="font-medium">{selectedClaim.causeOfDeath || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Cash-in-Lieu</p>
+                    <p className="font-medium">
+                      {selectedClaim.cashInLieuAmount ? formatAmountWithCode(selectedClaim.cashInLieuAmount, selectedClaim.currency) : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Waiting Period Waived</p>
+                    <p className="font-medium">{selectedClaim.isWaitingPeriodWaived ? "Yes" : "No"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Filed</p>
+                    <p className="font-medium">{formatDate(selectedClaim.createdAt as any)}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-muted-foreground">Status</p>
-                  <StatusBadge variant="claim" status={selectedClaim.status} />
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Claim Type</p>
-                  <p className="font-medium capitalize">{selectedClaim.claimType?.replace(/_/g, " ")}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Date of Death</p>
-                  <p className="font-medium">{formatDate(selectedClaim.dateOfDeath)}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Deceased Name</p>
-                  <p className="font-medium">{selectedClaim.deceasedName || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Relationship</p>
-                  <p className="font-medium">{selectedClaim.deceasedRelationship || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Cause of Death</p>
-                  <p className="font-medium">{selectedClaim.causeOfDeath || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Cash-in-Lieu</p>
-                  <p className="font-medium">
-                    {selectedClaim.cashInLieuAmount ? formatAmountWithCode(selectedClaim.cashInLieuAmount, selectedClaim.currency) : "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Waiting Period Waived</p>
-                  <p className="font-medium">{selectedClaim.isWaitingPeriodWaived ? "Yes" : "No"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Filed</p>
-                  <p className="font-medium">{formatDate(selectedClaim.createdAt as any)}</p>
-                </div>
+                {assessment && (
+                  <div>
+                    <p className="text-muted-foreground text-sm font-medium">Assessment</p>
+                    <p className="text-sm mt-1 p-2 bg-muted/50 rounded whitespace-pre-wrap">{assessment}</p>
+                  </div>
+                )}
+                {recommendation && (
+                  <div>
+                    <p className="text-muted-foreground text-sm font-medium">Recommendation</p>
+                    <p className="text-sm mt-1 p-2 bg-muted/50 rounded capitalize">{recommendation}</p>
+                  </div>
+                )}
+                {selectedClaim.approvalNotes && !assessment && !recommendation && (
+                  <div>
+                    <p className="text-muted-foreground text-sm">Notes</p>
+                    <p className="text-sm mt-1 p-2 bg-muted/50 rounded">{selectedClaim.approvalNotes}</p>
+                  </div>
+                )}
               </div>
-              {selectedClaim.approvalNotes && (
-                <div>
-                  <p className="text-muted-foreground text-sm">Approval Notes</p>
-                  <p className="text-sm mt-1 p-2 bg-muted/50 rounded">{selectedClaim.approvalNotes}</p>
-                </div>
-              )}
-            </div>
-          )}
+            );
+          })()}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDetailDialog(false)} data-testid="button-close-detail">
               Close

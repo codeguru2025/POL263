@@ -335,31 +335,28 @@ export default function StaffReports() {
     enabled: need("agentProductivity"),
   });
   const { data: users = [] } = useQuery<any[]>({
-    queryKey: ["reports", "filter-users", runKey],
+    queryKey: ["reports", "filter-users"],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/users", { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: needFilters,
   });
   const { data: branches = [] } = useQuery<any[]>({
-    queryKey: ["reports", "filter-branches", runKey],
+    queryKey: ["reports", "filter-branches"],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/branches", { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: needFilters,
   });
   const { data: products = [] } = useQuery<any[]>({
-    queryKey: ["reports", "filter-products", runKey],
+    queryKey: ["reports", "filter-products"],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/products", { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: needFilters,
   });
   const { data: policyDetails = [], isLoading: loadingPolicyDetails } = useQuery<any[]>({
     queryKey: ["reports", "policy-details", runKey, ...fk],
@@ -538,6 +535,7 @@ export default function StaffReports() {
                 <SelectContent>
                   <SelectItem value="__all__">All statuses</SelectItem>
                   <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="inactive">Inactive</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="grace">Grace</SelectItem>
