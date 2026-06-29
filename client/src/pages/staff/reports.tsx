@@ -2,14 +2,13 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, FilterBar } from "@/components/ds";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { getApiBase } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import {
@@ -23,7 +22,8 @@ import {
   type ReportDatasetId,
   type ReportSectionId,
 } from "@/lib/staff-reports-nav";
-import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt, Eye, TrendingUp, FolderOpen, UserCircle, Wrench } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { BarChart3, FileText, Loader2, Download, Truck, DollarSign, Users, Percent, Building, RotateCcw, Calendar, UserCheck, AlertCircle, Clock, CheckCircle, Receipt, Eye, TrendingUp, FolderOpen, UserCircle, Wrench, Filter, Play } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
 export type ReportFiltersState = {
@@ -449,132 +449,117 @@ export default function StaffReports() {
           title="Reports"
           description={reportContextLabel(reportSection, activeReport)}
           titleDataTestId="text-reports-title"
+          actions={
+            <Button onClick={() => setRunKey((k) => k + 1)} data-testid="button-run-report" className="gap-2 shadow-sm">
+              <Play className="h-4 w-4" /> Run report
+            </Button>
+          }
         />
 
-        <CardSection title="Filters" icon={Calendar}>
-          <div className="space-y-4">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-2">Reporting period</p>
-              <div className="flex flex-wrap items-end gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="fromDate">From</Label>
-                  <Input id="fromDate" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-40" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="toDate">To</Label>
-                  <Input id="toDate" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-40" />
-                </div>
-              </div>
-            </div>
-            <Separator />
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-2">Scope</p>
-              <div className="flex flex-wrap items-end gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="branchId">Branch</Label>
-                  <select id="branchId" value={branchId} onChange={(e) => setBranchId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
-                    <option value="">All branches</option>
-                    {(branches as any[]).map((b: any) => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="productId">Product</Label>
-                  <select id="productId" value={productId} onChange={(e) => setProductId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
-                    <option value="">All products</option>
-                    {(products as any[]).map((p: any) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="agentId">Agent</Label>
-                  <select id="agentId" value={agentId} onChange={(e) => setAgentId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
-                    <option value="">All agents</option>
-                    {users.map((u: any) => (
-                      <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
-                    ))}
-                  </select>
-                </div>
-                {activeReport === "claims" ? (
-                  <div className="space-y-2">
-                    <Label htmlFor="statusFilter">Claim status</Label>
-                    <select id="statusFilter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
-                      <option value="">All statuses</option>
-                      <option value="submitted">Submitted</option>
-                      <option value="verified">Verified</option>
-                      <option value="approved">Approved</option>
-                      <option value="paid">Paid</option>
-                      <option value="closed">Closed</option>
-                      <option value="rejected">Rejected</option>
-                    </select>
-                  </div>
-                ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "platform", "income-statement", "cash-flow", "funerals", "payments"].includes(activeReport) ? (
-                  <div className="space-y-2">
-                    <Label htmlFor="statusFilter">Policy status</Label>
-                    <select id="statusFilter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
-                      <option value="">All statuses</option>
-                      <option value="draft">Draft</option>
-                      <option value="pending">Pending</option>
-                      <option value="active">Active</option>
-                      <option value="grace">Grace</option>
-                      <option value="lapsed">Lapsed</option>
-                      <option value="reinstatement_pending">Reinstatement pending</option>
-                      <option value="cancelled">Cancelled</option>
-                    </select>
-                  </div>
-                ) : null}
-                <div className="space-y-2">
-                  <Label htmlFor="userId">Cashups user</Label>
-                  <select id="userId" value={userId} onChange={(e) => setUserId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
-                    <option value="">All users</option>
-                    {users.map((u: any) => (
-                      <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-3 pt-2">
-              <Button type="button" onClick={() => setRunKey((k) => k + 1)} data-testid="button-run-report">
-                Run report
-              </Button>
-              {!load && (
-                <p className="text-sm text-muted-foreground">Choose filters, then run to load data for this report.</p>
-              )}
-            </div>
-          </div>
-        </CardSection>
+        {/* Section navigation */}
+        <div className="flex flex-wrap gap-1.5">
+          {visibleSections.map((s) => {
+            const meta = SECTION_META[s];
+            const Icon = meta.icon;
+            const isActive = s === reportSection;
+            const firstTab = tabsForSection(s, sectionOpts)[0]?.value ?? "";
+            return (
+              <a
+                key={s}
+                href={buildStaffReportHref(s, firstTab)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors border ${
+                  isActive
+                    ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                    : "bg-card border-border/70 text-muted-foreground hover:text-foreground hover:bg-accent shadow-sm"
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                {meta.label}
+              </a>
+            );
+          })}
+        </div>
 
-        <div className="min-w-0 space-y-4">
+        {/* Filters + tab nav in one card */}
+        <CardSection title="" flush>
+          <FilterBar className="border-b border-border/60 bg-muted/10 px-4 py-3 sm:px-6">
+            <div className="space-y-1.5">
+              <Label htmlFor="fromDate" className="text-xs text-muted-foreground">From</Label>
+              <Input id="fromDate" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-36 h-9" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="toDate" className="text-xs text-muted-foreground">To</Label>
+              <Input id="toDate" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-36 h-9" />
+            </div>
+            <Select value={branchId || "__all__"} onValueChange={(v) => setBranchId(v === "__all__" ? "" : v)}>
+              <SelectTrigger className="w-44 h-9">
+                <Filter className="h-3.5 w-3.5 mr-1.5 shrink-0 text-muted-foreground" />
+                <SelectValue placeholder="All branches" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All branches</SelectItem>
+                {(branches as any[]).map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={productId || "__all__"} onValueChange={(v) => setProductId(v === "__all__" ? "" : v)}>
+              <SelectTrigger className="w-44 h-9">
+                <SelectValue placeholder="All products" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All products</SelectItem>
+                {(products as any[]).map((p: any) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={agentId || "__all__"} onValueChange={(v) => setAgentId(v === "__all__" ? "" : v)}>
+              <SelectTrigger className="w-44 h-9">
+                <SelectValue placeholder="All agents" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All agents</SelectItem>
+                {(users as any[]).map((u: any) => <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {activeReport === "claims" ? (
+              <Select value={statusFilter || "__all__"} onValueChange={(v) => setStatusFilter(v === "__all__" ? "" : v)}>
+                <SelectTrigger className="w-44 h-9"><SelectValue placeholder="All statuses" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All statuses</SelectItem>
+                  <SelectItem value="submitted">Submitted</SelectItem>
+                  <SelectItem value="verified">Verified</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                  <SelectItem value="paid">Paid</SelectItem>
+                  <SelectItem value="closed">Closed</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "funerals", "payments"].includes(activeReport) ? (
+              <Select value={statusFilter || "__all__"} onValueChange={(v) => setStatusFilter(v === "__all__" ? "" : v)}>
+                <SelectTrigger className="w-44 h-9"><SelectValue placeholder="All statuses" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All statuses</SelectItem>
+                  <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="grace">Grace</SelectItem>
+                  <SelectItem value="lapsed">Lapsed</SelectItem>
+                  <SelectItem value="reinstatement_pending">Reinstatement pending</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+            ) : null}
+            {activeReport === "cashups" && (
+              <Select value={userId || "__all__"} onValueChange={(v) => setUserId(v === "__all__" ? "" : v)}>
+                <SelectTrigger className="w-44 h-9"><SelectValue placeholder="All users" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All users</SelectItem>
+                  {(users as any[]).map((u: any) => <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+          </FilterBar>
 
-          {/* Section navigation */}
-          <div className="flex flex-wrap gap-2">
-            {visibleSections.map((s) => {
-              const meta = SECTION_META[s];
-              const Icon = meta.icon;
-              const isActive = s === reportSection;
-              const firstTab = tabsForSection(s, sectionOpts)[0]?.value ?? "";
-              return (
-                <a
-                  key={s}
-                  href={buildStaffReportHref(s, firstTab)}
-                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors border ${
-                    isActive
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-background border-input text-muted-foreground hover:text-foreground hover:bg-accent"
-                  }`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {meta.label}
-                </a>
-              );
-            })}
-          </div>
-
-          {/* Tab navigation within section */}
-          <div className="flex flex-wrap gap-1 border-b pb-0">
+          {/* Tab nav */}
+          <div className="flex overflow-x-auto px-4 sm:px-6 scrollbar-hide">
             {tabsForSection(reportSection, sectionOpts).map((t) => {
               const isActive = t.value === activeReport;
               return (
@@ -582,10 +567,10 @@ export default function StaffReports() {
                   key={t.value}
                   href={buildStaffReportHref(reportSection, t.value)}
                   data-testid={t.testId}
-                  className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                  className={`shrink-0 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
                     isActive
                       ? "border-primary text-foreground"
-                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
                   }`}
                 >
                   {t.label}
@@ -593,7 +578,9 @@ export default function StaffReports() {
               );
             })}
           </div>
+        </CardSection>
 
+        <div className="min-w-0 space-y-4">
             <Tabs value={activeReport}>
               <TabsList className="sr-only absolute h-px w-px overflow-hidden whitespace-nowrap p-0 -m-px border-0">
                 {tabsForSection(reportSection, sectionOpts).map((t) => (
