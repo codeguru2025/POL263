@@ -2122,6 +2122,9 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(policies).where(and(eq(policies.agentId, agentId), eq(policies.organizationId, orgId), isNull(policies.deletedAt))).limit(500);
   }
   async reassignAgentPolicies(fromAgentId: string, toAgentId: string, orgId: string): Promise<number> {
+    // Mirror toAgent into the tenant DB first — policies.agentId has an FK to users.id
+    // and the tenant DB users table is a mirror that may not yet contain toAgent.
+    await ensureRegistryUserMirroredToOrgDataDb(orgId, toAgentId);
     const tdb = await getDbForOrg(orgId);
     const result = await tdb.update(policies).set({ agentId: toAgentId }).where(and(eq(policies.agentId, fromAgentId), eq(policies.organizationId, orgId))).returning({ id: policies.id });
     return result.length;
