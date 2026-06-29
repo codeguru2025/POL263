@@ -59,6 +59,7 @@ import {
   CalendarDays,
   Coins,
   RefreshCw,
+  UserCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -337,7 +338,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
         { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2, agentHidden: true },
         { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
-        { href: "/staff/reports?section=finance", label: "Transactional Reports", icon: Receipt, permission: "read:report" },
+        { href: "/staff/reports?section=finance", label: "Financial Reports", icon: Receipt, permission: "read:report" },
+        { href: "/staff/reports?section=agents", label: "Agent Reports", icon: UserCircle, permission: "read:report" },
+        { href: "/staff/reports?section=claims", label: "Claims Reports", icon: Shield, permission: "read:report" },
         { href: "/staff/employee-reports", label: "Employee Reports", icon: Users, permission: "read:report", agentHidden: true },
         { href: "/staff/diagnostics", label: "System Issue Reports", icon: Stethoscope, permission: "read:audit_log" },
       ]);

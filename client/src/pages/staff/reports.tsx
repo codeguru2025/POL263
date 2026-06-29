@@ -16,6 +16,7 @@ import {
   buildStaffReportHref,
   parseReportSearchParams,
   reportContextLabel,
+  SECTION_META,
   tabUsesDataset,
   tabsForSection,
   visibleReportSections,
@@ -547,6 +548,52 @@ export default function StaffReports() {
         </CardSection>
 
         <div className="min-w-0 space-y-4">
+
+          {/* Section navigation */}
+          <div className="flex flex-wrap gap-2">
+            {visibleSections.map((s) => {
+              const meta = SECTION_META[s];
+              const Icon = meta.icon;
+              const isActive = s === reportSection;
+              const firstTab = tabsForSection(s, sectionOpts)[0]?.value ?? "";
+              return (
+                <a
+                  key={s}
+                  href={buildStaffReportHref(s, firstTab)}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors border ${
+                    isActive
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background border-input text-muted-foreground hover:text-foreground hover:bg-accent"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {meta.label}
+                </a>
+              );
+            })}
+          </div>
+
+          {/* Tab navigation within section */}
+          <div className="flex flex-wrap gap-1 border-b pb-0">
+            {tabsForSection(reportSection, sectionOpts).map((t) => {
+              const isActive = t.value === activeReport;
+              return (
+                <a
+                  key={t.value}
+                  href={buildStaffReportHref(reportSection, t.value)}
+                  data-testid={t.testId}
+                  className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                    isActive
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground"
+                  }`}
+                >
+                  {t.label}
+                </a>
+              );
+            })}
+          </div>
+
             <Tabs value={activeReport}>
               <TabsList className="sr-only absolute h-px w-px overflow-hidden whitespace-nowrap p-0 -m-px border-0">
                 {tabsForSection(reportSection, sectionOpts).map((t) => (
