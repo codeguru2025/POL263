@@ -6778,27 +6778,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/active-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "active" }));
+    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "active" }));
   });
   app.get("/api/reports/awaiting-payments", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["active", "grace"] }));
+    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["active", "grace"] }));
   });
   app.get("/api/reports/overdue", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
+    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
   });
   app.get("/api/reports/pre-lapse", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
+    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
   });
   app.get("/api/reports/lapsed", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "lapsed" }));
+    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "lapsed" }));
+  });
+  app.get("/api/reports/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    const status = req.query.status ? String(req.query.status) : undefined;
+    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
+    return res.json(await storage.getClaimsReportByOrg(user.organizationId, limit, 0, { ...filters, status }));
   });
   app.get("/api/reports/issued-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -7171,51 +7178,51 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "active-policies": {
-          const active = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "active" });
-          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          const active = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "active" });
+          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Inception Date", "Created"];
           currencyTotals = { Premium: {} };
           rows = active.map((r: any) => {
             const c = (r.currency || "USD").toUpperCase();
             const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
             currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.inceptionDate || "", r.policyCreatedAt];
           });
           break;
         }
         case "awaiting-payments": {
-          const awaiting = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
-          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          const awaiting = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
+          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
           currencyTotals = { Premium: {} };
           rows = awaiting.map((r: any) => {
             const c = (r.currency || "USD").toUpperCase();
             const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
             currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.graceEndDate || "", r.policyCreatedAt];
           });
           break;
         }
         case "overdue":
         case "pre-lapse": {
-          const grace = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
-          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
+          const grace = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
+          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
           currencyTotals = { Premium: {} };
           rows = grace.map((r: any) => {
             const c = (r.currency || "USD").toUpperCase();
             const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
             currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.graceEndDate || "", r.createdAt];
+            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.graceEndDate || "", r.policyCreatedAt];
           });
           break;
         }
         case "lapsed": {
-          const lapsed = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "lapsed" });
-          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
+          const lapsed = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "lapsed" });
+          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Inception Date", "Created"];
           currencyTotals = { Premium: {} };
           rows = lapsed.map((r: any) => {
             const c = (r.currency || "USD").toUpperCase();
             const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
             currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
+            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.inceptionDate || "", r.policyCreatedAt];
           });
           break;
         }

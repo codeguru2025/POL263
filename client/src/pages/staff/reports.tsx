@@ -147,15 +147,6 @@ export default function StaffReports() {
     },
     enabled: need("policies"),
   });
-  const { data: claims = [], isLoading: loadingClaims } = useQuery<any[]>({
-    queryKey: ["reports", "claims", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/claims?limit=200" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("claims"),
-  });
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({
     queryKey: ["reports", "payments", runKey, ...fk],
     queryFn: async () => {
@@ -408,6 +399,15 @@ export default function StaffReports() {
     },
     enabled: need("receiptReport"),
   });
+  const { data: claimsReport = [], isLoading: loadingClaimsReport } = useQuery<any[]>({
+    queryKey: ["reports", "claims-report", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/claims?limit=500" + qAppend, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: need("claimsReport"),
+  });
 
   const policySummary = {
     inactive: policies.filter((p: any) => p.status === "inactive").length,
@@ -415,15 +415,6 @@ export default function StaffReports() {
     grace: policies.filter((p: any) => p.status === "grace").length,
     lapsed: policies.filter((p: any) => p.status === "lapsed").length,
     cancelled: policies.filter((p: any) => p.status === "cancelled").length,
-  };
-
-  const claimSummary = {
-    submitted: claims.filter((c: any) => c.status === "submitted").length,
-    verified: claims.filter((c: any) => c.status === "verified").length,
-    approved: claims.filter((c: any) => c.status === "approved").length,
-    paid: claims.filter((c: any) => c.status === "paid").length,
-    closed: claims.filter((c: any) => c.status === "closed").length,
-    rejected: claims.filter((c: any) => c.status === "rejected").length,
   };
 
   return (
@@ -481,17 +472,34 @@ export default function StaffReports() {
                     ))}
                   </select>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="statusFilter">Policy status</Label>
-                  <select id="statusFilter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
-                    <option value="">All statuses</option>
-                    <option value="inactive">Inactive</option>
-                    <option value="active">Active</option>
-                    <option value="grace">Grace</option>
-                    <option value="lapsed">Lapsed</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                </div>
+                {activeReport === "claims" ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="statusFilter">Claim status</Label>
+                    <select id="statusFilter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
+                      <option value="">All statuses</option>
+                      <option value="submitted">Submitted</option>
+                      <option value="verified">Verified</option>
+                      <option value="approved">Approved</option>
+                      <option value="paid">Paid</option>
+                      <option value="closed">Closed</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+                  </div>
+                ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "platform", "income-statement", "cash-flow", "funerals", "payments"].includes(activeReport) ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="statusFilter">Policy status</Label>
+                    <select id="statusFilter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
+                      <option value="">All statuses</option>
+                      <option value="draft">Draft</option>
+                      <option value="pending">Pending</option>
+                      <option value="active">Active</option>
+                      <option value="grace">Grace</option>
+                      <option value="lapsed">Lapsed</option>
+                      <option value="reinstatement_pending">Reinstatement pending</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                ) : null}
                 <div className="space-y-2">
                   <Label htmlFor="userId">Cashups user</Label>
                   <select id="userId" value={userId} onChange={(e) => setUserId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm w-full min-w-[12rem] max-w-xs">
@@ -944,86 +952,230 @@ export default function StaffReports() {
           </TabsContent>
 
           <TabsContent value="active-policies">
-            <CardSection title="Active policies" icon={CheckCircle} description="Policies with status active. When from/to are set, results are limited to policies captured in that window (same as other policy lists)." headerRight={<ExportButton reportType="active-policies" filters={filters} />} flush>
+            <CardSection title="Active policies" icon={CheckCircle} description="Policies with status active. When from/to are set, results are limited to policies captured in that window." headerRight={<ExportButton reportType="active-policies" filters={filters} />} flush>
               {loadingActivePolicies ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : activePolicies.length === 0 ? (
                 <EmptyState title="No active policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
-                <Table>
-                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Schedule</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {activePolicies.slice(0, 50).map((p: any) => (
-                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="default">active</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell>{p.paymentSchedule}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Surname</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Premium</TableHead>
+                        <TableHead>Inception Date</TableHead>
+                        <TableHead>Capture Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {activePolicies.slice(0, 100).map((p: any) => (
+                        <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
+                          <TableCell><StatusBadge status={p.status} variant="policy" /></TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.productName || "—"}</TableCell>
+                          <TableCell>{p.branchName || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{p.inceptionDate ? new Date(p.inceptionDate).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
               )}
             </CardSection>
           </TabsContent>
 
           <TabsContent value="awaiting-payments">
-            <CardSection title="Policies Awaiting Payments" icon={Clock} headerRight={<ExportButton reportType="awaiting-payments" filters={filters} />} flush>
+            <CardSection title="Policies Awaiting Payments" icon={Clock} description="Active and grace policies — awaiting premium payment. Filter by branch, product, or agent." headerRight={<ExportButton reportType="awaiting-payments" filters={filters} />} flush>
               {loadingAwaitingPayments ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : awaitingPayments.length === 0 ? (
-                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+                <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
-                <Table>
-                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {awaitingPayments.slice(0, 50).map((p: any) => (
-                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="secondary">{p.status}</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Surname</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Premium</TableHead>
+                        <TableHead>Grace End</TableHead>
+                        <TableHead>Capture Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {awaitingPayments.slice(0, 100).map((p: any) => (
+                        <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
+                          <TableCell><StatusBadge status={p.status} variant="policy" /></TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.productName || "—"}</TableCell>
+                          <TableCell>{p.branchName || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
               )}
             </CardSection>
           </TabsContent>
 
           <TabsContent value="overdue">
-            <CardSection title="Overdue Payments (Grace)" icon={AlertCircle} headerRight={<ExportButton reportType="overdue" filters={filters} />} flush>
+            <CardSection title="Overdue Payments (Grace)" icon={AlertCircle} description="Policies currently in grace period — payment overdue. Filter by branch, product, or agent." headerRight={<ExportButton reportType="overdue" filters={filters} />} flush>
               {loadingOverdue ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : overduePolicies.length === 0 ? (
-                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+                <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
-                <Table>
-                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {overduePolicies.slice(0, 50).map((p: any) => (
-                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Surname</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Premium</TableHead>
+                        <TableHead>Grace End</TableHead>
+                        <TableHead>Capture Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {overduePolicies.slice(0, 100).map((p: any) => (
+                        <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.productName || "—"}</TableCell>
+                          <TableCell>{p.branchName || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
               )}
             </CardSection>
           </TabsContent>
 
           <TabsContent value="pre-lapse">
-            <CardSection title="Pre-lapse (Grace period)" icon={AlertCircle} headerRight={<ExportButton reportType="pre-lapse" filters={filters} />} flush>
+            <CardSection title="Pre-lapse (Grace period)" icon={AlertCircle} description="Policies in grace period at risk of lapsing. Filter by branch, product, or agent." headerRight={<ExportButton reportType="pre-lapse" filters={filters} />} flush>
               {loadingPreLapse ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : preLapsePolicies.length === 0 ? (
-                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+                <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
-                <Table>
-                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Premium</TableHead><TableHead>Grace end</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {preLapsePolicies.slice(0, 50).map((p: any) => (
-                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm">{p.graceEndDate || "—"}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Surname</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Premium</TableHead>
+                        <TableHead>Grace End</TableHead>
+                        <TableHead>Capture Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {preLapsePolicies.slice(0, 100).map((p: any) => (
+                        <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.productName || "—"}</TableCell>
+                          <TableCell>{p.branchName || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
               )}
             </CardSection>
           </TabsContent>
 
           <TabsContent value="lapsed">
-            <CardSection title="Lapsed Policies" icon={AlertCircle} headerRight={<ExportButton reportType="lapsed" filters={filters} />} flush>
+            <CardSection title="Lapsed Policies" icon={AlertCircle} description="Policies that have lapsed due to non-payment. Filter by branch, product, or agent." headerRight={<ExportButton reportType="lapsed" filters={filters} />} flush>
               {loadingLapsed ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : lapsedPolicies.length === 0 ? (
-                <EmptyState title="None in range" className="border-0 rounded-none bg-transparent py-8" />
+                <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
-                <Table>
-                  <TableHeader><TableRow><TableHead>Policy #</TableHead><TableHead>Status</TableHead><TableHead>Premium</TableHead><TableHead>Created</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {lapsedPolicies.slice(0, 50).map((p: any) => (
-                      <TableRow key={p.id}><TableCell className="font-mono text-sm">{p.policyNumber}</TableCell><TableCell><Badge variant="secondary">lapsed</Badge></TableCell><TableCell>{p.currency} {p.premiumAmount}</TableCell><TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell></TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Surname</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Premium</TableHead>
+                        <TableHead>Inception Date</TableHead>
+                        <TableHead>Capture Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {lapsedPolicies.slice(0, 100).map((p: any) => (
+                        <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.productName || "—"}</TableCell>
+                          <TableCell>{p.branchName || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{p.inceptionDate ? new Date(p.inceptionDate).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
               )}
             </CardSection>
           </TabsContent>
@@ -1200,42 +1352,52 @@ export default function StaffReports() {
           </TabsContent>
 
           <TabsContent value="claims">
-            <CardSection title="Claims Summary" icon={FileText} headerRight={<ExportButton reportType="claims" filters={filters} />}>
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
-                {Object.entries(claimSummary).map(([status, count]) => (
-                  <div key={status} className="text-center p-3 rounded-lg bg-muted">
-                    <p className="text-xl font-bold">{count}</p>
-                    <p className="text-xs text-muted-foreground capitalize">{status}</p>
-                  </div>
-                ))}
-              </div>
-              {loadingClaims ? (
+            <CardSection title="Claims report" icon={FileText} description="Claims with policyholder details. Filter by date range, branch, or claim status." headerRight={<ExportButton reportType="claims" filters={filters} />} flush>
+              {loadingClaimsReport ? (
                 <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : claimsReport.length === 0 ? (
+                <EmptyState title="No claims match the filters" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Claim #</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Approved Amount</TableHead>
-                      <TableHead>Deceased</TableHead>
-                      <TableHead>Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {claims.slice(0, 20).map((c: any) => (
-                      <TableRow key={c.id}>
-                        <TableCell className="font-mono text-sm">{c.claimNumber}</TableCell>
-                        <TableCell><Badge variant="outline">{c.claimType}</Badge></TableCell>
-                        <TableCell><Badge>{c.status}</Badge></TableCell>
-                        <TableCell className="font-semibold">{c.approvedAmount ? `${c.currency || "USD"} ${c.approvedAmount}` : "—"}</TableCell>
-                        <TableCell>{c.deceasedName || "—"}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleDateString()}</TableCell>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1200px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Claim #</TableHead>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Surname</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Deceased</TableHead>
+                        <TableHead>Date of Death</TableHead>
+                        <TableHead>Approved Amount</TableHead>
+                        <TableHead>Submitted</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {claimsReport.slice(0, 100).map((c: any) => (
+                        <TableRow key={c.claimId} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{c.claimNumber}</TableCell>
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{c.policyNumber || "—"}</TableCell>
+                          <TableCell><Badge variant="outline">{c.claimType}</Badge></TableCell>
+                          <TableCell><StatusBadge status={c.status} variant="claim" /></TableCell>
+                          <TableCell className="whitespace-nowrap">{c.clientFirstName || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{c.clientLastName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{c.clientNationalId || "—"}</TableCell>
+                          <TableCell className="text-sm">{c.clientPhone || "—"}</TableCell>
+                          <TableCell>{c.branchName || "—"}</TableCell>
+                          <TableCell>{c.deceasedName || "—"}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{c.dateOfDeath ? new Date(c.dateOfDeath).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="font-semibold tabular-nums">{c.approvedAmount ? `${c.currency || "USD"} ${c.approvedAmount}` : "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
               )}
             </CardSection>
           </TabsContent>

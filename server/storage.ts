@@ -431,6 +431,7 @@ export interface IStorage {
   deleteReceipt(id: string, orgId: string): Promise<void>;
   deletePaymentReceipt(id: string, orgId: string): Promise<void>;
   getClaimsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<Claim[]>;
+  getClaimsReportByOrg(orgId: string, limit: number, offset: number, filters?: ReportFilters & { status?: string }): Promise<any[]>;
   getClaimsByPolicy(policyId: string, orgId: string): Promise<Claim[]>;
   getClaimsByClient(clientId: string, orgId: string): Promise<Claim[]>;
   getClaim(id: string, orgId: string): Promise<Claim | undefined>;
@@ -3011,6 +3012,47 @@ export class DatabaseStorage implements IStorage {
     if (filters?.toDate) conditions.push(lte(claims.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
     return tdb.select().from(claims).where(and(...conditions))
       .orderBy(desc(claims.createdAt)).limit(limit).offset(offset);
+  }
+
+  async getClaimsReportByOrg(orgId: string, limit = 200, offset = 0, filters?: ReportFilters & { status?: string }): Promise<any[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: SQL[] = [eq(claims.organizationId, orgId)];
+    if (filters?.fromDate) conditions.push(gte(claims.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(claims.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.status) conditions.push(eq(claims.status, filters.status));
+    if (filters?.branchId) conditions.push(eq(claims.branchId, filters.branchId));
+    return tdb
+      .select({
+        claimId: claims.id,
+        claimNumber: claims.claimNumber,
+        claimType: claims.claimType,
+        status: claims.status,
+        currency: claims.currency,
+        approvedAmount: claims.cashInLieuAmount,
+        deceasedName: claims.deceasedName,
+        deceasedRelationship: claims.deceasedRelationship,
+        dateOfDeath: claims.dateOfDeath,
+        causeOfDeath: claims.causeOfDeath,
+        createdAt: claims.createdAt,
+        policyId: policies.id,
+        policyNumber: policies.policyNumber,
+        policyStatus: policies.status,
+        clientId: clients.id,
+        clientFirstName: clients.firstName,
+        clientLastName: clients.lastName,
+        clientNationalId: clients.nationalId,
+        clientPhone: clients.phone,
+        clientEmail: clients.email,
+        branchName: branches.name,
+      })
+      .from(claims)
+      .innerJoin(policies, eq(claims.policyId, policies.id))
+      .innerJoin(clients, eq(claims.clientId, clients.id))
+      .leftJoin(branches, eq(claims.branchId, branches.id))
+      .where(and(...conditions))
+      .orderBy(desc(claims.createdAt))
+      .limit(limit)
+      .offset(offset);
   }
   async getClaimsByPolicy(policyId: string, orgId: string): Promise<Claim[]> {
     const tdb = await getDbForOrg(orgId);

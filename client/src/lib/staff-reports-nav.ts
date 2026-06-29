@@ -32,6 +32,7 @@ export type ReportDatasetId =
   | "underwriterPayable"
   | "cashups"
   | "receiptReport"
+  | "claimsReport"
   | "branches"
   | "products"
   | "users";
@@ -141,7 +142,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   platform: ["platformReceivables"],
   "agent-productivity": ["agentProductivity"],
   commissions: ["commissionPlans", "commissionSummary"],
-  claims: ["claims"],
+  claims: ["claimsReport"],
   funerals: ["funeralCases"],
   fleet: ["fleet"],
   payroll: ["payrollEmployees"],
