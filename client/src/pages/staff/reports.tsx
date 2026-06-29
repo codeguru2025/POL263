@@ -216,6 +216,15 @@ export default function StaffReports() {
     },
     enabled: need("commissionSummary") && canReadCommission,
   });
+  const { data: commissionPayments = [], isLoading: loadingCommissionPayments } = useQuery<any[]>({
+    queryKey: ["reports", "commission-payments", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/commission-payments?limit=500" + qAppend, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: need("commissionPayments") && canReadCommission,
+  });
   const { data: platformReceivables = [], isLoading: loadingPlatform } = useQuery<any[]>({
     queryKey: ["reports", "platform", runKey, ...fk],
     queryFn: async () => {
@@ -1845,6 +1854,81 @@ export default function StaffReports() {
                     ))}
                   </TableBody>
                 </Table>
+              )}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="commission-payments">
+            <CardSection
+              title="Commission by payment"
+              description="One row per receipt. Shows client, policy premium, amount paid, commission earned by the agent, and branch info. Filter by date range, agent, or branch."
+              icon={Percent}
+              headerRight={<ExportButton reportType="commission-payments" filters={filters} />}
+              flush
+            >
+              {loadingCommissionPayments ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : commissionPayments.length === 0 ? (
+                <EmptyState title="No payment receipts match the filters" description="Set a date range and click Run report." className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1400px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Receipt #</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Surname</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>Policy Status</TableHead>
+                        <TableHead>Policy Premium</TableHead>
+                        <TableHead>Amount Due</TableHead>
+                        <TableHead>Amount Paid</TableHead>
+                        <TableHead>Commission Payable</TableHead>
+                        <TableHead>Comm. Type</TableHead>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Months Paid</TableHead>
+                        <TableHead>Receipt Count</TableHead>
+                        <TableHead>Policy Branch</TableHead>
+                        <TableHead>Payment Branch</TableHead>
+                        <TableHead>Period From</TableHead>
+                        <TableHead>Period To</TableHead>
+                        <TableHead>Channel</TableHead>
+                        <TableHead>Issued At</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {commissionPayments.slice(0, 200).map((r: any) => (
+                        <TableRow key={r.receiptId} className="hover:bg-muted/40">
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{r.receiptNumber}</TableCell>
+                          <TableCell className="whitespace-nowrap">{r.clientFirstName || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{r.clientLastName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{r.clientNationalId || "—"}</TableCell>
+                          <TableCell className="text-sm">{r.clientPhone || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
+                          <TableCell><StatusBadge status={r.policyStatus} variant="policy" /></TableCell>
+                          <TableCell className="tabular-nums whitespace-nowrap">{r.currency} {r.policyPremium}</TableCell>
+                          <TableCell className="tabular-nums whitespace-nowrap">{r.currency} {r.amountDue}</TableCell>
+                          <TableCell className="font-medium tabular-nums whitespace-nowrap">{r.currency} {parseFloat(String(r.amountPaid ?? 0)).toFixed(2)}</TableCell>
+                          <TableCell className="tabular-nums whitespace-nowrap text-emerald-700 font-medium">
+                            {r.commissionPayable != null ? `${r.currency} ${parseFloat(String(r.commissionPayable)).toFixed(2)}` : "—"}
+                          </TableCell>
+                          <TableCell className="text-xs">{r.commissionType ? <Badge variant="outline" className="text-xs">{r.commissionType}</Badge> : "—"}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{r.agentName || "—"}</TableCell>
+                          <TableCell className="tabular-nums text-center">{r.monthsPaidFor}</TableCell>
+                          <TableCell className="tabular-nums text-center">{r.receiptCount}</TableCell>
+                          <TableCell>{r.policyBranch || "—"}</TableCell>
+                          <TableCell>{r.paymentBranch || "—"}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{r.periodFrom || "—"}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{r.periodTo || "—"}</TableCell>
+                          <TableCell className="text-xs"><Badge variant="outline" className="text-[10px]">{r.paymentChannel || "—"}</Badge></TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
               )}
             </CardSection>
           </TabsContent>

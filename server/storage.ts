@@ -465,6 +465,7 @@ export interface IStorage {
   getCommissionLedgerDetailedByOrg(orgId: string, agentId?: string): Promise<any[]>;
   /** Per-agent commission totals for payroll-style report (uses ledger entry types + policy group / payment method). */
   getCommissionReportByOrg(orgId: string, filters?: ReportFilters): Promise<any[]>;
+  getCommissionPaymentReportByOrg(orgId: string, limit: number, offset: number, filters?: ReportFilters & { agentId?: string }): Promise<any[]>;
   getCommissionEntriesByPolicy(policyId: string, orgId: string): Promise<CommissionLedgerEntry[]>;
   createCommissionLedgerEntry(entry: InsertCommissionLedgerEntry): Promise<CommissionLedgerEntry>;
   getNotificationTemplates(orgId: string): Promise<NotificationTemplate[]>;
@@ -3437,6 +3438,115 @@ export class DatabaseStorage implements IStorage {
     });
     out.sort((a, b) => a.agentName.localeCompare(b.agentName));
     return out;
+  }
+
+  async getCommissionPaymentReportByOrg(orgId: string, limit: number, offset: number, filters?: ReportFilters & { agentId?: string }): Promise<any[]> {
+    const tdb = await getDbForOrg(orgId);
+    const policyBranches = alias(branches, "policy_branches");
+    const paymentBranches = alias(branches, "payment_branches");
+    const commissionAlias = alias(commissionLedgerEntries, "commission_alias");
+
+    const conditions: SQL[] = [
+      eq(paymentReceipts.organizationId, orgId),
+      eq(paymentReceipts.status, "issued"),
+      isNull(paymentReceipts.deletedAt),
+    ];
+    if (filters?.fromDate) conditions.push(gte(paymentReceipts.issuedAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(paymentReceipts.issuedAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.branchId) conditions.push(eq(paymentReceipts.branchId, filters.branchId));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.productId) {
+      const vids = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = vids.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else return [];
+    }
+
+    const rows = await tdb
+      .select({
+        receiptId: paymentReceipts.id,
+        receiptNumber: paymentReceipts.receiptNumber,
+        amountPaid: paymentReceipts.amount,
+        currency: paymentReceipts.currency,
+        periodFrom: paymentReceipts.periodFrom,
+        periodTo: paymentReceipts.periodTo,
+        issuedAt: paymentReceipts.issuedAt,
+        paymentChannel: paymentReceipts.paymentChannel,
+        clientFirstName: clients.firstName,
+        clientLastName: clients.lastName,
+        clientNationalId: clients.nationalId,
+        clientPhone: clients.phone,
+        policyId: policies.id,
+        policyNumber: policies.policyNumber,
+        policyPremium: policies.premiumAmount,
+        policyStatus: policies.status,
+        agentDisplayName: users.displayName,
+        agentEmail: users.email,
+        policyBranchName: policyBranches.name,
+        paymentBranchName: paymentBranches.name,
+        commissionAmount: commissionAlias.amount,
+        commissionType: commissionAlias.entryType,
+      })
+      .from(paymentReceipts)
+      .innerJoin(clients, eq(paymentReceipts.clientId, clients.id))
+      .innerJoin(policies, eq(paymentReceipts.policyId, policies.id))
+      .leftJoin(users, eq(policies.agentId, users.id))
+      .leftJoin(policyBranches, eq(policies.branchId, policyBranches.id))
+      .leftJoin(paymentBranches, eq(paymentReceipts.branchId, paymentBranches.id))
+      .leftJoin(commissionAlias, and(
+        eq(commissionAlias.policyId, paymentReceipts.policyId),
+        eq(commissionAlias.organizationId, orgId),
+        eq(commissionAlias.periodStart, paymentReceipts.periodFrom),
+      ))
+      .where(and(...conditions))
+      .orderBy(desc(paymentReceipts.issuedAt))
+      .limit(limit)
+      .offset(offset);
+
+    const policyIds = Array.from(new Set(rows.map((r) => r.policyId).filter(Boolean)));
+    const totalReceiptCounts: Record<string, number> = {};
+    if (policyIds.length > 0) {
+      const rcRows = await tdb
+        .select({ policyId: paymentReceipts.policyId, cnt: sql<number>`count(*)::int` })
+        .from(paymentReceipts)
+        .where(and(inArray(paymentReceipts.policyId, policyIds), eq(paymentReceipts.status, "issued"), isNull(paymentReceipts.deletedAt)))
+        .groupBy(paymentReceipts.policyId);
+      for (const rc of rcRows) {
+        if (rc.policyId) totalReceiptCounts[rc.policyId] = rc.cnt;
+      }
+    }
+
+    const calcMonths = (from: string | null, to: string | null): number => {
+      if (!from || !to) return 1;
+      const d1 = new Date(from), d2 = new Date(to);
+      return Math.max(1, Math.round((d2.getTime() - d1.getTime()) / (30 * 24 * 60 * 60 * 1000)) + 1);
+    };
+
+    return rows.map((r) => ({
+      receiptId: r.receiptId,
+      receiptNumber: r.receiptNumber,
+      clientFirstName: r.clientFirstName,
+      clientLastName: r.clientLastName,
+      clientNationalId: r.clientNationalId,
+      clientPhone: r.clientPhone,
+      policyNumber: r.policyNumber,
+      policyPremium: r.policyPremium,
+      amountDue: r.policyPremium,
+      amountPaid: r.amountPaid,
+      currency: r.currency,
+      commissionPayable: r.commissionAmount ?? null,
+      commissionType: r.commissionType ?? null,
+      agentName: (r.agentDisplayName || r.agentEmail || "").trim(),
+      monthsPaidFor: calcMonths(r.periodFrom, r.periodTo),
+      receiptCount: totalReceiptCounts[r.policyId] ?? 0,
+      policyBranch: r.policyBranchName || "",
+      paymentBranch: r.paymentBranchName || "",
+      issuedAt: r.issuedAt,
+      periodFrom: r.periodFrom,
+      periodTo: r.periodTo,
+      paymentChannel: r.paymentChannel,
+      policyStatus: r.policyStatus,
+    }));
   }
 
   async getCommissionEntriesByPolicy(policyId: string, orgId: string): Promise<CommissionLedgerEntry[]> {

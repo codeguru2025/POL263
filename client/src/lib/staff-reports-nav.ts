@@ -33,6 +33,7 @@ export type ReportDatasetId =
   | "cashups"
   | "receiptReport"
   | "claimsReport"
+  | "commissionPayments"
   | "branches"
   | "products"
   | "users";
@@ -73,7 +74,8 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
   ],
   agents: [
     { value: "agent-productivity", label: "Agent productivity", testId: "tab-agent-productivity" },
-    { value: "commissions", label: "Commissions", testId: "tab-commissions-report" },
+    { value: "commissions", label: "Commissions summary", testId: "tab-commissions-report" },
+    { value: "commission-payments", label: "Commission by payment", testId: "tab-commission-payments" },
   ],
   claims: [{ value: "claims", label: "Claims", testId: "tab-claims-report" }],
   operations: [
@@ -90,7 +92,7 @@ export function tabsForSection(
   opts: { canReadCommission: boolean; canReadFuneralOps: boolean; canReadFleet: boolean },
 ) {
   if (section === "agents" && !opts.canReadCommission) {
-    return SECTION_TAB_DEFS.agents.filter((t) => t.value !== "commissions");
+    return SECTION_TAB_DEFS.agents.filter((t) => t.value !== "commissions" && t.value !== "commission-payments");
   }
   if (section === "operations") {
     return SECTION_TAB_DEFS.operations.filter((t) => {
@@ -142,6 +144,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   platform: ["platformReceivables"],
   "agent-productivity": ["agentProductivity"],
   commissions: ["commissionPlans", "commissionSummary"],
+  "commission-payments": ["commissionPayments"],
   claims: ["claimsReport"],
   funerals: ["funeralCases"],
   fleet: ["fleet"],
