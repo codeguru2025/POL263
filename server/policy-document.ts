@@ -217,7 +217,8 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
       ["Marital Status", client.maritalStatus || "—"],
       ["Phone", client.phone || "—"],
       ["Email", client.email || "—"],
-      ["Address", client.address || "—"],
+      ["Physical Address", (client as any).physicalAddress || client.address || "—"],
+      ["Postal Address", (client as any).postalAddress || "—"],
     ], y);
   }
   if (enrichedMembers.length > 0) {

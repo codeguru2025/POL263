@@ -78,6 +78,8 @@ export default function StaffFunerals() {
   const [showEditCase, setShowEditCase] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showCreateVehicle, setShowCreateVehicle] = useState(false);
+  const [showEditVehicle, setShowEditVehicle] = useState(false);
+  const [selectedVehicle, setSelectedVehicle] = useState<FleetVehicle | null>(null);
 
   const { data: funeralCases = [], isLoading: casesLoading, isError: casesError } = useQuery<FuneralCase[]>({
     queryKey: ["/api/funeral-cases"],
@@ -201,6 +203,20 @@ export default function StaffFunerals() {
       return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/tasks`] }),
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const updateVehicleMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, string | number | null> }) => {
+      const res = await apiRequest("PUT", `/api/fleet/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/fleet"] });
+      setShowEditVehicle(false);
+      setSelectedVehicle(null);
+      toast({ title: "Vehicle updated" });
+    },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
@@ -429,6 +445,7 @@ export default function StaffFunerals() {
                       <TableHead>Type</TableHead>
                       <TableHead>Mileage</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead className="text-right pr-6">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -445,6 +462,12 @@ export default function StaffFunerals() {
                           <Badge variant="outline" className={`font-medium text-[10px] ${v.status === "available" ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : v.status === "dispatched" ? "bg-blue-500/15 text-blue-700 border-blue-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}`}>
                             {v.status.toUpperCase()}
                           </Badge>
+                        </TableCell>
+                        <TableCell className="text-right pr-6">
+                          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit vehicle" data-testid={`button-edit-vehicle-${v.id}`}
+                            onClick={() => { setSelectedVehicle(v); setShowEditVehicle(true); }}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -492,6 +515,15 @@ export default function StaffFunerals() {
         onSubmit={(data) => createVehicleMutation.mutate(data)}
         isPending={createVehicleMutation.isPending}
       />
+      {selectedVehicle && (
+        <EditVehicleDialog
+          open={showEditVehicle}
+          onOpenChange={(v) => { setShowEditVehicle(v); if (!v) setSelectedVehicle(null); }}
+          vehicle={selectedVehicle}
+          onSubmit={(data) => updateVehicleMutation.mutate({ id: selectedVehicle.id, data })}
+          isPending={updateVehicleMutation.isPending}
+        />
+      )}
 
       {/* Record cash-service payment */}
       <Dialog open={showPaymentDialog} onOpenChange={(open) => { setShowPaymentDialog(open); if (open) setPaymentIdempotencyKey(crypto.randomUUID()); }}>
@@ -1639,6 +1671,87 @@ function DriverChecklistDialog({ open, onOpenChange, funeralCase, existing, user
             </a>
             <Button type="submit" disabled={isPending}>
               {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Save Checklist
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Edit Vehicle Dialog ──────────────────────────────────────────────────────
+
+function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  vehicle: FleetVehicle;
+  onSubmit: (data: Record<string, string | number | null>) => void; isPending: boolean;
+}) {
+  const [form, setForm] = useState({
+    registration: vehicle.registration,
+    make: vehicle.make || "",
+    model: vehicle.model || "",
+    year: vehicle.year ? String(vehicle.year) : "",
+    vehicleType: vehicle.vehicleType || "",
+    currentMileage: vehicle.currentMileage != null ? String(vehicle.currentMileage) : "",
+    status: vehicle.status || "available",
+  });
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit({
+      registration: form.registration,
+      make: form.make || null,
+      model: form.model || null,
+      year: form.year ? parseInt(form.year) : null,
+      vehicleType: form.vehicleType || null,
+      currentMileage: form.currentMileage ? parseInt(form.currentMileage) : null,
+      status: form.status,
+    });
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Edit Vehicle</DialogTitle></DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Registration *</Label>
+            <Input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })} required data-testid="input-edit-vehicle-registration" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2"><Label>Make</Label><Input value={form.make} onChange={(e) => setForm({ ...form, make: e.target.value })} data-testid="input-edit-vehicle-make" /></div>
+            <div className="space-y-2"><Label>Model</Label><Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} data-testid="input-edit-vehicle-model" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2"><Label>Year</Label><Input type="number" value={form.year} onChange={(e) => setForm({ ...form, year: e.target.value })} data-testid="input-edit-vehicle-year" /></div>
+            <div className="space-y-2">
+              <Label>Vehicle Type</Label>
+              <Select value={form.vehicleType} onValueChange={(v) => setForm({ ...form, vehicleType: v })}>
+                <SelectTrigger data-testid="select-edit-vehicle-type"><SelectValue placeholder="Select type" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hearse">Hearse</SelectItem>
+                  <SelectItem value="ambulance">Ambulance</SelectItem>
+                  <SelectItem value="transport">Transport</SelectItem>
+                  <SelectItem value="utility">Utility</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2"><Label>Current Mileage (km)</Label><Input type="number" value={form.currentMileage} onChange={(e) => setForm({ ...form, currentMileage: e.target.value })} data-testid="input-edit-vehicle-mileage" /></div>
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+                <SelectTrigger data-testid="select-edit-vehicle-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="available">Available</SelectItem>
+                  <SelectItem value="dispatched">Dispatched</SelectItem>
+                  <SelectItem value="maintenance">Maintenance</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={isPending || !form.registration} data-testid="button-submit-edit-vehicle">
+              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Save Changes
             </Button>
           </DialogFooter>
         </form>

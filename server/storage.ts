@@ -348,6 +348,8 @@ export interface IStorage {
   getPoliciesByOrg(organizationId: string, limit?: number, offset?: number, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]>;
   /** Policy report rows with client, product, branch, agent details for reports/export. */
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
+  /** All-policies report: 45-column spreadsheet export matching the standard template. */
+  getAllPoliciesReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -551,6 +553,7 @@ export interface IStorage {
   updateDebitOrder(id: string, orgId: string, data: Partial<DebitOrder>): Promise<DebitOrder | undefined>;
   getFuneralQuotation(funeralCaseId: string, orgId: string): Promise<(FuneralQuotation & { items: FuneralQuotationItem[] }) | undefined>;
   upsertFuneralQuotation(orgId: string, funeralCaseId: string, data: { currency: string; status?: string; notes?: string; createdBy?: string }, items: Omit<InsertFuneralQuotationItem, "quotationId">[]): Promise<FuneralQuotation>;
+  deleteFuneralQuotation(id: string, orgId: string): Promise<void>;
   getServiceReceipts(orgId: string, opts?: { funeralCaseId?: string; fromDate?: string; toDate?: string }): Promise<ServiceReceipt[]>;
   getServiceReceiptByIdempotencyKey(orgId: string, idempotencyKey: string): Promise<ServiceReceipt | undefined>;
   createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt>;
@@ -1467,8 +1470,153 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  async getAllPoliciesReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const conditions: SQL[] = [eq(policies.organizationId, organizationId), isNull(policies.deletedAt)];
+    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.status) conditions.push(eq(policies.status, filters.status));
+    if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
+    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
+    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
+    if (filters?.productId) {
+      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
+      const ids = versionIds.map((v) => v.id);
+      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
+      else return [];
+    }
+
+    const rows = await tdb
+      .select({
+        policyId: policies.id,
+        branchId: policies.branchId,
+        branchName: branches.name,
+        policyNumber: policies.policyNumber,
+        status: policies.status,
+        currency: policies.currency,
+        premiumAmount: policies.premiumAmount,
+        inceptionDate: policies.inceptionDate,
+        policyCreatedAt: policies.createdAt,
+        agentUserId: users.id,
+        agentDisplayName: users.displayName,
+        agentEmail: users.email,
+        clientId: clients.id,
+        clientTitle: clients.title,
+        clientFirstName: clients.firstName,
+        clientLastName: clients.lastName,
+        clientNationalId: clients.nationalId,
+        clientDateOfBirth: clients.dateOfBirth,
+        clientPhone: clients.phone,
+        clientEmail: clients.email,
+        clientAddress: clients.address,
+        clientPhysicalAddress: clients.physicalAddress,
+        clientPostalAddress: clients.postalAddress,
+        productName: products.name,
+        groupName: groups.name,
+      })
+      .from(policies)
+      .innerJoin(clients, eq(policies.clientId, clients.id))
+      .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+      .innerJoin(products, eq(productVersions.productId, products.id))
+      .leftJoin(branches, eq(policies.branchId, branches.id))
+      .leftJoin(groups, eq(policies.groupId, groups.id))
+      .leftJoin(users, eq(policies.agentId, users.id))
+      .where(and(...conditions))
+      .orderBy(desc(policies.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const policyIds = rows.map((r) => r.policyId);
+    const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter(Boolean)));
+
+    const memberMap: Record<string, string> = {};
+    if (policyIds.length > 0) {
+      const mRows = await tdb
+        .select({ policyId: policyMembers.policyId, memberNumber: policyMembers.memberNumber })
+        .from(policyMembers)
+        .where(and(inArray(policyMembers.role, ["principal", "policy_holder"]), inArray(policyMembers.policyId, policyIds)));
+      for (const m of mRows) { if (m.memberNumber && !memberMap[m.policyId]) memberMap[m.policyId] = m.memberNumber; }
+    }
+
+    const debitOrderMap: Record<string, { mandateReference: string; dayOfMonth: number | null }> = {};
+    if (policyIds.length > 0) {
+      const doRows = await tdb
+        .select({ policyId: debitOrders.policyId, mandateReference: debitOrders.mandateReference, dayOfMonth: debitOrders.dayOfMonth })
+        .from(debitOrders)
+        .where(and(inArray(debitOrders.policyId, policyIds), eq(debitOrders.organizationId, organizationId)))
+        .orderBy(desc(debitOrders.createdAt));
+      for (const d of doRows) { if (d.policyId && !debitOrderMap[d.policyId]) debitOrderMap[d.policyId] = { mandateReference: d.mandateReference, dayOfMonth: d.dayOfMonth }; }
+    }
+
+    const payMethodMap: Record<string, string> = {};
+    if (clientIds.length > 0) {
+      const cpmRows = await tdb
+        .select({ clientId: clientPaymentMethods.clientId, methodType: clientPaymentMethods.methodType })
+        .from(clientPaymentMethods)
+        .where(and(inArray(clientPaymentMethods.clientId, clientIds), eq(clientPaymentMethods.isDefault, true), eq(clientPaymentMethods.isActive, true)));
+      for (const c of cpmRows) { if (!payMethodMap[c.clientId]) payMethodMap[c.clientId] = c.methodType; }
+    }
+
+    return rows.map((r) => {
+      const do_ = debitOrderMap[r.policyId];
+      return {
+        Branch_ID: r.branchId ?? "",
+        BranchName: r.branchName ?? "",
+        Member_ID: memberMap[r.policyId] ?? "",
+        Policy_Number: r.policyNumber ?? "",
+        MandateReference: do_?.mandateReference ?? "",
+        InternalReferenceNumber: "",
+        Inception_Date: r.inceptionDate ? String(r.inceptionDate) : "",
+        fullname: [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim(),
+        ID_Number: r.clientNationalId ?? "",
+        Passport_Number: "",
+        Date_Of_Birth: r.clientDateOfBirth ? String(r.clientDateOfBirth) : "",
+        ProductName: r.productName ?? "",
+        physicalAddress: r.clientPhysicalAddress || r.clientAddress || "",
+        postalAddress: r.clientPostalAddress ?? "",
+        Cell_Number: r.clientPhone ?? "",
+        EmailAddress: r.clientEmail ?? "",
+        UsualPremium: `${r.currency || "USD"} ${r.premiumAmount ?? ""}`.trim(),
+        Currency: r.currency ?? "",
+        AgentsName: (r.agentDisplayName || r.agentEmail || "").trim(),
+        Payment_Method: r.clientId ? (payMethodMap[r.clientId] ?? "") : "",
+        IsDebiCheck: "",
+        User_Code: "",
+        currstatus: r.status ?? "",
+        agentCode: "",
+        ApplicationComplete: "",
+        Notes: "",
+        Date_Captured: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString().split("T")[0] : "",
+        maturityTerm: "",
+        GroupName: r.groupName ?? "",
+        EasyPayNumber: "",
+        ConfidentialNotes: "",
+        OverrideNAEDOWithEFT: "",
+        EmployeeID: "",
+        UserID: r.agentUserId ?? "",
+        LanguageId: "",
+        SalaryScaleID: "",
+        PayAtNumber: "",
+        Debit_day: do_?.dayOfMonth != null ? String(do_.dayOfMonth) : "",
+        IsNaedo: "",
+        CapturerName: "",
+        LanguageName: "",
+        SalaryScale: "",
+        HomeTelephone: "",
+        "Exclude Escalation": "",
+        WhatsappNumber: "",
+      };
+    });
+  }
+
+
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
     const tdb = await getDbForOrg(organizationId);
+
+    // Fetch franchise (org) name from the registry database
+    const [orgRow] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, organizationId));
+    const franchiseName = orgRow?.name ?? "";
+
     const conditions = [eq(policies.organizationId, organizationId)];
     if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
@@ -1503,7 +1651,8 @@ export class DatabaseStorage implements IStorage {
         clientNationalId: clients.nationalId,
         clientPhone: clients.phone,
         clientAddress: clients.address,
-        clientLocation: clients.location,
+        clientPhysicalAddress: clients.physicalAddress,
+        clientPostalAddress: clients.postalAddress,
         clientActivationCode: clients.activationCode,
         productName: products.name,
         productCode: products.code,
@@ -1543,9 +1692,7 @@ export class DatabaseStorage implements IStorage {
     const initialsFrom = (first: string, last: string) => {
       const a = (first || "").trim();
       const b = (last || "").trim();
-      const i1 = a.charAt(0).toUpperCase();
-      const i2 = b.charAt(0).toUpperCase();
-      return `${i1}${i2}`.trim() || "";
+      return `${a.charAt(0).toUpperCase()}${b.charAt(0).toUpperCase()}`.trim() || "";
     };
 
     const scheduleLabel = (s: string | null | undefined) => {
@@ -1554,25 +1701,31 @@ export class DatabaseStorage implements IStorage {
     };
 
     return rows.map((r) => {
-      const memberNumber = memberMap[r.policyId] ?? null;
+      const memberNumber = memberMap[r.policyId] ?? "";
       const prem = String(r.premiumAmount ?? "");
-      const usualPrem = prem ? `${r.currency || "USD"} ${prem}` : "";
+      const usualPremium = prem ? `${r.currency || "USD"} ${prem}` : "";
       const policyHolder = [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim();
       const wpDays = r.waitingPeriodDays != null ? Number(r.waitingPeriodDays) : null;
-      const Waiting_Pe = wpDays != null && !Number.isNaN(wpDays) ? `${wpDays} days` : "";
+      const Waiting_Period = wpDays != null && !Number.isNaN(wpDays) ? `${wpDays} days` : "";
       const maturityParts: string[] = [];
       if (r.currentCycleEnd) maturityParts.push(`Cycle end ${r.currentCycleEnd}`);
       if (r.waitingPeriodEndDate) maturityParts.push(`Waiting end ${r.waitingPeriodEndDate}`);
       if (r.graceEndDate) maturityParts.push(`Grace end ${r.graceEndDate}`);
-      const MaturityTe = maturityParts.join(" · ") || "";
-      const InternalRe = [r.productCode, r.policyNumber].filter(Boolean).join(" · ") || String(r.policyId);
+      const MaturityTerm = maturityParts.join(" · ") || "";
+      const InternalReferenceNumber = [r.productCode, r.policyNumber].filter(Boolean).join(" · ") || String(r.policyId);
+      const agentName = r.agentDisplayName || r.agentEmail || "";
 
       return {
         _policyId: r.policyId,
-        Franchise_Branch_ID: r.policyBranchId ?? "",
-        Franchise_BranchName: r.branchName ?? "",
-        Marketing_Member_ID: memberNumber ?? "",
-        Policy_num: r.policyNumber ?? "",
+        _status: r.status,
+        _policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
+        Franchise_ID: organizationId,
+        Branch_ID: r.policyBranchId ?? "",
+        Franchise: franchiseName,
+        BranchName: r.branchName ?? "",
+        MarketingManager: agentName,
+        Member_ID: memberNumber,
+        Policy_number: r.policyNumber ?? "",
         Inception_Date: r.inceptionDate ? String(r.inceptionDate) : "",
         ID_Number: r.clientNationalId ?? "",
         First_Name: r.clientFirstName ?? "",
@@ -1580,23 +1733,21 @@ export class DatabaseStorage implements IStorage {
         PolicyHolder: policyHolder,
         Title: r.clientTitle ?? "",
         Initials: initialsFrom(r.clientFirstName ?? "", r.clientLastName ?? ""),
-        UsualPrem: usualPrem,
-        Cell_Num: r.clientPhone ?? "",
-        PhysicalAdd: r.clientAddress ?? "",
-        PostalAdd: r.clientLocation ?? "",
-        EasyPayNo: r.clientActivationCode ?? "",
-        Payment_M: scheduleLabel(r.paymentSchedule),
-        StopOrder: "",
-        Product_N: r.productName ?? "",
-        Waiting_Pe,
-        InternalRe,
-        AgentNam: r.agentDisplayName || r.agentEmail || "",
-        MaturityTe,
+        UsualPremium: usualPremium,
+        Cell_Number: r.clientPhone ?? "",
+        PhysicalAddress: r.clientPhysicalAddress || r.clientAddress || "",
+        PostalAddress: r.clientPostalAddress ?? "",
+        EasyPayNumber: r.clientActivationCode ?? "",
+        Payment_Method: scheduleLabel(r.paymentSchedule),
+        StopOrderNumber: "",
+        Product_Name: r.productName ?? "",
+        Waiting_Period,
+        InternalReferenceNumber,
+        AgentName: agentName,
+        MaturityTerm,
         GroupName: r.groupName ?? "",
-        Idate: idate,
+        fdate: idate,
         tdate,
-        _status: r.status,
-        _policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
       };
     });
   }
@@ -1718,17 +1869,17 @@ export class DatabaseStorage implements IStorage {
       return {
         policyId: r.policyId,
         agent_id: r.agentId ?? "",
-        AgentsNar: (r.agentDisplayName || r.agentEmail || "").trim(),
-        Inception_: r.inceptionDate ? String(r.inceptionDate) : "",
-        Policy_Nur: r.policyNumber ?? "",
+        AgentsName: (r.agentDisplayName || r.agentEmail || "").trim(),
+        Inception_Date: r.inceptionDate ? String(r.inceptionDate) : "",
+        Policy_Number: r.policyNumber ?? "",
         FullName: fullName,
-        Product_N: r.productName ?? "",
-        UsualPrem: usualPrem,
-        StatusDes: statusDes(r.status || ""),
-        ReceiptsC: receiptsC,
+        Product_Name: r.productName ?? "",
+        UsualPremium: usualPrem,
+        StatusDesc: statusDes(r.status || ""),
+        ReceiptsCollected: receiptsC,
         Colour: statusColour(r.status || ""),
-        MembersB: r.memberBranchName ?? "",
-        AgentsBra: r.agentBranchName ?? "",
+        MembersBranch: r.memberBranchName ?? "",
+        AgentsBranch: r.agentBranchName ?? "",
         Active: r.status === "active" ? "Yes" : "No",
         fdate,
         tdate,
@@ -2652,6 +2803,7 @@ export class DatabaseStorage implements IStorage {
         fdate,
         tdate,
         /** Policy receipts report (spreadsheet columns) */
+        Total: `${r.currency || "USD"} ${r.amount ?? ""}`.trim(),
         PaymentBy,
         ReceiptNumber: r.receiptNumber ?? "",
         ManualUser,
@@ -4164,6 +4316,10 @@ export class DatabaseStorage implements IStorage {
       }
       return quote;
     });
+  }
+  async deleteFuneralQuotation(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(funeralQuotations).where(and(eq(funeralQuotations.id, id), eq(funeralQuotations.organizationId, orgId)));
   }
   async createStandaloneQuotation(
     orgId: string,

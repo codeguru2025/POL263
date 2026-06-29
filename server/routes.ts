@@ -1524,6 +1524,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       dateOfBirth,
       gender: gender!,
       address: address || undefined,
+      physicalAddress: req.body.physicalAddress || undefined,
+      postalAddress: req.body.postalAddress || undefined,
       organizationId: user.organizationId,
       branchId: req.body.branchId || user.branchId,
       activationCode,
@@ -1961,6 +1963,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
     return res.json({ ok: true });
+  });
+
+  // PATCH /api/policies/:id/members/:memberId — edit a dependent or policy holder's personal details (admin only)
+  app.patch("/api/policies/:id/members/:memberId", requireAuth, requireTenantScope, requirePermission("edit:premium"), async (req, res) => {
+    const user = req.user as any;
+    const { id: policyId, memberId } = req.params as { id: string; memberId: string };
+    const policy = await storage.getPolicy(policyId, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    const members = await storage.getPolicyMembers(policyId, user.organizationId);
+    const member = (members as any[]).find((m: any) => m.id === memberId);
+    if (!member) return res.status(404).json({ message: "Member not found" });
+
+    const DEP_FIELDS = ["firstName", "lastName", "relationship", "gender", "nationalId", "dateOfBirth"];
+    const CLIENT_FIELDS = ["firstName", "lastName", "gender", "nationalId", "dateOfBirth", "phone", "email"];
+    const nullify = (v: any) => (v === "" || v === undefined ? null : v);
+
+    if (member.dependentId) {
+      const before = await storage.getDependent(member.dependentId, user.organizationId);
+      const data: Record<string, any> = {};
+      for (const key of DEP_FIELDS) { if (key in req.body) data[key] = nullify(req.body[key]); }
+      if (Object.keys(data).length === 0) return res.json(before);
+      const updated = await storage.updateDependent(member.dependentId, data, user.organizationId);
+      await auditLog(req, "UPDATE_DEPENDENT", "Dependent", member.dependentId, before, updated);
+      return res.json(updated);
+    } else if (member.clientId) {
+      const before = await storage.getClient(member.clientId, user.organizationId);
+      if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+      const data: Record<string, any> = {};
+      for (const key of CLIENT_FIELDS) { if (key in req.body) data[key] = nullify(req.body[key]); }
+      if (Object.keys(data).length === 0) return res.json(before);
+      const updated = await storage.updateClient(member.clientId, data, user.organizationId);
+      await auditLog(req, "UPDATE_CLIENT", "Client", member.clientId, before, updated);
+      return res.json(updated);
+    }
+    return res.status(400).json({ message: "Member has no associated person record" });
   });
 
   app.get("/api/age-bands", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -2519,6 +2556,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "currency", "paymentSchedule", "effectiveDate", "branchId", "agentId", "groupId",
       "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryRelationship",
       "beneficiaryNationalId", "beneficiaryPhone", "beneficiaryDependentId",
+      ...(canEditPremium ? ["inceptionDate", "waitingPeriodEndDate", "cancelReason", "status"] : []),
     ]);
     const sanitized: Record<string, any> = {};
     for (const [key, value] of Object.entries(body)) {
@@ -2716,7 +2754,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // ─── Hard-delete a policy and all related records (RBAC-gated) ──
+  // ─── Request deletion of a policy — creates approval request, management must approve ──
   app.delete("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("delete:policy"), async (req, res) => {
     const user = req.user as any;
     const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
@@ -2724,10 +2762,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
     }
     const policy = accessCheck.policy;
-    await storage.deletePolicy(policy.id, user.organizationId);
-    await auditLog(req, "DELETE_POLICY", "Policy", policy.id, policy, null);
-    structuredLog("warn", "Hard-deleted policy", { userId: user.id, email: user.email, policyId: policy.id, policyNumber: policy.policyNumber });
-    return res.json({ message: "Policy permanently deleted" });
+    try {
+      const approval = await storage.createApprovalRequest({
+        organizationId: user.organizationId,
+        requestType: "delete_policy",
+        entityType: "Policy",
+        entityId: policy.id,
+        requestData: { policyNumber: policy.policyNumber, clientId: policy.clientId, status: policy.status, reason: req.body?.reason || null },
+        status: "pending",
+        initiatedBy: user.id,
+      });
+      await auditLog(req, "REQUEST_DELETE_POLICY", "Policy", policy.id, policy, { pendingDeletion: true, approvalId: approval.id });
+      await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+        type: "APPROVAL_NEEDED",
+        title: "Policy Deletion Approval Required",
+        body: `Policy ${policy.policyNumber} has been submitted for deletion and requires management approval.`,
+        metadata: { approvalId: approval.id, policyId: policy.id },
+      });
+      structuredLog("warn", "Policy deletion requested", { userId: user.id, email: user.email, policyId: policy.id, policyNumber: policy.policyNumber, approvalId: approval.id });
+      return res.status(202).json({ message: "Deletion request submitted for management approval", approvalId: approval.id });
+    } catch (err: any) {
+      structuredLog("error", "DELETE /api/policies/:id failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   // ─── Edit a payment transaction (RBAC-gated) ──
@@ -2792,18 +2849,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
-  // ─── Delete a receipt (RBAC-gated) ──
+  // ─── Request deletion of a receipt — creates approval request, management must approve ──
   app.delete("/api/receipts/:id", requireAuth, requireTenantScope, requirePermission("delete:receipt"), async (req, res) => {
     const user = req.user as any;
     const receipt = await storage.getPaymentReceiptById(req.params.id as string, user.organizationId);
     if (!receipt || receipt.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    if (receipt.status === "issued") {
-      return res.status(400).json({ message: "Cannot delete issued receipts. Create a reversal instead." });
+    try {
+      const approval = await storage.createApprovalRequest({
+        organizationId: user.organizationId,
+        requestType: "delete_receipt",
+        entityType: "PaymentReceipt",
+        entityId: receipt.id,
+        requestData: { receiptNumber: receipt.receiptNumber, amount: receipt.amount, currency: receipt.currency, status: receipt.status, reason: req.body?.reason || null },
+        status: "pending",
+        initiatedBy: user.id,
+      });
+      await auditLog(req, "REQUEST_DELETE_RECEIPT", "PaymentReceipt", receipt.id, receipt, { pendingDeletion: true, approvalId: approval.id });
+      await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+        type: "APPROVAL_NEEDED",
+        title: "Receipt Deletion Approval Required",
+        body: `Receipt ${receipt.receiptNumber} has been submitted for deletion and requires management approval.`,
+        metadata: { approvalId: approval.id, receiptId: receipt.id },
+      });
+      structuredLog("warn", "Receipt deletion requested", { userId: user.id, email: user.email, receiptId: receipt.id, receiptNumber: receipt.receiptNumber, approvalId: approval.id });
+      return res.status(202).json({ message: "Deletion request submitted for management approval", approvalId: approval.id });
+    } catch (err: any) {
+      structuredLog("error", "DELETE /api/receipts/:id failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
-    await storage.deletePaymentReceipt(receipt.id, user.organizationId);
-    await auditLog(req, "DELETE_RECEIPT", "PaymentReceipt", receipt.id, receipt, null);
-    structuredLog("warn", "Hard-deleted receipt", { userId: user.id, email: user.email, receiptId: receipt.id, receiptNumber: receipt.receiptNumber });
-    return res.json({ message: "Receipt permanently deleted" });
   });
 
   app.get("/api/policies/:id/members", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -4721,6 +4794,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.put("/api/fleet/:id", requireAuth, requireTenantScope, requirePermission("write:fleet"), async (req, res) => {
+    const user = req.user as any;
+    const vehicleId = req.params.id as string;
+    const existing = await storage.getFleetVehicleById(vehicleId, user.organizationId);
+    if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ message: "Vehicle not found" });
+    const ALLOWED = new Set(["registration", "make", "model", "year", "vehicleType", "currentMileage", "status"]);
+    const body: Record<string, any> = {};
+    for (const [k, v] of Object.entries(req.body)) {
+      if (ALLOWED.has(k)) body[k] = v;
+    }
+    if (Object.keys(body).length === 0) return res.status(400).json({ message: "No valid fields to update" });
+    try {
+      const updated = await storage.updateFleetVehicle(vehicleId, body, user.organizationId);
+      await auditLog(req, "UPDATE_VEHICLE", "FleetVehicle", vehicleId, existing, updated);
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PUT /api/fleet/:id failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   // ─── Commissions ────────────────────────────────────────────
 
   app.get("/api/commission-plans", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
@@ -5419,6 +5513,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(item);
   });
 
+  app.delete("/api/quotations/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const quote = await storage.getQuotationById(req.params.id as string, user.organizationId);
+    if (!quote || quote.organizationId !== user.organizationId) return res.status(404).json({ message: "Quotation not found" });
+    try {
+      const approval = await storage.createApprovalRequest({
+        organizationId: user.organizationId,
+        requestType: "delete_quote",
+        entityType: "FuneralQuotation",
+        entityId: quote.id,
+        requestData: { quotationNumber: (quote as any).quotationNumber || null, funeralCaseId: (quote as any).funeralCaseId || null, reason: req.body?.reason || null },
+        status: "pending",
+        initiatedBy: user.id,
+      });
+      await auditLog(req, "REQUEST_DELETE_QUOTE", "FuneralQuotation", quote.id, quote, { pendingDeletion: true, approvalId: approval.id });
+      await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+        type: "APPROVAL_NEEDED",
+        title: "Quotation Deletion Approval Required",
+        body: `Quotation ${(quote as any).quotationNumber || quote.id} has been submitted for deletion and requires management approval.`,
+        metadata: { approvalId: approval.id, quotationId: quote.id },
+      });
+      structuredLog("warn", "Quotation deletion requested", { userId: user.id, email: user.email, quotationId: quote.id, approvalId: approval.id });
+      return res.status(202).json({ message: "Deletion request submitted for management approval", approvalId: approval.id });
+    } catch (err: any) {
+      structuredLog("error", "DELETE /api/quotations/:id failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   app.delete("/api/quotations/collateral/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const collateralId = req.params.id as string;
@@ -5531,6 +5654,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       rejectionReason: rejectionReason || null,
     }, user.organizationId);
     await auditLog(req, `RESOLVE_APPROVAL_${action.toUpperCase()}`, "ApprovalRequest", approval.id, approval, updated);
+
+    // Execute side-effects for approved requests
+    if (action === "approve" && approval.entityId) {
+      try {
+        if (approval.requestType === "delete_policy") {
+          const policy = await storage.getPolicy(approval.entityId, user.organizationId);
+          if (policy) {
+            await storage.deletePolicy(approval.entityId, user.organizationId);
+            await auditLog(req, "DELETE_POLICY", "Policy", approval.entityId, policy, null);
+            structuredLog("warn", "Policy deleted via approval", { userId: user.id, policyId: approval.entityId, approvalId: approval.id });
+          }
+        } else if (approval.requestType === "delete_receipt") {
+          const receipt = await storage.getPaymentReceiptById(approval.entityId, user.organizationId);
+          if (receipt) {
+            await storage.deletePaymentReceipt(approval.entityId, user.organizationId);
+            await auditLog(req, "DELETE_RECEIPT", "PaymentReceipt", approval.entityId, receipt, null);
+            structuredLog("warn", "Receipt deleted via approval", { userId: user.id, receiptId: approval.entityId, approvalId: approval.id });
+          }
+        } else if (approval.requestType === "delete_quote") {
+          await storage.deleteFuneralQuotation(approval.entityId, user.organizationId);
+          await auditLog(req, "DELETE_QUOTE", "FuneralQuotation", approval.entityId, { id: approval.entityId }, null);
+          structuredLog("warn", "Quotation deleted via approval", { userId: user.id, quotationId: approval.entityId, approvalId: approval.id });
+        }
+      } catch (sideEffectErr: any) {
+        structuredLog("error", "Approval side-effect failed", { approvalId: approval.id, requestType: approval.requestType, error: sideEffectErr?.message });
+      }
+    }
+
     // Notify the submitter of the decision
     if (approval.initiatedBy) {
       const label = action === "approve" ? "Approved" : "Rejected";
@@ -6732,15 +6883,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       switch (reportType) {
         case "policies": {
-          const polRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Created"];
-          currencyTotals = { Premium: {} };
-          rows = polRaw.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
-            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule, r.createdAt];
-          });
+          const polRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = [
+            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
+            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Passport_Number",
+            "Date_Of_Birth", "ProductName", "physicalAddress", "postalAddress", "Cell_Number",
+            "EmailAddress", "UsualPremium", "Currency", "AgentsName", "Payment_Method",
+            "IsDebiCheck", "User_Code", "currstatus", "agentCode", "ApplicationComplete",
+            "Notes", "Date_Captured", "maturityTerm", "GroupName", "EasyPayNumber",
+            "ConfidentialNotes", "OverrideNAEDOWithEFT", "EmployeeID", "UserID", "LanguageId",
+            "SalaryScaleID", "PayAtNumber", "Debit_day", "IsNaedo", "CapturerName",
+            "LanguageName", "SalaryScale", "HomeTelephone", "Exclude Escalation", "WhatsappNumber",
+          ];
+          currencyTotals = null;
+          rows = polRaw.map((r: any) => [
+            r.Branch_ID ?? "", r.BranchName ?? "", r.Member_ID ?? "", r.Policy_Number ?? "", r.MandateReference ?? "",
+            r.InternalReferenceNumber ?? "", r.Inception_Date ?? "", r.fullname ?? "", r.ID_Number ?? "", r.Passport_Number ?? "",
+            r.Date_Of_Birth ?? "", r.ProductName ?? "", r.physicalAddress ?? "", r.postalAddress ?? "", r.Cell_Number ?? "",
+            r.EmailAddress ?? "", r.UsualPremium ?? "", r.Currency ?? "", r.AgentsName ?? "", r.Payment_Method ?? "",
+            r.IsDebiCheck ?? "", r.User_Code ?? "", r.currstatus ?? "", r.agentCode ?? "", r.ApplicationComplete ?? "",
+            r.Notes ?? "", r.Date_Captured ?? "", r.maturityTerm ?? "", r.GroupName ?? "", r.EasyPayNumber ?? "",
+            r.ConfidentialNotes ?? "", r.OverrideNAEDOWithEFT ?? "", r.EmployeeID ?? "", r.UserID ?? "", r.LanguageId ?? "",
+            r.SalaryScaleID ?? "", r.PayAtNumber ?? "", r.Debit_day ?? "", r.IsNaedo ?? "", r.CapturerName ?? "",
+            r.LanguageName ?? "", r.SalaryScale ?? "", r.HomeTelephone ?? "", r["Exclude Escalation"] ?? "", r.WhatsappNumber ?? "",
+          ]);
           break;
         }
         case "policy-details": {
@@ -7057,17 +7223,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const prod = await storage.getAgentProductivityReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
             "agent_id",
-            "AgentsNar",
-            "Inception_",
-            "Policy_Nur",
+            "AgentsName",
+            "Inception_Date",
+            "Policy_Number",
             "FullName",
-            "Product_N",
-            "UsualPrem",
-            "StatusDes",
-            "ReceiptsC",
+            "Product_Name",
+            "UsualPremium",
+            "StatusDesc",
+            "ReceiptsCollected",
             "Colour",
-            "MembersB",
-            "AgentsBra",
+            "MembersBranch",
+            "AgentsBranch",
             "Active",
             "fdate",
             "tdate",
@@ -7075,17 +7241,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           currencyTotals = null;
           rows = prod.map((r: any) => [
             r.agent_id ?? "",
-            r.AgentsNar ?? "",
-            r.Inception_ ?? "",
-            r.Policy_Nur ?? "",
+            r.AgentsName ?? "",
+            r.Inception_Date ?? "",
+            r.Policy_Number ?? "",
             r.FullName ?? "",
-            r.Product_N ?? "",
-            r.UsualPrem ?? "",
-            r.StatusDes ?? "",
-            r.ReceiptsC ?? "",
+            r.Product_Name ?? "",
+            r.UsualPremium ?? "",
+            r.StatusDesc ?? "",
+            r.ReceiptsCollected ?? "",
             r.Colour ?? "",
-            r.MembersB ?? "",
-            r.AgentsBra ?? "",
+            r.MembersBranch ?? "",
+            r.AgentsBranch ?? "",
             r.Active ?? "",
             r.fdate ?? "",
             r.tdate ?? "",
@@ -7096,10 +7262,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "new-joinings": {
           const issued = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
-            "Franchise_Branch_ID",
-            "Franchise_BranchName",
-            "Marketing_Member_ID",
-            "Policy_num",
+            "Franchise_ID",
+            "Branch_ID",
+            "Franchise",
+            "BranchName",
+            "MarketingManager",
+            "Member_ID",
+            "Policy_number",
             "Inception_Date",
             "ID_Number",
             "First_Name",
@@ -7107,30 +7276,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             "PolicyHolder",
             "Title",
             "Initials",
-            "UsualPrem",
-            "Cell_Num",
-            "PhysicalAdd",
-            "PostalAdd",
-            "EasyPayNo",
-            "Payment_M",
-            "StopOrder",
-            "Product_N",
-            "Waiting_Pe",
-            "InternalRe",
-            "AgentNam",
-            "MaturityTe",
+            "UsualPremium",
+            "Cell_Number",
+            "PhysicalAddress",
+            "PostalAddress",
+            "EasyPayNumber",
+            "Payment_Method",
+            "StopOrderNumber",
+            "Product_Name",
+            "Waiting_Period",
+            "InternalReferenceNumber",
+            "AgentName",
+            "MaturityTerm",
             "GroupName",
-            "Idate",
+            "fdate",
             "tdate",
-            "Status",
-            "Date captured",
           ];
           currencyTotals = null;
           rows = issued.map((r: any) => [
-            r.Franchise_Branch_ID ?? "",
-            r.Franchise_BranchName ?? "",
-            r.Marketing_Member_ID ?? "",
-            r.Policy_num ?? "",
+            r.Franchise_ID ?? "",
+            r.Branch_ID ?? "",
+            r.Franchise ?? "",
+            r.BranchName ?? "",
+            r.MarketingManager ?? "",
+            r.Member_ID ?? "",
+            r.Policy_number ?? "",
             r.Inception_Date ?? "",
             r.ID_Number ?? "",
             r.First_Name ?? "",
@@ -7138,23 +7308,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             r.PolicyHolder ?? "",
             r.Title ?? "",
             r.Initials ?? "",
-            r.UsualPrem ?? "",
-            r.Cell_Num ?? "",
-            r.PhysicalAdd ?? "",
-            r.PostalAdd ?? "",
-            r.EasyPayNo ?? "",
-            r.Payment_M ?? "",
-            r.StopOrder ?? "",
-            r.Product_N ?? "",
-            r.Waiting_Pe ?? "",
-            r.InternalRe ?? "",
-            r.AgentNam ?? "",
-            r.MaturityTe ?? "",
+            r.UsualPremium ?? "",
+            r.Cell_Number ?? "",
+            r.PhysicalAddress ?? "",
+            r.PostalAddress ?? "",
+            r.EasyPayNumber ?? "",
+            r.Payment_Method ?? "",
+            r.StopOrderNumber ?? "",
+            r.Product_Name ?? "",
+            r.Waiting_Period ?? "",
+            r.InternalReferenceNumber ?? "",
+            r.AgentName ?? "",
+            r.MaturityTerm ?? "",
             r.GroupName ?? "",
-            r.Idate ?? "",
+            r.fdate ?? "",
             r.tdate ?? "",
-            r._status ?? "",
-            r._policyCreatedAt ?? "",
           ]);
           break;
         }
@@ -7176,7 +7344,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "receipts": {
           const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           headers = [
+            "ReceiptNumber",
+            "datepaid",
             "DTSTAMP",
+            "PaymentMethod",
+            "Total",
+            "PremiumDue",
+            "AmountCollected",
+            "Remarks",
             "agentsName",
             "MonthsPaidInAdvance",
             "policy_number",
@@ -7189,40 +7364,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             "ReceiptCount",
             "fdate",
             "tdate",
-            "PaymentBy",
-            "ReceiptNumber",
-            "ManualUser",
-            "DatePaid",
-            "Transaction",
-            "PremiumDue",
-            "Currency",
-            "AmountCollected",
-            "MonthsPaid",
-            "Remarks",
-            "PaymentMethod",
-            "DefaultPay",
-            "DebitMethod",
-            "ReceiptMonth",
-            "ReceiptYear",
-            "policy_num",
-            "PolicyBranch",
-            "Inception_",
-            "Sstatus",
-            "InternalRe",
-            "Product_N",
-            "CollectedBy",
-            "fromDate",
-            "toDate",
-            "GroupName",
-            "InceptionD",
-            "MemberID",
-            "ActualPen",
-            "ReceiptID",
-            "CapturedBy",
           ];
           currencyTotals = null;
           rows = receiptRows.map((r: any) => [
+            r.ReceiptNumber ?? "",
+            r.DatePaid ?? "",
             r.DTSTAMP ?? "",
+            r.PaymentMethod ?? "",
+            r.Total ?? "",
+            r.PremiumDue ?? "",
+            r.AmountCollected ?? "",
+            r.Remarks ?? "",
             r.agentsName ?? "",
             r.MonthsPaidInAdvance ?? "",
             r.policy_number ?? "",
@@ -7235,36 +7387,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             r.ReceiptCount ?? "",
             r.fdate ?? "",
             r.tdate ?? "",
-            r.PaymentBy ?? "",
-            r.ReceiptNumber ?? "",
-            r.ManualUser ?? "",
-            r.DatePaid ?? "",
-            r.Transaction ?? "",
-            r.PremiumDue ?? "",
-            r.Currency ?? "",
-            r.AmountCollected ?? "",
-            r.MonthsPaid ?? "",
-            r.Remarks ?? "",
-            r.PaymentMethod ?? "",
-            r.DefaultPay ?? "",
-            r.DebitMethod ?? "",
-            r.ReceiptMonth ?? "",
-            r.ReceiptYear ?? "",
-            r.policy_num ?? "",
-            r.PolicyBranch ?? "",
-            r.Inception_ ?? "",
-            r.Sstatus ?? "",
-            r.InternalRe ?? "",
-            r.Product_N ?? "",
-            r.CollectedBy ?? "",
-            r.fromDate ?? "",
-            r.toDate ?? "",
-            r.GroupName ?? "",
-            r.InceptionD ?? "",
-            r.MemberID ?? "",
-            r.ActualPen ?? "",
-            r.ReceiptID ?? "",
-            r.CapturedBy ?? "",
           ]);
           break;
         }

@@ -161,8 +161,10 @@ export default function StaffPolicies() {
     currency: "",
     paymentSchedule: "",
     effectiveDate: "",
+    inceptionDate: "",
     branchId: "",
     agentId: "",
+    groupId: "",
     beneficiaryFirstName: "",
     beneficiaryLastName: "",
     beneficiaryRelationship: "",
@@ -172,6 +174,12 @@ export default function StaffPolicies() {
     premiumEffectiveDate: "",
     premiumChangeReason: "",
     isLegacy: false,
+  });
+
+  const [editMemberOpen, setEditMemberOpen] = useState(false);
+  const [editingMember, setEditingMember] = useState<any>(null);
+  const [editMemberForm, setEditMemberForm] = useState({
+    firstName: "", lastName: "", relationship: "", gender: "", nationalId: "", dateOfBirth: "", phone: "", email: "",
   });
 
   const [createForm, setCreateForm] = useState({
@@ -192,7 +200,7 @@ export default function StaffPolicies() {
       mobileNumber: "",
     },
     memberAddOns: {} as Record<string, string[]>,
-    newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "" },
+    newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", physicalAddress: "", postalAddress: "" },
     isLegacy: false,
   });
   const [createStep, setCreateStep] = useState(1);
@@ -282,6 +290,10 @@ export default function StaffPolicies() {
     queryKey: ["/api/branches"],
   });
   const branches = rawBranches ?? [];
+  const { data: rawGroups } = useQuery<any[]>({
+    queryKey: ["/api/groups"],
+  });
+  const groups = rawGroups ?? [];
 
   const { data: selectedClient } = useQuery<any>({
     queryKey: ["/api/clients", createForm.clientId],
@@ -726,6 +738,8 @@ export default function StaffPolicies() {
           nationalId: data.newClient.nationalId ? toUpper(data.newClient.nationalId) : undefined,
           dateOfBirth: data.newClient.dateOfBirth || undefined,
           gender: data.newClient.gender ? toUpper(data.newClient.gender) : undefined,
+          physicalAddress: data.newClient.physicalAddress?.trim() || undefined,
+          postalAddress: data.newClient.postalAddress?.trim() || undefined,
         });
         const clientData = await clientRes.json();
         // Handle existing client returned instead of new creation
@@ -888,6 +902,58 @@ export default function StaffPolicies() {
       toast({ title: "Update failed", description: err.message, variant: "destructive" });
     },
   });
+  const editMemberMutation = useMutation({
+    mutationFn: async ({ policyId, memberId, data }: { policyId: string; memberId: string; data: Record<string, any> }) => {
+      const res = await apiRequest("PATCH", `/api/policies/${policyId}/members/${memberId}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "members"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "detail"] });
+      setEditMemberOpen(false);
+      toast({ title: "Member updated", description: "Member details have been saved." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const openEditMember = (m: any) => {
+    setEditingMember(m);
+    const nameParts = (m.memberName || "").trim().split(" ");
+    setEditMemberForm({
+      firstName: nameParts[0] || "",
+      lastName: nameParts.slice(1).join(" ") || "",
+      relationship: m.relationship || "",
+      gender: m.gender || "",
+      nationalId: m.nationalId || "",
+      dateOfBirth: m.dateOfBirth || "",
+      phone: m.phone || "",
+      email: m.email || "",
+    });
+    setEditMemberOpen(true);
+  };
+
+  const handleEditMemberSubmit = () => {
+    if (!selectedPolicy || !editingMember) return;
+    const data: Record<string, any> = {};
+    const orig = {
+      firstName: (editingMember.memberName || "").trim().split(" ")[0] || "",
+      lastName: (editingMember.memberName || "").trim().split(" ").slice(1).join(" ") || "",
+      relationship: editingMember.relationship || "",
+      gender: editingMember.gender || "",
+      nationalId: editingMember.nationalId || "",
+      dateOfBirth: editingMember.dateOfBirth || "",
+      phone: editingMember.phone || "",
+      email: editingMember.email || "",
+    };
+    for (const key of Object.keys(editMemberForm) as (keyof typeof editMemberForm)[]) {
+      if (editMemberForm[key] !== orig[key]) data[key] = editMemberForm[key] || null;
+    }
+    if (Object.keys(data).length === 0) { setEditMemberOpen(false); return; }
+    editMemberMutation.mutate({ policyId: selectedPolicy.id, memberId: editingMember.id, data });
+  };
+
   const savePaymentMethodMutation = useMutation({
     mutationFn: async () => {
       if (!displayPolicy?.clientId) throw new Error("No client selected");
@@ -959,8 +1025,10 @@ export default function StaffPolicies() {
       currency: policy.currency || "USD",
       paymentSchedule: policy.paymentSchedule || "monthly",
       effectiveDate: policy.effectiveDate || "",
+      inceptionDate: policy.inceptionDate || "",
       branchId: policy.branchId || "",
       agentId: policy.agentId || "",
+      groupId: policy.groupId || "",
       beneficiaryFirstName: policy.beneficiaryFirstName || "",
       beneficiaryLastName: policy.beneficiaryLastName || "",
       beneficiaryRelationship: policy.beneficiaryRelationship || "",
@@ -980,8 +1048,10 @@ export default function StaffPolicies() {
     if (editForm.currency !== (displayPolicy.currency || "USD")) data.currency = editForm.currency;
     if (editForm.paymentSchedule !== (displayPolicy.paymentSchedule || "monthly")) data.paymentSchedule = editForm.paymentSchedule;
     if (editForm.effectiveDate !== (displayPolicy.effectiveDate || "")) data.effectiveDate = editForm.effectiveDate || null;
+    if (canEditPremium && editForm.inceptionDate !== (displayPolicy.inceptionDate || "")) data.inceptionDate = editForm.inceptionDate || null;
     if (editForm.branchId !== (displayPolicy.branchId || "")) data.branchId = editForm.branchId || null;
     if (canEditPremium && editForm.agentId !== (displayPolicy.agentId || "")) data.agentId = editForm.agentId || null;
+    if (canEditPremium && editForm.groupId !== (displayPolicy.groupId || "")) data.groupId = editForm.groupId || null;
     if (editForm.beneficiaryFirstName !== (displayPolicy.beneficiaryFirstName || "")) data.beneficiaryFirstName = editForm.beneficiaryFirstName || null;
     if (editForm.beneficiaryLastName !== (displayPolicy.beneficiaryLastName || "")) data.beneficiaryLastName = editForm.beneficiaryLastName || null;
     if (editForm.beneficiaryRelationship !== (displayPolicy.beneficiaryRelationship || "")) data.beneficiaryRelationship = editForm.beneficiaryRelationship || null;
@@ -1817,6 +1887,7 @@ export default function StaffPolicies() {
                       <TableHead>Inception</TableHead>
                       <TableHead>Cover starts</TableHead>
                       <TableHead>Waiting period</TableHead>
+                      {canEditPremium && <TableHead>Edit</TableHead>}
                       <TableHead>Status</TableHead>
                       <TableHead>Claimable</TableHead>
                       <TableHead>Add-ons</TableHead>
@@ -1922,6 +1993,13 @@ export default function StaffPolicies() {
                             );
                           })()}
                         </TableCell>
+                        {canEditPremium && (
+                          <TableCell>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit member details" onClick={() => openEditMember(m)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -2587,6 +2665,12 @@ export default function StaffPolicies() {
                   <Label className="text-xs">Effective Date</Label>
                   <Input type="date" value={editForm.effectiveDate} onChange={(e) => setEditForm({ ...editForm, effectiveDate: e.target.value })} />
                 </div>
+                {canEditPremium && (
+                  <div>
+                    <Label className="text-xs">Inception Date</Label>
+                    <Input type="date" value={editForm.inceptionDate} onChange={(e) => setEditForm({ ...editForm, inceptionDate: e.target.value })} />
+                  </div>
+                )}
                 <div>
                   <Label className="text-xs">Branch</Label>
                   <Select value={editForm.branchId || "none"} onValueChange={(v) => setEditForm({ ...editForm, branchId: v === "none" ? "" : v })}>
@@ -2600,18 +2684,32 @@ export default function StaffPolicies() {
                   </Select>
                 </div>
                 {canEditPremium && (
-                  <div className="col-span-2">
-                    <Label className="text-xs">Agent</Label>
-                    <Select value={editForm.agentId || "walk-in"} onValueChange={(v) => setEditForm({ ...editForm, agentId: v === "walk-in" ? "" : v })}>
-                      <SelectTrigger><SelectValue placeholder="Walk-in" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="walk-in">Walk-in (no agent)</SelectItem>
-                        {agents.map((a: any) => (
-                          <SelectItem key={a.id} value={a.id}>{a.displayName || a.email}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <>
+                    <div>
+                      <Label className="text-xs">Agent</Label>
+                      <Select value={editForm.agentId || "walk-in"} onValueChange={(v) => setEditForm({ ...editForm, agentId: v === "walk-in" ? "" : v })}>
+                        <SelectTrigger><SelectValue placeholder="Walk-in" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="walk-in">Walk-in (no agent)</SelectItem>
+                          {agents.map((a: any) => (
+                            <SelectItem key={a.id} value={a.id}>{a.displayName || a.email}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Group</Label>
+                      <Select value={editForm.groupId || "none"} onValueChange={(v) => setEditForm({ ...editForm, groupId: v === "none" ? "" : v })}>
+                        <SelectTrigger><SelectValue placeholder="No group" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No group</SelectItem>
+                          {groups.map((g: any) => (
+                            <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -2706,6 +2804,81 @@ export default function StaffPolicies() {
                 data-testid="btn-save-policy-edit"
               >
                 {editPolicyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save Changes
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={editMemberOpen} onOpenChange={setEditMemberOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Edit Member Details</DialogTitle>
+              <DialogDescription>
+                Update personal details for <strong>{editingMember?.memberName || "this member"}</strong>.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs">First Name</Label>
+                  <Input value={editMemberForm.firstName} onChange={(e) => setEditMemberForm({ ...editMemberForm, firstName: e.target.value })} placeholder="First name" />
+                </div>
+                <div>
+                  <Label className="text-xs">Last Name</Label>
+                  <Input value={editMemberForm.lastName} onChange={(e) => setEditMemberForm({ ...editMemberForm, lastName: e.target.value })} placeholder="Last name" />
+                </div>
+                <div>
+                  <Label className="text-xs">Relationship</Label>
+                  <Select value={editMemberForm.relationship || "none"} onValueChange={(v) => setEditMemberForm({ ...editMemberForm, relationship: v === "none" ? "" : v })}>
+                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      <SelectItem value="Policy Holder">Policy Holder</SelectItem>
+                      {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
+                        <SelectItem key={r} value={r}>{r}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Gender</Label>
+                  <Select value={editMemberForm.gender || "none"} onValueChange={(v) => setEditMemberForm({ ...editMemberForm, gender: v === "none" ? "" : v })}>
+                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      <SelectItem value="male">Male</SelectItem>
+                      <SelectItem value="female">Female</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">National ID</Label>
+                  <Input value={editMemberForm.nationalId} onChange={(e) => setEditMemberForm({ ...editMemberForm, nationalId: e.target.value.toUpperCase() })} placeholder="National ID" />
+                </div>
+                <div>
+                  <Label className="text-xs">Date of Birth</Label>
+                  <Input type="date" value={editMemberForm.dateOfBirth} onChange={(e) => setEditMemberForm({ ...editMemberForm, dateOfBirth: e.target.value })} />
+                </div>
+                {(editingMember?.role === "policy_holder" || editingMember?.role === "principal") && (
+                  <>
+                    <div>
+                      <Label className="text-xs">Phone</Label>
+                      <Input value={editMemberForm.phone} onChange={(e) => setEditMemberForm({ ...editMemberForm, phone: e.target.value })} placeholder="Phone number" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Email</Label>
+                      <Input type="email" value={editMemberForm.email} onChange={(e) => setEditMemberForm({ ...editMemberForm, email: e.target.value })} placeholder="Email address" />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditMemberOpen(false)}>Cancel</Button>
+              <Button onClick={handleEditMemberSubmit} disabled={editMemberMutation.isPending}>
+                {editMemberMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save Changes
               </Button>
             </DialogFooter>
@@ -3622,6 +3795,33 @@ export default function StaffPolicies() {
                               <SelectItem value="other">Other</SelectItem>
                             </SelectContent>
                           </Select>
+                        </div>
+                        <div className="col-span-2">
+                          <Label className="text-xs">Physical Address</Label>
+                          <Input
+                            value={createForm.newClient.physicalAddress}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, physicalAddress: e.target.value } })}
+                            placeholder="Street address, suburb, city"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <Label className="text-xs">Postal Address</Label>
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                              <Checkbox
+                                checked={createForm.newClient.postalAddress === createForm.newClient.physicalAddress && !!createForm.newClient.physicalAddress}
+                                onCheckedChange={(checked) =>
+                                  setCreateForm({ ...createForm, newClient: { ...createForm.newClient, postalAddress: checked ? createForm.newClient.physicalAddress : "" } })
+                                }
+                              />
+                              Same as physical
+                            </label>
+                          </div>
+                          <Input
+                            value={createForm.newClient.postalAddress}
+                            onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, postalAddress: e.target.value } })}
+                            placeholder="P.O. Box or postal address"
+                          />
                         </div>
                       </div>
                     </div>

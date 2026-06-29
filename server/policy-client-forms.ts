@@ -126,6 +126,15 @@ function fieldLine(doc: InstanceType<typeof PDFDocument>, label: string, y: numb
   return y + 22;
 }
 
+function twoColFieldLine(doc: InstanceType<typeof PDFDocument>, label1: string, label2: string, y: number): number {
+  const halfCOL = COL / 2 - 10;
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(C_MUTED).text(label1, MARGIN + 8, y, { width: 80 });
+  doc.moveTo(MARGIN + 92, y + 10).lineTo(MARGIN + halfCOL + 10, y + 10).lineWidth(0.5).strokeColor(C_BORDER).stroke();
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(C_MUTED).text(label2, MARGIN + halfCOL + 20, y, { width: 80 });
+  doc.moveTo(MARGIN + halfCOL + 104, y + 10).lineTo(MARGIN + COL - 8, y + 10).lineWidth(0.5).strokeColor(C_BORDER).stroke();
+  return y + 22;
+}
+
 function checkBoxField(doc: InstanceType<typeof PDFDocument>, label: string, checked: boolean | null | undefined, x: number, y: number): void {
   doc.rect(x, y + 1, 9, 9).lineWidth(0.5).strokeColor(C_TEXT).stroke();
   if (checked) {
@@ -175,9 +184,8 @@ export async function streamClientRegistrationPDF(
   y += 6;
 
   y = sectionHeader(doc, "Address & Contact", y);
-  y = infoRow(doc, "Address", fmt(client.address), y);
-  y = infoRow(doc, "Location / Area", fmt(client.location), y);
-  y = infoRow(doc, "Preferred Contact", fmt(client.preferredCommMethod), y);
+  y = twoColRow(doc, "Physical Address", fmt((client as any).physicalAddress || client.address), "Postal Address", fmt((client as any).postalAddress), y);
+  y = twoColRow(doc, "Location / Area", fmt(client.location), "Preferred Contact", fmt(client.preferredCommMethod), y);
   y += 6;
 
   y = sectionHeader(doc, "Sales Information", y);
@@ -228,9 +236,8 @@ export async function streamClientRegistrationBlankPDF(orgId: string, res: Respo
   y += 4;
 
   y = sectionHeader(doc, "Address & Contact", y);
-  y = fieldLine(doc, "Address", y, 300);
-  y = fieldLine(doc, "Location / Area", y, 200);
-  y = fieldLine(doc, "Preferred Contact Method", y, 160);
+  y = twoColFieldLine(doc, "Physical Address", "Postal Address", y);
+  y = twoColFieldLine(doc, "Location / Area", "Preferred Contact Method", y);
   y += 4;
 
   y = sectionHeader(doc, "Sales Information", y);
@@ -293,6 +300,7 @@ export async function streamPolicyApplicationPDF(
   if (client) {
     y = twoColRow(doc, "Full Name", `${fmt(client.title)} ${fmt(client.firstName)} ${fmt(client.lastName)}`.trim(), "National ID", fmt(client.nationalId), y);
     y = twoColRow(doc, "Phone", fmt(client.phone), "Email", fmt(client.email), y);
+    y = twoColRow(doc, "Physical Address", fmt((client as any).physicalAddress || client.address), "Postal Address", fmt((client as any).postalAddress), y);
   } else {
     y = infoRow(doc, "Client ID", fmt(policy.clientId), y);
   }
@@ -332,28 +340,22 @@ export async function streamPolicyApplicationBlankPDF(orgId: string, res: Respon
   let y = await buildHeader(doc, { name: org?.name ?? null, phone: org?.phone ?? null, email: org?.email ?? null, address: org?.address ?? null, logoUrl: (org as any)?.logoUrl ?? null }, "POLICY APPLICATION FORM", "Complete all fields in block capitals · For official use");
 
   y = sectionHeader(doc, "Policy Details", y);
-  y = fieldLine(doc, "Policy Number", y, 180);
-  y = fieldLine(doc, "Product Name", y, 200);
-  y = fieldLine(doc, "Product Version", y, 100);
-  y = fieldLine(doc, "Payment Schedule", y, 160);
-  y = fieldLine(doc, "Currency", y, 80);
-  y = fieldLine(doc, "Premium Amount", y, 120);
-  y = fieldLine(doc, "Effective Date", y, 120);
+  y = twoColFieldLine(doc, "Policy Number", "Status", y);
+  y = twoColFieldLine(doc, "Product Name", "Version", y);
+  y = twoColFieldLine(doc, "Payment Schedule", "Currency", y);
+  y = twoColFieldLine(doc, "Premium Amount", "Effective Date", y);
   y = fieldLine(doc, "Agent Name", y, 200);
   y += 4;
 
   y = sectionHeader(doc, "Policyholder", y);
-  y = fieldLine(doc, "Full Name", y, 250);
-  y = fieldLine(doc, "National ID / Passport", y, 200);
-  y = fieldLine(doc, "Phone", y, 160);
-  y = fieldLine(doc, "Email", y, 200);
+  y = twoColFieldLine(doc, "Full Name", "National ID / Passport", y);
+  y = twoColFieldLine(doc, "Phone", "Email", y);
+  y = twoColFieldLine(doc, "Physical Address", "Postal Address", y);
   y += 4;
 
   y = sectionHeader(doc, "Beneficiary", y);
-  y = fieldLine(doc, "First Name", y, 180);
-  y = fieldLine(doc, "Last Name", y, 180);
-  y = fieldLine(doc, "Relationship", y, 150);
-  y = fieldLine(doc, "National ID", y, 180);
+  y = twoColFieldLine(doc, "First Name", "Last Name", y);
+  y = twoColFieldLine(doc, "Relationship", "National ID", y);
   y = fieldLine(doc, "Phone", y, 160);
   y += 8;
 

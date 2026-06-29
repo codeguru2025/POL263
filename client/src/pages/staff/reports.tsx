@@ -1123,17 +1123,17 @@ export default function StaffReports() {
                       <TableHeader>
                         <TableRow>
                           <TableHead className="text-xs whitespace-nowrap">agent_id</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">AgentsNar</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">Inception_</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">Policy_Nur</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">AgentsName</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">Inception_Date</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">Policy_Number</TableHead>
                           <TableHead className="text-xs whitespace-nowrap">FullName</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">Product_N</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">UsualPrem</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">StatusDes</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">ReceiptsC</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">Product_Name</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">UsualPremium</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">StatusDesc</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">ReceiptsCollected</TableHead>
                           <TableHead className="text-xs whitespace-nowrap">Colour</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">MembersB</TableHead>
-                          <TableHead className="text-xs whitespace-nowrap">AgentsBra</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">MembersBranch</TableHead>
+                          <TableHead className="text-xs whitespace-nowrap">AgentsBranch</TableHead>
                           <TableHead className="text-xs whitespace-nowrap">Active</TableHead>
                           <TableHead className="text-xs whitespace-nowrap">fdate</TableHead>
                           <TableHead className="text-xs whitespace-nowrap">tdate</TableHead>
@@ -1143,17 +1143,17 @@ export default function StaffReports() {
                         {agentProductivity.slice(0, 100).map((r: any) => (
                           <TableRow key={r.policyId}>
                             <TableCell className="text-xs font-mono whitespace-nowrap">{r.agent_id || "—"}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap max-w-[120px] truncate" title={r.AgentsNar}>{r.AgentsNar || "—"}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap">{r.Inception_ || "—"}</TableCell>
-                            <TableCell className="text-xs font-mono whitespace-nowrap">{r.Policy_Nur}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap max-w-[120px] truncate" title={r.AgentsName}>{r.AgentsName || "—"}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</TableCell>
+                            <TableCell className="text-xs font-mono whitespace-nowrap">{r.Policy_Number}</TableCell>
                             <TableCell className="text-xs max-w-[140px] truncate" title={r.FullName}>{r.FullName || "—"}</TableCell>
-                            <TableCell className="text-xs max-w-[140px] truncate" title={r.Product_N}>{r.Product_N || "—"}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap">{r.UsualPrem || "—"}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap">{r.StatusDes}</TableCell>
-                            <TableCell className="text-xs">{r.ReceiptsC}</TableCell>
+                            <TableCell className="text-xs max-w-[140px] truncate" title={r.Product_Name}>{r.Product_Name || "—"}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">{r.UsualPremium || "—"}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">{r.StatusDesc}</TableCell>
+                            <TableCell className="text-xs">{r.ReceiptsCollected}</TableCell>
                             <TableCell className="text-xs whitespace-nowrap">{r.Colour || "—"}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap max-w-[100px] truncate" title={r.MembersB}>{r.MembersB || "—"}</TableCell>
-                            <TableCell className="text-xs whitespace-nowrap max-w-[100px] truncate" title={r.AgentsBra}>{r.AgentsBra || "—"}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap max-w-[100px] truncate" title={r.MembersBranch}>{r.MembersBranch || "—"}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap max-w-[100px] truncate" title={r.AgentsBranch}>{r.AgentsBranch || "—"}</TableCell>
                             <TableCell className="text-xs">{r.Active}</TableCell>
                             <TableCell className="text-xs whitespace-nowrap">{r.fdate}</TableCell>
                             <TableCell className="text-xs whitespace-nowrap">{r.tdate}</TableCell>

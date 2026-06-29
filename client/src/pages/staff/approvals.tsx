@@ -70,24 +70,36 @@ export default function StaffApprovals() {
     });
   };
 
+  const requestTypeLabel: Record<string, string> = {
+    CLAIM_REVIEW: "Claim Review",
+    delete_policy: "Delete Policy",
+    delete_receipt: "Delete Receipt",
+    delete_quote: "Delete Quotation",
+    legacy_policy: "Legacy Policy Activation",
+  };
+
   const approvalColumns: EdtColumn<any>[] = [
     {
       id: "type",
       header: "Type",
       accessor: (a) => a.requestType,
-      cell: (a) => <span className="font-medium">{a.requestType}</span>,
+      cell: (a) => <span className="font-medium">{requestTypeLabel[a.requestType] ?? a.requestType}</span>,
     },
     {
       id: "entity",
-      header: "Entity",
-      accessor: (a) => `${a.entityType ?? ""} ${a.entityId ?? ""}`,
-      cell: (a) => (
-        <div>
-          <span className="text-xs text-muted-foreground">{a.entityType}</span>
-          <br />
-          <span className="text-xs font-mono">{a.entityId?.slice(0, 8)}...</span>
-        </div>
-      ),
+      header: "Details",
+      accessor: (a) => `${a.entityType ?? ""} ${(a.requestData as any)?.policyNumber ?? (a.requestData as any)?.receiptNumber ?? (a.requestData as any)?.quotationNumber ?? a.entityId ?? ""}`,
+      cell: (a) => {
+        const d = a.requestData as any;
+        const label = d?.policyNumber ?? d?.receiptNumber ?? d?.quotationNumber ?? null;
+        return (
+          <div>
+            <span className="text-xs text-muted-foreground">{a.entityType}</span>
+            {label && <><br /><span className="text-xs font-medium">{label}</span></>}
+            {d?.reason && <><br /><span className="text-xs text-muted-foreground italic">{d.reason}</span></>}
+          </div>
+        );
+      },
     },
     {
       id: "status",

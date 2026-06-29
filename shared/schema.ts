@@ -205,6 +205,8 @@ export const clients = pgTable(
     phone: text("phone"),
     email: text("email"),
     address: text("address"),
+    physicalAddress: text("physical_address"),
+    postalAddress: text("postal_address"),
     preferredCommMethod: text("preferred_comm_method"),
     location: text("location"),
     sellingPoint: text("selling_point"),

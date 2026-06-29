@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -122,6 +123,8 @@ interface ClientFormData {
   phone: string;
   email: string;
   address: string;
+  physicalAddress: string;
+  postalAddress: string;
   preferredCommMethod: string;
   location: string;
   sellingPoint: string;
@@ -150,6 +153,8 @@ const emptyForm: ClientFormData = {
   phone: "",
   email: "",
   address: "",
+  physicalAddress: "",
+  postalAddress: "",
   preferredCommMethod: "",
   location: "",
   sellingPoint: "",
@@ -446,6 +451,8 @@ export default function StaffClients() {
       phone: client.phone || "",
       email: client.email || "",
       address: client.address || "",
+      physicalAddress: (client as any).physicalAddress || "",
+      postalAddress: (client as any).postalAddress || "",
       preferredCommMethod: client.preferredCommMethod || "",
       location: client.location ?? "",
       sellingPoint: client.sellingPoint ?? "",
@@ -1593,13 +1600,37 @@ function ClientForm({
         />
       </div>
       <div className="space-y-2 col-span-3">
-        <Label htmlFor="address">Address</Label>
+        <Label htmlFor="physicalAddress">Physical Address</Label>
         <Input
-          id="address"
-          value={formData.address}
-          onChange={(e) => update("address", e.target.value)}
-          placeholder="Street address"
-          data-testid="input-address"
+          id="physicalAddress"
+          value={formData.physicalAddress}
+          onChange={(e) => update("physicalAddress", e.target.value)}
+          placeholder="Street address, suburb, city"
+          data-testid="input-physical-address"
+        />
+      </div>
+      <div className="space-y-2 col-span-3">
+        <div className="flex items-center justify-between mb-1">
+          <Label htmlFor="postalAddress">Postal Address</Label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+            <Checkbox
+              id="postal-same-as-physical"
+              checked={formData.postalAddress === formData.physicalAddress && !!formData.physicalAddress}
+              onCheckedChange={(checked) => {
+                if (checked) update("postalAddress", formData.physicalAddress);
+                else update("postalAddress", "");
+              }}
+              data-testid="checkbox-postal-same"
+            />
+            Same as physical address
+          </label>
+        </div>
+        <Input
+          id="postalAddress"
+          value={formData.postalAddress}
+          onChange={(e) => update("postalAddress", e.target.value)}
+          placeholder="P.O. Box or postal address"
+          data-testid="input-postal-address"
         />
       </div>
       <div className="space-y-2 col-span-3">
