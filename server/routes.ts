@@ -6862,6 +6862,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, limit, offset, filters));
   });
 
+  app.get("/api/reports/agent-portfolio/pdf", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
+    const { streamAgentPortfolioPDF } = await import("./agent-portfolio-pdf");
+    return streamAgentPortfolioPDF(user.organizationId, filters, res, { attachment: req.query.download === "1" });
+  });
+
   const defaultStatementRange = () => {
     const to = new Date();
     const from = new Date(to.getFullYear(), to.getMonth(), 1);

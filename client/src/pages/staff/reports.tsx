@@ -1288,9 +1288,27 @@ export default function StaffReports() {
           <TabsContent value="agent-portfolio">
             <CardSection
               title="Agent portfolio"
-              description="All policies assigned to each agent. Filter by agent or status. Export as a CSV workbook — agents can record call outcomes and next engagement dates directly in the spreadsheet."
+              description="All policies assigned to each agent. Filter by agent or status. Export as PDF for printing or CSV for Excel — both include Call Outcome and Next Engagement Date columns for client follow-up."
               icon={UserCircle}
-              headerRight={<ExportButton reportType="agent-portfolio" filters={filters} />}
+              headerRight={
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                    onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = getApiBase() + "/api/reports/agent-portfolio/pdf?download=1" + qAppend;
+                      a.download = "agent-portfolio.pdf";
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }}
+                  >
+                    <FileText className="h-4 w-4" /> PDF
+                  </button>
+                  <ExportButton reportType="agent-portfolio" filters={filters} />
+                </div>
+              }
               flush
             >
               {loadingAgentPortfolio ? (
