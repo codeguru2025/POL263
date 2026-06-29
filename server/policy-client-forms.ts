@@ -368,7 +368,68 @@ export async function streamPolicyApplicationBlankPDF(orgId: string, res: Respon
   sigBlock(doc, "Client / Policyholder Signature", MARGIN, sigW, y);
   sigBlock(doc, "Agent / Issuing Officer Signature", MARGIN + sigW + 40, sigW, y);
 
-  footer(doc, org?.name ?? null, "Policy Application", "BLANK");
+  footer(doc, org?.name ?? null, "Policy Application", "BLANK — PAGE 1");
+
+  // ── PAGE 2: DEPENDANTS ──────────────────────────────────────
+  doc.addPage({ size: "A4", margin: 0 });
+
+  let y2 = buildBlankHeader(doc, "POLICY APPLICATION FORM", "Page 2 of 2 — Dependants · Complete all fields in block capitals");
+
+  y2 = sectionHeader(doc, "Policyholder (repeat for reference)", y2);
+  y2 = twoColFieldLine(doc, "Policy Number", "Policyholder Name", y2);
+  y2 += 8;
+
+  y2 = sectionHeader(doc, "Dependants", y2);
+  doc.font("Helvetica").fontSize(8).fillColor(C_MUTED)
+    .text("List all persons to be covered under this policy. Attach a certified copy of each dependent's ID or birth certificate.", MARGIN + 8, y2, { width: COL - 16 });
+  y2 += 16;
+
+  // Column definitions — widths sum to COL (499)
+  const depCols = [
+    { label: "#",                        x: MARGIN,        w: 18 },
+    { label: "First Name",               x: MARGIN + 18,   w: 73 },
+    { label: "Last Name",                x: MARGIN + 91,   w: 73 },
+    { label: "National ID / Passport",   x: MARGIN + 164,  w: 92 },
+    { label: "Date of Birth",            x: MARGIN + 256,  w: 68 },
+    { label: "Gender",                   x: MARGIN + 324,  w: 40 },
+    { label: "Relationship",             x: MARGIN + 364,  w: 72 },
+    { label: "Phone",                    x: MARGIN + 436,  w: 63 },
+  ];
+  doc.rect(MARGIN, y2, COL, 17).fill(C_PRIMARY);
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#ffffff");
+  depCols.forEach((c) => doc.text(c.label, c.x + 3, y2 + 4, { width: c.w - 4, lineBreak: false }));
+  doc.fillColor(C_TEXT);
+  y2 += 19;
+
+  for (let i = 0; i < 12; i++) {
+    const rowBg = i % 2 === 0 ? "#ffffff" : C_LIGHT_BG;
+    doc.rect(MARGIN, y2, COL, 20).fill(rowBg);
+    doc.rect(MARGIN, y2, COL, 20).lineWidth(0.3).strokeColor(C_BORDER).stroke();
+    doc.font("Helvetica").fontSize(7.5).fillColor(C_MUTED)
+      .text(String(i + 1), MARGIN + 3, y2 + 6, { width: 15, lineBreak: false });
+    depCols.slice(1).forEach((c) => {
+      doc.moveTo(c.x, y2).lineTo(c.x, y2 + 20).lineWidth(0.3).strokeColor(C_BORDER).stroke();
+    });
+    y2 += 20;
+  }
+
+  y2 += 14;
+
+  y2 = sectionHeader(doc, "Additional Notes / Instructions", y2);
+  for (let i = 0; i < 4; i++) {
+    doc.moveTo(MARGIN + 8, y2 + 12).lineTo(MARGIN + COL - 8, y2 + 12).lineWidth(0.3).strokeColor(C_BORDER).stroke();
+    y2 += 18;
+  }
+  y2 += 8;
+
+  y2 = sectionHeader(doc, "Authorisation", y2);
+  doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
+    .text("I confirm that the dependants listed above are accurate and authorise their inclusion under the policy.", MARGIN + 8, y2, { width: COL - 16 });
+  y2 += 28;
+  sigBlock(doc, "Client / Policyholder Signature", MARGIN, sigW, y2);
+  sigBlock(doc, "Agent / Issuing Officer Signature", MARGIN + sigW + 40, sigW, y2);
+
+  footer(doc, org?.name ?? null, "Policy Application", "BLANK — PAGE 2");
   doc.end();
 }
 

@@ -6854,6 +6854,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getCommissionPaymentReportByOrg(user.organizationId, limit, 0, filters));
   });
 
+  app.get("/api/reports/agent-portfolio", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
+    const limit = Math.min(parseInt(String(req.query.limit)) || 2000, REPORT_EXPORT_MAX_ROWS);
+    const offset = parseInt(String(req.query.offset)) || 0;
+    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, limit, offset, filters));
+  });
+
   const defaultStatementRange = () => {
     const to = new Date();
     const from = new Date(to.getFullYear(), to.getMonth(), 1);
@@ -7285,6 +7293,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             r.Active ?? "",
             r.fdate ?? "",
             r.tdate ?? "",
+          ]);
+          break;
+        }
+        case "agent-portfolio": {
+          const portfolio = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          headers = [
+            "Agent",
+            "Policy_Number",
+            "Status",
+            "First_Name",
+            "Last_Name",
+            "National_ID",
+            "Phone",
+            "Product",
+            "Branch",
+            "Premium",
+            "Currency",
+            "Effective_Date",
+            "Capture_Date",
+            "Call_Outcome",
+            "Next_Engagement_Date",
+          ];
+          currencyTotals = null;
+          rows = portfolio.map((r: any) => [
+            r.MarketingManager ?? r.AgentName ?? "",
+            r.Policy_Number ?? "",
+            r.currstatus ?? r.StatusDesc ?? "",
+            r.clientFirstName ?? (r.fullname ?? "").split(" ")[0] ?? "",
+            r.clientLastName ?? (r.fullname ?? "").split(" ").slice(1).join(" ") ?? "",
+            r.clientNationalId ?? r.ID_Number ?? "",
+            r.Cell_Number ?? "",
+            r.Product_Name ?? "",
+            r.BranchName ?? r.MembersBranch ?? "",
+            r.UsualPremium ?? r.premiumAmount ?? "",
+            r.Currency ?? "",
+            r.Inception_Date ?? "",
+            r.Date_Captured ?? "",
+            "",
+            "",
           ]);
           break;
         }

@@ -315,6 +315,15 @@ export default function StaffReports() {
     },
     enabled: need("newJoinings"),
   });
+  const { data: agentPortfolio = [], isLoading: loadingAgentPortfolio } = useQuery<any[]>({
+    queryKey: ["reports", "agent-portfolio", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/agent-portfolio?limit=2000" + qAppend, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: need("agentPortfolio"),
+  });
   const { data: agentProductivity = [], isLoading: loadingAgentProductivity } = useQuery<any[]>({
     queryKey: ["reports", "agent-productivity", runKey, ...fk],
     queryFn: async () => {
@@ -1273,6 +1282,63 @@ export default function StaffReports() {
                     </Table>
                   </div>
                 )}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="agent-portfolio">
+            <CardSection
+              title="Agent portfolio"
+              description="All policies assigned to each agent. Filter by agent or status. Export as a CSV workbook — agents can record call outcomes and next engagement dates directly in the spreadsheet."
+              icon={UserCircle}
+              headerRight={<ExportButton reportType="agent-portfolio" filters={filters} />}
+              flush
+            >
+              {loadingAgentPortfolio ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : agentPortfolio.length === 0 ? (
+                <EmptyState title="No policies found" description="Adjust filters and click Run report." className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1200px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Policy #</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>First Name</TableHead>
+                        <TableHead>Last Name</TableHead>
+                        <TableHead>National ID</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Premium</TableHead>
+                        <TableHead>Effective Date</TableHead>
+                        <TableHead className="text-muted-foreground italic">Call Outcome</TableHead>
+                        <TableHead className="text-muted-foreground italic">Next Engagement</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {agentPortfolio.map((p: any, idx: number) => (
+                        <TableRow key={p.id ?? idx} className="hover:bg-muted/40">
+                          <TableCell className="text-sm whitespace-nowrap">{p.MarketingManager ?? p.AgentName ?? "—"}</TableCell>
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.Policy_Number ?? "—"}</TableCell>
+                          <TableCell><StatusBadge status={p.currstatus ?? p.StatusDesc} variant="policy" /></TableCell>
+                          <TableCell>{p.clientFirstName ?? (p.fullname ?? "").split(" ")[0] ?? "—"}</TableCell>
+                          <TableCell>{p.clientLastName ?? ((p.fullname ?? "").split(" ").slice(1).join(" ") || "—")}</TableCell>
+                          <TableCell className="font-mono text-sm">{p.clientNationalId ?? p.ID_Number ?? "—"}</TableCell>
+                          <TableCell className="text-sm">{p.Cell_Number ?? "—"}</TableCell>
+                          <TableCell className="text-sm">{p.Product_Name ?? "—"}</TableCell>
+                          <TableCell className="text-sm">{p.BranchName ?? p.MembersBranch ?? "—"}</TableCell>
+                          <TableCell className="tabular-nums whitespace-nowrap">{p.Currency} {p.UsualPremium ?? p.premiumAmount ?? "—"}</TableCell>
+                          <TableCell className="text-sm">{p.Inception_Date ? new Date(p.Inception_Date).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="text-muted-foreground text-xs italic">— export to fill in —</TableCell>
+                          <TableCell className="text-muted-foreground text-xs italic">— export to fill in —</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
+              )}
             </CardSection>
           </TabsContent>
 

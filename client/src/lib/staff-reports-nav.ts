@@ -34,6 +34,7 @@ export type ReportDatasetId =
   | "receiptReport"
   | "claimsReport"
   | "commissionPayments"
+  | "agentPortfolio"
   | "branches"
   | "products"
   | "users";
@@ -73,6 +74,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "platform", label: "POL263 revenue", testId: "tab-platform-report" },
   ],
   agents: [
+    { value: "agent-portfolio", label: "Agent portfolio", testId: "tab-agent-portfolio" },
     { value: "agent-productivity", label: "Agent productivity", testId: "tab-agent-productivity" },
     { value: "commissions", label: "Commissions summary", testId: "tab-commissions-report" },
     { value: "commission-payments", label: "Commission by payment", testId: "tab-commission-payments" },
@@ -142,6 +144,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   expenditures: ["expenditures"],
   cashups: ["cashups"],
   platform: ["platformReceivables"],
+  "agent-portfolio": ["agentPortfolio"],
   "agent-productivity": ["agentProductivity"],
   commissions: ["commissionPlans", "commissionSummary"],
   "commission-payments": ["commissionPayments"],
