@@ -38,11 +38,46 @@ function datetimeLocalToUtc(local: string): string {
 
 const TIME_FIELDS: (keyof CaseForm)[] = ["bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd"];
 
-// Add/subtract hours from a datetime-local string.
-function shiftTime(local: string, hours: number): string {
+// Service timeline: body wash (0) → memorial start (+30min) → memorial end (+60min) → departure (+90min).
+// 15-minute buffer after departure before next service can start.
+const STEP = 30; // minutes per step
+
+// Add/subtract minutes from a datetime-local string.
+function shiftTime(local: string, minutes: number): string {
   const d = new Date(local);
-  d.setMinutes(d.getMinutes() + hours * 60);
+  d.setMinutes(d.getMinutes() + minutes);
   return utcToDatetimeLocal(d.toISOString());
+}
+
+// Returns true if two time windows [aStart, aEnd] and [bStart, bEnd] overlap.
+function windowsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
+  return aStart < bEnd && aEnd > bStart;
+}
+
+// Check if the proposed service window clashes with any other case.
+// Returns the name of the clashing case, or null if clear.
+function detectClash(
+  proposedWash: string,        // datetime-local
+  proposedDeparture: string,   // datetime-local
+  cases: FuneralCase[],
+  excludeId?: string,
+): string | null {
+  if (!proposedWash || !proposedDeparture) return null;
+  const BUFFER = 15 * 60 * 1000; // 15 min in ms
+  const pStart = new Date(proposedWash);
+  const pEnd   = new Date(new Date(proposedDeparture).getTime() + BUFFER);
+  for (const c of cases) {
+    if (c.id === excludeId) continue;
+    const wash = (c as any).bodyWashTime;
+    const dep  = (c as any).burialDepartureTime;
+    if (!wash || !dep) continue;
+    const cStart = new Date(wash);
+    const cEnd   = new Date(new Date(dep).getTime() + BUFFER);
+    if (windowsOverlap(pStart, pEnd, cStart, cEnd)) {
+      return (c as any).deceasedName || "another family";
+    }
+  }
+  return null;
 }
 
 type CaseForm = {
@@ -507,6 +542,7 @@ export default function StaffFunerals() {
         title="New Funeral Case"
         vehicles={fleetVehicles}
         users={users}
+        otherCases={funeralCases}
         onSubmit={(data) => createCaseMutation.mutate(data)}
         isPending={createCaseMutation.isPending}
       />
@@ -519,6 +555,7 @@ export default function StaffFunerals() {
           vehicles={fleetVehicles}
           users={users}
           initial={selectedCase}
+          otherCases={funeralCases}
           onSubmit={(data) => updateCaseMutation.mutate({ id: selectedCase.id, data })}
           isPending={updateCaseMutation.isPending}
         />
@@ -982,7 +1019,7 @@ function Field({ label, children, required }: { label: string; children: React.R
 }
 
 function CaseFormDialog({
-  open, onOpenChange, title, vehicles, users, initial, onSubmit, isPending,
+  open, onOpenChange, title, vehicles, users, initial, onSubmit, isPending, otherCases,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -992,6 +1029,7 @@ function CaseFormDialog({
   initial?: FuneralCase | null;
   onSubmit: (data: Partial<CaseForm>) => void;
   isPending: boolean;
+  otherCases?: FuneralCase[];
 }) {
   const [form, setForm] = useState<CaseForm>(() => {
     if (initial) {
@@ -1031,6 +1069,7 @@ function CaseFormDialog({
     return { ...BLANK_FORM };
   });
 
+  const { toast } = useToast();
   const set = (k: keyof CaseForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const setSel = (k: keyof CaseForm) => (v: string) =>
@@ -1103,20 +1142,43 @@ function CaseFormDialog({
     }
   };
 
-  // Auto-fill empty time fields when a key anchor time is set.
+  // Auto-fill empty time fields using the fixed 90-min service window:
+  // body wash → +30min → memorial start → +30min → memorial end → +30min → burial departure
+  // Only fills fields that are still empty so manual entries are never overwritten.
   const autoFillTimes = (field: keyof CaseForm, value: string) => {
-    if (!value) return;
+    if (!value) { setForm((f) => ({ ...f, [field]: value })); return; }
     setForm((f) => {
       const next = { ...f, [field]: value };
-      if (field === "burialDepartureTime") {
-        if (!next.memorialServiceEnd)   next.memorialServiceEnd   = shiftTime(value, -0.5);
-        if (!next.memorialServiceStart) next.memorialServiceStart = shiftTime(value, -2);
-        if (!next.bodyWashTime)         next.bodyWashTime         = shiftTime(value, -4);
+      if (field === "bodyWashTime") {
+        if (!next.memorialServiceStart) next.memorialServiceStart = shiftTime(value, STEP);
+        if (!next.memorialServiceEnd)   next.memorialServiceEnd   = shiftTime(value, STEP * 2);
+        if (!next.burialDepartureTime)  next.burialDepartureTime  = shiftTime(value, STEP * 3);
       }
       if (field === "memorialServiceStart") {
-        if (!next.bodyWashTime)         next.bodyWashTime         = shiftTime(value, -2);
-        if (!next.memorialServiceEnd)   next.memorialServiceEnd   = shiftTime(value, 1.5);
-        if (!next.burialDepartureTime)  next.burialDepartureTime  = shiftTime(value, 2.5);
+        if (!next.bodyWashTime)         next.bodyWashTime         = shiftTime(value, -STEP);
+        if (!next.memorialServiceEnd)   next.memorialServiceEnd   = shiftTime(value, STEP);
+        if (!next.burialDepartureTime)  next.burialDepartureTime  = shiftTime(value, STEP * 2);
+      }
+      if (field === "memorialServiceEnd") {
+        if (!next.bodyWashTime)         next.bodyWashTime         = shiftTime(value, -STEP * 2);
+        if (!next.memorialServiceStart) next.memorialServiceStart = shiftTime(value, -STEP);
+        if (!next.burialDepartureTime)  next.burialDepartureTime  = shiftTime(value, STEP);
+      }
+      if (field === "burialDepartureTime") {
+        if (!next.memorialServiceEnd)   next.memorialServiceEnd   = shiftTime(value, -STEP);
+        if (!next.memorialServiceStart) next.memorialServiceStart = shiftTime(value, -STEP * 2);
+        if (!next.bodyWashTime)         next.bodyWashTime         = shiftTime(value, -STEP * 3);
+      }
+      // Clash check after filling
+      if (next.bodyWashTime && next.burialDepartureTime && otherCases?.length) {
+        const clash = detectClash(next.bodyWashTime, next.burialDepartureTime, otherCases, initial?.id);
+        if (clash) {
+          setTimeout(() => toast({
+            title: "Scheduling clash",
+            description: `These times overlap with the service for ${clash}. Please choose a different time slot.`,
+            variant: "destructive",
+          }), 0);
+        }
       }
       return next;
     });
@@ -1396,27 +1458,21 @@ function CaseFormDialog({
             <AccordionItem value="timing">
               <AccordionTrigger>Service Timing</AccordionTrigger>
               <AccordionContent>
-                <p className="text-xs text-muted-foreground mb-3">Set the burial departure time or memorial start time first — the other fields will auto-fill based on a typical 4-hour service window.</p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Set any one time — the rest auto-fill. Each service is <strong>1 hr 30 min</strong> (body wash → memorial start → memorial end → burial departure, 30 min each). A 15-minute gap is required before the next family's service.
+                </p>
                 <div className="grid grid-cols-2 gap-3 pt-1">
-                  <Field label="Time of Body Wash">
-                    <Input type="datetime-local" value={form.bodyWashTime} onChange={set("bodyWashTime")} />
-                  </Field>
-                  <Field label="Departure Time for Burial">
-                    <Input
-                      type="datetime-local"
-                      value={form.burialDepartureTime}
-                      onChange={(e) => autoFillTimes("burialDepartureTime", e.target.value)}
-                    />
+                  <Field label="Body Wash">
+                    <Input type="datetime-local" value={form.bodyWashTime} onChange={(e) => autoFillTimes("bodyWashTime", e.target.value)} />
                   </Field>
                   <Field label="Memorial / Church Service Start">
-                    <Input
-                      type="datetime-local"
-                      value={form.memorialServiceStart}
-                      onChange={(e) => autoFillTimes("memorialServiceStart", e.target.value)}
-                    />
+                    <Input type="datetime-local" value={form.memorialServiceStart} onChange={(e) => autoFillTimes("memorialServiceStart", e.target.value)} />
                   </Field>
                   <Field label="Memorial / Church Service End">
-                    <Input type="datetime-local" value={form.memorialServiceEnd} onChange={set("memorialServiceEnd")} />
+                    <Input type="datetime-local" value={form.memorialServiceEnd} onChange={(e) => autoFillTimes("memorialServiceEnd", e.target.value)} />
+                  </Field>
+                  <Field label="Departure for Burial">
+                    <Input type="datetime-local" value={form.burialDepartureTime} onChange={(e) => autoFillTimes("burialDepartureTime", e.target.value)} />
                   </Field>
                 </div>
               </AccordionContent>
