@@ -1384,20 +1384,20 @@ export default function StaffReports() {
                     </TableHeader>
                     <TableBody>
                       {agentPortfolio.map((p: any, idx: number) => (
-                        <TableRow key={p.id ?? idx} className="hover:bg-muted/40">
-                          <TableCell className="text-sm whitespace-nowrap">{p.MarketingManager ?? p.AgentName ?? "—"}</TableCell>
-                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.Policy_Number ?? "—"}</TableCell>
-                          <TableCell><StatusBadge status={p.currstatus ?? p.StatusDesc} variant="policy" /></TableCell>
-                          <TableCell>{p.clientFirstName ?? (p.fullname ?? "").split(" ")[0] ?? "—"}</TableCell>
-                          <TableCell>{p.clientLastName ?? ((p.fullname ?? "").split(" ").slice(1).join(" ") || "—")}</TableCell>
-                          <TableCell className="font-mono text-sm">{p.clientNationalId ?? p.ID_Number ?? "—"}</TableCell>
-                          <TableCell className="text-sm">{p.Cell_Number ?? "—"}</TableCell>
-                          <TableCell className="text-sm">{p.Product_Name ?? "—"}</TableCell>
-                          <TableCell className="text-sm">{p.BranchName ?? p.MembersBranch ?? "—"}</TableCell>
-                          <TableCell className="tabular-nums whitespace-nowrap">{p.Currency} {p.UsualPremium ?? p.premiumAmount ?? "—"}</TableCell>
-                          <TableCell className="text-sm">{p.Inception_Date ? new Date(p.Inception_Date).toLocaleDateString() : "—"}</TableCell>
-                          <TableCell className="text-muted-foreground text-xs italic">— export to fill in —</TableCell>
-                          <TableCell className="text-muted-foreground text-xs italic">— export to fill in —</TableCell>
+                        <TableRow key={p.Policy_Number ?? idx} className="hover:bg-muted/40">
+                          <TableCell className="text-sm whitespace-nowrap">{p.AgentsName || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm whitespace-nowrap">{p.Policy_Number || "—"}</TableCell>
+                          <TableCell><StatusBadge status={p.currstatus} variant="policy" /></TableCell>
+                          <TableCell className="whitespace-nowrap">{(p.fullname ?? "").split(" ")[0] || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{(p.fullname ?? "").split(" ").slice(1).join(" ") || "—"}</TableCell>
+                          <TableCell className="font-mono text-sm">{p.ID_Number || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.Cell_Number || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.ProductName || "—"}</TableCell>
+                          <TableCell className="text-sm">{p.BranchName || "—"}</TableCell>
+                          <TableCell className="tabular-nums whitespace-nowrap">{p.UsualPremium || "—"}</TableCell>
+                          <TableCell className="text-sm whitespace-nowrap">{p.Inception_Date ? new Date(p.Inception_Date).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell className="text-muted-foreground text-xs italic border-l">____________</TableCell>
+                          <TableCell className="text-muted-foreground text-xs italic border-l">____________</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
