@@ -51,7 +51,13 @@ function buildQuery(f: ReportFiltersState) {
 function ExportButton({ reportType, filters }: { reportType: string; filters: ReportFiltersState }) {
   const handleExport = () => {
     const q = buildQuery(filters);
-    window.open(getApiBase() + `/api/reports/export/${reportType}` + q, "_blank");
+    const url = getApiBase() + `/api/reports/export/${reportType}` + q;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${reportType}-report.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
   return (
     <div className="flex items-center gap-2">
@@ -1727,7 +1733,13 @@ export default function StaffReports() {
                       size="sm"
                       onClick={() => {
                         const suffix = q ? `${q}&` : "?";
-                        window.open(getApiBase() + `/api/reports/export/commissions${suffix}mode=ledger`, "_blank");
+                        const url = getApiBase() + `/api/reports/export/commissions${suffix}mode=ledger`;
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = "commissions-ledger.csv";
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
                       }}
                       data-testid="button-export-commission-ledger"
                     >
