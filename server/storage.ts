@@ -16,7 +16,7 @@ import {
   paymentIntents, paymentEvents, paymentReceipts,
   claims, claimDocuments, claimStatusHistory,
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
-  partnerParlours,
+  partnerParlours, parlourPersonnel,
   mortuaryIntakes, mortuaryDispatches, deceasedBelongings, bodyWashRequirements, driverChecklists,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
@@ -39,6 +39,7 @@ import {
   type BankAccount, type InsertBankAccount,
   type BankDeposit, type InsertBankDeposit,
   type BankStatementBalance, type InsertBankStatementBalance,
+  type ParlourPersonnel, type InsertParlourPersonnel,
   type BalanceSheetEntry, type InsertBalanceSheetEntry,
   type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
@@ -2934,12 +2935,11 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
   async createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent> {
-    const [intentRow] = await db.select({ organizationId: paymentIntents.organizationId })
-      .from(paymentIntents)
-      .where(eq(paymentIntents.id, event.paymentIntentId))
-      .limit(1);
-    if (intentRow?.organizationId) {
-      const tdb = await getDbForOrg(intentRow.organizationId);
+    // Always route to the same DB as the intent — use event.organizationId directly to avoid
+    // a cross-DB lookup that fails for tenant-isolated orgs where payment_intents lives in tdb.
+    const orgId = event.organizationId;
+    if (orgId) {
+      const tdb = await getDbForOrg(orgId);
       const [created] = await tdb.insert(paymentEvents).values(event).returning();
       return created;
     }
@@ -4155,6 +4155,28 @@ export class DatabaseStorage implements IStorage {
     return `EMP-${String(nextVal).padStart(5, "0")}`;
   }
 
+  async generateRequisitionNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, requisition_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET requisition_next = org_policy_sequences.requisition_next + 1
+      RETURNING requisition_next
+    `);
+    const nextVal = (result as unknown as { rows?: { requisition_next: number }[] }).rows?.[0]?.requisition_next ?? 1;
+    return `REQ-${String(nextVal).padStart(5, "0")}`;
+  }
+
+  async generateVoucherNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, disbursement_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET disbursement_next = org_policy_sequences.disbursement_next + 1
+      RETURNING disbursement_next
+    `);
+    const nextVal = (result as unknown as { rows?: { disbursement_next: number }[] }).rows?.[0]?.disbursement_next ?? 1;
+    return `PV-${String(nextVal).padStart(5, "0")}`;
+  }
+
   // ─── Groups ──────────────────────────────────────────────
   async getGroupsByOrg(orgId: string): Promise<Group[]> {
     const tdb = await getDbForOrg(orgId);
@@ -4405,6 +4427,13 @@ export class DatabaseStorage implements IStorage {
         eq(paymentDisbursements.entityId, entityId),
       ))
       .orderBy(paymentDisbursements.paidDate);
+  }
+
+  async getPaymentDisbursementById(id: string, orgId: string): Promise<PaymentDisbursement | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(paymentDisbursements)
+      .where(and(eq(paymentDisbursements.id, id), eq(paymentDisbursements.organizationId, orgId)));
+    return row;
   }
 
   // ── Bank accounts ──────────────────────────────────────────
@@ -5386,6 +5415,29 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(partnerParlours.id, id), eq(partnerParlours.organizationId, orgId)))
       .returning();
     return row;
+  }
+
+  async getParlourPersonnel(orgId: string, parlourId?: string): Promise<ParlourPersonnel[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(parlourPersonnel.organizationId, orgId)];
+    if (parlourId) conds.push(eq(parlourPersonnel.parlourId, parlourId));
+    return tdb.select().from(parlourPersonnel).where(and(...conds)).orderBy(parlourPersonnel.name);
+  }
+  async createParlourPersonnel(data: InsertParlourPersonnel): Promise<ParlourPersonnel> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(parlourPersonnel).values(data).returning();
+    return row;
+  }
+  async updateParlourPersonnel(id: string, orgId: string, data: Partial<ParlourPersonnel>): Promise<ParlourPersonnel | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(parlourPersonnel).set(data)
+      .where(and(eq(parlourPersonnel.id, id), eq(parlourPersonnel.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+  async deleteParlourPersonnel(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(parlourPersonnel).where(and(eq(parlourPersonnel.id, id), eq(parlourPersonnel.organizationId, orgId)));
   }
 
   async recordStoragePayment(intakeId: string, orgId: string, data: { storageFeePaidBy: string; storageFeePaidAt: Date; storageFeeStatus: string }): Promise<MortuaryIntake> {

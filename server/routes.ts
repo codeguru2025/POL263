@@ -16,6 +16,8 @@ import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet } from "./financial-statements";
+import { generateRequisitionPdf, generateBlankRequisitionPdf } from "./requisition-pdf";
+import { generatePaymentVoucherPdf, generateBlankPaymentVoucherPdf } from "./payment-voucher-pdf";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -4740,6 +4742,101 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─── Parlour Personnel ─────────────────────────────────────
+  app.get("/api/partner-parlours/:parlourId/personnel", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getParlourPersonnel(user.organizationId, String(req.params.parlourId)));
+  });
+
+  app.post("/api/partner-parlours/:parlourId/personnel", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const parlourId = String(req.params.parlourId);
+    const { name, role, phone, email } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: "name is required" });
+    try {
+      const person = await storage.createParlourPersonnel({
+        organizationId: user.organizationId,
+        parlourId,
+        name: String(name).trim(),
+        role: role ? String(role).trim() : undefined,
+        phone: phone ? String(phone).trim() : undefined,
+        email: email ? String(email).trim() : undefined,
+      });
+      await auditLog(req, "CREATE_PARLOUR_PERSONNEL", "ParlourPersonnel", person.id, null, person);
+      return res.status(201).json(person);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/parlour-personnel/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const patch: Record<string, any> = {};
+    for (const k of ["name", "role", "phone", "email", "isActive"]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k];
+    }
+    const updated = await storage.updateParlourPersonnel(id, user.organizationId, patch);
+    if (!updated) return res.status(404).json({ message: "Personnel not found" });
+    await auditLog(req, "UPDATE_PARLOUR_PERSONNEL", "ParlourPersonnel", id, null, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/parlour-personnel/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteParlourPersonnel(String(req.params.id), user.organizationId);
+    return res.json({ success: true });
+  });
+
+  // ─── Requisition / Voucher Print ───────────────────────────
+  app.get("/api/requisitions/blank-form", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const org = await storage.getOrganization(user.organizationId);
+    const buf = await generateBlankRequisitionPdf(org);
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": 'inline; filename="requisition-blank.pdf"' });
+    return res.end(buf);
+  });
+
+  app.get("/api/requisitions/:id/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const req2 = await storage.getRequisition(String(req.params.id), user.organizationId);
+    if (!req2) return res.status(404).json({ message: "Requisition not found" });
+    const [allItems, requesterList] = await Promise.all([
+      storage.getRequisitionItemsByIds([req2.id], user.organizationId),
+      storage.getUsersByIds([req2.requestedBy]),
+    ]);
+    const requester = (requesterList as any[])[0];
+    const reqData = { ...req2, items: allItems, requesterName: requester?.displayName || requester?.email || "Unknown" };
+    const buf = await generateRequisitionPdf(reqData, user.organizationId);
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="REQ-${req2.requisitionNumber}.pdf"` });
+    return res.end(buf);
+  });
+
+  app.get("/api/payment-vouchers/blank-form", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const org = await storage.getOrganization(user.organizationId);
+    const buf = await generateBlankPaymentVoucherPdf(org);
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": 'inline; filename="payment-voucher-blank.pdf"' });
+    return res.end(buf);
+  });
+
+  app.get("/api/payment-disbursements/:id/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const disb = await storage.getPaymentDisbursementById(String(req.params.id), user.organizationId);
+    if (!disb) return res.status(404).json({ message: "Disbursement not found" });
+    // Load linked requisition if applicable
+    let linkedReq: any = null;
+    if (disb.entityType === "requisition") {
+      linkedReq = await storage.getRequisition(disb.entityId, user.organizationId);
+    }
+    const paidByUser = disb.paidByUserId ? (await storage.getUsersByIds([disb.paidByUserId]))[0] as any : null;
+    const voucherData = { ...disb, paidByName: paidByUser?.displayName || paidByUser?.email || "—" };
+    const org = await storage.getOrganization(user.organizationId);
+    const buf = await generatePaymentVoucherPdf(voucherData, linkedReq, org);
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="${disb.voucherNumber || "PV"}.pdf"` });
+    return res.end(buf);
+  });
+
   // ─── Mortuary Register ──────────────────────────────────────
 
   app.get("/api/mortuary-intakes", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
@@ -5356,7 +5453,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/requisitions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const requisitionNumber = `REQ-${Date.now().toString(36).toUpperCase()}`;
+    const requisitionNumber = await storage.generateRequisitionNumber(user.organizationId);
     const submit = req.body.submit === true || req.body.status === "submitted";
 
     // Calculate total from line items if provided.
@@ -5370,6 +5467,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       amount,
       organizationId: user.organizationId,
       requisitionNumber,
+      raisedDate: req.body.raisedDate || new Date().toISOString().slice(0, 10),
       requestedBy: user.id,
       status: submit ? "submitted" : "draft",
       neededByDate: req.body.neededByDate || null,
@@ -5569,6 +5667,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= Number(existing.amount) - 0.001;
     try {
+      const voucherNumber = await storage.generateVoucherNumber(user.organizationId);
       const disbursement = await storage.createPaymentDisbursement({
         organizationId: user.organizationId,
         branchId: existing.branchId ?? undefined,
@@ -5583,6 +5682,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
         reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
         notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+        voucherNumber,
         createdByUserId: user.id,
       });
       const patch: Record<string, any> = {
@@ -5631,6 +5731,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= totalAmt - 0.001;
     try {
+      const expVoucherNumber = await storage.generateVoucherNumber(user.organizationId);
       const disbursement = await storage.createPaymentDisbursement({
         organizationId: user.organizationId,
         branchId: existing.branchId ?? undefined,
@@ -5645,6 +5746,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
         reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
         notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+        voucherNumber: expVoucherNumber,
         createdByUserId: user.id,
       });
       const patch: Record<string, any> = {
@@ -6905,7 +7007,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Groups ──────────────────────────────────────────────
 
-  app.get("/api/groups", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+  app.get("/api/groups", requireAuth, requireTenantScope, requireAnyPermission("read:policy", "read:finance", "write:finance"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getGroupsByOrg(user.organizationId));
   });

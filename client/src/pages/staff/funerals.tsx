@@ -19,9 +19,10 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User, ChevronDown } from "lucide-react";
+import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User, ChevronDown, Trash2, Building2, Users } from "lucide-react";
 import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 import { QuoteDialog } from "./quotations";
+import { useAuth } from "@/hooks/use-auth";
 
 // Convert a UTC timestamp from the DB into a value suitable for <input type="datetime-local">.
 // datetime-local expects local time; .toISOString() gives UTC, so we offset by the browser's TZ.
@@ -128,6 +129,8 @@ const BLANK_FORM: CaseForm = {
 export default function StaffFunerals() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { permissions } = useAuth();
+  const canWriteFuneralOps = permissions.includes("write:funeral_ops");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showCreateCase, setShowCreateCase] = useState(false);
@@ -166,6 +169,66 @@ export default function StaffFunerals() {
     queryKey: [`/api/funeral-cases/${selectedCaseId}/receipts`],
     enabled: !!selectedCaseId,
   });
+  // ── Parlours ──────────────────────────────────────────────
+  const [selectedParlourId, setSelectedParlourId] = useState<string | null>(null);
+  const [showParlourDialog, setShowParlourDialog] = useState(false);
+  const [editingParlour, setEditingParlour] = useState<any>(null);
+  const [parlourForm, setParlourForm] = useState({ name: "", contactPerson: "", phone: "", email: "", address: "" });
+  const [showPersonnelDialog, setShowPersonnelDialog] = useState(false);
+  const [editingPersonnel, setEditingPersonnel] = useState<any>(null);
+  const [personnelForm, setPersonnelForm] = useState({ name: "", role: "", phone: "", email: "" });
+
+  const { data: parlours = [] } = useQuery<any[]>({ queryKey: ["/api/partner-parlours"] });
+  const { data: parlourPersonnel = [] } = useQuery<any[]>({
+    queryKey: [`/api/partner-parlours/${selectedParlourId}/personnel`],
+    enabled: !!selectedParlourId,
+  });
+
+  const saveParlourMutation = useMutation({
+    mutationFn: async (data: Record<string, string>) => {
+      const res = editingParlour
+        ? await apiRequest("PATCH", `/api/partner-parlours/${editingParlour.id}`, data)
+        : await apiRequest("POST", "/api/partner-parlours", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/partner-parlours"] });
+      setShowParlourDialog(false);
+      setEditingParlour(null);
+      setParlourForm({ name: "", contactPerson: "", phone: "", email: "", address: "" });
+      toast({ title: editingParlour ? "Parlour updated" : "Parlour added" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const savePersonnelMutation = useMutation({
+    mutationFn: async (data: Record<string, string>) => {
+      const res = editingPersonnel
+        ? await apiRequest("PATCH", `/api/parlour-personnel/${editingPersonnel.id}`, data)
+        : await apiRequest("POST", `/api/partner-parlours/${selectedParlourId}/personnel`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/partner-parlours/${selectedParlourId}/personnel`] });
+      setShowPersonnelDialog(false);
+      setEditingPersonnel(null);
+      setPersonnelForm({ name: "", role: "", phone: "", email: "" });
+      toast({ title: editingPersonnel ? "Contact updated" : "Contact added" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deletePersonnelMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/parlour-personnel/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/partner-parlours/${selectedParlourId}/personnel`] });
+      toast({ title: "Contact removed" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const [showDriverChecklist, setShowDriverChecklist] = useState(false);
 
   const { data: driverChecklist } = useQuery<any>({
@@ -374,6 +437,7 @@ export default function StaffFunerals() {
           <TabsList>
             <TabsTrigger value="cases" data-testid="tab-cases">Funeral Cases</TabsTrigger>
             <TabsTrigger value="fleet" data-testid="tab-fleet">Fleet Vehicles</TabsTrigger>
+            <TabsTrigger value="parlours" data-testid="tab-parlours">Partner Parlours</TabsTrigger>
           </TabsList>
 
           {/* ─── Cases tab ─────────────────────────────────────── */}
@@ -533,8 +597,173 @@ export default function StaffFunerals() {
               )}
             </CardSection>
           </TabsContent>
+          {/* ─── Parlours tab ──────────────────────────────────────── */}
+          <TabsContent value="parlours" className="mt-4">
+            <div className="grid md:grid-cols-3 gap-4">
+              {/* Parlours list */}
+              <CardSection
+                title="Partner Parlours"
+                icon={Building2}
+                headerRight={canWriteFuneralOps ? (
+                  <Button size="sm" onClick={() => { setEditingParlour(null); setParlourForm({ name: "", contactPerson: "", phone: "", email: "", address: "" }); setShowParlourDialog(true); }}>
+                    <Plus className="h-4 w-4 mr-1" />Add
+                  </Button>
+                ) : undefined}
+              >
+                {parlours.length === 0 ? (
+                  <EmptyState icon={Building2} title="No parlours" description="Add partner funeral parlours to track contacts." />
+                ) : (
+                  <div className="divide-y">
+                    {parlours.map((p: any) => (
+                      <div key={p.id} className={`px-4 py-3 cursor-pointer hover:bg-muted/40 flex items-start justify-between gap-2 ${selectedParlourId === p.id ? "bg-muted/60" : ""}`} onClick={() => setSelectedParlourId(p.id)}>
+                        <div className="min-w-0">
+                          <div className="font-medium text-sm truncate">{p.name}</div>
+                          {p.contactPerson && <div className="text-xs text-muted-foreground">{p.contactPerson}</div>}
+                          {p.phone && <div className="text-xs text-muted-foreground">{p.phone}</div>}
+                        </div>
+                        {canWriteFuneralOps && (
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={(e) => { e.stopPropagation(); setEditingParlour(p); setParlourForm({ name: p.name || "", contactPerson: p.contactPerson || "", phone: p.phone || "", email: p.email || "", address: p.address || "" }); setShowParlourDialog(true); }}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardSection>
+
+              {/* Personnel panel */}
+              <div className="md:col-span-2">
+                <CardSection
+                  title={selectedParlourId ? `Personnel — ${parlours.find((p: any) => p.id === selectedParlourId)?.name || ""}` : "Personnel"}
+                  icon={Users}
+                  headerRight={canWriteFuneralOps && selectedParlourId ? (
+                    <Button size="sm" onClick={() => { setEditingPersonnel(null); setPersonnelForm({ name: "", role: "", phone: "", email: "" }); setShowPersonnelDialog(true); }}>
+                      <Plus className="h-4 w-4 mr-1" />Add Contact
+                    </Button>
+                  ) : undefined}
+                >
+                  {!selectedParlourId ? (
+                    <EmptyState icon={Users} title="Select a parlour" description="Click a parlour on the left to view its personnel." />
+                  ) : parlourPersonnel.length === 0 ? (
+                    <EmptyState icon={Users} title="No contacts" description="Add contacts for this parlour." />
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead>Phone</TableHead>
+                          <TableHead>Email</TableHead>
+                          {canWriteFuneralOps && <TableHead className="w-[80px]" />}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {parlourPersonnel.map((p: any) => (
+                          <TableRow key={p.id}>
+                            <TableCell className="font-medium text-sm">{p.name}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{p.role || "—"}</TableCell>
+                            <TableCell className="text-sm">{p.phone || "—"}</TableCell>
+                            <TableCell className="text-sm">{p.email || "—"}</TableCell>
+                            {canWriteFuneralOps && (
+                              <TableCell>
+                                <div className="flex gap-1">
+                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingPersonnel(p); setPersonnelForm({ name: p.name || "", role: p.role || "", phone: p.phone || "", email: p.email || "" }); setShowPersonnelDialog(true); }}>
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => deletePersonnelMutation.mutate(p.id)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardSection>
+              </div>
+            </div>
+          </TabsContent>
         </Tabs>
       </PageShell>
+
+      {/* ─── Parlour dialog ─────────────────────────────────────── */}
+      <Dialog open={showParlourDialog} onOpenChange={setShowParlourDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingParlour ? "Edit Parlour" : "Add Partner Parlour"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Name *</Label>
+              <Input value={parlourForm.name} onChange={(e) => setParlourForm({ ...parlourForm, name: e.target.value })} placeholder="Parlour name" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Contact Person</Label>
+                <Input value={parlourForm.contactPerson} onChange={(e) => setParlourForm({ ...parlourForm, contactPerson: e.target.value })} placeholder="Main contact" />
+              </div>
+              <div>
+                <Label className="text-xs">Phone</Label>
+                <Input value={parlourForm.phone} onChange={(e) => setParlourForm({ ...parlourForm, phone: e.target.value })} placeholder="+263..." />
+              </div>
+              <div>
+                <Label className="text-xs">Email</Label>
+                <Input type="email" value={parlourForm.email} onChange={(e) => setParlourForm({ ...parlourForm, email: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Address</Label>
+              <Textarea rows={2} value={parlourForm.address} onChange={(e) => setParlourForm({ ...parlourForm, address: e.target.value })} placeholder="Physical address" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowParlourDialog(false)}>Cancel</Button>
+            <Button onClick={() => saveParlourMutation.mutate(parlourForm)} disabled={!parlourForm.name.trim() || saveParlourMutation.isPending}>
+              {saveParlourMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              {editingParlour ? "Save Changes" : "Add Parlour"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Personnel dialog ───────────────────────────────────── */}
+      <Dialog open={showPersonnelDialog} onOpenChange={setShowPersonnelDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingPersonnel ? "Edit Contact" : "Add Contact"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Name *</Label>
+              <Input value={personnelForm.name} onChange={(e) => setPersonnelForm({ ...personnelForm, name: e.target.value })} placeholder="Full name" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Role / Title</Label>
+                <Input value={personnelForm.role} onChange={(e) => setPersonnelForm({ ...personnelForm, role: e.target.value })} placeholder="e.g. Director" />
+              </div>
+              <div>
+                <Label className="text-xs">Phone</Label>
+                <Input value={personnelForm.phone} onChange={(e) => setPersonnelForm({ ...personnelForm, phone: e.target.value })} placeholder="+263..." />
+              </div>
+              <div>
+                <Label className="text-xs">Email</Label>
+                <Input type="email" value={personnelForm.email} onChange={(e) => setPersonnelForm({ ...personnelForm, email: e.target.value })} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPersonnelDialog(false)}>Cancel</Button>
+            <Button onClick={() => savePersonnelMutation.mutate(personnelForm)} disabled={!personnelForm.name.trim() || savePersonnelMutation.isPending}>
+              {savePersonnelMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              {editingPersonnel ? "Save Changes" : "Add Contact"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <CaseFormDialog
         open={showCreateCase}

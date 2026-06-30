@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown, ChevronRight, ShieldCheck, ShieldX, Building2, ArrowDownToLine, Banknote, TriangleAlert } from "lucide-react";
+import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown, ChevronRight, ShieldCheck, ShieldX, Building2, ArrowDownToLine, Banknote, TriangleAlert, Printer } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
@@ -1048,12 +1048,12 @@ export default function StaffFinance() {
     enabled: commissionOnly,
   });
   const { data: rawExpenditures } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
-  const { data: rawRequisitions } = useQuery<any[]>({ queryKey: ["/api/requisitions"], enabled: canReadFinance });
+  const { data: rawRequisitions } = useQuery<any[]>({ queryKey: ["/api/requisitions"], enabled: canReadFinance || canWriteFinance || canApproveFinance });
   const requisitions = Array.isArray(rawRequisitions) ? rawRequisitions : [];
   type ReqItem = { description: string; category: string; qty: string; unitPrice: string };
   const blankItem = (): ReqItem => ({ description: "", category: "", qty: "1", unitPrice: "" });
   const [showRequisitionDialog, setShowRequisitionDialog] = useState(false);
-  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "", neededByDate: "" });
+  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10) });
   const [reqItems, setReqItems] = useState<ReqItem[]>([blankItem()]);
   // Approve/reject dialog
   const [approveTarget, setApproveTarget] = useState<any>(null);
@@ -1066,7 +1066,7 @@ export default function StaffFinance() {
     setReqItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
   const addReqItem = () => setReqItems(prev => [...prev, blankItem()]);
   const removeReqItem = (idx: number) => setReqItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
-  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "", neededByDate: "" }); setReqItems([blankItem()]); };
+  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10) }); setReqItems([blankItem()]); };
   const openApproveDialog = (r: any, action: "approve" | "reject") => {
     setApproveTarget(r);
     setApproveAction(action);
@@ -1084,6 +1084,7 @@ export default function StaffFinance() {
       }));
       const res = await apiRequest("POST", "/api/requisitions", {
         ...reqHeader,
+        raisedDate: reqHeader.raisedDate || new Date().toISOString().slice(0, 10),
         neededByDate: reqHeader.neededByDate || null,
         // Legacy fields derived from first item as fallback
         category: items[0]?.category || "",
@@ -2326,7 +2327,7 @@ export default function StaffFinance() {
                           )}
                           {r.approverNotes && <p className="text-[10px] text-muted-foreground mt-0.5 italic">Approver: {r.approverNotes}</p>}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground pt-3">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground pt-3">{(r.raisedDate || r.createdAt) ? new Date(r.raisedDate || r.createdAt).toLocaleDateString() : "—"}</TableCell>
                         <TableCell className="text-xs pt-3">
                           {r.neededByDate
                             ? <span className={new Date(r.neededByDate) < new Date() && r.status !== "paid" ? "text-destructive font-medium" : ""}>{new Date(r.neededByDate).toLocaleDateString()}</span>
@@ -2360,6 +2361,9 @@ export default function StaffFinance() {
                             )}
                             {r.status === "paid" && <span className="text-xs text-muted-foreground">Paid ✓</span>}
                             {r.status === "rejected" && <span className="text-xs text-muted-foreground">Rejected</span>}
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print requisition" onClick={(e) => { e.stopPropagation(); window.open(`/api/requisitions/${r.id}/pdf`, "_blank"); }}>
+                              <Printer className="h-3.5 w-3.5" />
+                            </Button>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -2907,6 +2911,10 @@ export default function StaffFinance() {
             <div>
               <Label className="text-xs">Currency</Label>
               <CurrencySelect value={reqHeader.currency} onValueChange={(v) => setReqHeader({ ...reqHeader, currency: v })} />
+            </div>
+            <div>
+              <Label className="text-xs">Date Raised *</Label>
+              <Input type="date" value={reqHeader.raisedDate} onChange={(e) => setReqHeader({ ...reqHeader, raisedDate: e.target.value })} />
             </div>
             <div>
               <Label className="text-xs">Date Funds Needed *</Label>

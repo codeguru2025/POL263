@@ -78,6 +78,8 @@ export const orgPolicySequences = pgTable("org_policy_sequences", {
   mortuaryNext: integer("mortuary_next").default(0).notNull(),
   quotationNext: integer("quotation_next").default(0).notNull(),
   employeeNext: integer("employee_next").default(0).notNull(),
+  requisitionNext: integer("requisition_next").default(0).notNull(),
+  disbursementNext: integer("disbursement_next").default(0).notNull(),
 });
 
 // ─── IDENTITY ───────────────────────────────────────────────
@@ -1296,6 +1298,22 @@ export const partnerParlours = pgTable("partner_parlours", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const parlourPersonnel = pgTable("parlour_personnel", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+  parlourId: uuid("parlour_id").notNull().references(() => partnerParlours.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  role: text("role"),
+  phone: text("phone"),
+  email: text("email"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("parlour_personnel_parlour_idx").on(t.parlourId)]);
+
+export const insertParlourPersonnelSchema = createInsertSchema(parlourPersonnel).omit({ id: true, createdAt: true });
+export type ParlourPersonnel = typeof parlourPersonnel.$inferSelect;
+export type InsertParlourPersonnel = typeof parlourPersonnel.$inferInsert;
+
 export const mortuaryIntakes = pgTable(
   "mortuary_intakes",
   {
@@ -2050,6 +2068,7 @@ export const requisitions = pgTable(
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     branchId: uuid("branch_id").references(() => branches.id),
     requisitionNumber: text("requisition_number").notNull(),
+    raisedDate: date("raised_date"),                  // user-set date of raising; defaults to createdAt on display
     category: text("category").notNull(),
     description: text("description").notNull(),
     payee: text("payee"),
@@ -2246,6 +2265,7 @@ export const paymentDisbursements = pgTable(
     paymentMethod: text("payment_method").default("cash").notNull(),  // cash|bank_transfer|cheque|mobile_money
     reference: text("reference"),
     notes: text("notes"),
+    voucherNumber: text("voucher_number"),            // PV-00001 — set on creation
     createdByUserId: uuid("created_by_user_id").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
