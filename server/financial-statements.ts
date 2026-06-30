@@ -377,24 +377,34 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
     }
   }
 
-  // 3. Premium receivables — outstanding premiums on active/grace policies
+  // 3. Premium receivables — premiums owed by grace-period policyholders (one missed cycle)
+  //    and active policies where the current cycle has ended (admin hasn't run month-end yet).
+  //    Conservative estimate: 1 × premium_amount per overdue policy.
   const receivableRows = await tdb.execute(sql`
     SELECT currency,
-           COALESCE(SUM(
-             GREATEST(
-               (premium_amount::numeric * COALESCE(months_outstanding, 1)) - COALESCE(amount_paid::numeric, 0),
-               0
-             )
-           ), 0) AS total
+           COALESCE(SUM(premium_amount::numeric), 0) AS total
     FROM policies
     WHERE organization_id = ${orgId}
-      AND status IN ('active','grace')
+      AND status IN ('grace')
+      AND premium_amount IS NOT NULL
+      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+    GROUP BY currency
+  `);
+  // Also include active policies whose cycle ended before today (haven't been moved to grace yet)
+  const activeOverdueRows = await tdb.execute(sql`
+    SELECT currency,
+           COALESCE(SUM(premium_amount::numeric), 0) AS total
+    FROM policies
+    WHERE organization_id = ${orgId}
+      AND status = 'active'
+      AND current_cycle_end IS NOT NULL
+      AND current_cycle_end < ${asOf}
       AND premium_amount IS NOT NULL
       ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
     GROUP BY currency
   `);
   const premiumReceivable: AmountMap = {};
-  for (const r of (receivableRows.rows ?? receivableRows) as any[]) {
+  for (const r of [...(receivableRows.rows ?? receivableRows) as any[], ...(activeOverdueRows.rows ?? activeOverdueRows) as any[]]) {
     const amt = parseFloat(r.total ?? 0);
     if (amt > 0.005) add(premiumReceivable, r.currency, amt);
   }

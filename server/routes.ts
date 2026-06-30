@@ -5699,7 +5699,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/bank-accounts/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     const id = String(req.params.id);
-    const existing = (await storage.getBankAccounts(user.organizationId)).find(a => a.id === id);
+    const existing = await storage.getBankAccount(id, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Bank account not found" });
     const patch: Record<string, any> = {};
     for (const k of ["accountName", "bankName", "accountNumber", "currency", "notes", "isActive"]) {
@@ -5739,6 +5739,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const amt = parsePositiveAmount(amount);
     if (!amt) return res.status(400).json({ message: "A valid positive amount is required" });
     if (!depositDate) return res.status(400).json({ message: "depositDate is required" });
+    // Validate bank account belongs to this org
+    if (bankAccountId) {
+      const acct = await storage.getBankAccount(String(bankAccountId), user.organizationId);
+      if (!acct) return res.status(400).json({ message: "Bank account not found" });
+    }
     const byUserId = depositedByUserId || user.id;
     try {
       const deposit = await storage.createBankDeposit({
@@ -5761,9 +5766,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/bank-deposits/:id/verify", requireAuth, requireTenantScope, requireAnyPermission("approve:finance", "write:finance"), async (req, res) => {
     const user = req.user as any;
     const id = String(req.params.id);
-    const deposits = await storage.getBankDeposits(user.organizationId, {});
-    const existing = deposits.find(d => d.id === id);
+    const existing = await storage.getBankDepositById(id, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Deposit not found" });
+    if (existing.verifiedAt) return res.status(409).json({ message: "Deposit has already been verified" });
     const updated = await storage.updateBankDeposit(id, user.organizationId, {
       verifiedByUserId: user.id,
       verifiedAt: new Date(),
@@ -5797,6 +5802,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!bankAccountId || !statementDate || closingBalance === undefined) {
       return res.status(400).json({ message: "bankAccountId, statementDate, and closingBalance are required" });
     }
+    // Validate bank account belongs to this org
+    const acctForBal = await storage.getBankAccount(String(bankAccountId), user.organizationId);
+    if (!acctForBal) return res.status(400).json({ message: "Bank account not found" });
     try {
       const bal = await storage.createBankStatementBalance({
         organizationId: user.organizationId,
@@ -7338,19 +7346,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ORDER BY income DESC
     `);
 
-    // 4. Claims stats
+    // 4. Claims stats — COALESCE currency to 'USD' to avoid NULL grouping
     const claimStats = await tdb.execute(sql`
       SELECT
         status,
-        COUNT(*)                                    AS count,
+        COUNT(*)                                       AS count,
         COALESCE(SUM(cash_in_lieu_amount::numeric), 0) AS total_value,
-        currency
+        COALESCE(currency, 'USD')                      AS currency
       FROM claims
       WHERE organization_id = ${orgId}
         AND created_at >= ${from + 'T00:00:00.000Z'}
         AND created_at <= ${to   + 'T23:59:59.999Z'}
         ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
-      GROUP BY status, currency
+      GROUP BY status, COALESCE(currency, 'USD')
     `);
 
     // 5. New policies in period
@@ -7673,7 +7681,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/balance-sheet-entries/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     const id = String(req.params.id);
-    const existing = (await storage.getBalanceSheetEntries(user.organizationId)).find(e => e.id === id);
+    const existing = await storage.getBalanceSheetEntry(id, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Entry not found" });
     const patch: Record<string, any> = {};
     for (const k of ["label", "amount", "currency", "subsection", "asOfDate", "notes"]) {
@@ -7688,7 +7696,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/balance-sheet-entries/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     const id = String(req.params.id);
-    const existing = (await storage.getBalanceSheetEntries(user.organizationId)).find(e => e.id === id);
+    const existing = await storage.getBalanceSheetEntry(id, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Entry not found" });
     await storage.deleteBalanceSheetEntry(id, user.organizationId);
     await auditLog(req, "DELETE_BALANCE_SHEET_ENTRY", "BalanceSheetEntry", id, existing, null);

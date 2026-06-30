@@ -561,15 +561,18 @@ export interface IStorage {
   getPaymentDisbursements(orgId: string, filters?: { entityType?: string; entityId?: string; fromDate?: string; toDate?: string; branchId?: string }): Promise<PaymentDisbursement[]>;
   getPaymentDisbursementsByEntity(entityType: string, entityId: string, orgId: string): Promise<PaymentDisbursement[]>;
   getBankAccounts(orgId: string): Promise<BankAccount[]>;
+  getBankAccount(id: string, orgId: string): Promise<BankAccount | undefined>;
   createBankAccount(data: InsertBankAccount): Promise<BankAccount>;
   updateBankAccount(id: string, orgId: string, data: Partial<BankAccount>): Promise<BankAccount | undefined>;
   getBankDeposits(orgId: string, filters?: { userId?: string; bankAccountId?: string; fromDate?: string; toDate?: string }): Promise<BankDeposit[]>;
+  getBankDepositById(id: string, orgId: string): Promise<BankDeposit | undefined>;
   createBankDeposit(data: InsertBankDeposit): Promise<BankDeposit>;
   updateBankDeposit(id: string, orgId: string, data: Partial<BankDeposit>): Promise<BankDeposit | undefined>;
   getBankStatementBalances(orgId: string, bankAccountId?: string): Promise<BankStatementBalance[]>;
   createBankStatementBalance(data: InsertBankStatementBalance): Promise<BankStatementBalance>;
   getAdminCashPosition(orgId: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>>;
   getBalanceSheetEntries(orgId: string, filters?: { section?: string; asOfDate?: string }): Promise<BalanceSheetEntry[]>;
+  getBalanceSheetEntry(id: string, orgId: string): Promise<BalanceSheetEntry | undefined>;
   createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry>;
   updateBalanceSheetEntry(id: string, orgId: string, data: Partial<BalanceSheetEntry>): Promise<BalanceSheetEntry | undefined>;
   deleteBalanceSheetEntry(id: string, orgId: string): Promise<void>;
@@ -4411,6 +4414,12 @@ export class DatabaseStorage implements IStorage {
       .where(eq(bankAccounts.organizationId, orgId))
       .orderBy(bankAccounts.accountName);
   }
+  async getBankAccount(id: string, orgId: string): Promise<BankAccount | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(bankAccounts)
+      .where(and(eq(bankAccounts.id, id), eq(bankAccounts.organizationId, orgId)));
+    return row;
+  }
   async createBankAccount(data: InsertBankAccount): Promise<BankAccount> {
     const tdb = await getDbForOrg(data.organizationId);
     const [row] = await tdb.insert(bankAccounts).values(data).returning();
@@ -4431,6 +4440,12 @@ export class DatabaseStorage implements IStorage {
     if (filters?.fromDate) conds.push(sql`${bankDeposits.depositDate} >= ${filters.fromDate}`);
     if (filters?.toDate) conds.push(sql`${bankDeposits.depositDate} <= ${filters.toDate}`);
     return tdb.select().from(bankDeposits).where(and(...conds)).orderBy(desc(bankDeposits.depositDate));
+  }
+  async getBankDepositById(id: string, orgId: string): Promise<BankDeposit | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(bankDeposits)
+      .where(and(eq(bankDeposits.id, id), eq(bankDeposits.organizationId, orgId)));
+    return row;
   }
   async createBankDeposit(data: InsertBankDeposit): Promise<BankDeposit> {
     const tdb = await getDbForOrg(data.organizationId);
@@ -4521,6 +4536,12 @@ export class DatabaseStorage implements IStorage {
     if (filters?.section) conds.push(eq(balanceSheetEntries.section, filters.section));
     if (filters?.asOfDate) conds.push(sql`${balanceSheetEntries.asOfDate} <= ${filters.asOfDate}`);
     return tdb.select().from(balanceSheetEntries).where(and(...conds)).orderBy(balanceSheetEntries.section, balanceSheetEntries.subsection, balanceSheetEntries.label);
+  }
+  async getBalanceSheetEntry(id: string, orgId: string): Promise<BalanceSheetEntry | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(balanceSheetEntries)
+      .where(and(eq(balanceSheetEntries.id, id), eq(balanceSheetEntries.organizationId, orgId)));
+    return row;
   }
   async createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry> {
     const tdb = await getDbForOrg(data.organizationId);
