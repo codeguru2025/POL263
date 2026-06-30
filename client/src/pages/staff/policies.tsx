@@ -212,8 +212,10 @@ export default function StaffPolicies() {
     const params = new URLSearchParams(searchString);
     if (params.get("create") === "1") {
       const clientId = params.get("clientId") || "";
+      const groupId = params.get("groupId") || "";
       setShowCreateDialog(true);
-      setCreateForm((f) => ({ ...f, clientId }));
+      setCreateForm((f) => ({ ...f, clientId, groupId }));
+      if (clientId) setClientMode("search");
     }
   }, [searchString]);
 

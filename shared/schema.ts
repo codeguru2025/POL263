@@ -916,6 +916,12 @@ export const paymentReceipts = pgTable(
     pdfStorageKey: text("pdf_storage_key"),
     printFormat: text("print_format").default("thermal_80mm"),
     status: text("status").default("issued").notNull(), // issued | voided
+    approvalStatus: text("approval_status"), // null=instant-applied | pending | approved | rejected
+    approvedByUserId: uuid("approved_by_user_id").references(() => users.id),
+    approvedAt: timestamp("approved_at"),
+    approvalNote: text("approval_note"),
+    submitterNote: text("submitter_note"),
+    backdatedDate: date("backdated_date"),
     metadataJson: jsonb("metadata_json"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deletedAt: timestamp("deleted_at"),
@@ -1922,6 +1928,14 @@ export const expenditures = pgTable(
     approvedBy: uuid("approved_by").references(() => users.id),
     receiptRef: text("receipt_ref"),
     spentAt: date("spent_at"),
+    status: text("status").default("pending").notNull(),  // pending | partial | paid
+    amountPaid: numeric("amount_paid", { precision: 12, scale: 2 }).default("0").notNull(),
+    paidBy: uuid("paid_by").references(() => users.id),
+    receivedBy: text("received_by"),
+    receivedByUserId: uuid("received_by_user_id").references(() => users.id),
+    paymentMethod: text("payment_method"),
+    paidDate: date("paid_date"),
+    reference: text("reference"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("exp_org_idx").on(t.organizationId)]
@@ -2028,7 +2042,7 @@ export const fxRates = pgTable(
 );
 
 // ─── REQUISITIONS (expenditure request → approve → pay) ──────
-export const REQUISITION_STATUSES = ["draft", "submitted", "approved", "rejected", "paid"] as const;
+export const REQUISITION_STATUSES = ["draft", "submitted", "approved", "rejected", "partial", "paid"] as const;
 export const requisitions = pgTable(
   "requisitions",
   {
@@ -2051,6 +2065,9 @@ export const requisitions = pgTable(
     paidDate: date("paid_date"),                 // value date used for cash-basis statements
     paymentMethod: text("payment_method"),
     reference: text("reference"),
+    receivedBy: text("received_by"),             // free-text recipient name
+    receivedByUserId: uuid("received_by_user_id").references(() => users.id),
+    amountPaid: numeric("amount_paid", { precision: 12, scale: 2 }).default("0").notNull(),
     notes: text("notes"),
     neededByDate: date("needed_by_date"),
     approverNotes: text("approver_notes"),
@@ -2208,6 +2225,147 @@ export const requisitionItems = pgTable(
 export const insertRequisitionItemSchema = createInsertSchema(requisitionItems).omit({ id: true });
 export type RequisitionItem = typeof requisitionItems.$inferSelect;
 export type InsertRequisitionItem = z.infer<typeof insertRequisitionItemSchema>;
+
+// ─── PAYMENT DISBURSEMENTS ────────────────────────────────
+// One row per cash-out event — covers requisition AND expenditure partial payments.
+// entityType: 'requisition' | 'expenditure'
+export const paymentDisbursements = pgTable(
+  "payment_disbursements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    entityType: text("entity_type").notNull(),          // 'requisition' | 'expenditure'
+    entityId: uuid("entity_id").notNull(),              // FK to requisitions.id or expenditures.id
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    paidByUserId: uuid("paid_by_user_id").references(() => users.id),  // staff who made payment
+    receivedBy: text("received_by"),                   // free-text (supplier, staff, vendor)
+    receivedByUserId: uuid("received_by_user_id").references(() => users.id),  // optional system user
+    paidDate: date("paid_date").notNull(),              // cash-basis value date → hits P&L on this date
+    paymentMethod: text("payment_method").default("cash").notNull(),  // cash|bank_transfer|cheque|mobile_money
+    reference: text("reference"),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("disb_org_idx").on(t.organizationId),
+    index("disb_entity_idx").on(t.entityType, t.entityId),
+    index("disb_date_idx").on(t.paidDate),
+  ]
+);
+
+export const insertPaymentDisbursementSchema = createInsertSchema(paymentDisbursements).omit({ id: true, createdAt: true });
+
+// ─── BANK ACCOUNTS ────────────────────────────────────────
+export const bankAccounts = pgTable(
+  "bank_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    accountName: text("account_name").notNull(),       // e.g. "FBC Main Account"
+    bankName: text("bank_name").notNull(),
+    accountNumber: text("account_number").notNull(),
+    currency: text("currency").default("USD").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("ba_org_idx").on(t.organizationId)]
+);
+
+export const insertBankAccountSchema = createInsertSchema(bankAccounts).omit({ id: true, createdAt: true });
+export type BankAccount = typeof bankAccounts.$inferSelect;
+export type InsertBankAccount = z.infer<typeof insertBankAccountSchema>;
+
+// ─── BANK DEPOSITS ────────────────────────────────────────
+// Records when an admin physically banks collected cash.
+export const bankDeposits = pgTable(
+  "bank_deposits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    bankAccountId: uuid("bank_account_id").references(() => bankAccounts.id),
+    depositedByUserId: uuid("deposited_by_user_id").notNull().references(() => users.id),  // admin who banked
+    verifiedByUserId: uuid("verified_by_user_id").references(() => users.id),              // manager who confirmed slip
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    depositDate: date("deposit_date").notNull(),
+    reference: text("reference"),          // deposit slip number / EFT ref
+    notes: text("notes"),
+    verifiedAt: timestamp("verified_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("bd_org_idx").on(t.organizationId),
+    index("bd_user_idx").on(t.depositedByUserId),
+    index("bd_date_idx").on(t.depositDate),
+  ]
+);
+
+export const insertBankDepositSchema = createInsertSchema(bankDeposits).omit({ id: true, createdAt: true });
+export type BankDeposit = typeof bankDeposits.$inferSelect;
+export type InsertBankDeposit = z.infer<typeof insertBankDepositSchema>;
+
+// ─── BANK STATEMENT BALANCES ──────────────────────────────
+// Manual closing-balance entry from the actual bank statement.
+export const bankStatementBalances = pgTable(
+  "bank_statement_balances",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    bankAccountId: uuid("bank_account_id").notNull().references(() => bankAccounts.id),
+    statementDate: date("statement_date").notNull(),
+    closingBalance: numeric("closing_balance", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    enteredByUserId: uuid("entered_by_user_id").references(() => users.id),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("bsb_org_idx").on(t.organizationId), index("bsb_account_idx").on(t.bankAccountId)]
+);
+
+export const insertBankStatementBalanceSchema = createInsertSchema(bankStatementBalances).omit({ id: true, createdAt: true });
+export type BankStatementBalance = typeof bankStatementBalances.$inferSelect;
+export type InsertBankStatementBalance = z.infer<typeof insertBankStatementBalanceSchema>;
+export type PaymentDisbursement = typeof paymentDisbursements.$inferSelect;
+export type InsertPaymentDisbursement = z.infer<typeof insertPaymentDisbursementSchema>;
+
+// ─── BALANCE SHEET MANUAL ENTRIES ─────────────────────────────────────────
+// Holds non-derived items: fixed assets, loans, capital contributions, etc.
+export const balanceSheetEntries = pgTable(
+  "balance_sheet_entries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    /** 'asset' | 'liability' | 'equity' */
+    section: text("section").notNull(),
+    /** 'current' | 'non_current' — equity entries leave this null */
+    subsection: text("subsection"),
+    label: text("label").notNull(),
+    amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    /** Date this entry is effective as at (for point-in-time balance sheets). */
+    asOfDate: date("as_of_date").notNull(),
+    notes: text("notes"),
+    enteredByUserId: uuid("entered_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("bse_org_idx").on(t.organizationId),
+    index("bse_section_idx").on(t.organizationId, t.section),
+    index("bse_date_idx").on(t.asOfDate),
+  ]
+);
+
+export const insertBalanceSheetEntrySchema = createInsertSchema(balanceSheetEntries).omit({ id: true, createdAt: true, updatedAt: true });
+export type BalanceSheetEntry = typeof balanceSheetEntries.$inferSelect;
+export type InsertBalanceSheetEntry = z.infer<typeof insertBalanceSheetEntrySchema>;
 
 // ── Debit Orders: recurring bank-debit mandates for premium collection ──
 export const DEBIT_ORDER_STATUSES = ["active", "paused", "cancelled"] as const;
@@ -2535,6 +2693,7 @@ export const groups = pgTable(
     contactPersonEmail: text("contact_person_email"),
     capacity: integer("capacity"),
     isActive: boolean("is_active").default(true).notNull(),
+    isLegacy: boolean("is_legacy").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("groups_org_idx").on(t.organizationId)]

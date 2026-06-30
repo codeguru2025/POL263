@@ -23,6 +23,10 @@ import {
   MessageSquare,
   HelpCircle,
   LayoutDashboard,
+  Banknote,
+  TriangleAlert,
+  ArrowUpRight,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -107,6 +111,151 @@ interface ControlPlaneDashboard {
     branches: number;
   };
   tenants: ControlPlaneTenantMetrics[];
+}
+
+// ─── Executive Finance Summary ────────────────────────────────────────────
+function ExecutiveSummarySection({ execSummary, execLoading, branchesList }: { execSummary: any; execLoading: boolean; branchesList: any[] }) {
+  if (execLoading) {
+    return (
+      <CardSection title="Executive finance summary" icon={BarChart3}>
+        <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+      </CardSection>
+    );
+  }
+  if (!execSummary) return null;
+
+  const ex = execSummary;
+  const cu = ex.consolidatedUsd || {};
+  const fmt = (n: number) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtCur = (map: Record<string, number>) =>
+    Object.entries(map || {}).map(([c, v]) => `${c} ${fmt(v)}`).join("  ") || "—";
+
+  // Aggregate branch breakdown by branchId
+  const branchMap: Record<string, { name: string; income: Record<string, number>; policyCount: number }> = {};
+  for (const r of ex.branchBreakdown || []) {
+    if (!branchMap[r.branchId || "none"]) {
+      branchMap[r.branchId || "none"] = { name: r.branchName, income: {}, policyCount: 0 };
+    }
+    branchMap[r.branchId || "none"].income[r.currency] = (branchMap[r.branchId || "none"].income[r.currency] || 0) + r.income;
+    branchMap[r.branchId || "none"].policyCount += r.policyCount;
+  }
+
+  // Claim stats summary
+  const claimsByStatus: Record<string, { count: number; value: number; currency: string }> = {};
+  for (const r of ex.claimStats || []) {
+    claimsByStatus[r.status] = (claimsByStatus[r.status] || { count: 0, value: 0, currency: r.currency });
+    claimsByStatus[r.status].count += r.count;
+    claimsByStatus[r.status].value += r.totalValue;
+  }
+
+  const daysSince = (d: string | null) => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null;
+
+  return (
+    <div className="space-y-6">
+      {/* ── Financial KPIs ── */}
+      <CardSection
+        title={`Executive summary — ${ex.period?.from} to ${ex.period?.to}`}
+        description="Cash-basis P&L for the selected period, derived from issued receipts and paid disbursements."
+        icon={BarChart3}
+      >
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4">
+          <div className="rounded-md border p-3">
+            <p className="text-xs text-muted-foreground flex items-center gap-1"><ArrowUpRight className="h-3 w-3 text-emerald-500" />Total income (USD)</p>
+            <p className="text-xl font-bold tabular-nums text-emerald-600">{fmt(cu.income || 0)}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{fmtCur(ex.income?.total)}</p>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs text-muted-foreground">Total expenses (USD)</p>
+            <p className="text-xl font-bold tabular-nums text-destructive">{fmt(cu.expenses || 0)}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{fmtCur(ex.expenses?.total)}</p>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs text-muted-foreground">Net surplus (USD)</p>
+            <p className={`text-xl font-bold tabular-nums ${(cu.net || 0) >= 0 ? "text-emerald-600" : "text-destructive"}`}>{fmt(cu.net || 0)}</p>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs text-muted-foreground flex items-center gap-1"><Banknote className="h-3 w-3 text-amber-500" />Unbanked cash (USD)</p>
+            <p className="text-xl font-bold tabular-nums text-amber-600">{fmt(ex.cashPosition?.totalOnHand || 0)}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">Banked: {fmt(ex.cashPosition?.totalDeposited || 0)}</p>
+          </div>
+        </div>
+
+        {/* Additional KPI row */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-4 pb-4">
+          <div className="rounded-md bg-muted/30 p-3 text-center">
+            <p className="text-xs text-muted-foreground">New policies</p>
+            <p className="text-2xl font-bold tabular-nums">{ex.newPoliciesCount || 0}</p>
+          </div>
+          <div className="rounded-md bg-muted/30 p-3 text-center">
+            <p className="text-xs text-muted-foreground">Claims submitted</p>
+            <p className="text-2xl font-bold tabular-nums">{Object.values(claimsByStatus).reduce((s: number, v: any) => s + v.count, 0)}</p>
+          </div>
+          <div className="rounded-md bg-muted/30 p-3 text-center">
+            <p className="text-xs text-muted-foreground">Claims approved</p>
+            <p className="text-2xl font-bold tabular-nums text-amber-600">{claimsByStatus["approved"]?.count || 0}</p>
+          </div>
+          <div className="rounded-md bg-muted/30 p-3 text-center">
+            <p className="text-xs text-muted-foreground">Income — individual premiums</p>
+            <p className="text-lg font-bold tabular-nums">{fmtCur(ex.income?.premiumIndividual)}</p>
+          </div>
+        </div>
+      </CardSection>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* ── Branch breakdown ── */}
+        <CardSection title="Income by branch" icon={Building2}>
+          {Object.keys(branchMap).length === 0 ? (
+            <p className="text-sm text-muted-foreground p-4">No branch data for this period.</p>
+          ) : (
+            <div className="divide-y">
+              {Object.entries(branchMap)
+                .sort(([, a], [, b]) => Object.values(b.income).reduce((s, v) => s + v, 0) - Object.values(a.income).reduce((s, v) => s + v, 0))
+                .map(([id, br]) => (
+                  <div key={id} className="flex items-center justify-between px-4 py-2.5">
+                    <div>
+                      <p className="font-medium text-sm">{br.name}</p>
+                      <p className="text-[11px] text-muted-foreground">{br.policyCount} policies receipted</p>
+                    </div>
+                    <p className="font-semibold tabular-nums text-sm text-emerald-700">{fmtCur(br.income)}</p>
+                  </div>
+                ))}
+            </div>
+          )}
+        </CardSection>
+
+        {/* ── Admin cash accountability ── */}
+        <CardSection title="Admin cash positions" icon={Banknote} description="Unbanked cash each admin currently holds.">
+          {!ex.cashPosition?.admins?.length ? (
+            <p className="text-sm text-muted-foreground p-4">No cash activity yet.</p>
+          ) : (
+            <div className="divide-y">
+              {ex.cashPosition.admins
+                .filter((a: any) => a.totalCollected > 0 || a.totalDeposited > 0)
+                .sort((a: any, b: any) => b.onHand - a.onHand)
+                .map((a: any) => {
+                  const days = daysSince(a.lastDepositDate);
+                  const stale = a.onHand > 0 && (days === null || days > 2);
+                  return (
+                    <div key={a.userId} className={`flex items-center justify-between px-4 py-2.5 ${stale ? "bg-amber-50/60 dark:bg-amber-900/10" : ""}`}>
+                      <div>
+                        <p className="font-medium text-sm">{a.displayName}</p>
+                        <p className="text-[11px] text-muted-foreground">Collected: {a.currency} {fmt(a.totalCollected)} · Banked: {a.currency} {fmt(a.totalDeposited)}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`font-semibold tabular-nums text-sm ${a.onHand > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                          {a.currency} {fmt(a.onHand)}
+                        </p>
+                        {stale && <p className="text-[10px] text-amber-600 flex items-center gap-0.5 justify-end"><TriangleAlert className="h-3 w-3" />{days === null ? "Never banked" : `${days}d`}</p>}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </CardSection>
+      </div>
+    </div>
+  );
 }
 
 const FUNNEL_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#ddd6fe", "#ede9fe"];
@@ -233,6 +382,25 @@ export default function StaffDashboard() {
       return res.json();
     },
     enabled: !isControlPlaneMode,
+  });
+
+  const canApproveFinance = permissions.includes("approve:finance");
+  const execParams = useMemo(() => {
+    const p = new URLSearchParams();
+    if (dateFrom) p.set("fromDate", dateFrom);
+    if (dateTo) p.set("toDate", dateTo);
+    if (branchFilter && branchFilter !== "all") p.set("branchId", branchFilter);
+    return p.toString() ? `?${p}` : "";
+  }, [dateFrom, dateTo, branchFilter]);
+
+  const { data: execSummary, isLoading: execLoading } = useQuery<any>({
+    queryKey: ["/api/dashboard/executive-summary", dateFrom, dateTo, branchFilter],
+    queryFn: async () => {
+      const res = await fetch(base + "/api/dashboard/executive-summary" + execParams, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !isControlPlaneMode && canReadFinance,
   });
 
   const { data: orgs } = useQuery<any[]>({
@@ -658,6 +826,11 @@ export default function StaffDashboard() {
               </div>
           </CardSection>
         </div>
+
+        {/* ── Executive Finance Dashboard ──────────────────── */}
+        {canReadFinance && !isAgent && (
+          <ExecutiveSummarySection execSummary={execSummary} execLoading={execLoading} branchesList={branchesList || []} />
+        )}
 
       </PageShell>
       </ErrorBoundary>

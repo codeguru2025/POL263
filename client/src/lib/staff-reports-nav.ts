@@ -29,6 +29,7 @@ export type ReportDatasetId =
   | "financeReport"
   | "incomeStatement"
   | "cashFlow"
+  | "balanceSheet"
   | "underwriterPayable"
   | "cashups"
   | "receiptReport"
@@ -65,6 +66,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
   finance: [
     { value: "income-statement", label: "Income Statement", testId: "tab-income-statement" },
     { value: "cash-flow", label: "Cash Flow", testId: "tab-cash-flow" },
+    { value: "balance-sheet", label: "Balance Sheet", testId: "tab-balance-sheet" },
     { value: "finance", label: "Finance", testId: "tab-finance-report" },
     { value: "underwriter-payable", label: "Underwriter payable", testId: "tab-underwriter-payable" },
     { value: "receipts", label: "Receipts", testId: "tab-receipts-report" },
@@ -137,6 +139,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   reinstatements: ["reinstatements"],
   "income-statement": ["incomeStatement"],
   "cash-flow": ["cashFlow"],
+  "balance-sheet": ["balanceSheet"],
   finance: ["financeReport"],
   "underwriter-payable": ["underwriterPayable"],
   receipts: ["receiptReport"],

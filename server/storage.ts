@@ -25,7 +25,8 @@ import {
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
-  fxRates, requisitions, requisitionItems, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  fxRates, requisitions, requisitionItems, paymentDisbursements,
+  bankAccounts, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
   quotationGuarantors, quotationCollateral, receiptAdverts, reminders,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
@@ -34,6 +35,11 @@ import {
   type FxRate, type InsertFxRate,
   type Requisition, type InsertRequisition,
   type RequisitionItem, type InsertRequisitionItem,
+  type PaymentDisbursement, type InsertPaymentDisbursement,
+  type BankAccount, type InsertBankAccount,
+  type BankDeposit, type InsertBankDeposit,
+  type BankStatementBalance, type InsertBankStatementBalance,
+  type BalanceSheetEntry, type InsertBalanceSheetEntry,
   type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
   type QuotationGuarantor, type InsertQuotationGuarantor,
@@ -477,7 +483,9 @@ export interface IStorage {
   createLead(lead: InsertLead): Promise<Lead>;
   updateLead(id: string, data: Partial<InsertLead>, orgId: string): Promise<Lead | undefined>;
   getExpenditures(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<Expenditure[]>;
+  getExpenditure(id: string, orgId: string): Promise<Expenditure | undefined>;
   createExpenditure(exp: InsertExpenditure): Promise<Expenditure>;
+  updateExpenditure(id: string, orgId: string, data: Partial<Expenditure>): Promise<Expenditure | undefined>;
   getPriceBookItems(orgId: string): Promise<PriceBookItem[]>;
   createPriceBookItem(item: InsertPriceBookItem): Promise<PriceBookItem>;
   updatePriceBookItem(id: string, data: Partial<InsertPriceBookItem>, orgId: string): Promise<PriceBookItem | undefined>;
@@ -549,6 +557,23 @@ export interface IStorage {
   createRequisitionItems(items: InsertRequisitionItem[]): Promise<RequisitionItem[]>;
   getRequisitionItemsByOrg(orgId: string): Promise<RequisitionItem[]>;
   getRequisitionItemsByIds(requisitionIds: string[], orgId: string): Promise<RequisitionItem[]>;
+  createPaymentDisbursement(data: InsertPaymentDisbursement): Promise<PaymentDisbursement>;
+  getPaymentDisbursements(orgId: string, filters?: { entityType?: string; entityId?: string; fromDate?: string; toDate?: string; branchId?: string }): Promise<PaymentDisbursement[]>;
+  getPaymentDisbursementsByEntity(entityType: string, entityId: string, orgId: string): Promise<PaymentDisbursement[]>;
+  getBankAccounts(orgId: string): Promise<BankAccount[]>;
+  createBankAccount(data: InsertBankAccount): Promise<BankAccount>;
+  updateBankAccount(id: string, orgId: string, data: Partial<BankAccount>): Promise<BankAccount | undefined>;
+  getBankDeposits(orgId: string, filters?: { userId?: string; bankAccountId?: string; fromDate?: string; toDate?: string }): Promise<BankDeposit[]>;
+  createBankDeposit(data: InsertBankDeposit): Promise<BankDeposit>;
+  updateBankDeposit(id: string, orgId: string, data: Partial<BankDeposit>): Promise<BankDeposit | undefined>;
+  getBankStatementBalances(orgId: string, bankAccountId?: string): Promise<BankStatementBalance[]>;
+  createBankStatementBalance(data: InsertBankStatementBalance): Promise<BankStatementBalance>;
+  getAdminCashPosition(orgId: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>>;
+  getBalanceSheetEntries(orgId: string, filters?: { section?: string; asOfDate?: string }): Promise<BalanceSheetEntry[]>;
+  createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry>;
+  updateBalanceSheetEntry(id: string, orgId: string, data: Partial<BalanceSheetEntry>): Promise<BalanceSheetEntry | undefined>;
+  deleteBalanceSheetEntry(id: string, orgId: string): Promise<void>;
+
   getDebitOrders(orgId: string, filters?: { status?: string; policyId?: string }): Promise<DebitOrder[]>;
   getDebitOrder(id: string, orgId: string): Promise<DebitOrder | undefined>;
   createDebitOrder(order: InsertDebitOrder): Promise<DebitOrder>;
@@ -3673,10 +3698,21 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(expenditures).where(and(...conditions))
       .orderBy(desc(expenditures.createdAt)).limit(limit).offset(offset);
   }
+  async getExpenditure(id: string, orgId: string): Promise<Expenditure | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(expenditures)
+      .where(and(eq(expenditures.id, id), eq(expenditures.organizationId, orgId)));
+    return row;
+  }
   async createExpenditure(exp: InsertExpenditure): Promise<Expenditure> {
     const tdb = await getDbForOrg(exp.organizationId);
     const [created] = await tdb.insert(expenditures).values(exp).returning();
     return created;
+  }
+  async updateExpenditure(id: string, orgId: string, data: Partial<Expenditure>): Promise<Expenditure | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(expenditures).set(data).where(and(eq(expenditures.id, id), eq(expenditures.organizationId, orgId))).returning();
+    return updated;
   }
 
   // ─── Price Book ────────────────────────────────────────────
@@ -4329,6 +4365,177 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(requisitionItems)
       .where(and(inArray(requisitionItems.requisitionId, requisitionIds), eq(requisitionItems.organizationId, orgId)));
+  }
+
+  // ── Payment disbursements ──────────────────────────────────
+  async createPaymentDisbursement(data: InsertPaymentDisbursement): Promise<PaymentDisbursement> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(paymentDisbursements).values(data).returning();
+    return row;
+  }
+
+  async getPaymentDisbursements(orgId: string, filters?: {
+    entityType?: string;
+    entityId?: string;
+    fromDate?: string;
+    toDate?: string;
+    branchId?: string;
+  }): Promise<PaymentDisbursement[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(paymentDisbursements.organizationId, orgId)];
+    if (filters?.entityType) conds.push(eq(paymentDisbursements.entityType, filters.entityType));
+    if (filters?.entityId) conds.push(eq(paymentDisbursements.entityId, filters.entityId));
+    if (filters?.branchId) conds.push(eq(paymentDisbursements.branchId, filters.branchId));
+    if (filters?.fromDate) conds.push(sql`${paymentDisbursements.paidDate} >= ${filters.fromDate}`);
+    if (filters?.toDate) conds.push(sql`${paymentDisbursements.paidDate} <= ${filters.toDate}`);
+    return tdb.select().from(paymentDisbursements)
+      .where(and(...conds))
+      .orderBy(desc(paymentDisbursements.paidDate));
+  }
+
+  async getPaymentDisbursementsByEntity(entityType: string, entityId: string, orgId: string): Promise<PaymentDisbursement[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(paymentDisbursements)
+      .where(and(
+        eq(paymentDisbursements.organizationId, orgId),
+        eq(paymentDisbursements.entityType, entityType),
+        eq(paymentDisbursements.entityId, entityId),
+      ))
+      .orderBy(paymentDisbursements.paidDate);
+  }
+
+  // ── Bank accounts ──────────────────────────────────────────
+  async getBankAccounts(orgId: string): Promise<BankAccount[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(bankAccounts)
+      .where(eq(bankAccounts.organizationId, orgId))
+      .orderBy(bankAccounts.accountName);
+  }
+  async createBankAccount(data: InsertBankAccount): Promise<BankAccount> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(bankAccounts).values(data).returning();
+    return row;
+  }
+  async updateBankAccount(id: string, orgId: string, data: Partial<BankAccount>): Promise<BankAccount | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(bankAccounts).set(data).where(and(eq(bankAccounts.id, id), eq(bankAccounts.organizationId, orgId))).returning();
+    return row;
+  }
+
+  // ── Bank deposits ──────────────────────────────────────────
+  async getBankDeposits(orgId: string, filters?: { userId?: string; bankAccountId?: string; fromDate?: string; toDate?: string }): Promise<BankDeposit[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(bankDeposits.organizationId, orgId)];
+    if (filters?.userId) conds.push(eq(bankDeposits.depositedByUserId, filters.userId));
+    if (filters?.bankAccountId) conds.push(eq(bankDeposits.bankAccountId, filters.bankAccountId));
+    if (filters?.fromDate) conds.push(sql`${bankDeposits.depositDate} >= ${filters.fromDate}`);
+    if (filters?.toDate) conds.push(sql`${bankDeposits.depositDate} <= ${filters.toDate}`);
+    return tdb.select().from(bankDeposits).where(and(...conds)).orderBy(desc(bankDeposits.depositDate));
+  }
+  async createBankDeposit(data: InsertBankDeposit): Promise<BankDeposit> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(bankDeposits).values(data).returning();
+    return row;
+  }
+  async updateBankDeposit(id: string, orgId: string, data: Partial<BankDeposit>): Promise<BankDeposit | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(bankDeposits).set(data).where(and(eq(bankDeposits.id, id), eq(bankDeposits.organizationId, orgId))).returning();
+    return row;
+  }
+
+  // ── Bank statement balances ────────────────────────────────
+  async getBankStatementBalances(orgId: string, bankAccountId?: string): Promise<BankStatementBalance[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(bankStatementBalances.organizationId, orgId)];
+    if (bankAccountId) conds.push(eq(bankStatementBalances.bankAccountId, bankAccountId));
+    return tdb.select().from(bankStatementBalances).where(and(...conds)).orderBy(desc(bankStatementBalances.statementDate));
+  }
+  async createBankStatementBalance(data: InsertBankStatementBalance): Promise<BankStatementBalance> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(bankStatementBalances).values(data).returning();
+    return row;
+  }
+
+  // ── Per-admin cash position ────────────────────────────────
+  // Returns how much unbanked cash each admin currently holds.
+  async getAdminCashPosition(orgId: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>> {
+    const tdb = await getDbForOrg(orgId);
+    // Cash collected: sum cashup cash amounts per admin (submitted or confirmed cashups)
+    const cashupRows = await tdb.execute(sql`
+      SELECT
+        prepared_by   AS user_id,
+        currency,
+        COALESCE(SUM((amounts_by_method->>'cash')::numeric), 0) AS total_collected
+      FROM cashups
+      WHERE organization_id = ${orgId}
+        AND status IN ('submitted','confirmed')
+      GROUP BY prepared_by, currency
+    `);
+    // Cash deposited: sum bank deposits per admin
+    const depositRows = await tdb.execute(sql`
+      SELECT
+        deposited_by_user_id AS user_id,
+        currency,
+        COALESCE(SUM(amount::numeric), 0) AS total_deposited,
+        MAX(deposit_date)                  AS last_deposit_date
+      FROM bank_deposits
+      WHERE organization_id = ${orgId}
+      GROUP BY deposited_by_user_id, currency
+    `);
+
+    const collected = new Map<string, { total: number; currency: string }>();
+    for (const r of (cashupRows.rows ?? cashupRows) as any[]) {
+      const key = `${r.user_id}:${r.currency}`;
+      collected.set(key, { total: parseFloat(r.total_collected ?? 0), currency: r.currency });
+    }
+    const deposited = new Map<string, { total: number; lastDate: string | null }>();
+    for (const r of (depositRows.rows ?? depositRows) as any[]) {
+      const key = `${r.user_id}:${r.currency}`;
+      deposited.set(key, { total: parseFloat(r.total_deposited ?? 0), lastDate: r.last_deposit_date });
+    }
+
+    // Merge into per-user position
+    const positions: Record<string, { userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }> = {};
+    collected.forEach((col, key) => {
+      const parts = key.split(":");
+      const userId = parts[0]; const currency = parts[1];
+      const dep = deposited.get(key) ?? { total: 0, lastDate: null };
+      const onHand = col.total - dep.total;
+      positions[key] = { userId, totalCollected: col.total, totalDeposited: dep.total, onHand, lastDepositDate: dep.lastDate, currency };
+    });
+    // Include admins who only have deposits but no cashups (edge case)
+    deposited.forEach((dep, key) => {
+      if (!positions[key]) {
+        const parts = key.split(":");
+        const userId = parts[0]; const currency = parts[1];
+        positions[key] = { userId, totalCollected: 0, totalDeposited: dep.total, onHand: -dep.total, lastDepositDate: dep.lastDate, currency };
+      }
+    });
+    return Object.values(positions).filter(p => p.totalCollected > 0 || p.totalDeposited > 0);
+  }
+
+  // ── Balance sheet manual entries ──────────────────────────
+  async getBalanceSheetEntries(orgId: string, filters?: { section?: string; asOfDate?: string }): Promise<BalanceSheetEntry[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(balanceSheetEntries.organizationId, orgId)];
+    if (filters?.section) conds.push(eq(balanceSheetEntries.section, filters.section));
+    if (filters?.asOfDate) conds.push(sql`${balanceSheetEntries.asOfDate} <= ${filters.asOfDate}`);
+    return tdb.select().from(balanceSheetEntries).where(and(...conds)).orderBy(balanceSheetEntries.section, balanceSheetEntries.subsection, balanceSheetEntries.label);
+  }
+  async createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(balanceSheetEntries).values(data).returning();
+    return row;
+  }
+  async updateBalanceSheetEntry(id: string, orgId: string, data: Partial<BalanceSheetEntry>): Promise<BalanceSheetEntry | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(balanceSheetEntries).set({ ...data, updatedAt: new Date() })
+      .where(and(eq(balanceSheetEntries.id, id), eq(balanceSheetEntries.organizationId, orgId))).returning();
+    return row;
+  }
+  async deleteBalanceSheetEntry(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(balanceSheetEntries).where(and(eq(balanceSheetEntries.id, id), eq(balanceSheetEntries.organizationId, orgId)));
   }
 
   // ── Finance: debit orders (recurring premium-collection mandates) ──

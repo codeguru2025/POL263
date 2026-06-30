@@ -14,7 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown } from "lucide-react";
+import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown, ChevronRight, ShieldCheck, ShieldX, Building2, ArrowDownToLine, Banknote, TriangleAlert } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import { PolicySearchInput } from "@/components/policy-search-input";
@@ -82,11 +83,134 @@ function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
   );
 }
 
+function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }) {
+  const { toast } = useToast();
+  const [actionId, setActionId] = useState<string | null>(null);
+  const [actionType, setActionType] = useState<"approve" | "reject" | null>(null);
+  const [approvalNote, setApprovalNote] = useState("");
+  const { data: pending = [], isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["/api/payment-receipts/pending-approvals"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/payment-receipts/pending-approvals", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const actionMutation = useMutation({
+    mutationFn: async ({ id, type, note }: { id: string; type: "approve" | "reject"; note: string }) => {
+      const res = await apiRequest("POST", `/api/payment-receipts/${id}/${type}`, { approvalNote: note });
+      if (!res.ok) { const j = await res.json(); throw new Error(j.message || res.statusText); }
+      return res.json();
+    },
+    onSuccess: (_, vars) => {
+      setActionId(null);
+      setActionType(null);
+      setApprovalNote("");
+      refetch();
+      onApproved();
+      toast({ title: vars.type === "approve" ? "Receipt approved and applied" : "Receipt rejected" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const openAction = (id: string, type: "approve" | "reject") => {
+    setActionId(id);
+    setActionType(type);
+    setApprovalNote("");
+  };
+
+  return (
+    <CardSection title="Pending receipt approvals" description="Backdated group receipts awaiting approval. Approving applies the payment to the policy and financial statements." icon={Clock}>
+      {isLoading ? (
+        <div className="p-8 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+      ) : pending.length === 0 ? (
+        <EmptyState icon={CheckCircle2} title="No pending approvals" description="All backdated receipts have been reviewed." className="border-0 rounded-none bg-transparent py-10" />
+      ) : (
+        <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+          <TableHeader className={dataTableStickyHeaderClass}>
+            <TableRow>
+              <TableHead className="pl-6">Receipt #</TableHead>
+              <TableHead>Policy</TableHead>
+              <TableHead>Client</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>Backdated To</TableHead>
+              <TableHead>Submitter Note</TableHead>
+              <TableHead className="text-right pr-6">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {pending.map((r: any) => (
+              <TableRow key={r.id} data-testid={`row-pending-approval-${r.id}`}>
+                <TableCell className="pl-6 font-mono text-sm">{r.receiptNumber}</TableCell>
+                <TableCell className="text-sm">{r.policyNumber || r.policyId?.slice(0, 8)}</TableCell>
+                <TableCell className="text-sm">{r.clientName || "—"}</TableCell>
+                <TableCell className="text-sm font-medium">{r.currency} {parseFloat(r.amount).toFixed(2)}</TableCell>
+                <TableCell className="text-sm">{r.backdatedDate || "—"}</TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate" title={r.submitterNote}>{r.submitterNote || "—"}</TableCell>
+                <TableCell className="text-right pr-6">
+                  <div className="flex items-center justify-end gap-1">
+                    <Button size="sm" variant="outline" className="gap-1.5 text-green-700 border-green-200 hover:bg-green-50" onClick={() => openAction(r.id, "approve")} data-testid={`btn-approve-${r.id}`}>
+                      <ShieldCheck className="h-3.5 w-3.5" /> Approve
+                    </Button>
+                    <Button size="sm" variant="outline" className="gap-1.5 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => openAction(r.id, "reject")} data-testid={`btn-reject-${r.id}`}>
+                      <ShieldX className="h-3.5 w-3.5" /> Reject
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
+      )}
+
+      <Dialog open={!!actionId} onOpenChange={(open) => { if (!open) { setActionId(null); setActionType(null); setApprovalNote(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{actionType === "approve" ? "Approve Receipt" : "Reject Receipt"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {actionType === "approve" ? (
+              <p className="text-sm text-muted-foreground">Approving will apply this backdated payment to the policy and update financial statements. This cannot be undone.</p>
+            ) : (
+              <p className="text-sm text-muted-foreground">Rejecting will leave the policy unchanged. The submitter should be notified separately.</p>
+            )}
+            <div className="space-y-1">
+              <Label>{actionType === "approve" ? "Approval note *" : "Rejection note *"}</Label>
+              <Textarea
+                value={approvalNote}
+                onChange={(e) => setApprovalNote(e.target.value)}
+                placeholder={actionType === "approve" ? "Note confirming the basis for approval..." : "Reason for rejection..."}
+                rows={3}
+                data-testid="textarea-approval-note"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setActionId(null); setActionType(null); setApprovalNote(""); }}>Cancel</Button>
+            <Button
+              variant={actionType === "approve" ? "default" : "destructive"}
+              disabled={!approvalNote.trim() || actionMutation.isPending}
+              onClick={() => actionMutation.mutate({ id: actionId!, type: actionType!, note: approvalNote })}
+              data-testid="btn-confirm-action"
+            >
+              {actionMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {actionType === "approve" ? "Approve & Apply" : "Reject"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </CardSection>
+  );
+}
+
 function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
   const [groupId, setGroupId] = useState("");
   const [policyIds, setPolicyIds] = useState<Set<string>>(new Set());
   const [totalAmount, setTotalAmount] = useState("");
+  const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState("");
+  const [submitterNote, setSubmitterNote] = useState("");
   const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const { data: groups = [] } = useQuery<any[]>({ queryKey: ["/api/groups"] });
@@ -100,11 +224,33 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
     },
     enabled: !!groupId,
   });
+  const today = new Date().toISOString().slice(0, 10);
+  const isBackdated = receiptDate < today;
   const mutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/group-receipt", { groupId, policyIds: Array.from(policyIds), totalAmount: parseFloat(totalAmount), currency: "USD" });
+      const res = await apiRequest("POST", "/api/group-receipt", {
+        groupId,
+        policyIds: Array.from(policyIds),
+        totalAmount: parseFloat(totalAmount),
+        currency: "USD",
+        receiptDate,
+        notes: notes.trim() || undefined,
+        submitterNote: submitterNote.trim() || undefined,
+      });
+      return res.json() as Promise<{ receipted: number; pendingApproval?: boolean }>;
     },
-    onSuccess: () => { setPolicyIds(new Set()); setTotalAmount(""); onSuccess(); },
+    onSuccess: (data) => {
+      setPolicyIds(new Set());
+      setTotalAmount("");
+      setReceiptDate(today);
+      setNotes("");
+      setSubmitterNote("");
+      if (data.pendingApproval) {
+        toast({ title: "Receipt submitted for approval", description: "A backdated receipt has been queued for manager approval before being applied." });
+      } else {
+        onSuccess();
+      }
+    },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
   const paynowMutation = useMutation({
@@ -167,7 +313,7 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
         <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setPaynowIntentId(null); setPolling(false); }}>
           <SelectTrigger className="max-w-xs"><SelectValue placeholder="Select group" /></SelectTrigger>
           <SelectContent>
-            {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
+            {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}{(g as any).isLegacy ? " (Legacy)" : ""}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
@@ -175,7 +321,7 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
         <>
           <div>
             <div className="flex items-center justify-between mb-1">
-              <Label>Policies (select to include)</Label>
+              <Label>Members (select who paid)</Label>
               <Button type="button" variant="ghost" size="sm" className="text-xs h-auto py-0.5" onClick={() => {
                 if (policyIds.size === groupPolicies.length) {
                   setPolicyIds(new Set());
@@ -186,42 +332,81 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
                 {policyIds.size === groupPolicies.length ? "Deselect all" : "Select all"}
               </Button>
             </div>
-            <div className="border rounded-md p-2 max-h-48 overflow-auto space-y-1">
+            <div className="border rounded-md p-2 max-h-56 overflow-auto space-y-1">
               {groupPolicies.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-2">No policies in this group.</p>
               ) : (
                 groupPolicies.map((p: any) => (
                   <label key={p.id} className="flex items-start gap-3 cursor-pointer p-2 rounded-md hover:bg-muted/50 transition-colors">
-                    <input type="checkbox" checked={policyIds.has(p.id)} onChange={() => togglePolicy(p.id)} className="mt-1" />
+                    <input type="checkbox" checked={policyIds.has(p.id)} onChange={() => togglePolicy(p.id)} className="mt-0.5" />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm font-medium">{p.policyNumber}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{p.clientFirstName || "—"} {p.clientLastName || ""}</span>
+                        {!p.clientPhone && !p.clientNationalId && (
+                          <Badge variant="secondary" className="text-xs">Legacy</Badge>
+                        )}
                         <Badge variant="outline" className="text-xs">{p.status}</Badge>
-                        <span className="text-sm font-semibold ml-auto">{p.currency} {p.premiumAmount}</span>
+                        <span className="text-sm font-semibold ml-auto">{p.currency} {parseFloat(p.premiumAmount || 0).toFixed(2)}</span>
                       </div>
-                      {(p.clientFirstName || p.clientLastName) && (
-                        <p className="text-sm text-muted-foreground mt-0.5">
-                          {p.clientFirstName} {p.clientLastName}
-                          {p.clientPhone && <span className="ml-2">{p.clientPhone}</span>}
-                          {p.clientNationalId && <span className="ml-2 font-mono text-xs">ID: {p.clientNationalId}</span>}
-                        </p>
-                      )}
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="font-mono text-xs text-muted-foreground">{p.policyNumber}</span>
+                        {p.clientPhone && <span className="text-xs text-muted-foreground">{p.clientPhone}</span>}
+                        {p.clientNationalId && <span className="font-mono text-xs text-muted-foreground">ID: {p.clientNationalId}</span>}
+                      </div>
                     </div>
                   </label>
                 ))
               )}
             </div>
           </div>
-          <div>
-            <Label>Total amount</Label>
-            <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total to split" className="max-w-xs" />
+          <div className="grid grid-cols-2 gap-4 max-w-sm">
+            <div>
+              <Label>Total amount</Label>
+              <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total to split" />
+            </div>
+            <div>
+              <Label>Receipt date</Label>
+              <Input type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
+            </div>
           </div>
+          <div>
+            <Label>Receipt notes (optional)</Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Any notes about this receipt session — appear on individual member receipts..."
+              rows={2}
+              className="text-sm"
+              data-testid="textarea-group-receipt-notes"
+            />
+          </div>
+          {isBackdated && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 space-y-2">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-400">Backdated receipt — approval required</p>
+              <p className="text-xs text-amber-700 dark:text-amber-500">This receipt will be queued for manager approval before being applied to financial statements.</p>
+              <div className="space-y-1">
+                <Label className="text-xs">Notes for approver *</Label>
+                <Textarea
+                  value={submitterNote}
+                  onChange={(e) => setSubmitterNote(e.target.value)}
+                  placeholder="Explain why this receipt is being backdated..."
+                  rows={2}
+                  className="text-sm"
+                  data-testid="textarea-submitter-note"
+                />
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => mutation.mutate()} disabled={policyIds.size === 0 || !totalAmount || mutation.isPending} data-testid="button-submit-group-receipt">
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={policyIds.size === 0 || !totalAmount || mutation.isPending || (isBackdated && !submitterNote.trim())}
+              data-testid="button-submit-group-receipt"
+            >
               {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Receipt selected ({policyIds.size} policies)
+              {isBackdated ? `Submit for approval (${policyIds.size} policies)` : `Receipt selected (${policyIds.size} policies)`}
             </Button>
-            {paynowConfig?.enabled && (
+            {!isBackdated && paynowConfig?.enabled && (
               <Button variant="outline" onClick={() => paynowMutation.mutate()} disabled={policyIds.size === 0 || !totalAmount || paynowMutation.isPending || polling}>
                 {paynowMutation.isPending || polling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                 {polling ? "Waiting for PayNow…" : "Pay with PayNow"}
@@ -234,6 +419,524 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
           {mutation.isError && <p className="text-sm text-destructive">{(mutation.error as Error).message}</p>}
         </>
       )}
+    </div>
+  );
+}
+
+function PaymentHistoryTable({ disbursements, currency }: { disbursements: any[]; currency: string }) {
+  if (disbursements.length === 0) return <p className="text-sm text-muted-foreground py-3">No payments recorded yet.</p>;
+  const total = disbursements.reduce((s, d) => s + parseFloat(d.amount || 0), 0);
+  return (
+    <div className="space-y-2 mt-2">
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Payment History</p>
+      <div className="border rounded-md overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="pl-4 text-xs">Date</TableHead>
+              <TableHead className="text-xs">Amount</TableHead>
+              <TableHead className="text-xs">Method</TableHead>
+              <TableHead className="text-xs">Paid by</TableHead>
+              <TableHead className="text-xs">Received by</TableHead>
+              <TableHead className="text-xs pr-4">Reference</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {disbursements.map((d: any) => (
+              <TableRow key={d.id} className="text-xs">
+                <TableCell className="pl-4">{d.paidDate}</TableCell>
+                <TableCell className="font-semibold tabular-nums">{currency} {parseFloat(d.amount).toFixed(2)}</TableCell>
+                <TableCell className="capitalize">{(d.paymentMethod || "cash").replace(/_/g, " ")}</TableCell>
+                <TableCell>{d.paidByName || "—"}</TableCell>
+                <TableCell>{d.receivedByName || d.receivedBy || "—"}</TableCell>
+                <TableCell className="pr-4 font-mono">{d.reference || "—"}</TableCell>
+              </TableRow>
+            ))}
+            <TableRow className="bg-muted/30 font-semibold text-xs">
+              <TableCell className="pl-4">Total paid</TableCell>
+              <TableCell className="tabular-nums">{currency} {total.toFixed(2)}</TableCell>
+              <TableCell colSpan={4} />
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+function RequisitionPaymentHistory({ requisitionId, currency }: { requisitionId: string; currency: string }) {
+  const { data = [] } = useQuery<any[]>({
+    queryKey: ["/api/payment-disbursements", { entityType: "requisition", entityId: requisitionId }],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/payment-disbursements?entityType=requisition&entityId=${requisitionId}`, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
+  return <PaymentHistoryTable disbursements={data} currency={currency} />;
+}
+
+function ExpenditurePaymentHistory({ expenditureId, currency }: { expenditureId: string; currency: string }) {
+  const { data = [] } = useQuery<any[]>({
+    queryKey: ["/api/payment-disbursements", { entityType: "expenditure", entityId: expenditureId }],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/payment-disbursements?entityType=expenditure&entityId=${expenditureId}`, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
+  return <PaymentHistoryTable disbursements={data} currency={currency} />;
+}
+
+// ─── Banking & Cash Panel ──────────────────────────────────────────────────
+function BankingPanel() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  // queries
+  const { data: cashPosition = [], isLoading: loadingPos } = useQuery<any[]>({
+    queryKey: ["/api/cash-position"],
+    queryFn: async () => {
+      const res = await fetch("/api/cash-position", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
+  const { data: bankAccounts = [] } = useQuery<any[]>({
+    queryKey: ["/api/bank-accounts"],
+    queryFn: async () => {
+      const res = await fetch("/api/bank-accounts", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
+  const { data: bankDeposits = [], isLoading: loadingDeposits } = useQuery<any[]>({
+    queryKey: ["/api/bank-deposits"],
+    queryFn: async () => {
+      const res = await fetch("/api/bank-deposits", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
+  const { data: statementBalances = [] } = useQuery<any[]>({
+    queryKey: ["/api/bank-statement-balances"],
+    queryFn: async () => {
+      const res = await fetch("/api/bank-statement-balances", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
+
+  // Bank account form
+  const [showAccountDialog, setShowAccountDialog] = useState(false);
+  const [accountForm, setAccountForm] = useState({ accountName: "", bankName: "", accountNumber: "", currency: "USD", notes: "" });
+  const createAccountMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/bank-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": await getCsrfToken() ?? "" },
+        credentials: "include",
+        body: JSON.stringify(accountForm),
+      });
+      if (!res.ok) throw new Error((await res.json()).message);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bank-accounts"] });
+      setShowAccountDialog(false);
+      setAccountForm({ accountName: "", bankName: "", accountNumber: "", currency: "USD", notes: "" });
+      toast({ title: "Bank account added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // Deposit form
+  const [showDepositDialog, setShowDepositDialog] = useState(false);
+  const [depositForm, setDepositForm] = useState({ bankAccountId: "", amount: "", currency: "USD", depositDate: new Date().toISOString().slice(0, 10), reference: "", notes: "" });
+  const createDepositMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/bank-deposits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": await getCsrfToken() ?? "" },
+        credentials: "include",
+        body: JSON.stringify(depositForm),
+      });
+      if (!res.ok) throw new Error((await res.json()).message);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bank-deposits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash-position"] });
+      setShowDepositDialog(false);
+      setDepositForm({ bankAccountId: "", amount: "", currency: "USD", depositDate: new Date().toISOString().slice(0, 10), reference: "", notes: "" });
+      toast({ title: "Deposit recorded" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // Verify deposit
+  const verifyDepositMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/bank-deposits/${id}/verify`, {
+        method: "POST",
+        headers: { "X-CSRF-Token": await getCsrfToken() ?? "" },
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error((await res.json()).message);
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/bank-deposits"] }); toast({ title: "Deposit verified" }); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // Statement balance form
+  const [showBalanceDialog, setShowBalanceDialog] = useState(false);
+  const [balForm, setBalForm] = useState({ bankAccountId: "", statementDate: new Date().toISOString().slice(0, 10), closingBalance: "", currency: "USD", notes: "" });
+  const createBalanceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/bank-statement-balances", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": await getCsrfToken() ?? "" },
+        credentials: "include",
+        body: JSON.stringify(balForm),
+      });
+      if (!res.ok) throw new Error((await res.json()).message);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bank-statement-balances"] });
+      setShowBalanceDialog(false);
+      setBalForm({ bankAccountId: "", statementDate: new Date().toISOString().slice(0, 10), closingBalance: "", currency: "USD", notes: "" });
+      toast({ title: "Statement balance saved" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // Helper: days since last deposit
+  function daysSince(dateStr: string | null) {
+    if (!dateStr) return null;
+    return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* ── Per-Admin Cash Position ─────────────────────────── */}
+      <CardSection
+        title="Admin cash accountability"
+        description="Unbanked cash each admin holds, derived from confirmed cashups minus recorded bank deposits."
+        icon={Banknote}
+        headerRight={
+          <Button size="sm" onClick={() => setShowDepositDialog(true)}>
+            <ArrowDownToLine className="h-4 w-4 mr-1.5" />
+            Record Deposit
+          </Button>
+        }
+      >
+        {loadingPos ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : cashPosition.length === 0 ? (
+          <EmptyState icon={Banknote} title="No cash activity yet" description="Cash positions appear once admins submit cashups." />
+        ) : (
+          <DataTable>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Admin</TableHead>
+                <TableHead className="text-right">Collected (cashups)</TableHead>
+                <TableHead className="text-right">Deposited to bank</TableHead>
+                <TableHead className="text-right">On hand (unbanked)</TableHead>
+                <TableHead>Last deposit</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {cashPosition.map((p: any) => {
+                const days = daysSince(p.lastDepositDate);
+                const stale = p.onHand > 0 && (days === null || days > 2);
+                return (
+                  <TableRow key={p.userId} className={stale ? "bg-amber-50/60 dark:bg-amber-900/10" : ""}>
+                    <TableCell>
+                      <div className="font-medium text-sm">{p.displayName}</div>
+                      <div className="text-xs text-muted-foreground">{p.email}</div>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums font-medium">{p.currency} {parseFloat(p.totalCollected).toFixed(2)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{p.currency} {parseFloat(p.totalDeposited).toFixed(2)}</TableCell>
+                    <TableCell className="text-right tabular-nums font-semibold">
+                      <span className={p.onHand > 0 ? "text-amber-600" : "text-green-600"}>{p.currency} {parseFloat(p.onHand).toFixed(2)}</span>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {p.lastDepositDate ? new Date(p.lastDepositDate).toLocaleDateString() : "—"}
+                    </TableCell>
+                    <TableCell>
+                      {p.onHand <= 0 ? (
+                        <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Banked</Badge>
+                      ) : stale ? (
+                        <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 gap-1">
+                          <TriangleAlert className="h-3 w-3" />
+                          {days === null ? "Never banked" : `${days}d unbanked`}
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary">Pending bank</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </DataTable>
+        )}
+      </CardSection>
+
+      {/* ── Bank Accounts ───────────────────────────────────── */}
+      <CardSection
+        title="Bank accounts"
+        description="Organisation's registered bank accounts for depositing collected premiums."
+        icon={Building2}
+        headerRight={
+          <Button size="sm" variant="outline" onClick={() => setShowAccountDialog(true)}>
+            <Plus className="h-4 w-4 mr-1.5" />
+            Add Account
+          </Button>
+        }
+      >
+        {bankAccounts.length === 0 ? (
+          <EmptyState icon={Building2} title="No bank accounts" description="Add a bank account to start recording deposits." />
+        ) : (
+          <DataTable>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Account name</TableHead>
+                <TableHead>Bank</TableHead>
+                <TableHead>Account #</TableHead>
+                <TableHead>Currency</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bankAccounts.map((a: any) => {
+                const latestBal = statementBalances.find((b: any) => b.bankAccountId === a.id);
+                return (
+                  <TableRow key={a.id}>
+                    <TableCell className="font-medium">{a.accountName}</TableCell>
+                    <TableCell>{a.bankName}</TableCell>
+                    <TableCell className="font-mono text-sm">{a.accountNumber}</TableCell>
+                    <TableCell>{a.currency}</TableCell>
+                    <TableCell>
+                      {latestBal ? (
+                        <div>
+                          <span className="font-semibold tabular-nums">{a.currency} {parseFloat(latestBal.closingBalance).toFixed(2)}</span>
+                          <p className="text-xs text-muted-foreground">as at {new Date(latestBal.statementDate).toLocaleDateString()}</p>
+                        </div>
+                      ) : (
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setBalForm(f => ({ ...f, bankAccountId: a.id, currency: a.currency })); setShowBalanceDialog(true); }}>
+                          + Enter balance
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </DataTable>
+        )}
+      </CardSection>
+
+      {/* ── Deposit History ─────────────────────────────────── */}
+      <CardSection
+        title="Deposit history"
+        description="All cash deposits made to bank accounts, with verification status."
+        icon={ArrowDownToLine}
+        headerRight={
+          <Button size="sm" variant="outline" onClick={() => setShowBalanceDialog(true)}>
+            <FileText className="h-4 w-4 mr-1.5" />
+            Record Statement Balance
+          </Button>
+        }
+      >
+        {loadingDeposits ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : bankDeposits.length === 0 ? (
+          <EmptyState icon={ArrowDownToLine} title="No deposits yet" description="Record a deposit when an admin banks collected premiums." />
+        ) : (
+          <DataTable>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Admin (deposited by)</TableHead>
+                <TableHead>Bank account</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Reference</TableHead>
+                <TableHead>Verified</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bankDeposits.map((d: any) => (
+                <TableRow key={d.id}>
+                  <TableCell className="tabular-nums text-sm">{new Date(d.depositDate).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-sm">{d.depositedByName || d.depositedByUserId}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{d.bankAccountName || "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums font-semibold">{d.currency} {parseFloat(d.amount).toFixed(2)}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{d.reference || "—"}</TableCell>
+                  <TableCell>
+                    {d.verifiedAt ? (
+                      <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30 gap-1">
+                        <CheckCircle2 className="h-3 w-3" /> {d.verifiedByName || "verified"}
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary">Unverified</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {!d.verifiedAt && (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={verifyDepositMutation.isPending} onClick={() => verifyDepositMutation.mutate(d.id)}>
+                        Verify
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
+        )}
+      </CardSection>
+
+      {/* ── Add Bank Account Dialog ─────────────────────────── */}
+      <Dialog open={showAccountDialog} onOpenChange={setShowAccountDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Add bank account</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Account name</Label>
+              <Input placeholder="e.g. FBC Main USD Account" value={accountForm.accountName} onChange={e => setAccountForm(f => ({ ...f, accountName: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Bank</Label>
+              <Input placeholder="e.g. FBC Bank" value={accountForm.bankName} onChange={e => setAccountForm(f => ({ ...f, bankName: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Account number</Label>
+              <Input placeholder="Account number" value={accountForm.accountNumber} onChange={e => setAccountForm(f => ({ ...f, accountNumber: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Currency</Label>
+              <Select value={accountForm.currency} onValueChange={v => setAccountForm(f => ({ ...f, currency: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="ZAR">ZAR</SelectItem>
+                  <SelectItem value="ZIG">ZIG</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes (optional)</Label>
+              <Textarea rows={2} value={accountForm.notes} onChange={e => setAccountForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowAccountDialog(false)}>Cancel</Button>
+            <Button disabled={!accountForm.accountName || !accountForm.bankName || !accountForm.accountNumber || createAccountMutation.isPending} onClick={() => createAccountMutation.mutate()}>
+              {createAccountMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Record Deposit Dialog ───────────────────────────── */}
+      <Dialog open={showDepositDialog} onOpenChange={setShowDepositDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Record bank deposit</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Bank account</Label>
+              <Select value={depositForm.bankAccountId} onValueChange={v => setDepositForm(f => ({ ...f, bankAccountId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
+                <SelectContent>
+                  {bankAccounts.map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Amount</Label>
+                <Input type="number" min="0.01" step="0.01" placeholder="0.00" value={depositForm.amount} onChange={e => setDepositForm(f => ({ ...f, amount: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Currency</Label>
+                <Select value={depositForm.currency} onValueChange={v => setDepositForm(f => ({ ...f, currency: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="ZAR">ZAR</SelectItem>
+                    <SelectItem value="ZIG">ZIG</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Deposit date</Label>
+              <Input type="date" value={depositForm.depositDate} onChange={e => setDepositForm(f => ({ ...f, depositDate: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Deposit slip / reference (optional)</Label>
+              <Input placeholder="Slip number or EFT reference" value={depositForm.reference} onChange={e => setDepositForm(f => ({ ...f, reference: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes (optional)</Label>
+              <Textarea rows={2} value={depositForm.notes} onChange={e => setDepositForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowDepositDialog(false)}>Cancel</Button>
+            <Button disabled={!depositForm.amount || parseFloat(depositForm.amount) <= 0 || !depositForm.depositDate || createDepositMutation.isPending} onClick={() => createDepositMutation.mutate()}>
+              {createDepositMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Record Deposit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Statement Balance Dialog ────────────────────────── */}
+      <Dialog open={showBalanceDialog} onOpenChange={setShowBalanceDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Enter statement closing balance</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Bank account</Label>
+              <Select value={balForm.bankAccountId} onValueChange={v => setBalForm(f => ({ ...f, bankAccountId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
+                <SelectContent>
+                  {bankAccounts.map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Statement date</Label>
+              <Input type="date" value={balForm.statementDate} onChange={e => setBalForm(f => ({ ...f, statementDate: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Closing balance</Label>
+                <Input type="number" min="0" step="0.01" placeholder="0.00" value={balForm.closingBalance} onChange={e => setBalForm(f => ({ ...f, closingBalance: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Currency</Label>
+                <Select value={balForm.currency} onValueChange={v => setBalForm(f => ({ ...f, currency: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="ZAR">ZAR</SelectItem>
+                    <SelectItem value="ZIG">ZIG</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes (optional)</Label>
+              <Textarea rows={2} value={balForm.notes} onChange={e => setBalForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowBalanceDialog(false)}>Cancel</Button>
+            <Button disabled={!balForm.bankAccountId || !balForm.closingBalance || !balForm.statementDate || createBalanceMutation.isPending} onClick={() => createBalanceMutation.mutate()}>
+              {createBalanceMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save Balance
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -253,7 +956,7 @@ export default function StaffFinance() {
   // with the active tab so Finance sub-sections are reachable from the menu.
   const FINANCE_TABS = [
     "payments", "paynow", "cashups", "commissions", "requisitions",
-    "fx-rates", "expenditures", "platform", "month-end", "group-receipt",
+    "fx-rates", "expenditures", "platform", "month-end", "group-receipt", "approvals",
   ];
   const search = useSearch();
   const [, setLocation] = useLocation();
@@ -337,6 +1040,13 @@ export default function StaffFinance() {
   const branchesArr = Array.isArray(branchesList) ? branchesList : [];
   const { data: rawProducts } = useQuery<any[]>({ queryKey: ["/api/products"] });
   const { data: rawCommissionLedger } = useQuery<any[]>({ queryKey: ["/api/commission-ledger"] });
+  const [pnlFrom, setPnlFrom] = useState(() => new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10));
+  const [pnlTo, setPnlTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const { data: agentPnl, isLoading: pnlLoading, refetch: refetchPnl } = useQuery<any>({
+    queryKey: ["/api/agent/pnl", pnlFrom, pnlTo],
+    queryFn: () => fetch(`/api/agent/pnl?fromDate=${pnlFrom}&toDate=${pnlTo}`, { credentials: "include" }).then(r => r.json()),
+    enabled: commissionOnly,
+  });
   const { data: rawExpenditures } = useQuery<any[]>({ queryKey: ["/api/expenditures"] });
   const { data: rawRequisitions } = useQuery<any[]>({ queryKey: ["/api/requisitions"], enabled: canReadFinance });
   const requisitions = Array.isArray(rawRequisitions) ? rawRequisitions : [];
@@ -403,6 +1113,59 @@ export default function StaffFinance() {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  // ── Payment dialog (shared for requisitions + expenditures) ──
+  const [payTarget, setPayTarget] = useState<{ type: "requisition" | "expenditure"; item: any } | null>(null);
+  const [payForm, setPayForm] = useState({
+    amount: "", paidDate: new Date().toISOString().slice(0, 10),
+    paymentMethod: "cash", reference: "", receivedBy: "", receivedByUserId: "", notes: "",
+  });
+  const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
+  const [expandedExpId, setExpandedExpId] = useState<string | null>(null);
+  const { data: staffUsers = [] } = useQuery<any[]>({ queryKey: ["/api/users"], enabled: canWriteFinance });
+
+  const openPayDialog = (type: "requisition" | "expenditure", item: any) => {
+    const outstanding = Number(item.amount) - Number(item.amountPaid ?? 0);
+    setPayTarget({ type, item });
+    setPayForm({
+      amount: outstanding.toFixed(2),
+      paidDate: new Date().toISOString().slice(0, 10),
+      paymentMethod: "cash", reference: "", receivedBy: "", receivedByUserId: "", notes: "",
+    });
+  };
+
+  const payMutation = useMutation({
+    mutationFn: async () => {
+      if (!payTarget) throw new Error("No target");
+      const endpoint = payTarget.type === "requisition"
+        ? `/api/requisitions/${payTarget.item.id}/payments`
+        : `/api/expenditures/${payTarget.item.id}/payments`;
+      const res = await apiRequest("POST", endpoint, {
+        amount: parseFloat(payForm.amount),
+        paidDate: payForm.paidDate,
+        paymentMethod: payForm.paymentMethod,
+        reference: payForm.reference || undefined,
+        receivedBy: payForm.receivedBy || undefined,
+        receivedByUserId: payForm.receivedByUserId || undefined,
+        notes: payForm.notes || undefined,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Payment failed");
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenditures"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-disbursements"] });
+      setPayTarget(null);
+      toast({
+        title: data.fullyPaid ? "Fully paid" : "Partial payment recorded",
+        description: data.fullyPaid ? "Payment complete." : `${payTarget?.item.currency} ${parseFloat(payForm.amount).toFixed(2)} recorded. Outstanding balance remains.`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   // FX rates (USD base) for consolidated statements.
   const canManageSettings = permissions.includes("manage:settings") || (authUser as any)?.isPlatformOwner;
   const { data: rawFxRates } = useQuery<any[]>({ queryKey: ["/api/fx-rates"], enabled: canReadFinance });
@@ -920,12 +1683,15 @@ export default function StaffFinance() {
             {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow" title="Mobile money (Paynow) and cash payment collection">Mobile &amp; Cash</TabsTrigger>}
             {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups" title="Daily cash reconciliation — count cash collected against receipts issued">Cash-up Reconciliation</TabsTrigger>}
             {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions" title="Agent commission earnings and payout status">Commissions</TabsTrigger>}
+            {commissionOnly && <TabsTrigger value="my-pnl" data-testid="tab-my-pnl" title="Your collections vs commissions P&L for the period">My P&amp;L</TabsTrigger>}
             {!commissionOnly && !isAgent && <TabsTrigger value="requisitions" data-testid="tab-requisitions" title="Expenditure requests: raise, approve, and mark paid">Requisitions</TabsTrigger>}
             {canManageSettings && !isAgent && <TabsTrigger value="fx-rates" data-testid="tab-fx-rates" title="USD-base exchange rates for consolidated financial statements">FX Rates</TabsTrigger>}
             {!commissionOnly && !isAgent && <TabsTrigger value="expenditures" data-testid="tab-expenditures" title="Operating expenses and outgoing payments">Expenditures</TabsTrigger>}
             {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform" title="Platform revenue owed to POL263 (2.5% on all cleared receipts — policy premiums and funeral service payments)">Platform Fees</TabsTrigger>}
             {canWriteFinance && !isAgent && <TabsTrigger value="month-end" data-testid="tab-month-end" title="Run the month-end close: batch premium collection for overdue policies">Month-End Close</TabsTrigger>}
             {canWriteFinance && !isAgent && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt" title="Receipt a single payment across multiple policies in a group">Group Receipt</TabsTrigger>}
+            {canApproveFinance && !isAgent && <TabsTrigger value="approvals" data-testid="tab-approvals" title="Review and approve backdated group receipts before they are applied">Pending Approvals</TabsTrigger>}
+            {!commissionOnly && !isAgent && <TabsTrigger value="banking" data-testid="tab-banking" title="Bank accounts, cash deposits, and per-admin cash accountability">Banking &amp; Cash</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="payments">
@@ -1398,6 +2164,101 @@ export default function StaffFinance() {
             </CardSection>
           </TabsContent>
 
+          {/* ── Agent P&L ── */}
+          <TabsContent value="my-pnl">
+            <div className="space-y-6">
+              {/* Date range filters */}
+              <CardSection title="My P&L — collections vs commissions" icon={TrendingUp}
+                description="Shows your premium collections and commission earnings for the selected period.">
+                <div className="flex flex-wrap gap-3 p-4 border-b">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-muted-foreground">From</label>
+                    <Input type="date" value={pnlFrom} onChange={e => setPnlFrom(e.target.value)} className="h-8 w-36 text-sm" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-muted-foreground">To</label>
+                    <Input type="date" value={pnlTo} onChange={e => setPnlTo(e.target.value)} className="h-8 w-36 text-sm" />
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => refetchPnl()} className="h-8">Apply</Button>
+                </div>
+
+                {pnlLoading ? (
+                  <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                ) : agentPnl ? (() => {
+                  const fmtMap = (m: Record<string, number>) =>
+                    Object.entries(m || {}).map(([c, v]) => `${c} ${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join("  ") || "—";
+                  const p = agentPnl;
+                  const port = p.portfolio || {};
+                  const coll = p.collections || {};
+                  const comm = p.commissions || {};
+                  return (
+                    <>
+                      {/* Portfolio KPIs */}
+                      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 p-4">
+                        <KpiStatCard label="Total Policies" value={port.totalPolicies ?? 0} className="bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200" />
+                        <KpiStatCard label="Active" value={<span className="text-emerald-700">{port.activePolicies ?? 0}</span>} className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200" />
+                        <KpiStatCard label="Grace" value={<span className="text-amber-700">{port.gracePolicies ?? 0}</span>} className="bg-amber-50 dark:bg-amber-950/20 border-amber-200" />
+                        <KpiStatCard label="Lapsed" value={<span className="text-red-700">{port.lapsedPolicies ?? 0}</span>} className="bg-red-50 dark:bg-red-950/20 border-red-200" />
+                        <KpiStatCard label="New in period" value={<span className="text-blue-700">{port.newInPeriod ?? 0}</span>} className="bg-blue-50 dark:bg-blue-950/20 border-blue-200" />
+                        <KpiStatCard label="Retention rate" value={<span className="text-indigo-700">{port.retentionRate ?? "—"}%</span>} hint="active ÷ total" className="bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200" />
+                      </div>
+
+                      {/* Collections vs Commissions side-by-side */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border-t">
+                        <div className="p-4 border-r">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Collections (premiums paid in period)</p>
+                          <p className="text-2xl font-bold tabular-nums text-emerald-700">{fmtMap(coll.total)}</p>
+                          {(coll.byMonth || []).length > 0 && (
+                            <div className="mt-3 space-y-1">
+                              {(coll.byMonth as any[]).map((m: any) => (
+                                <div key={m.month} className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">{m.month}</span>
+                                  <span className="tabular-nums font-medium">{fmtMap(m.amounts)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Commissions (period)</p>
+                          <div className="space-y-2">
+                            <div className="flex justify-between text-sm">
+                              <span>Earned</span>
+                              <span className="tabular-nums font-semibold text-emerald-700">{fmtMap(comm.earned)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span>Paid out</span>
+                              <span className="tabular-nums font-semibold text-blue-700">{fmtMap(comm.paid)}</span>
+                            </div>
+                            {Object.keys(comm.clawbacks || {}).length > 0 && (
+                              <div className="flex justify-between text-sm">
+                                <span>Clawbacks</span>
+                                <span className="tabular-nums font-semibold text-red-700">−{fmtMap(comm.clawbacks)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between text-sm border-t pt-2 mt-2">
+                              <span className="font-medium">Outstanding (period)</span>
+                              <span className="tabular-nums font-bold text-amber-700">{fmtMap(comm.outstanding)}</span>
+                            </div>
+                          </div>
+                          <div className="mt-4 pt-4 border-t">
+                            <div className="flex justify-between text-sm">
+                              <span className="font-medium">Total outstanding (all time)</span>
+                              <span className="tabular-nums font-bold text-indigo-700">{fmtMap(p.lifetimeOutstanding || {})}</span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-1">Commissions earned but not yet paid out, across all periods.</p>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })() : (
+                  <p className="p-4 text-sm text-muted-foreground">No data available.</p>
+                )}
+              </CardSection>
+            </div>
+          </TabsContent>
+
           <TabsContent value="requisitions">
             <CardSection
               title="Requisitions"
@@ -1429,9 +2290,18 @@ export default function StaffFinance() {
                   <TableBody>
                     {requisitions.map((r: any) => {
                       const items: any[] = Array.isArray(r.items) ? r.items : [];
+                      const amountPaid = Number(r.amountPaid ?? 0);
+                      const outstanding = Number(r.amount) - amountPaid;
+                      const isExpanded = expandedReqId === r.id;
                       return (
-                      <TableRow key={r.id} className="hover:bg-muted/40 align-top">
-                        <TableCell className="font-mono text-xs pt-3">{r.requisitionNumber}</TableCell>
+                      <>
+                      <TableRow key={r.id} className={`hover:bg-muted/40 align-top cursor-pointer ${isExpanded ? "bg-muted/20" : ""}`} onClick={() => setExpandedReqId(isExpanded ? null : r.id)}>
+                        <TableCell className="font-mono text-xs pt-3">
+                          <div className="flex items-center gap-1">
+                            {isExpanded ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                            {r.requisitionNumber}
+                          </div>
+                        </TableCell>
                         <TableCell className="pt-3">
                           <div className="text-xs font-medium leading-tight">{r.requesterName || "—"}</div>
                           {r.requesterDepartment && <div className="text-[10px] text-muted-foreground">{r.requesterDepartment}</div>}
@@ -1462,9 +2332,17 @@ export default function StaffFinance() {
                             ? <span className={new Date(r.neededByDate) < new Date() && r.status !== "paid" ? "text-destructive font-medium" : ""}>{new Date(r.neededByDate).toLocaleDateString()}</span>
                             : <span className="text-muted-foreground">—</span>}
                         </TableCell>
-                        <TableCell className="font-semibold text-right tabular-nums pt-3">{r.currency} {Number(r.amount).toFixed(2)}</TableCell>
+                        <TableCell className="pt-3 text-right">
+                          <div className="tabular-nums font-semibold text-xs">{r.currency} {Number(r.amount).toFixed(2)}</div>
+                          {r.status === "partial" && (
+                            <div className="text-[10px] text-amber-600 dark:text-amber-400 tabular-nums">
+                              Paid: {r.currency} {amountPaid.toFixed(2)}<br />
+                              <span className="text-destructive">Due: {r.currency} {outstanding.toFixed(2)}</span>
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell className="pt-3"><StatusBadge status={r.status} /></TableCell>
-                        <TableCell className="text-right pt-3">
+                        <TableCell className="text-right pt-3" onClick={(e) => e.stopPropagation()}>
                           <div className="flex justify-end gap-1.5 flex-wrap">
                             {r.status === "draft" && canWriteFinance && (
                               <Button size="sm" variant="outline" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "submit" })} data-testid={`btn-submit-req-${r.id}`}>Submit</Button>
@@ -1475,13 +2353,24 @@ export default function StaffFinance() {
                                 <Button size="sm" variant="ghost" className="text-destructive" onClick={() => openApproveDialog(r, "reject")}>Reject</Button>
                               </>
                             )}
-                            {r.status === "approved" && canWriteFinance && (
-                              <Button size="sm" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "pay" })} data-testid={`btn-pay-req-${r.id}`}>Mark Paid</Button>
+                            {(r.status === "approved" || r.status === "partial") && canWriteFinance && (
+                              <Button size="sm" onClick={() => openPayDialog("requisition", r)} data-testid={`btn-pay-req-${r.id}`}>
+                                {r.status === "partial" ? "Pay Balance" : "Record Payment"}
+                              </Button>
                             )}
-                            {(r.status === "paid" || r.status === "rejected") && <span className="text-xs text-muted-foreground">—</span>}
+                            {r.status === "paid" && <span className="text-xs text-muted-foreground">Paid ✓</span>}
+                            {r.status === "rejected" && <span className="text-xs text-muted-foreground">Rejected</span>}
                           </div>
                         </TableCell>
                       </TableRow>
+                      {isExpanded && (
+                        <TableRow key={`${r.id}-detail`} className="hover:bg-transparent">
+                          <TableCell colSpan={8} className="px-4 pb-4 pt-0 bg-muted/10">
+                            <RequisitionPaymentHistory requisitionId={r.id} currency={r.currency} />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      </>
                     )})}
                   </TableBody>
                 </DataTable>
@@ -1490,28 +2379,65 @@ export default function StaffFinance() {
           </TabsContent>
 
           <TabsContent value="expenditures">
-            <CardSection title="Expenditures" description="Operational spend recorded against the organization." icon={Wallet} flush>
+            <CardSection title="Expenditures" description="Direct operational spend. Click a row to view payment history. Record payments to move items from pending to paid." icon={Wallet} flush>
                 {expenditures.length === 0 ? (
                   <EmptyState title="No expenditures yet" className="border-0 rounded-none bg-transparent py-8" />
                 ) : (
                   <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
                     <TableHeader className={dataTableStickyHeaderClass}>
                       <TableRow>
-                        <TableHead>Category</TableHead>
+                        <TableHead className="pl-6">Category</TableHead>
                         <TableHead>Description</TableHead>
                         <TableHead className="text-right">Amount</TableHead>
                         <TableHead>Date</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right pr-6">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {expenditures.map((e: any) => (
-                        <TableRow key={e.id} className="hover:bg-muted/40">
-                          <TableCell><Badge variant="outline">{e.category}</Badge></TableCell>
-                          <TableCell>{e.description}</TableCell>
-                          <TableCell className="font-semibold text-right tabular-nums">{e.currency} {e.amount}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground tabular-nums">{e.spentAt || "—"}</TableCell>
-                        </TableRow>
-                      ))}
+                      {expenditures.map((e: any) => {
+                        const amountPaid = Number(e.amountPaid ?? 0);
+                        const outstanding = Number(e.amount) - amountPaid;
+                        const isExpExp = expandedExpId === e.id;
+                        return (
+                          <>
+                          <TableRow key={e.id} className={`hover:bg-muted/40 cursor-pointer ${isExpExp ? "bg-muted/20" : ""}`} onClick={() => setExpandedExpId(isExpExp ? null : e.id)}>
+                            <TableCell className="pl-6">
+                              <div className="flex items-center gap-1">
+                                {isExpExp ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                                <Badge variant="outline">{e.category}</Badge>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm">{e.description}</TableCell>
+                            <TableCell className="text-right">
+                              <div className="tabular-nums font-semibold text-sm">{e.currency} {Number(e.amount).toFixed(2)}</div>
+                              {e.status === "partial" && (
+                                <div className="text-[10px] text-amber-600 dark:text-amber-400 tabular-nums">
+                                  Paid: {e.currency} {amountPaid.toFixed(2)} · Due: {outstanding.toFixed(2)}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground tabular-nums">{e.spentAt || e.paidDate || "—"}</TableCell>
+                            <TableCell><StatusBadge status={e.status || "pending"} /></TableCell>
+                            <TableCell className="text-right pr-6" onClick={(ev) => ev.stopPropagation()}>
+                              {(e.status === "pending" || e.status === "partial") && canWriteFinance && (
+                                <Button size="sm" variant="outline" onClick={() => openPayDialog("expenditure", e)} data-testid={`btn-pay-exp-${e.id}`}>
+                                  {e.status === "partial" ? "Pay Balance" : "Record Payment"}
+                                </Button>
+                              )}
+                              {e.status === "paid" && <span className="text-xs text-muted-foreground">Paid ✓</span>}
+                            </TableCell>
+                          </TableRow>
+                          {isExpExp && (
+                            <TableRow key={`${e.id}-detail`} className="hover:bg-transparent">
+                              <TableCell colSpan={6} className="px-4 pb-4 pt-0 bg-muted/10">
+                                <ExpenditurePaymentHistory expenditureId={e.id} currency={e.currency} />
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          </>
+                        );
+                      })}
                     </TableBody>
                   </DataTable>
                 )}
@@ -1689,11 +2615,19 @@ export default function StaffFinance() {
           <TabsContent value="group-receipt">
             <CardSection
               title="Group receipt"
-              description="Select a group and policies to receipt at once. Total amount is split by premium proportion."
+              description="Select a group and policies to receipt at once. Total amount is split by premium proportion. Backdated receipts require manager approval."
               icon={Receipt}
             >
               <GroupReceiptForm onSuccess={() => { toast({ title: "Group receipted" }); queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); }} />
             </CardSection>
+          </TabsContent>
+
+          <TabsContent value="approvals">
+            <PendingApprovalsPanel onApproved={() => { queryClient.invalidateQueries({ queryKey: ["/api/payments"] }); queryClient.invalidateQueries({ queryKey: ["/api/payment-receipts/pending-approvals"] }); }} />
+          </TabsContent>
+
+          <TabsContent value="banking">
+            <BankingPanel />
           </TabsContent>
         </Tabs>
       </PageShell>
@@ -2169,6 +3103,111 @@ export default function StaffFinance() {
             >
               {requisitionActionMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
               {approveAction === "approve" ? "Approve" : "Reject"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Record Payment dialog (requisitions + expenditures) ── */}
+      <Dialog open={!!payTarget} onOpenChange={(open) => { if (!open) setPayTarget(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {payTarget?.type === "requisition"
+                ? `Record Payment — ${payTarget.item.requisitionNumber}`
+                : `Record Payment — Expenditure`}
+            </DialogTitle>
+          </DialogHeader>
+          {payTarget && (() => {
+            const outstanding = Number(payTarget.item.amount) - Number(payTarget.item.amountPaid ?? 0);
+            const selectedUser = (staffUsers as any[]).find((u: any) => u.id === payForm.receivedByUserId);
+            return (
+              <div className="space-y-4">
+                <div className="rounded-md border p-3 bg-muted/30 text-sm space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Total</span>
+                    <span className="font-semibold">{payTarget.item.currency} {Number(payTarget.item.amount).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Already paid</span>
+                    <span>{payTarget.item.currency} {Number(payTarget.item.amountPaid ?? 0).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold border-t pt-1 mt-1">
+                    <span>Outstanding</span>
+                    <span className="text-destructive">{payTarget.item.currency} {outstanding.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label>Amount paying now *</Label>
+                    <Input type="number" step="0.01" min="0.01" max={outstanding}
+                      value={payForm.amount} onChange={(e) => setPayForm({ ...payForm, amount: e.target.value })}
+                      placeholder={outstanding.toFixed(2)} data-testid="input-pay-amount" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Payment date *</Label>
+                    <Input type="date" value={payForm.paidDate} max={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) => setPayForm({ ...payForm, paidDate: e.target.value })} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label>Payment method *</Label>
+                    <Select value={payForm.paymentMethod} onValueChange={(v) => setPayForm({ ...payForm, paymentMethod: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cash">Cash</SelectItem>
+                        <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                        <SelectItem value="cheque">Cheque</SelectItem>
+                        <SelectItem value="mobile_money">Mobile Money</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Reference / Cheque #</Label>
+                    <Input value={payForm.reference} onChange={(e) => setPayForm({ ...payForm, reference: e.target.value })} placeholder="Optional reference" />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label>Received by (recipient) *</Label>
+                  <Input value={payForm.receivedBy} onChange={(e) => setPayForm({ ...payForm, receivedBy: e.target.value, receivedByUserId: "" })}
+                    placeholder="Supplier name, staff member, vendor…" data-testid="input-received-by" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Or select a system user as recipient</Label>
+                  <Select value={payForm.receivedByUserId}
+                    onValueChange={(v) => setPayForm({ ...payForm, receivedByUserId: v, receivedBy: v ? ((staffUsers as any[]).find((u: any) => u.id === v)?.displayName || "") : payForm.receivedBy })}>
+                    <SelectTrigger className="text-sm"><SelectValue placeholder="Choose system user (optional)…" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None — use text above</SelectItem>
+                      {(staffUsers as any[]).map((u: any) => (
+                        <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label>Notes</Label>
+                  <Textarea value={payForm.notes} onChange={(e) => setPayForm({ ...payForm, notes: e.target.value })} rows={2} placeholder="Optional notes about this payment…" className="text-sm" />
+                </div>
+                {payMutation.isError && <p className="text-sm text-destructive">{(payMutation.error as Error).message}</p>}
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPayTarget(null)}>Cancel</Button>
+            <Button
+              onClick={() => payMutation.mutate()}
+              disabled={payMutation.isPending || !payForm.amount || parseFloat(payForm.amount) <= 0 || (!payForm.receivedBy.trim() && !payForm.receivedByUserId)}
+              data-testid="btn-confirm-disbursement"
+            >
+              {payMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Record Payment
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -435,6 +435,15 @@ export async function streamReceiptToResponse(
     row("Receipt Number", displayReceiptNum);
     y += 6;
 
+    // ── Group receipt notes (if present) ────────────────────────
+    const receiptNote = (receipt as any).submitterNote;
+    if (receiptNote) {
+      sectionHeader("Receipt Notes");
+      doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
+        .text(String(receiptNote), MARGIN, y, { width: COL });
+      y = doc.y + 10;
+    }
+
     // ── Advert + QR ─────────────────────────────────────────────
     drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55, org.name || "POL263");
 

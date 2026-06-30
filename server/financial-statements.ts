@@ -1,15 +1,27 @@
 /**
  * Income statement & cash-flow statement (cash basis), multi-currency with a
- * consolidated USD total. Income = issued receipts (premium individual/group +
- * cash-service); expenses = paid requisitions + expenditures. Amounts are kept
- * per-currency (no implicit conversion); the consolidated block converts to the
- * USD base using fx_rates (USD = 1; currencies without a rate are listed as
- * unconvertible and excluded from the consolidated total).
+ * consolidated USD total.
+ *
+ * Income  = issued premium + service receipts (cash received).
+ * Expenses = payment_disbursements (single cash-out ledger, covering requisitions
+ *            and expenditures) + paid commission ledger entries.
+ *
+ * Amounts are kept per-currency (no implicit conversion). The consolidated block
+ * converts to USD using fx_rates; currencies without a rate are listed as
+ * unconvertible and excluded from that total.
  */
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
-import { paymentReceipts, serviceReceipts, requisitions, expenditures, policies } from "@shared/schema";
+import {
+  paymentReceipts,
+  serviceReceipts,
+  paymentDisbursements,
+  commissionLedgerEntries,
+  platformReceivables,
+  claims,
+  policies,
+} from "@shared/schema";
 
 export interface StatementParams {
   from: string; // YYYY-MM-DD
@@ -39,7 +51,6 @@ export function consolidateToUsd(map: AmountMap, fx: Record<string, number>): { 
   return consolidate(map, fx);
 }
 
-/** Consolidate a per-currency map into a USD total; report currencies with no rate. */
 function consolidate(map: AmountMap, fx: Record<string, number>): { usd: number; unconvertible: string[] } {
   let usd = 0;
   const unconvertible: string[] = [];
@@ -55,40 +66,31 @@ function consolidate(map: AmountMap, fx: Record<string, number>): { usd: number;
 const round2 = (m: AmountMap): AmountMap =>
   Object.fromEntries(Object.entries(m).map(([k, v]) => [k, Number(v.toFixed(2))]));
 
-export async function buildIncomeStatement(orgId: string, params: StatementParams) {
-  const tdb = await getDbForOrg(orgId);
-  const { from, to, branchId } = params;
-  const fx = await fxMapFor(orgId);
+// ─── Shared query helpers ──────────────────────────────────────────────────
 
-  // ── Income: premium receipts split individual vs group ──
-  const prConds = [
+/** Premium + service receipts in the period, grouped by currency and payment channel. */
+async function queryReceipts(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const prConds: any[] = [
     eq(paymentReceipts.organizationId, orgId),
     eq(paymentReceipts.status, "issued"),
     gte(paymentReceipts.issuedAt, fromTs(from)),
     lte(paymentReceipts.issuedAt, toTs(to)),
   ];
   if (branchId) prConds.push(eq(paymentReceipts.branchId, branchId));
+
   const premiumRows = await tdb
     .select({
       currency: paymentReceipts.currency,
+      channel: paymentReceipts.paymentChannel,
       isGroup: sql<boolean>`${policies.groupId} IS NOT NULL`,
       total: sql<string>`COALESCE(SUM(${paymentReceipts.amount}), '0')`,
     })
     .from(paymentReceipts)
     .innerJoin(policies, eq(paymentReceipts.policyId, policies.id))
     .where(and(...prConds))
-    .groupBy(paymentReceipts.currency, sql`${policies.groupId} IS NOT NULL`);
+    .groupBy(paymentReceipts.currency, paymentReceipts.paymentChannel, sql`${policies.groupId} IS NOT NULL`);
 
-  const premiumIndividual: AmountMap = {};
-  const premiumGroup: AmountMap = {};
-  for (const r of premiumRows) {
-    const amt = parseFloat(r.total);
-    if (r.isGroup) add(premiumGroup, r.currency, amt);
-    else add(premiumIndividual, r.currency, amt);
-  }
-
-  // ── Income: cash-service receipts ──
-  const srConds = [
+  const srConds: any[] = [
     eq(serviceReceipts.organizationId, orgId),
     eq(serviceReceipts.status, "issued"),
     gte(serviceReceipts.issuedAt, fromTs(from)),
@@ -96,48 +98,118 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   ];
   if (branchId) srConds.push(eq(serviceReceipts.branchId, branchId));
   const serviceRows = await tdb
-    .select({ currency: serviceReceipts.currency, total: sql<string>`COALESCE(SUM(${serviceReceipts.amount}), '0')` })
-    .from(serviceReceipts).where(and(...srConds)).groupBy(serviceReceipts.currency);
+    .select({
+      currency: serviceReceipts.currency,
+      channel: serviceReceipts.paymentChannel,
+      total: sql<string>`COALESCE(SUM(${serviceReceipts.amount}), '0')`,
+    })
+    .from(serviceReceipts).where(and(...srConds))
+    .groupBy(serviceReceipts.currency, serviceReceipts.paymentChannel);
+
+  return { premiumRows, serviceRows };
+}
+
+/** Cash-out disbursements in the period (from payment_disbursements ledger). */
+async function queryDisbursements(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const conds: any[] = [
+    eq(paymentDisbursements.organizationId, orgId),
+    sql`${paymentDisbursements.paidDate} >= ${from}`,
+    sql`${paymentDisbursements.paidDate} <= ${to}`,
+  ];
+  if (branchId) conds.push(eq(paymentDisbursements.branchId, branchId));
+
+  return tdb
+    .select({
+      entityType: paymentDisbursements.entityType,
+      entityId: paymentDisbursements.entityId,
+      currency: paymentDisbursements.currency,
+      total: sql<string>`COALESCE(SUM(${paymentDisbursements.amount}), '0')`,
+    })
+    .from(paymentDisbursements)
+    .where(and(...conds))
+    .groupBy(paymentDisbursements.entityType, paymentDisbursements.entityId, paymentDisbursements.currency);
+}
+
+/** Commission ledger entries with status='paid' in the period. */
+async function queryCommissions(tdb: any, orgId: string, from: string, to: string) {
+  return tdb
+    .select({
+      currency: commissionLedgerEntries.currency,
+      total: sql<string>`COALESCE(SUM(${commissionLedgerEntries.amount}), '0')`,
+    })
+    .from(commissionLedgerEntries)
+    .where(and(
+      eq(commissionLedgerEntries.organizationId, orgId),
+      eq(commissionLedgerEntries.status, "paid"),
+      sql`${commissionLedgerEntries.createdAt} >= ${fromTs(from)}`,
+      sql`${commissionLedgerEntries.createdAt} <= ${toTs(to)}`,
+    ))
+    .groupBy(commissionLedgerEntries.currency);
+}
+
+// ─── Income Statement ──────────────────────────────────────────────────────
+
+export async function buildIncomeStatement(orgId: string, params: StatementParams) {
+  const tdb = await getDbForOrg(orgId);
+  const { from, to, branchId } = params;
+  const fx = await fxMapFor(orgId);
+
+  const { premiumRows, serviceRows } = await queryReceipts(tdb, orgId, from, to, branchId);
+  const disbRows = await queryDisbursements(tdb, orgId, from, to, branchId);
+  const commRows = await queryCommissions(tdb, orgId, from, to);
+
+  // ── Income ──
+  const premiumIndividual: AmountMap = {};
+  const premiumGroup: AmountMap = {};
+  for (const r of premiumRows) {
+    if (r.isGroup) add(premiumGroup, r.currency, parseFloat(r.total));
+    else add(premiumIndividual, r.currency, parseFloat(r.total));
+  }
   const cashServices: AmountMap = {};
   for (const r of serviceRows) add(cashServices, r.currency, parseFloat(r.total));
 
-  // ── Expenses: paid requisitions by category ──
-  const reqConds = [
-    eq(requisitions.organizationId, orgId),
-    eq(requisitions.status, "paid"),
-    gte(requisitions.paidDate, from),
-    lte(requisitions.paidDate, to),
-  ];
-  if (branchId) reqConds.push(eq(requisitions.branchId, branchId));
-  const reqRows = await tdb
-    .select({ currency: requisitions.currency, category: requisitions.category, total: sql<string>`COALESCE(SUM(${requisitions.amount}), '0')` })
-    .from(requisitions).where(and(...reqConds)).groupBy(requisitions.currency, requisitions.category);
+  // ── Expenses — look up entity categories in bulk ──
+  // Collect unique entity IDs per type so we can join category labels.
+  const reqIds = disbRows.filter((d: any) => d.entityType === "requisition").map((d: any) => d.entityId as string);
+  const expIds = disbRows.filter((d: any) => d.entityType === "expenditure").map((d: any) => d.entityId as string);
 
-  // ── Expenses: expenditures by category (cash basis on spent_at, fallback created_at) ──
-  const expDateExpr = sql`COALESCE(${expenditures.spentAt}, ${expenditures.createdAt}::date)`;
-  const expConds = [
-    eq(expenditures.organizationId, orgId),
-    sql`${expDateExpr} >= ${from}`,
-    sql`${expDateExpr} <= ${to}`,
-  ];
-  if (branchId) expConds.push(eq(expenditures.branchId, branchId));
-  const expRows = await tdb
-    .select({ currency: expenditures.currency, category: expenditures.category, total: sql<string>`COALESCE(SUM(${expenditures.amount}), '0')` })
-    .from(expenditures).where(and(...expConds)).groupBy(expenditures.currency, expenditures.category);
+  // Fetch categories for requisitions and expenditures in one query each.
+  const reqCategoryMap: Record<string, string> = {};
+  if (reqIds.length) {
+    const rows = await tdb.execute(
+      sql`SELECT id, category FROM requisitions WHERE id = ANY(${reqIds}::uuid[])`
+    );
+    for (const r of (rows.rows ?? rows) as any[]) reqCategoryMap[r.id] = r.category || "Uncategorised";
+  }
+  const expCategoryMap: Record<string, string> = {};
+  if (expIds.length) {
+    const rows = await tdb.execute(
+      sql`SELECT id, category FROM expenditures WHERE id = ANY(${expIds}::uuid[])`
+    );
+    for (const r of (rows.rows ?? rows) as any[]) expCategoryMap[r.id] = r.category || "Uncategorised";
+  }
 
-  // Assemble expense lines (category, source) and totals.
-  const expenseLines: { label: string; source: "requisition" | "expenditure"; amounts: AmountMap }[] = [];
-  const expenseByKey = new Map<string, { label: string; source: "requisition" | "expenditure"; amounts: AmountMap }>();
-  const pushExpense = (label: string, source: "requisition" | "expenditure", currency: string, amount: number) => {
+  const expenseLines: { label: string; source: "requisition" | "expenditure" | "commission"; amounts: AmountMap }[] = [];
+  const expenseByKey: Record<string, { label: string; source: "requisition" | "expenditure" | "commission"; amounts: AmountMap }> = {};
+  const pushExpense = (label: string, source: "requisition" | "expenditure" | "commission", currency: string, amount: number) => {
     const key = `${source}:${label}`;
-    let line = expenseByKey.get(key);
-    if (!line) { line = { label, source, amounts: {} }; expenseByKey.set(key, line); expenseLines.push(line); }
-    add(line.amounts, currency, amount);
+    if (!expenseByKey[key]) {
+      expenseByKey[key] = { label, source, amounts: {} };
+      expenseLines.push(expenseByKey[key]);
+    }
+    add(expenseByKey[key].amounts, currency, amount);
   };
-  for (const r of reqRows) pushExpense(r.category || "Uncategorised", "requisition", r.currency, parseFloat(r.total));
-  for (const r of expRows) pushExpense(r.category || "Uncategorised", "expenditure", r.currency, parseFloat(r.total));
 
-  // Totals per currency.
+  for (const d of disbRows) {
+    const type = d.entityType as "requisition" | "expenditure";
+    const cat = type === "requisition" ? (reqCategoryMap[d.entityId] || "Uncategorised") : (expCategoryMap[d.entityId] || "Uncategorised");
+    pushExpense(cat, type, d.currency, parseFloat(d.total));
+  }
+  for (const r of commRows) {
+    pushExpense("Agent commissions", "commission", r.currency, parseFloat(r.total));
+  }
+
+  // ── Totals ──
   const incomeTotal: AmountMap = {};
   for (const m of [premiumIndividual, premiumGroup, cashServices]) for (const [c, v] of Object.entries(m)) add(incomeTotal, c, v);
   const expenseTotal: AmountMap = {};
@@ -146,10 +218,10 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   for (const [c, v] of Object.entries(incomeTotal)) add(net, c, v);
   for (const [c, v] of Object.entries(expenseTotal)) add(net, c, -v);
 
-  const currencies = Array.from(new Set([...Object.keys(incomeTotal), ...Object.keys(expenseTotal)])).sort();
+  const allCurrencies = Object.keys(incomeTotal).concat(Object.keys(expenseTotal));
+  const currencies = allCurrencies.filter((c, i) => allCurrencies.indexOf(c) === i).sort();
   const cIncome = consolidate(incomeTotal, fx);
   const cExpense = consolidate(expenseTotal, fx);
-  const cNet = consolidate(net, fx);
 
   return {
     from, to, branchId: branchId ?? null, currencies, fxRates: fx,
@@ -168,79 +240,62 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
       income: cIncome.usd,
       expenses: cExpense.usd,
       net: Number((cIncome.usd - cExpense.usd).toFixed(2)),
-      unconvertible: Array.from(new Set([...cIncome.unconvertible, ...cExpense.unconvertible, ...cNet.unconvertible])),
+      unconvertible: Array.from(new Set([...cIncome.unconvertible, ...cExpense.unconvertible])),
     },
   };
 }
+
+// ─── Cash Flow Statement ───────────────────────────────────────────────────
 
 export async function buildCashFlowStatement(orgId: string, params: StatementParams) {
   const tdb = await getDbForOrg(orgId);
   const { from, to, branchId } = params;
   const fx = await fxMapFor(orgId);
 
-  // Cash IN by channel (premium + service receipts).
+  const { premiumRows, serviceRows } = await queryReceipts(tdb, orgId, from, to, branchId);
+  const disbRows = await queryDisbursements(tdb, orgId, from, to, branchId);
+  const commRows = await queryCommissions(tdb, orgId, from, to);
+
+  // ── Cash IN by channel ──
   const inByChannel: Record<string, AmountMap> = {};
   const addIn = (channel: string, currency: string, amt: number) => {
     const ch = channel || "other";
     inByChannel[ch] = inByChannel[ch] || {};
     add(inByChannel[ch], currency, amt);
   };
+  for (const r of premiumRows) addIn(r.channel, r.currency, parseFloat(r.total));
+  for (const r of serviceRows) addIn(r.channel, r.currency, parseFloat(r.total));
 
-  const prConds = [
-    eq(paymentReceipts.organizationId, orgId), eq(paymentReceipts.status, "issued"),
-    gte(paymentReceipts.issuedAt, fromTs(from)), lte(paymentReceipts.issuedAt, toTs(to)),
-  ];
-  if (branchId) prConds.push(eq(paymentReceipts.branchId, branchId));
-  const prRows = await tdb
-    .select({ channel: paymentReceipts.paymentChannel, currency: paymentReceipts.currency, total: sql<string>`COALESCE(SUM(${paymentReceipts.amount}), '0')` })
-    .from(paymentReceipts).where(and(...prConds)).groupBy(paymentReceipts.paymentChannel, paymentReceipts.currency);
-  for (const r of prRows) addIn(r.channel, r.currency, parseFloat(r.total));
-
-  const srConds = [
-    eq(serviceReceipts.organizationId, orgId), eq(serviceReceipts.status, "issued"),
-    gte(serviceReceipts.issuedAt, fromTs(from)), lte(serviceReceipts.issuedAt, toTs(to)),
-  ];
-  if (branchId) srConds.push(eq(serviceReceipts.branchId, branchId));
-  const srRows = await tdb
-    .select({ channel: serviceReceipts.paymentChannel, currency: serviceReceipts.currency, total: sql<string>`COALESCE(SUM(${serviceReceipts.amount}), '0')` })
-    .from(serviceReceipts).where(and(...srConds)).groupBy(serviceReceipts.paymentChannel, serviceReceipts.currency);
-  for (const r of srRows) addIn(r.channel, r.currency, parseFloat(r.total));
-
-  // Cash OUT (paid requisitions + expenditures).
-  const reqConds = [
-    eq(requisitions.organizationId, orgId), eq(requisitions.status, "paid"),
-    gte(requisitions.paidDate, from), lte(requisitions.paidDate, to),
-  ];
-  if (branchId) reqConds.push(eq(requisitions.branchId, branchId));
-  const reqRows = await tdb
-    .select({ currency: requisitions.currency, total: sql<string>`COALESCE(SUM(${requisitions.amount}), '0')` })
-    .from(requisitions).where(and(...reqConds)).groupBy(requisitions.currency);
-
-  const expDateExpr = sql`COALESCE(${expenditures.spentAt}, ${expenditures.createdAt}::date)`;
-  const expConds = [eq(expenditures.organizationId, orgId), sql`${expDateExpr} >= ${from}`, sql`${expDateExpr} <= ${to}`];
-  if (branchId) expConds.push(eq(expenditures.branchId, branchId));
-  const expRows = await tdb
-    .select({ currency: expenditures.currency, total: sql<string>`COALESCE(SUM(${expenditures.amount}), '0')` })
-    .from(expenditures).where(and(...expConds)).groupBy(expenditures.currency);
+  // ── Cash OUT — from payment_disbursements ledger + commissions ──
+  const requisitionsOut: AmountMap = {};
+  const expendituresOut: AmountMap = {};
+  const commissionsOut: AmountMap = {};
+  for (const d of disbRows) {
+    if (d.entityType === "requisition") add(requisitionsOut, d.currency, parseFloat(d.total));
+    else add(expendituresOut, d.currency, parseFloat(d.total));
+  }
+  for (const r of commRows) add(commissionsOut, r.currency, parseFloat(r.total));
 
   const cashIn: AmountMap = {};
   for (const ch of Object.values(inByChannel)) for (const [c, v] of Object.entries(ch)) add(cashIn, c, v);
-  const requisitionsOut: AmountMap = {};
-  for (const r of reqRows) add(requisitionsOut, r.currency, parseFloat(r.total));
-  const expendituresOut: AmountMap = {};
-  for (const r of expRows) add(expendituresOut, r.currency, parseFloat(r.total));
   const cashOut: AmountMap = {};
-  for (const m of [requisitionsOut, expendituresOut]) for (const [c, v] of Object.entries(m)) add(cashOut, c, v);
+  for (const m of [requisitionsOut, expendituresOut, commissionsOut]) for (const [c, v] of Object.entries(m)) add(cashOut, c, v);
   const netCash: AmountMap = {};
   for (const [c, v] of Object.entries(cashIn)) add(netCash, c, v);
   for (const [c, v] of Object.entries(cashOut)) add(netCash, c, -v);
 
-  const currencies = Array.from(new Set([...Object.keys(cashIn), ...Object.keys(cashOut)])).sort();
+  const allCurrencies = Object.keys(cashIn).concat(Object.keys(cashOut));
+  const currencies = allCurrencies.filter((c, i) => allCurrencies.indexOf(c) === i).sort();
   const cIn = consolidate(cashIn, fx);
   const cOut = consolidate(cashOut, fx);
 
-  // Cash-up reconciliation for the period (confirmed daily cash counts).
-  const cashups = await storage.getCashups(orgId, 200, { fromDate: from, toDate: to, ...(branchId ? { } : {}) });
+  // Cash-up reconciliation for the period.
+  const cashups = await storage.getCashups(orgId, 200, { fromDate: from, toDate: to });
+
+  // Bank deposits in the period (cash banked by admins).
+  const deposits = await storage.getBankDeposits(orgId, { fromDate: from, toDate: to });
+  const depositsByMethod: AmountMap = {};
+  for (const d of deposits) add(depositsByMethod, d.currency, parseFloat(String(d.amount)));
 
   return {
     from, to, branchId: branchId ?? null, currencies, fxRates: fx,
@@ -249,6 +304,7 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
     outflows: {
       requisitions: round2(requisitionsOut),
       expenditures: round2(expendituresOut),
+      commissions: round2(commissionsOut),
       total: round2(cashOut),
     },
     netCash: round2(netCash),
@@ -258,9 +314,212 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
       netCash: Number((cIn.usd - cOut.usd).toFixed(2)),
       unconvertible: Array.from(new Set([...cIn.unconvertible, ...cOut.unconvertible])),
     },
+    bankDeposits: {
+      total: round2(depositsByMethod),
+      count: deposits.length,
+    },
     cashups: cashups.map((c: any) => ({
       id: c.id, cashupDate: c.cashupDate, currency: c.currency, status: c.status,
       totalAmount: c.totalAmount, countedTotal: c.countedTotal, discrepancyAmount: c.discrepancyAmount,
     })),
+  };
+}
+
+// ─── Balance Sheet ─────────────────────────────────────────────────────────
+//
+// Structure:
+//   Assets     = Current (cash, bank, receivables) + Non-current (manual: fixed assets, investments)
+//   Liabilities = Current (claims payable, platform fees, manual) + Non-current (loans, manual)
+//   Equity      = Retained earnings (derived) + Capital contributions (manual)
+//
+// Accounting equation check: Assets = Liabilities + Equity
+// (any gap is shown as "retained earnings adjustment")
+
+export interface BalanceSheetParams {
+  asOf: string;    // YYYY-MM-DD — point-in-time date
+  branchId?: string;
+}
+
+export interface BsLine {
+  id?: string;        // set for manual entries
+  label: string;
+  amounts: AmountMap;
+  source: "derived" | "manual";
+  notes?: string;
+}
+
+export async function buildBalanceSheet(orgId: string, params: BalanceSheetParams) {
+  const { asOf, branchId } = params;
+  const tdb = await getDbForOrg(orgId);
+  const fx = await fxMapFor(orgId);
+
+  // ── ASSETS ──────────────────────────────────────────────────
+
+  // 1. Cash on hand (unbanked cash held by admins)
+  const positions = await storage.getAdminCashPosition(orgId);
+  const cashOnHand: AmountMap = {};
+  for (const p of positions) {
+    if (p.onHand > 0) add(cashOnHand, p.currency, p.onHand);
+  }
+
+  // 2. Bank balances — latest statement balance per account on or before asOf
+  const allAccounts = await storage.getBankAccounts(orgId);
+  const bankLines: BsLine[] = [];
+  for (const acct of allAccounts.filter(a => a.isActive)) {
+    const balances = await storage.getBankStatementBalances(orgId, acct.id);
+    const latest = balances.find(b => b.statementDate <= asOf);
+    if (latest) {
+      bankLines.push({
+        label: `Bank — ${acct.accountName}`,
+        amounts: { [acct.currency]: parseFloat(String(latest.closingBalance)) },
+        source: "derived",
+      });
+    }
+  }
+
+  // 3. Premium receivables — outstanding premiums on active/grace policies
+  const receivableRows = await tdb.execute(sql`
+    SELECT currency,
+           COALESCE(SUM(
+             GREATEST(
+               (premium_amount::numeric * COALESCE(months_outstanding, 1)) - COALESCE(amount_paid::numeric, 0),
+               0
+             )
+           ), 0) AS total
+    FROM policies
+    WHERE organization_id = ${orgId}
+      AND status IN ('active','grace')
+      AND premium_amount IS NOT NULL
+      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+    GROUP BY currency
+  `);
+  const premiumReceivable: AmountMap = {};
+  for (const r of (receivableRows.rows ?? receivableRows) as any[]) {
+    const amt = parseFloat(r.total ?? 0);
+    if (amt > 0.005) add(premiumReceivable, r.currency, amt);
+  }
+
+  // ── LIABILITIES ─────────────────────────────────────────────
+
+  // 4. Outstanding claims payable (approved, not yet paid)
+  const claimRows = await tdb
+    .select({ currency: claims.currency, total: sql<string>`COALESCE(SUM(${claims.cashInLieuAmount}), '0')` })
+    .from(claims)
+    .where(and(
+      eq(claims.organizationId, orgId),
+      eq(claims.status, "approved"),
+      sql`${claims.cashInLieuAmount} IS NOT NULL`,
+    ))
+    .groupBy(claims.currency);
+  const claimsPayable: AmountMap = {};
+  for (const r of claimRows) {
+    const amt = parseFloat(r.total);
+    if (amt > 0.005) add(claimsPayable, r.currency, amt);
+  }
+
+  // 5. Platform fees payable (unsettled receivables owed to POL263)
+  const pfRows = await tdb
+    .select({ currency: platformReceivables.currency, total: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')` })
+    .from(platformReceivables)
+    .where(and(eq(platformReceivables.organizationId, orgId), eq(platformReceivables.isSettled, false)))
+    .groupBy(platformReceivables.currency);
+  const platformPayable: AmountMap = {};
+  for (const r of pfRows) {
+    const amt = parseFloat(r.total);
+    if (amt > 0.005) add(platformPayable, r.currency, amt);
+  }
+
+  // ── EQUITY — Retained Earnings (derived from cumulative P&L) ──
+  // Run income statement from inception to asOf.
+  const is = await buildIncomeStatement(orgId, { from: "2000-01-01", to: asOf, branchId });
+  const retainedEarnings: AmountMap = {};
+  for (const [c, v] of Object.entries(is.net)) {
+    if (Math.abs(v) > 0.005) retainedEarnings[c] = v;
+  }
+
+  // ── MANUAL ENTRIES ───────────────────────────────────────────
+  const manualEntries = await storage.getBalanceSheetEntries(orgId, { asOfDate: asOf });
+  const toLine = (e: any): BsLine => ({
+    id: e.id,
+    label: e.label,
+    amounts: { [e.currency]: parseFloat(String(e.amount)) },
+    source: "manual",
+    notes: e.notes,
+  });
+
+  const manualAssetCurrent    = manualEntries.filter(e => e.section === "asset"     && e.subsection === "current").map(toLine);
+  const manualAssetNonCurrent = manualEntries.filter(e => e.section === "asset"     && e.subsection === "non_current").map(toLine);
+  const manualLiabCurrent     = manualEntries.filter(e => e.section === "liability" && e.subsection === "current").map(toLine);
+  const manualLiabNonCurrent  = manualEntries.filter(e => e.section === "liability" && e.subsection === "non_current").map(toLine);
+  const manualEquity          = manualEntries.filter(e => e.section === "equity").map(toLine);
+
+  // ── TOTALS ───────────────────────────────────────────────────
+  const sumLines = (lines: BsLine[]): AmountMap => {
+    const t: AmountMap = {};
+    for (const l of lines) for (const [c, v] of Object.entries(l.amounts)) add(t, c, v);
+    return t;
+  };
+
+  const assetCurrentDerived: BsLine[] = [
+    ...(Object.keys(cashOnHand).length ? [{ label: "Cash on hand (unbanked)", amounts: cashOnHand, source: "derived" as const }] : []),
+    ...bankLines,
+    ...(Object.keys(premiumReceivable).length ? [{ label: "Premium receivables", amounts: premiumReceivable, source: "derived" as const }] : []),
+    ...manualAssetCurrent,
+  ];
+  const assetNonCurrentLines = manualAssetNonCurrent;
+
+  const liabCurrentLines: BsLine[] = [
+    ...(Object.keys(claimsPayable).length ? [{ label: "Claims payable (approved)", amounts: claimsPayable, source: "derived" as const }] : []),
+    ...(Object.keys(platformPayable).length ? [{ label: "Platform fees payable", amounts: platformPayable, source: "derived" as const }] : []),
+    ...manualLiabCurrent,
+  ];
+  const liabNonCurrentLines = manualLiabNonCurrent;
+
+  const equityLines: BsLine[] = [
+    ...(Object.keys(retainedEarnings).length ? [{ label: "Retained earnings", amounts: retainedEarnings, source: "derived" as const }] : []),
+    ...manualEquity,
+  ];
+
+  const totalAssets: AmountMap = {};
+  for (const m of [sumLines(assetCurrentDerived), sumLines(assetNonCurrentLines)]) for (const [c, v] of Object.entries(m)) add(totalAssets, c, v);
+  const totalLiabilities: AmountMap = {};
+  for (const m of [sumLines(liabCurrentLines), sumLines(liabNonCurrentLines)]) for (const [c, v] of Object.entries(m)) add(totalLiabilities, c, v);
+  const totalEquity: AmountMap = sumLines(equityLines);
+  const liabPlusEquity: AmountMap = {};
+  for (const m of [totalLiabilities, totalEquity]) for (const [c, v] of Object.entries(m)) add(liabPlusEquity, c, v);
+
+  const allCurrencies = [
+    ...Object.keys(totalAssets),
+    ...Object.keys(totalLiabilities),
+    ...Object.keys(totalEquity),
+  ].filter((c, i, a) => a.indexOf(c) === i).sort();
+
+  const cAssets = consolidate(totalAssets, fx);
+  const cLiab = consolidate(totalLiabilities, fx);
+  const cEquity = consolidate(totalEquity, fx);
+
+  return {
+    asOf, branchId: branchId ?? null, currencies: allCurrencies, fxRates: fx,
+    assets: {
+      current:    assetCurrentDerived,
+      nonCurrent: assetNonCurrentLines,
+      total: round2(totalAssets),
+    },
+    liabilities: {
+      current:    liabCurrentLines,
+      nonCurrent: liabNonCurrentLines,
+      total: round2(totalLiabilities),
+    },
+    equity: {
+      lines: equityLines,
+      total: round2(totalEquity),
+    },
+    liabilitiesAndEquity: round2(liabPlusEquity),
+    consolidatedUsd: {
+      totalAssets: cAssets.usd,
+      totalLiabilities: cLiab.usd,
+      totalEquity: cEquity.usd,
+      unconvertible: Array.from(new Set([...cAssets.unconvertible, ...cLiab.unconvertible, ...cEquity.unconvertible])),
+    },
   };
 }

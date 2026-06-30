@@ -15,7 +15,7 @@ import { requireAuth, requirePermission, requireAnyPermission, requireTenantScop
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
-import { buildIncomeStatement, buildCashFlowStatement } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet } from "./financial-statements";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -53,6 +53,7 @@ import {
   insertReceiptAdvertSchema,
   insertDependentSchema, insertTermsSchema,
   insertRequisitionSchema, insertRequisitionItemSchema, REQUISITION_STATUSES,
+  insertPaymentDisbursementSchema,
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases, waitingPeriodWaivers,
@@ -1488,27 +1489,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const firstName = toUpperTrim(req.body.firstName, false);
     const lastName = toUpperTrim(req.body.lastName, false);
-    const nationalIdNorm = normalizeNationalId(req.body.nationalId);
     if (!firstName || !lastName) {
       return res.status(400).json({ message: "First name and last name are required." });
     }
-    if (!nationalIdNorm) {
-      return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
+
+    // Check if this client is being captured into a legacy group — if so, only name is required.
+    let isLegacyGroupCapture = false;
+    if (req.body.legacyGroupId) {
+      const legacyGroup = await storage.getGroup(String(req.body.legacyGroupId), user.organizationId);
+      if (!legacyGroup || legacyGroup.organizationId !== user.organizationId) {
+        return res.status(400).json({ message: "Legacy group not found." });
+      }
+      if (!legacyGroup.isLegacy) {
+        return res.status(400).json({ message: "Group is not marked as legacy. Full client details are required." });
+      }
+      isLegacyGroupCapture = true;
     }
-    if (!isValidNationalId(req.body.nationalId)) {
+
+    const nationalIdNorm = normalizeNationalId(req.body.nationalId);
+    if (!isLegacyGroupCapture) {
+      if (!nationalIdNorm) {
+        return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
+      }
+      if (!isValidNationalId(req.body.nationalId)) {
+        return res.status(400).json({ message: "National ID must be digits, then one letter, then two digits (e.g. 08833089H38)." });
+      }
+    } else if (nationalIdNorm && !isValidNationalId(req.body.nationalId)) {
       return res.status(400).json({ message: "National ID must be digits, then one letter, then two digits (e.g. 08833089H38)." });
     }
     const phone = toUpperTrim(req.body.phone, false);
     const address = toUpperTrim(req.body.address, true);
-    if (!phone) {
+    if (!isLegacyGroupCapture && !phone) {
       return res.status(400).json({ message: "Phone is required." });
     }
     const dateOfBirth = req.body.dateOfBirth ? String(req.body.dateOfBirth).trim() : null;
     const gender = req.body.gender ? toUpperTrim(req.body.gender, false) : null;
-    if (!dateOfBirth) {
+    if (!isLegacyGroupCapture && !dateOfBirth) {
       return res.status(400).json({ message: "Date of birth is required." });
     }
-    if (!gender) {
+    if (!isLegacyGroupCapture && !gender) {
       return res.status(400).json({ message: "Gender is required." });
     }
 
@@ -1519,14 +1538,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (creatorHasAgentRole) {
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id, user.branchId || undefined);
     }
+    const { legacyGroupId: _lgid, ...bodyWithoutLegacyGroupId } = req.body;
     const parsed = insertClientSchema.parse({
-      ...req.body,
+      ...bodyWithoutLegacyGroupId,
       firstName: firstName!,
       lastName: lastName!,
-      nationalId: nationalIdNorm,
-      phone: phone!,
-      dateOfBirth,
-      gender: gender!,
+      nationalId: nationalIdNorm || undefined,
+      phone: phone || undefined,
+      dateOfBirth: dateOfBirth || undefined,
+      gender: gender || undefined,
       address: address || undefined,
       physicalAddress: req.body.physicalAddress || undefined,
       postalAddress: req.body.postalAddress || undefined,
@@ -1538,7 +1558,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let client: any;
     try {
       client = await storage.createClient(parsed);
-      await auditLog(req, "CREATE_CLIENT", "Client", client.id, null, client);
+      await auditLog(req, isLegacyGroupCapture ? "CREATE_CLIENT_LEGACY_GROUP" : "CREATE_CLIENT", "Client", client.id, null, { ...client, legacyGroupId: isLegacyGroupCapture ? req.body.legacyGroupId : undefined });
       const lead = await storage.createLead({
         organizationId: user.organizationId,
         branchId: user.branchId || undefined,
@@ -3861,17 +3881,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/group-receipt", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     try {
-    const { groupId, policyIds, totalAmount, currency } = req.body;
+    const { groupId, policyIds, totalAmount, currency, receiptDate, submitterNote, notes } = req.body;
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
+    }
+    const today = new Date().toISOString().split("T")[0];
+    const effectiveDate = receiptDate ? String(receiptDate).trim() : today;
+    const isBackdated = effectiveDate < today;
+    if (isBackdated && (!submitterNote || !String(submitterNote).trim())) {
+      return res.status(400).json({ message: "Notes for the approver are required when backdating a receipt." });
     }
     const policies = await storage.getPoliciesByIds(policyIds, user.organizationId);
     const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));
-    const today = new Date().toISOString().split("T")[0];
-    const results: { policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string }[] = [];
+    const results: { policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string; approvalStatus?: string }[] = [];
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
     // Stable lock order avoids deadlocks when multiple group receipts overlap.
     const sortedPolicies = [...valid].sort((a, b) => a.id.localeCompare(b.id));
@@ -3885,54 +3910,191 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const polyCurrency = currency || policy.currency || "USD";
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
         const receiptNum = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
+        if (isBackdated) {
+          // Backdated receipts go to an approval queue — policy status is NOT updated until approved.
+          await txDb.insert(paymentReceipts).values({
+            organizationId: user.organizationId,
+            branchId: policy.branchId ?? undefined,
+            receiptNumber: receiptNum,
+            policyId: policy.id,
+            clientId: policy.clientId!,
+            amount,
+            currency: polyCurrency,
+            paymentChannel: "cash",
+            issuedByUserId: recordedByForLedger ?? undefined,
+            status: "issued",
+            approvalStatus: "pending",
+            submitterNote: String(submitterNote).trim(),
+            backdatedDate: effectiveDate,
+            metadataJson: { groupId, groupRef, backdated: true },
+          });
+          results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency, approvalStatus: "pending" });
+        } else {
+          const [tx] = await txDb.insert(paymentTransactions).values({
+            organizationId: user.organizationId,
+            policyId: policy.id,
+            clientId: policy.clientId!,
+            amount,
+            currency: polyCurrency,
+            paymentMethod: "cash",
+            status: "cleared",
+            reference: groupRef,
+            receivedAt: new Date(),
+            postedDate: today,
+            valueDate: today,
+            notes: "Group batch receipt",
+            recordedBy: recordedByForLedger ?? undefined,
+          }).returning();
+          await txDb.insert(paymentReceipts).values({
+            organizationId: user.organizationId,
+            branchId: policy.branchId ?? undefined,
+            receiptNumber: receiptNum,
+            policyId: policy.id,
+            clientId: policy.clientId!,
+            amount,
+            currency: polyCurrency,
+            paymentChannel: "cash",
+            issuedByUserId: recordedByForLedger ?? undefined,
+            status: "issued",
+            submitterNote: notes ? String(notes).trim() : undefined,
+            metadataJson: { groupId, groupRef, transactionId: tx.id },
+          });
+          await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", recordedByForLedger ?? undefined);
+          if (policy.status === "lapsed") {
+            await rollbackClawbacksInTx(txDb, user.organizationId, policy);
+          }
+          results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency });
+        }
+      }
+    });
+    if (!isBackdated) {
+      // 2.5% platform fee on each cleared group receipt (not on pending approvals)
+      for (const r of results) {
+        storage.createPlatformReceivable({
+          organizationId: user.organizationId,
+          amount: (parseFloat(r.amount) * 0.025).toFixed(2),
+          currency: r.currency,
+          description: `2.5% on group receipt ${r.receiptNumber} (policy ${r.policyNumber})`,
+          isSettled: false,
+        }).catch((err: Error) => structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err.message }));
+      }
+    }
+    return res.status(201).json({ receipted: results.length, results, pendingApproval: isBackdated });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  // ─── Pending receipt approvals ────────────────────────────
+  app.get("/api/payment-receipts/pending-approvals", requireAuth, requireTenantScope, requireAnyPermission("approve:finance", "write:finance"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const rows = await tdb
+        .select()
+        .from(paymentReceipts)
+        .where(and(eq(paymentReceipts.organizationId, user.organizationId), eq(paymentReceipts.approvalStatus, "pending")))
+        .orderBy(paymentReceipts.createdAt);
+      const enriched = await Promise.all(rows.map(async (r: any) => {
+        const policy = await storage.getPolicy(r.policyId, user.organizationId);
+        const client = r.clientId ? await storage.getClient(r.clientId, user.organizationId) : null;
+        return { ...r, policyNumber: policy?.policyNumber, clientName: client ? `${client.firstName} ${client.lastName}` : null };
+      }));
+      return res.json(enriched);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.post("/api/payment-receipts/:id/approve", requireAuth, requireTenantScope, requireAnyPermission("approve:finance"), async (req, res) => {
+    const user = req.user as any;
+    const receiptId = String(req.params.id);
+    const { approvalNote } = req.body;
+    if (!approvalNote || !String(approvalNote).trim()) {
+      return res.status(400).json({ message: "Approval note is required." });
+    }
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const [receipt] = await tdb.select().from(paymentReceipts).where(and(eq(paymentReceipts.id, receiptId), eq(paymentReceipts.organizationId, user.organizationId))).limit(1);
+      if (!receipt) return res.status(404).json({ message: "Receipt not found." });
+      if (receipt.approvalStatus !== "pending") return res.status(400).json({ message: "Receipt is not pending approval." });
+      const policy = await storage.getPolicy(receipt.policyId, user.organizationId);
+      if (!policy) return res.status(404).json({ message: "Policy not found." });
+      const effectiveDate = receipt.backdatedDate || new Date().toISOString().split("T")[0];
+      await withOrgTransaction(user.organizationId, async (txDb) => {
+        await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
+        const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
+        const recordedBy = actorRow?.id ?? null;
         const [tx] = await txDb.insert(paymentTransactions).values({
           organizationId: user.organizationId,
           policyId: policy.id,
           clientId: policy.clientId!,
-          amount,
-          currency: polyCurrency,
+          amount: receipt.amount,
+          currency: receipt.currency,
           paymentMethod: "cash",
           status: "cleared",
-          reference: groupRef,
+          reference: `APPROVED-${receipt.receiptNumber}`,
           receivedAt: new Date(),
-          postedDate: today,
-          valueDate: today,
-          notes: "Group batch receipt",
-          recordedBy: recordedByForLedger ?? undefined,
+          postedDate: effectiveDate,
+          valueDate: effectiveDate,
+          notes: `Backdated group receipt approved — original date: ${effectiveDate}`,
+          recordedBy: recordedBy ?? undefined,
         }).returning();
-        await txDb.insert(paymentReceipts).values({
-          organizationId: user.organizationId,
-          branchId: policy.branchId ?? undefined,
-          receiptNumber: receiptNum,
-          policyId: policy.id,
-          clientId: policy.clientId!,
-          amount,
-          currency: polyCurrency,
-          paymentChannel: "cash",
-          issuedByUserId: recordedByForLedger ?? undefined,
-          status: "issued",
-          metadataJson: { groupId, transactionId: tx.id },
-        });
-        await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", recordedByForLedger ?? undefined);
+        await txDb.update(paymentReceipts)
+          .set({
+            approvalStatus: "approved",
+            approvedByUserId: user.id,
+            approvedAt: new Date(),
+            approvalNote: String(approvalNote).trim(),
+            metadataJson: { ...(receipt.metadataJson as any || {}), approvedTransactionId: tx.id },
+          } as any)
+          .where(eq(paymentReceipts.id, receiptId));
+        await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
+        await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, effectiveDate, " (backdated group receipt, approved)", recordedBy ?? undefined);
         if (policy.status === "lapsed") {
           await rollbackClawbacksInTx(txDb, user.organizationId, policy);
         }
-        results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency });
-      }
-    });
-    // 2.5% platform fee on each cleared group receipt
-    for (const r of results) {
+      });
       storage.createPlatformReceivable({
         organizationId: user.organizationId,
-        amount: (parseFloat(r.amount) * 0.025).toFixed(2),
-        currency: r.currency,
-        description: `2.5% on group receipt ${r.receiptNumber} (policy ${r.policyNumber})`,
+        amount: (parseFloat(String(receipt.amount)) * 0.025).toFixed(2),
+        currency: receipt.currency,
+        description: `2.5% on approved backdated receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`,
         isSettled: false,
-      }).catch((err: Error) => structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err.message }));
-    }
-    return res.status(201).json({ receipted: results.length, results });
+      }).catch((err: Error) => structuredLog("error", "Platform fee failed (approved backdated receipt)", { receiptId, error: err.message }));
+      await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
+      return res.json({ message: "Receipt approved and applied." });
     } catch (err: any) {
-      structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
+      structuredLog("error", "POST /api/payment-receipts/:id/approve failed", { error: err?.message, receiptId });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.post("/api/payment-receipts/:id/reject", requireAuth, requireTenantScope, requireAnyPermission("approve:finance"), async (req, res) => {
+    const user = req.user as any;
+    const receiptId = String(req.params.id);
+    const { approvalNote } = req.body;
+    if (!approvalNote || !String(approvalNote).trim()) {
+      return res.status(400).json({ message: "Rejection note is required." });
+    }
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const [receipt] = await tdb.select().from(paymentReceipts).where(and(eq(paymentReceipts.id, receiptId), eq(paymentReceipts.organizationId, user.organizationId))).limit(1);
+      if (!receipt) return res.status(404).json({ message: "Receipt not found." });
+      if (receipt.approvalStatus !== "pending") return res.status(400).json({ message: "Receipt is not pending approval." });
+      await tdb.update(paymentReceipts)
+        .set({
+          approvalStatus: "rejected",
+          approvedByUserId: user.id,
+          approvedAt: new Date(),
+          approvalNote: String(approvalNote).trim(),
+        } as any)
+        .where(eq(paymentReceipts.id, receiptId));
+      await auditLog(req, "REJECT_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "rejected", approvalNote: String(approvalNote).trim() });
+      return res.json({ message: "Receipt rejected." });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/payment-receipts/:id/reject failed", { error: err?.message, receiptId });
       return res.status(500).json({ message: safeError(err) });
     }
   });
@@ -4852,6 +5014,129 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(rows.slice(offset, offset + limit));
   });
 
+  // ─── Agent P&L ─────────────────────────────────────────────
+  app.get("/api/agent/pnl", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+    const userRoles = await storage.getUserRoles(user.id, orgId);
+    const isAgent = isAgentScoped(userRoles);
+    // Agents see their own P&L; managers can view any agent's P&L via ?agentId=
+    const agentId = isAgent ? user.id : (typeof req.query.agentId === "string" ? req.query.agentId : user.id);
+
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to   = typeof req.query.toDate   === "string" && req.query.toDate   ? req.query.toDate   : def.to;
+
+    const tdb = await getDbForOrg(orgId);
+
+    // 1. Portfolio stats — all agent policies
+    const agentPolicies = await storage.getPoliciesByAgent(agentId, orgId);
+    const newInPeriod = agentPolicies.filter(p => {
+      const d = new Date(p.createdAt).toISOString().slice(0, 10);
+      return d >= from && d <= to;
+    }).length;
+    const statusCounts: Record<string, number> = {};
+    for (const p of agentPolicies) statusCounts[p.status] = (statusCounts[p.status] || 0) + 1;
+    const totalPolicies   = agentPolicies.length;
+    const activePolicies  = statusCounts["active"] || 0;
+    const gracePolicies   = statusCounts["grace"] || 0;
+    const lapsedPolicies  = statusCounts["lapsed"] || 0;
+    const retentionRate   = totalPolicies > 0 ? ((activePolicies / totalPolicies) * 100).toFixed(1) : "0";
+
+    // 2. Collections — premium receipts on this agent's policies in the period
+    const policyIds = agentPolicies.map(p => p.id);
+    let collectionsRows: any[] = [];
+    if (policyIds.length > 0) {
+      const result = await tdb.execute(sql`
+        SELECT
+          currency,
+          TO_CHAR(issued_at, 'YYYY-MM') AS month,
+          COALESCE(SUM(amount::numeric), 0) AS total
+        FROM payment_receipts
+        WHERE organization_id = ${orgId}
+          AND status = 'issued'
+          AND policy_id = ANY(${policyIds}::uuid[])
+          AND issued_at >= ${from + 'T00:00:00.000Z'}
+          AND issued_at <= ${to   + 'T23:59:59.999Z'}
+        GROUP BY currency, TO_CHAR(issued_at, 'YYYY-MM')
+        ORDER BY month
+      `);
+      collectionsRows = (result as any).rows ?? result as unknown as any[];
+    }
+
+    // Aggregate by currency and by month
+    const collectionTotal: Record<string, number> = {};
+    const collectionByMonth: Record<string, Record<string, number>> = {};
+    for (const r of collectionsRows) {
+      const amt = parseFloat(r.total);
+      collectionTotal[r.currency] = (collectionTotal[r.currency] || 0) + amt;
+      if (!collectionByMonth[r.month]) collectionByMonth[r.month] = {};
+      collectionByMonth[r.month][r.currency] = (collectionByMonth[r.month][r.currency] || 0) + amt;
+    }
+
+    // 3. Commission ledger for the agent — split by status
+    const ledger = await storage.getCommissionLedgerByAgent(agentId, orgId);
+    const inPeriod = ledger.filter(e => {
+      const d = new Date(e.createdAt).toISOString().slice(0, 10);
+      return d >= from && d <= to;
+    });
+
+    const commEarned:    Record<string, number> = {};
+    const commPaid:      Record<string, number> = {};
+    const commClawbacks: Record<string, number> = {};
+    const commRollbacks: Record<string, number> = {};
+    for (const e of inPeriod) {
+      const amt = parseFloat(String(e.amount));
+      const c = (e.currency || "USD").toUpperCase();
+      if (e.entryType === "clawback")  { commClawbacks[c] = (commClawbacks[c] || 0) + amt; continue; }
+      if (e.entryType === "rollback")  { commRollbacks[c] = (commRollbacks[c] || 0) + amt; continue; }
+      if (e.status === "paid")         { commPaid[c] = (commPaid[c] || 0) + amt; }
+      else                             { commEarned[c] = (commEarned[c] || 0) + amt; }
+    }
+    const commOutstanding: Record<string, number> = {};
+    const allCommCurrencies = Array.from(new Set([...Object.keys(commEarned), ...Object.keys(commPaid)]));
+    for (const c of allCommCurrencies) {
+      commOutstanding[c] = (commEarned[c] || 0) - (commPaid[c] || 0);
+    }
+
+    // 4. Lifetime outstanding commission (all time, not just period)
+    const allLedger = ledger;
+    const lifetimeEarned: Record<string, number> = {};
+    const lifetimePaid:   Record<string, number> = {};
+    for (const e of allLedger) {
+      if (e.entryType === "clawback" || e.entryType === "rollback") continue;
+      const amt = parseFloat(String(e.amount));
+      const c = (e.currency || "USD").toUpperCase();
+      if (e.status === "paid") lifetimePaid[c] = (lifetimePaid[c] || 0) + amt;
+      else lifetimeEarned[c] = (lifetimeEarned[c] || 0) + amt;
+    }
+    const lifetimeOutstanding: Record<string, number> = {};
+    for (const c of Array.from(new Set([...Object.keys(lifetimeEarned), ...Object.keys(lifetimePaid)]))) {
+      lifetimeOutstanding[c] = (lifetimeEarned[c] || 0) - (lifetimePaid[c] || 0);
+    }
+
+    // Round all amounts to 2dp
+    const r2 = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, parseFloat(v.toFixed(2))]));
+
+    return res.json({
+      agentId,
+      period: { from, to },
+      portfolio: { totalPolicies, activePolicies, gracePolicies, lapsedPolicies, newInPeriod, retentionRate },
+      collections: {
+        total: r2(collectionTotal),
+        byMonth: Object.entries(collectionByMonth).map(([month, amounts]) => ({ month, amounts: r2(amounts) })),
+      },
+      commissions: {
+        earned:      r2(commEarned),
+        paid:        r2(commPaid),
+        outstanding: r2(commOutstanding),
+        clawbacks:   r2(commClawbacks),
+        rollbacks:   r2(commRollbacks),
+      },
+      lifetimeOutstanding: r2(lifetimeOutstanding),
+    });
+  });
+
   // ─── Leads / Pipeline ──────────────────────────────────────
 
   app.get("/api/leads", requireAuth, requireTenantScope, requirePermission("read:lead"), async (req, res) => {
@@ -5150,13 +5435,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         patch.approverNotes = req.body.approverNotes.trim();
       }
     } else if (action === "pay") {
-      if (existing.status !== "approved") return res.status(400).json({ message: "Only approved requisitions can be marked paid" });
-      patch.status = "paid";
+      // Legacy single-shot pay — redirects to disbursement endpoint. Keep for backward compat but discourage.
+      if (!["approved", "partial"].includes(existing.status)) return res.status(400).json({ message: "Only approved or partially-paid requisitions can record a payment" });
+      const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : today;
+      const payAmount = req.body.amount ? Number(req.body.amount) : (Number(existing.amount) - Number(existing.amountPaid ?? 0));
+      const newAmountPaid = Math.min(Number(existing.amount), Number(existing.amountPaid ?? 0) + payAmount);
+      const fullyPaid = newAmountPaid >= Number(existing.amount);
+      patch.status = fullyPaid ? "paid" : "partial";
+      patch.amountPaid = String(newAmountPaid.toFixed(2));
       patch.paidBy = user.id;
       patch.paidAt = new Date();
-      patch.paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : today;
+      patch.paidDate = paidDate;
       if (typeof req.body.paymentMethod === "string") patch.paymentMethod = req.body.paymentMethod;
       if (typeof req.body.reference === "string") patch.reference = req.body.reference;
+      if (typeof req.body.receivedBy === "string") patch.receivedBy = req.body.receivedBy;
+      if (typeof req.body.receivedByUserId === "string") patch.receivedByUserId = req.body.receivedByUserId;
+      // Record in disbursements ledger
+      await storage.createPaymentDisbursement({
+        organizationId: user.organizationId,
+        branchId: existing.branchId ?? undefined,
+        entityType: "requisition",
+        entityId: existing.id,
+        amount: String(payAmount.toFixed(2)),
+        currency: existing.currency,
+        paidByUserId: user.id,
+        receivedBy: typeof req.body.receivedBy === "string" ? req.body.receivedBy : undefined,
+        receivedByUserId: typeof req.body.receivedByUserId === "string" ? req.body.receivedByUserId : undefined,
+        paidDate,
+        paymentMethod: typeof req.body.paymentMethod === "string" ? req.body.paymentMethod : "cash",
+        reference: typeof req.body.reference === "string" ? req.body.reference : undefined,
+        notes: typeof req.body.notes === "string" ? req.body.notes : undefined,
+        createdByUserId: user.id,
+      });
     } else {
       // Plain edit (only while draft)
       if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be edited" });
@@ -5211,6 +5521,297 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     return res.json(updated);
+  });
+
+  // ─── Payment Disbursements ───────────────────────────────────
+
+  app.get("/api/payment-disbursements", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = {
+      entityType: typeof req.query.entityType === "string" ? req.query.entityType : undefined,
+      entityId: typeof req.query.entityId === "string" ? req.query.entityId : undefined,
+      fromDate: typeof req.query.fromDate === "string" ? req.query.fromDate : undefined,
+      toDate: typeof req.query.toDate === "string" ? req.query.toDate : undefined,
+      branchId: typeof req.query.branchId === "string" ? req.query.branchId : undefined,
+    };
+    const disbursements = await storage.getPaymentDisbursements(user.organizationId, filters);
+    const enriched = await Promise.all(disbursements.map(async (d) => {
+      const userIds = [d.paidByUserId, d.receivedByUserId].filter(Boolean) as string[];
+      const usersMap = userIds.length > 0 ? await storage.getUsersByIds(userIds) : [];
+      const findUser = (id: string | null | undefined) => usersMap.find((u: any) => u.id === id) || null;
+      const paidByUser = d.paidByUserId ? findUser(d.paidByUserId) : null;
+      const receivedByUser = d.receivedByUserId ? findUser(d.receivedByUserId) : null;
+      return {
+        ...d,
+        paidByName: paidByUser?.displayName || paidByUser?.email || null,
+        receivedByName: d.receivedBy || receivedByUser?.displayName || receivedByUser?.email || null,
+      };
+    }));
+    return res.json(enriched);
+  });
+
+  app.post("/api/requisitions/:id/payments", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const reqId = String(req.params.id);
+    const existing = await storage.getRequisition(reqId, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Requisition not found" });
+    if (!["approved", "partial"].includes(existing.status)) {
+      return res.status(400).json({ message: "Requisition must be approved before payments can be recorded" });
+    }
+    const amount = parsePositiveAmount(req.body.amount);
+    if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
+    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : new Date().toISOString().split("T")[0];
+    const alreadyPaid = Number(existing.amountPaid ?? 0);
+    const remaining = Number(existing.amount) - alreadyPaid;
+    if (amount > remaining + 0.001) {
+      return res.status(400).json({ message: `Payment of ${existing.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}` });
+    }
+    const newAmountPaid = alreadyPaid + amount;
+    const fullyPaid = newAmountPaid >= Number(existing.amount) - 0.001;
+    try {
+      const disbursement = await storage.createPaymentDisbursement({
+        organizationId: user.organizationId,
+        branchId: existing.branchId ?? undefined,
+        entityType: "requisition",
+        entityId: existing.id,
+        amount: String(amount.toFixed(2)),
+        currency: existing.currency,
+        paidByUserId: user.id,
+        receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
+        receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
+        paidDate,
+        paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
+        reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
+        notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+        createdByUserId: user.id,
+      });
+      const patch: Record<string, any> = {
+        amountPaid: String(newAmountPaid.toFixed(2)),
+        status: fullyPaid ? "paid" : "partial",
+        paidBy: user.id,
+        paidAt: new Date(),
+        paidDate,
+        paymentMethod: disbursement.paymentMethod,
+        reference: disbursement.reference ?? existing.reference,
+        receivedBy: disbursement.receivedBy ?? existing.receivedBy,
+        receivedByUserId: disbursement.receivedByUserId ?? existing.receivedByUserId,
+      };
+      const updated = await storage.updateRequisition(reqId, user.organizationId, patch);
+      await auditLog(req, fullyPaid ? "PAY_REQUISITION" : "PARTIAL_PAY_REQUISITION", "Requisition", existing.id, existing, updated);
+      if (fullyPaid) {
+        notifyUser(user.organizationId, existing.requestedBy, {
+          type: "GENERAL",
+          title: "Requisition fully paid",
+          body: `Your requisition ${existing.requisitionNumber} has been fully paid.`,
+          metadata: { requisitionId: existing.id },
+        });
+      }
+      return res.status(201).json({ disbursement, requisition: updated, fullyPaid });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/requisitions/:id/payments failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.post("/api/expenditures/:id/payments", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const expId = String(req.params.id);
+    const existing = await storage.getExpenditure(expId, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Expenditure not found" });
+    if (existing.status === "paid") return res.status(400).json({ message: "Expenditure is already fully paid" });
+    const amount = parsePositiveAmount(req.body.amount);
+    if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
+    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : new Date().toISOString().split("T")[0];
+    const alreadyPaid = Number(existing.amountPaid ?? 0);
+    const totalAmt = Number(existing.amount);
+    const remaining = totalAmt - alreadyPaid;
+    if (amount > remaining + 0.001) {
+      return res.status(400).json({ message: `Payment of ${existing.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}` });
+    }
+    const newAmountPaid = alreadyPaid + amount;
+    const fullyPaid = newAmountPaid >= totalAmt - 0.001;
+    try {
+      const disbursement = await storage.createPaymentDisbursement({
+        organizationId: user.organizationId,
+        branchId: existing.branchId ?? undefined,
+        entityType: "expenditure",
+        entityId: existing.id,
+        amount: String(amount.toFixed(2)),
+        currency: existing.currency,
+        paidByUserId: user.id,
+        receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
+        receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
+        paidDate,
+        paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
+        reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
+        notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+        createdByUserId: user.id,
+      });
+      const patch: Record<string, any> = {
+        amountPaid: String(newAmountPaid.toFixed(2)),
+        status: fullyPaid ? "paid" : "partial",
+        paidBy: user.id,
+        paidDate,
+        paymentMethod: disbursement.paymentMethod,
+        reference: disbursement.reference ?? existing.reference,
+        receivedBy: disbursement.receivedBy ?? existing.receivedBy,
+        receivedByUserId: disbursement.receivedByUserId ?? existing.receivedByUserId,
+      };
+      const updatedExp = await storage.updateExpenditure(expId, user.organizationId, patch);
+      await auditLog(req, fullyPaid ? "PAY_EXPENDITURE" : "PARTIAL_PAY_EXPENDITURE", "Expenditure", existing.id, existing, updatedExp);
+      return res.status(201).json({ disbursement, expenditure: updatedExp, fullyPaid });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/expenditures/:id/payments failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  // ─── Banking: accounts, deposits, statement balances ─────────
+
+  app.get("/api/bank-accounts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getBankAccounts(user.organizationId));
+  });
+
+  app.post("/api/bank-accounts", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const { accountName, bankName, accountNumber, currency, branchId, notes } = req.body;
+      if (!accountName?.trim() || !bankName?.trim() || !accountNumber?.trim()) {
+        return res.status(400).json({ message: "accountName, bankName, and accountNumber are required" });
+      }
+      const account = await storage.createBankAccount({
+        organizationId: user.organizationId,
+        branchId: branchId || undefined,
+        accountName: String(accountName).trim(),
+        bankName: String(bankName).trim(),
+        accountNumber: String(accountNumber).trim(),
+        currency: normalizeCurrency(currency) || "USD",
+        notes: notes ? String(notes).trim() : undefined,
+      });
+      await auditLog(req, "CREATE_BANK_ACCOUNT", "BankAccount", account.id, null, account);
+      return res.status(201).json(account);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/bank-accounts/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = (await storage.getBankAccounts(user.organizationId)).find(a => a.id === id);
+    if (!existing) return res.status(404).json({ message: "Bank account not found" });
+    const patch: Record<string, any> = {};
+    for (const k of ["accountName", "bankName", "accountNumber", "currency", "notes", "isActive"]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k];
+    }
+    const updated = await storage.updateBankAccount(id, user.organizationId, patch);
+    await auditLog(req, "UPDATE_BANK_ACCOUNT", "BankAccount", id, existing, updated);
+    return res.json(updated);
+  });
+
+  app.get("/api/bank-deposits", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = {
+      userId: typeof req.query.userId === "string" ? req.query.userId : undefined,
+      bankAccountId: typeof req.query.bankAccountId === "string" ? req.query.bankAccountId : undefined,
+      fromDate: typeof req.query.fromDate === "string" ? req.query.fromDate : undefined,
+      toDate: typeof req.query.toDate === "string" ? req.query.toDate : undefined,
+    };
+    const deposits = await storage.getBankDeposits(user.organizationId, filters);
+    const allUserIds = deposits.flatMap(d => [d.depositedByUserId, d.verifiedByUserId].filter(Boolean) as string[]);
+    const userIds = allUserIds.filter((id, i) => allUserIds.indexOf(id) === i);
+    const depositUsers = userIds.length > 0 ? await storage.getUsersByIds(userIds) : [];
+    const findU = (id: string | null | undefined) => depositUsers.find((u: any) => u.id === id);
+    const accounts = await storage.getBankAccounts(user.organizationId);
+    const findA = (id: string | null | undefined) => accounts.find(a => a.id === id);
+    return res.json(deposits.map(d => ({
+      ...d,
+      depositedByName: findU(d.depositedByUserId)?.displayName || findU(d.depositedByUserId)?.email || null,
+      verifiedByName: findU(d.verifiedByUserId)?.displayName || findU(d.verifiedByUserId)?.email || null,
+      bankAccountName: findA(d.bankAccountId)?.accountName || null,
+    })));
+  });
+
+  app.post("/api/bank-deposits", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { bankAccountId, amount, currency, depositDate, reference, notes, depositedByUserId } = req.body;
+    const amt = parsePositiveAmount(amount);
+    if (!amt) return res.status(400).json({ message: "A valid positive amount is required" });
+    if (!depositDate) return res.status(400).json({ message: "depositDate is required" });
+    const byUserId = depositedByUserId || user.id;
+    try {
+      const deposit = await storage.createBankDeposit({
+        organizationId: user.organizationId,
+        bankAccountId: bankAccountId || undefined,
+        depositedByUserId: byUserId,
+        amount: String(amt.toFixed(2)),
+        currency: normalizeCurrency(currency) || "USD",
+        depositDate: String(depositDate),
+        reference: reference ? String(reference).trim() : undefined,
+        notes: notes ? String(notes).trim() : undefined,
+      });
+      await auditLog(req, "CREATE_BANK_DEPOSIT", "BankDeposit", deposit.id, null, deposit);
+      return res.status(201).json(deposit);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.post("/api/bank-deposits/:id/verify", requireAuth, requireTenantScope, requireAnyPermission("approve:finance", "write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const deposits = await storage.getBankDeposits(user.organizationId, {});
+    const existing = deposits.find(d => d.id === id);
+    if (!existing) return res.status(404).json({ message: "Deposit not found" });
+    const updated = await storage.updateBankDeposit(id, user.organizationId, {
+      verifiedByUserId: user.id,
+      verifiedAt: new Date(),
+    });
+    await auditLog(req, "VERIFY_BANK_DEPOSIT", "BankDeposit", id, existing, updated);
+    return res.json(updated);
+  });
+
+  app.get("/api/cash-position", requireAuth, requireTenantScope, requireAnyPermission("approve:finance", "read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const positions = await storage.getAdminCashPosition(user.organizationId);
+    const userIds = positions.map(p => p.userId);
+    const positionUsers = userIds.length > 0 ? await storage.getUsersByIds(userIds) : [];
+    const findU = (id: string) => positionUsers.find((u: any) => u.id === id);
+    return res.json(positions.map(p => ({
+      ...p,
+      displayName: findU(p.userId)?.displayName || findU(p.userId)?.email || p.userId,
+      email: findU(p.userId)?.email || null,
+    })));
+  });
+
+  app.get("/api/bank-statement-balances", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const bankAccountId = typeof req.query.bankAccountId === "string" ? req.query.bankAccountId : undefined;
+    return res.json(await storage.getBankStatementBalances(user.organizationId, bankAccountId));
+  });
+
+  app.post("/api/bank-statement-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { bankAccountId, statementDate, closingBalance, currency, notes } = req.body;
+    if (!bankAccountId || !statementDate || closingBalance === undefined) {
+      return res.status(400).json({ message: "bankAccountId, statementDate, and closingBalance are required" });
+    }
+    try {
+      const bal = await storage.createBankStatementBalance({
+        organizationId: user.organizationId,
+        bankAccountId: String(bankAccountId),
+        statementDate: String(statementDate),
+        closingBalance: String(Number(closingBalance).toFixed(2)),
+        currency: normalizeCurrency(currency) || "USD",
+        enteredByUserId: user.id,
+        notes: notes ? String(notes).trim() : undefined,
+      });
+      await auditLog(req, "CREATE_BANK_STATEMENT_BALANCE", "BankStatementBalance", bal.id, null, bal);
+      return res.status(201).json(bal);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   // ─── Debit Orders (recurring premium-collection mandates) ────
@@ -6352,6 +6953,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(enriched);
   });
 
+  app.get("/api/groups/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const rows = await tdb.execute(sql`
+        SELECT pr.id, pr.receipt_number, pr.policy_id, pr.client_id, pr.amount, pr.currency,
+               pr.payment_channel, pr.issued_at, pr.created_at, pr.status, pr.approval_status,
+               pr.submitter_note, pr.backdated_date, pr.metadata_json,
+               c.first_name, c.last_name, p.policy_number
+        FROM payment_receipts pr
+        LEFT JOIN clients c ON c.id = pr.client_id
+        LEFT JOIN policies p ON p.id = pr.policy_id
+        WHERE pr.organization_id = ${user.organizationId}
+          AND pr.metadata_json->>'groupId' = ${groupId}
+        ORDER BY pr.created_at DESC
+        LIMIT 500
+      `);
+      return res.json(rows.rows ?? rows);
+    } catch (err: any) {
+      structuredLog("error", "GET /api/groups/:id/receipts failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   // ─── Directory Contacts (undertakers, underwriters, transport, general) ──
 
   app.get("/api/directory-contacts", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
@@ -6668,6 +7296,109 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ total, active, lapsed, grace, cancelled, retentionRate, lapseRate });
   });
 
+  // ─── Executive summary (finance-gated) ───────────────────
+  app.get("/api/dashboard/executive-summary", requireAuth, requireTenantScope, requireAnyPermission("approve:finance", "read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to   = typeof req.query.toDate   === "string" && req.query.toDate   ? req.query.toDate   : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+
+    const tdb = await getDbForOrg(orgId);
+
+    // 1. Income statement for the period (reuse existing builder)
+    const is = await buildIncomeStatement(orgId, { from, to, branchId });
+
+    // 2. Admin cash positions
+    const positions = await storage.getAdminCashPosition(orgId);
+    const posUserIds = positions.map(p => p.userId);
+    const posUsers   = posUserIds.length ? await storage.getUsersByIds(posUserIds) : [];
+    const findU = (id: string) => posUsers.find((u: any) => u.id === id);
+    const totalOnHand   = positions.reduce((s, p) => s + Math.max(0, p.onHand), 0);
+    const totalDeposited = positions.reduce((s, p) => s + p.totalDeposited, 0);
+
+    // 3. Per-branch income breakdown (premium receipts in period, grouped by branch)
+    const branchRows = await tdb.execute(sql`
+      SELECT
+        pr.branch_id,
+        b.name AS branch_name,
+        pr.currency,
+        COALESCE(SUM(pr.amount::numeric), 0) AS income,
+        COUNT(DISTINCT pr.policy_id)          AS policy_count
+      FROM payment_receipts pr
+      LEFT JOIN branches b ON b.id = pr.branch_id
+      WHERE pr.organization_id = ${orgId}
+        AND pr.status = 'issued'
+        AND pr.issued_at >= ${from + 'T00:00:00.000Z'}
+        AND pr.issued_at <= ${to   + 'T23:59:59.999Z'}
+        ${branchId ? sql`AND pr.branch_id = ${branchId}` : sql``}
+      GROUP BY pr.branch_id, b.name, pr.currency
+      ORDER BY income DESC
+    `);
+
+    // 4. Claims stats
+    const claimStats = await tdb.execute(sql`
+      SELECT
+        status,
+        COUNT(*)                                    AS count,
+        COALESCE(SUM(cash_in_lieu_amount::numeric), 0) AS total_value,
+        currency
+      FROM claims
+      WHERE organization_id = ${orgId}
+        AND created_at >= ${from + 'T00:00:00.000Z'}
+        AND created_at <= ${to   + 'T23:59:59.999Z'}
+        ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+      GROUP BY status, currency
+    `);
+
+    // 5. New policies in period
+    const newPolicies = await tdb.execute(sql`
+      SELECT COUNT(*) AS count
+      FROM policies
+      WHERE organization_id = ${orgId}
+        AND created_at >= ${from + 'T00:00:00.000Z'}
+        AND created_at <= ${to   + 'T23:59:59.999Z'}
+        ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+    `);
+
+    return res.json({
+      period: { from, to },
+      income: {
+        total:              is.income.total,
+        premiumIndividual:  is.income.premiumIndividual,
+        premiumGroup:       is.income.premiumGroup,
+        cashServices:       is.income.cashServices,
+      },
+      expenses: { total: is.expenses.total },
+      net: is.net,
+      consolidatedUsd: is.consolidatedUsd,
+      cashPosition: {
+        totalOnHand:   parseFloat(totalOnHand.toFixed(2)),
+        totalDeposited: parseFloat(totalDeposited.toFixed(2)),
+        admins: positions.map(p => ({
+          ...p,
+          displayName: findU(p.userId)?.displayName || findU(p.userId)?.email || p.userId,
+        })),
+      },
+      branchBreakdown: ((branchRows as any).rows ?? branchRows as unknown as any[]).map((r: any) => ({
+        branchId:    r.branch_id,
+        branchName:  r.branch_name || "No branch",
+        currency:    r.currency,
+        income:      parseFloat(r.income),
+        policyCount: parseInt(r.policy_count),
+      })),
+      claimStats: ((claimStats as any).rows ?? claimStats as unknown as any[]).map((r: any) => ({
+        status:     r.status,
+        count:      parseInt(r.count),
+        totalValue: parseFloat(r.total_value),
+        currency:   r.currency,
+      })),
+      newPoliciesCount: parseInt((((newPolicies as any).rows ?? newPolicies as unknown as any[])[0] as any)?.count ?? 0),
+    });
+  });
+
   // ─── Terms & Conditions ──────────────────────────────────
 
   app.get("/api/terms", requireAuth, requireTenantScope, async (req, res) => {
@@ -6893,6 +7624,75 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
     return res.json(await buildCashFlowStatement(user.organizationId, { from, to, branchId }));
+  });
+
+  app.get("/api/reports/balance-sheet", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : new Date().toISOString().slice(0, 10);
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    return res.json(await buildBalanceSheet(user.organizationId, { asOf, branchId }));
+  });
+
+  // ── Balance sheet manual entries CRUD ──
+  app.get("/api/balance-sheet-entries", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const section = typeof req.query.section === "string" ? req.query.section : undefined;
+    return res.json(await storage.getBalanceSheetEntries(user.organizationId, { section }));
+  });
+
+  app.post("/api/balance-sheet-entries", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { section, subsection, label, amount, currency, asOfDate, notes } = req.body;
+    if (!section || !label?.trim() || amount === undefined || !asOfDate) {
+      return res.status(400).json({ message: "section, label, amount, and asOfDate are required" });
+    }
+    if (!["asset", "liability", "equity"].includes(section)) {
+      return res.status(400).json({ message: "section must be asset, liability, or equity" });
+    }
+    const amt = parsePositiveAmount(amount);
+    if (!amt && amt !== 0) return res.status(400).json({ message: "amount must be a valid number" });
+    try {
+      const entry = await storage.createBalanceSheetEntry({
+        organizationId: user.organizationId,
+        section,
+        subsection: subsection || (section === "equity" ? null : "current"),
+        label: String(label).trim(),
+        amount: String(Number(amount).toFixed(2)),
+        currency: normalizeCurrency(currency) || "USD",
+        asOfDate: String(asOfDate),
+        notes: notes ? String(notes).trim() : undefined,
+        enteredByUserId: user.id,
+      });
+      await auditLog(req, "CREATE_BALANCE_SHEET_ENTRY", "BalanceSheetEntry", entry.id, null, entry);
+      return res.status(201).json(entry);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/balance-sheet-entries/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = (await storage.getBalanceSheetEntries(user.organizationId)).find(e => e.id === id);
+    if (!existing) return res.status(404).json({ message: "Entry not found" });
+    const patch: Record<string, any> = {};
+    for (const k of ["label", "amount", "currency", "subsection", "asOfDate", "notes"]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k];
+    }
+    if (patch.amount) patch.amount = String(Number(patch.amount).toFixed(2));
+    const updated = await storage.updateBalanceSheetEntry(id, user.organizationId, patch);
+    await auditLog(req, "UPDATE_BALANCE_SHEET_ENTRY", "BalanceSheetEntry", id, existing, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/balance-sheet-entries/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = (await storage.getBalanceSheetEntries(user.organizationId)).find(e => e.id === id);
+    if (!existing) return res.status(404).json({ message: "Entry not found" });
+    await storage.deleteBalanceSheetEntry(id, user.organizationId);
+    await auditLog(req, "DELETE_BALANCE_SHEET_ENTRY", "BalanceSheetEntry", id, existing, null);
+    return res.json({ success: true });
   });
 
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
