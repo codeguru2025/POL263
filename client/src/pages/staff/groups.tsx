@@ -17,7 +17,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import {
   Plus, Search, Pencil, Layers, FileStack, Loader2, LinkIcon, UserPlus,
-  Receipt, Printer, ArrowRight, ChevronDown, ChevronRight, Clock, History,
+  Receipt, Printer, ArrowRight, ChevronDown, ChevronRight, Clock, History, ShieldCheck, Save,
 } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -312,7 +312,10 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
                       <span className="font-medium text-sm">{p.clientFirstName} {p.clientLastName}</span>
                       <span className="font-mono text-xs text-muted-foreground">{p.policyNumber}</span>
                       <Badge variant="outline" className="text-xs">{p.status}</Badge>
-                      <span className="text-sm font-semibold ml-auto">{p.currency} {parseFloat(p.premiumAmount).toFixed(2)}</span>
+                      <span className="text-sm font-semibold ml-auto">
+                        {p.currency} {parseFloat(p.premiumOverride ?? p.premiumAmount).toFixed(2)}
+                        {p.premiumOverride != null && <span className="ml-1 text-xs text-amber-600 font-normal">(override)</span>}
+                      </span>
                     </div>
                   </div>
                 </label>
@@ -771,6 +774,166 @@ function LegacyGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
   );
 }
 
+// ─── Legacy Policies Premium Override Section ────────────────
+
+function LegacyPoliciesSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [overrides, setOverrides] = useState<Record<string, { amount: string; note: string }>>({});
+  const [dirty, setDirty] = useState<Set<string>>(new Set());
+
+  const { data: policies = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/policies/legacy"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/policies/legacy", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  // Seed local override state when data loads
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (policies.length && !seeded.current) {
+      seeded.current = true;
+      const init: Record<string, { amount: string; note: string }> = {};
+      for (const p of policies) {
+        init[p.id] = {
+          amount: p.premium_override != null ? parseFloat(p.premium_override).toFixed(2) : "",
+          note: p.premium_override_note ?? "",
+        };
+      }
+      setOverrides(init);
+    }
+  }, [policies]);
+
+  const setField = (id: string, field: "amount" | "note", value: string) => {
+    setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+    setDirty((prev) => new Set(prev).add(id));
+  };
+
+  const clearOverride = (id: string) => {
+    setOverrides((prev) => ({ ...prev, [id]: { amount: "", note: "" } }));
+    setDirty((prev) => new Set(prev).add(id));
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const updates = Array.from(dirty).map((id) => ({
+        id,
+        premiumOverride: overrides[id]?.amount?.trim() || null,
+        premiumOverrideNote: overrides[id]?.note?.trim() || null,
+      }));
+      const res = await apiRequest("POST", "/api/policies/legacy/bulk-override", updates);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed");
+      return data;
+    },
+    onSuccess: (data) => {
+      setDirty(new Set());
+      queryClient.invalidateQueries({ queryKey: ["/api/policies/legacy"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      seeded.current = false;
+      toast({ title: `${data.updated} policy premiums saved` });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const filtered = search
+    ? policies.filter((p) =>
+        `${p.first_name} ${p.last_name} ${p.policy_number} ${p.group_name ?? ""}`.toLowerCase().includes(search.toLowerCase())
+      )
+    : policies;
+
+  return (
+    <CardSection
+      title="Legacy Policy Premiums"
+      description="Override the system-calculated premium for individual legacy policies."
+      icon={ShieldCheck}
+      headerRight={
+        dirty.size > 0 ? (
+          <Button size="sm" className="gap-1.5" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Save {dirty.size} change{dirty.size !== 1 ? "s" : ""}
+          </Button>
+        ) : undefined
+      }
+      flush
+    >
+      <div className="p-4 border-b">
+        <div className="relative w-64">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input placeholder="Search member or policy…" className="pl-9 bg-background" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+      ) : filtered.length === 0 ? (
+        <EmptyState icon={ShieldCheck} title="No legacy policies" description="Legacy policies appear here once members are added to legacy groups." className="border-0 rounded-none bg-transparent py-10" />
+      ) : (
+        <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+          <TableHeader className={dataTableStickyHeaderClass}>
+            <TableRow>
+              <TableHead className="pl-6">Member</TableHead>
+              <TableHead>Policy #</TableHead>
+              <TableHead>Group</TableHead>
+              <TableHead>Currency</TableHead>
+              <TableHead className="text-right">System Premium</TableHead>
+              <TableHead className="text-right">Override Amount</TableHead>
+              <TableHead>Override Note</TableHead>
+              <TableHead className="pr-6"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.map((p: any) => {
+              const ov = overrides[p.id] ?? { amount: "", note: "" };
+              const isDirty = dirty.has(p.id);
+              return (
+                <TableRow key={p.id} className={isDirty ? "bg-amber-50/50 dark:bg-amber-950/20" : ""}>
+                  <TableCell className="pl-6 font-medium text-sm">{p.first_name} {p.last_name}</TableCell>
+                  <TableCell className="font-mono text-sm">{p.policy_number}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{p.group_name ?? "—"}</TableCell>
+                  <TableCell className="text-sm">{p.currency}</TableCell>
+                  <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                    {parseFloat(p.premium_amount).toFixed(2)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className="w-28 text-right tabular-nums text-sm h-8 ml-auto"
+                      placeholder={parseFloat(p.premium_amount).toFixed(2)}
+                      value={ov.amount}
+                      onChange={(e) => setField(p.id, "amount", e.target.value)}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      className="text-sm h-8 w-40"
+                      placeholder="Reason…"
+                      value={ov.note}
+                      onChange={(e) => setField(p.id, "note", e.target.value)}
+                    />
+                  </TableCell>
+                  <TableCell className="pr-6">
+                    {ov.amount && (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => clearOverride(p.id)}>
+                        Clear
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </DataTable>
+      )}
+    </CardSection>
+  );
+}
+
 // ─── Legacy Receipts Section ─────────────────────────────────
 
 function LegacyReceiptsSection() {
@@ -1021,6 +1184,8 @@ export default function StaffGroups() {
             </DataTable>
           )}
         </CardSection>
+
+        <LegacyPoliciesSection />
 
         <LegacyReceiptsSection />
 

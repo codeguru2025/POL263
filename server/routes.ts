@@ -2060,6 +2060,63 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Policies ───────────────────────────────────────────────
 
+  // ── Legacy policy premium overrides — bulk list + bulk save ──
+  app.get("/api/policies/legacy", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const rows = await tdb.execute(sql`
+        SELECT p.id, p.policy_number, p.status, p.currency,
+               p.premium_amount, p.premium_override, p.premium_override_note,
+               p.is_legacy, p.group_id,
+               c.first_name, c.last_name,
+               g.name AS group_name
+        FROM policies p
+        LEFT JOIN clients c ON c.id = p.client_id
+        LEFT JOIN groups g ON g.id = p.group_id
+        WHERE p.organization_id = ${user.organizationId}
+          AND p.is_legacy = true
+          AND p.deleted_at IS NULL
+        ORDER BY g.name NULLS LAST, c.last_name, c.first_name
+      `);
+      return res.json(rows.rows ?? rows);
+    } catch (err: any) {
+      structuredLog("error", "GET /api/policies/legacy failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.post("/api/policies/legacy/bulk-override", requireAuth, requireTenantScope, requirePermission("edit:premium"), async (req, res) => {
+    const user = req.user as any;
+    const updates: { id: string; premiumOverride: string | null; premiumOverrideNote: string | null }[] = req.body;
+    if (!Array.isArray(updates) || updates.length === 0) return res.status(400).json({ message: "Array of updates required" });
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const results: string[] = [];
+      for (const u of updates) {
+        if (!u.id) continue;
+        const override = u.premiumOverride != null && u.premiumOverride !== ""
+          ? parseFloat(String(u.premiumOverride))
+          : null;
+        if (override !== null && !Number.isFinite(override)) continue;
+        await tdb.execute(sql`
+          UPDATE policies
+          SET premium_override      = ${override != null ? override.toFixed(2) : null},
+              premium_override_note = ${u.premiumOverrideNote ?? null}
+          WHERE id = ${u.id}::uuid
+            AND organization_id = ${user.organizationId}
+            AND is_legacy = true
+        `);
+        results.push(u.id);
+      }
+      await auditLog(req, "bulk_update", "policy", "bulk", null, { premiumOverrideCount: results.length });
+      return res.json({ updated: results.length });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/policies/legacy/bulk-override failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   app.get("/api/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
@@ -2578,6 +2635,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const isLegacyRequest = canEditPremium && body.isLegacy === true && !before.isLegacy;
     delete body.isLegacy;
 
+    // Premium override for legacy policies: preserves original premiumAmount for reference.
+    const rawPremiumOverride = canEditPremium ? body.premiumOverride : undefined;
+    const rawPremiumOverrideNote = canEditPremium ? (body.premiumOverrideNote ?? null) : undefined;
+    delete body.premiumOverride;
+    delete body.premiumOverrideNote;
+
     const ALLOWED_FIELDS = new Set([
       "currency", "paymentSchedule", "effectiveDate", "branchId", "agentId", "groupId",
       "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryRelationship",
@@ -2600,7 +2663,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
-    if (Object.keys(sanitized).length === 0 && manualPremium == null) {
+    // Resolve premium_override (legacy-specific field — clears with null/empty, does not touch premiumAmount).
+    let premiumOverrideUpdate: { premiumOverride: string | null; premiumOverrideNote: string | null } | null = null;
+    if (rawPremiumOverride !== undefined) {
+      if (rawPremiumOverride === null || rawPremiumOverride === "") {
+        premiumOverrideUpdate = { premiumOverride: null, premiumOverrideNote: null };
+      } else {
+        const parsed = parseFloat(String(rawPremiumOverride));
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          premiumOverrideUpdate = {
+            premiumOverride: parsed.toFixed(2),
+            premiumOverrideNote: typeof rawPremiumOverrideNote === "string" ? rawPremiumOverrideNote.trim() || null : null,
+          };
+        }
+      }
+    }
+
+    if (Object.keys(sanitized).length === 0 && manualPremium == null && premiumOverrideUpdate == null) {
       return res.json(before);
     }
 
@@ -2621,6 +2700,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         actorId: user.id,
       });
       updated = (await storage.updatePolicy(req.params.id as string, { premiumAmount: manualPremium.toFixed(2) }, user.organizationId)) ?? updated;
+    }
+
+    if (premiumOverrideUpdate != null) {
+      updated = (await storage.updatePolicy(req.params.id as string, premiumOverrideUpdate, user.organizationId)) ?? updated;
+      await auditLog(req, "update", "policy", updated.id, { premiumOverride: before.premiumOverride }, { premiumOverride: premiumOverrideUpdate.premiumOverride, note: premiumOverrideUpdate.premiumOverrideNote });
     }
 
     if (isLegacyRequest) {

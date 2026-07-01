@@ -684,6 +684,9 @@ export const policies = pgTable(
     beneficiaryDependentId: uuid("beneficiary_dependent_id").references(() => dependents.id),
     version: integer("version").default(1).notNull(),
     isLegacy: boolean("is_legacy").default(false).notNull(),
+    /** Manually set premium that overrides the system-calculated premiumAmount. When set, this is the effective premium. */
+    premiumOverride: numeric("premium_override", { precision: 12, scale: 2 }),
+    premiumOverrideNote: text("premium_override_note"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deletedAt: timestamp("deleted_at"),
   },
