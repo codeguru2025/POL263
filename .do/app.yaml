@@ -71,10 +71,10 @@ envs:
     value: https://pol263-hl5ef.ondigitalocean.app
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_RETURN_URL
-    value: https://pol263-hl5ef.ondigitalocean.app/client/payments/return
+    value: https://pol263.com/client/payments/return
     scope: RUN_AND_BUILD_TIME
   - key: PAYNOW_RESULT_URL
-    value: https://pol263-hl5ef.ondigitalocean.app/api/payments/paynow/result
+    value: https://pol263.com/api/payments/paynow/result
     scope: RUN_AND_BUILD_TIME
   - key: GOOGLE_CALLBACK_URL
     value: https://pol263-hl5ef.ondigitalocean.app/api/auth/google/callback
