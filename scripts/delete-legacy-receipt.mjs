@@ -16,6 +16,14 @@ const r = await client.query(
   `DELETE FROM legacy_group_receipts WHERE receipt_number=$1 RETURNING group_name, currency, amount, receipt_number`,
   [receiptNumber]
 );
-if (r.rows[0]) console.log(`✓ DELETED ${r.rows[0].receipt_number} — ${r.rows[0].group_name} ${r.rows[0].currency} ${r.rows[0].amount}`);
-else console.log("Not found: " + receiptNumber);
+if (r.rows[0]) {
+  console.log(`✓ DELETED ${r.rows[0].receipt_number} — ${r.rows[0].group_name} ${r.rows[0].currency} ${r.rows[0].amount}`);
+  const feeDel = await client.query(
+    `DELETE FROM platform_receivables WHERE description LIKE $1 RETURNING id`,
+    [`%legacy group receipt ${receiptNumber} %`]
+  );
+  console.log(`  removed ${feeDel.rowCount} matching platform fee row(s)`);
+} else {
+  console.log("Not found: " + receiptNumber);
+}
 await client.end();

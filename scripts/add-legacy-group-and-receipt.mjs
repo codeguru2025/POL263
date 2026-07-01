@@ -51,5 +51,14 @@ const ins = await client.query(
    VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
   [orgId, groupId, displayName, receiptNum, amount, currency, paymentDate]
 );
-console.log(`✓ ${ins.rows[0].group_name} | ${ins.rows[0].currency} ${ins.rows[0].amount} | ${ins.rows[0].payment_date} | ${ins.rows[0].receipt_number}`);
+
+// 2.5% platform fee, matching /api/groups/legacy-receipts
+const fee = (parseFloat(amount) * 0.025).toFixed(2);
+await client.query(
+  `INSERT INTO platform_receivables (organization_id, amount, currency, description, is_settled)
+   VALUES ($1, $2, $3, $4, false)`,
+  [orgId, fee, currency.toUpperCase(), `2.5% on legacy group receipt ${ins.rows[0].receipt_number} (group ${displayName})`]
+);
+
+console.log(`✓ ${ins.rows[0].group_name} | ${ins.rows[0].currency} ${ins.rows[0].amount} | ${ins.rows[0].payment_date} | ${ins.rows[0].receipt_number} | fee ${fee}`);
 await client.end();

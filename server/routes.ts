@@ -7222,6 +7222,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       `);
       const created = (rows.rows ?? rows)[0];
       await auditLog(req, "create", "legacy_group_receipt", created.id as string, null, created);
+
+      // 2.5% platform fee on each legacy group receipt, same as regular group receipts
+      storage.createPlatformReceivable({
+        organizationId: user.organizationId,
+        amount: (parseFloat(String(amount)) * 0.025).toFixed(2),
+        currency: String(currency).toUpperCase(),
+        description: `2.5% on legacy group receipt ${receiptNumber} (group ${group.name})`,
+        isSettled: false,
+      }).catch((err: Error) => structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err.message }));
+
       return res.status(201).json(created);
     } catch (err: any) {
       structuredLog("error", "POST /api/groups/legacy-receipts failed", { error: err?.message });

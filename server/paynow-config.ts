@@ -8,6 +8,7 @@
  */
 
 import { storage } from "./storage";
+import { structuredLog } from "./logger";
 
 export interface OrgPaynowConfig {
   integrationId: string;
@@ -37,29 +38,42 @@ function platformConfig(): OrgPaynowConfig {
 /** Resolve PayNow config for a specific org, falling back to platform env vars. */
 export async function getOrgPaynowConfig(orgId: string): Promise<OrgPaynowConfig> {
   const platform = platformConfig();
+  let org: Awaited<ReturnType<typeof storage.getOrganization>>;
   try {
-    const org = await storage.getOrganization(orgId);
-    if (!org) return platform;
+    org = await storage.getOrganization(orgId);
+  } catch (err) {
+    // Org lookup failed (DB blip, network issue, etc). Do NOT silently fall back to the
+    // platform merchant account here — a tenant with its own dedicated PayNow credentials
+    // (e.g. a different merchant, live vs test mode) must never have its payments silently
+    // routed to the platform's account just because we couldn't confirm otherwise.
+    structuredLog("error", "getOrgPaynowConfig: org lookup failed, refusing to fall back to platform config", {
+      orgId,
+      error: (err as Error).message,
+    });
+    return { ...platform, enabled: false };
+  }
 
-    const integrationId = (org as any).paynowIntegrationId || platform.integrationId;
-    const integrationKey = (org as any).paynowIntegrationKey || platform.integrationKey;
-    const authEmail = (org as any).paynowAuthEmail || platform.authEmail;
-    const returnUrl = (org as any).paynowReturnUrl || platform.returnUrl;
-    const resultUrl = (org as any).paynowResultUrl || platform.resultUrl;
-    const mode = ((org as any).paynowMode || platform.mode) as "test" | "live";
-
-    return {
-      integrationId,
-      integrationKey,
-      authEmail,
-      returnUrl,
-      resultUrl,
-      mode,
-      enabled: process.env.PAYMENTS_PAYNOW_ENABLED !== "false" && !!integrationId && !!integrationKey,
-    };
-  } catch {
+  if (!org) {
+    structuredLog("warn", "getOrgPaynowConfig: organization not found, using platform config", { orgId });
     return platform;
   }
+
+  const integrationId = (org as any).paynowIntegrationId || platform.integrationId;
+  const integrationKey = (org as any).paynowIntegrationKey || platform.integrationKey;
+  const authEmail = (org as any).paynowAuthEmail || platform.authEmail;
+  const returnUrl = (org as any).paynowReturnUrl || platform.returnUrl;
+  const resultUrl = (org as any).paynowResultUrl || platform.resultUrl;
+  const mode = ((org as any).paynowMode || platform.mode) as "test" | "live";
+
+  return {
+    integrationId,
+    integrationKey,
+    authEmail,
+    returnUrl,
+    resultUrl,
+    mode,
+    enabled: process.env.PAYMENTS_PAYNOW_ENABLED !== "false" && !!integrationId && !!integrationKey,
+  };
 }
 
 /** Legacy synchronous helper used by existing code — returns platform config only. */
