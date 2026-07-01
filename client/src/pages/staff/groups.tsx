@@ -17,7 +17,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import {
   Plus, Search, Pencil, Layers, FileStack, Loader2, LinkIcon, UserPlus,
-  Receipt, Printer, ArrowRight, ChevronDown, ChevronRight, Clock,
+  Receipt, Printer, ArrowRight, ChevronDown, ChevronRight, Clock, History,
 } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -568,7 +568,12 @@ function GroupDetailPanel({ group }: { group: Group }) {
       {/* Receipt section */}
       {activeSection === "receipt" && (
         <div className="p-4">
-          {showCombinedReceipt && lastSessionReceipts.length > 0 ? (
+          {group.isLegacy && groupPolicies.length === 0 ? (
+            <LegacyGroupReceiptForm group={group} onSuccess={(r) => {
+              setLastSessionReceipts([r]);
+              toast({ title: `Receipt ${r.receipt_number} recorded`, description: `${r.currency} ${parseFloat(r.amount).toFixed(2)} for ${r.group_name}` });
+            }} />
+          ) : showCombinedReceipt && lastSessionReceipts.length > 0 ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-green-700 dark:text-green-400">Receipts issued successfully.</p>
@@ -694,6 +699,162 @@ function GroupDetailPanel({ group }: { group: Group }) {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// ─── Legacy Group Receipt Form (for groups with no policies yet) ─────────
+
+function LegacyGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess: (r: any) => void }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("USD");
+  const [paymentDate, setPaymentDate] = useState(today);
+  const [notes, setNotes] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/groups/legacy-receipts", {
+        groupId: group.id, amount: parseFloat(amount), currency, paymentDate, notes: notes.trim() || undefined,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed");
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/groups/legacy-receipts"] });
+      setAmount(""); setNotes(""); setPaymentDate(today);
+      toast({ title: "Payment recorded", description: `Receipt ${data.receipt_number} issued` });
+      onSuccess(data);
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        This group has no member policies yet. Record the lump-sum payment here — it will appear in financials
+        immediately. Once members are added and given policies, future payments use the member-selection form below.
+      </p>
+      <div className="grid grid-cols-3 gap-4 max-w-md">
+        <div>
+          <Label>Amount</Label>
+          <Input type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+        </div>
+        <div>
+          <Label>Currency</Label>
+          <Select value={currency} onValueChange={setCurrency}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="USD">USD</SelectItem>
+              <SelectItem value="ZAR">ZAR</SelectItem>
+              <SelectItem value="ZIG">ZIG</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Payment date</Label>
+          <Input type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} />
+        </div>
+      </div>
+      <div className="max-w-md">
+        <Label>Notes (optional)</Label>
+        <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
+      </div>
+      <Button onClick={() => mutation.mutate()} disabled={!amount || parseFloat(amount) <= 0 || mutation.isPending}>
+        {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+        Record Payment
+      </Button>
+      {mutation.isError && <p className="text-sm text-destructive">{(mutation.error as Error).message}</p>}
+    </div>
+  );
+}
+
+// ─── Legacy Receipts Section ─────────────────────────────────
+
+function LegacyReceiptsSection() {
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [search, setSearch] = useState("");
+
+  const params = new URLSearchParams();
+  if (fromDate) params.set("from", fromDate);
+  if (toDate) params.set("to", toDate);
+  const qs = params.toString();
+
+  const { data: receipts = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/groups/legacy-receipts", qs],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/legacy-receipts${qs ? "?" + qs : ""}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const filtered = search
+    ? receipts.filter((r) => r.group_name.toLowerCase().includes(search.toLowerCase()) || (r.receipt_number || "").toLowerCase().includes(search.toLowerCase()))
+    : receipts;
+
+  const totals = filtered.reduce<Record<string, number>>((acc, r) => {
+    const c = r.currency || "USD";
+    acc[c] = (acc[c] || 0) + parseFloat(r.amount);
+    return acc;
+  }, {});
+
+  return (
+    <CardSection title="Legacy Group Receipts" description="Backdated receipts for groups without policies." icon={History} flush>
+      <div className="p-4 border-b flex flex-wrap gap-3 items-end">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input placeholder="Search group or receipt #…" className="pl-9 bg-background w-56" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div className="flex items-center gap-2">
+          <Input type="date" className="w-36" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          <span className="text-muted-foreground text-sm">to</span>
+          <Input type="date" className="w-36" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+        </div>
+        {Object.keys(totals).length > 0 && (
+          <div className="ml-auto flex gap-3 flex-wrap">
+            {Object.entries(totals).sort().map(([c, v]) => (
+              <div key={c} className="rounded-md bg-muted px-3 py-1 text-sm font-semibold">
+                {c} {v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {isLoading ? (
+        <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+      ) : filtered.length === 0 ? (
+        <EmptyState icon={History} title="No receipts found" description="No legacy group receipts match your filters." className="border-0 rounded-none bg-transparent py-10" />
+      ) : (
+        <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
+          <TableHeader className={dataTableStickyHeaderClass}>
+            <TableRow>
+              <TableHead className="pl-6">Receipt #</TableHead>
+              <TableHead>Group</TableHead>
+              <TableHead>Currency</TableHead>
+              <TableHead className="text-right">Amount</TableHead>
+              <TableHead>Payment Date</TableHead>
+              <TableHead className="pr-6">Notes</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.map((r: any) => (
+              <TableRow key={r.id}>
+                <TableCell className="pl-6 font-mono text-sm">{r.receipt_number || "—"}</TableCell>
+                <TableCell className="font-medium text-sm">{r.group_name}</TableCell>
+                <TableCell className="text-sm">{r.currency}</TableCell>
+                <TableCell className="text-right tabular-nums text-sm font-medium">{parseFloat(r.amount).toFixed(2)}</TableCell>
+                <TableCell className="text-sm">{new Date(r.payment_date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</TableCell>
+                <TableCell className="pr-6 text-sm text-muted-foreground">{r.notes || "—"}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
+      )}
+    </CardSection>
   );
 }
 
@@ -860,6 +1021,8 @@ export default function StaffGroups() {
             </DataTable>
           )}
         </CardSection>
+
+        <LegacyReceiptsSection />
 
         {/* Create dialog */}
         <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>

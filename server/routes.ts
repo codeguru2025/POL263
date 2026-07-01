@@ -7090,6 +7090,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { from, to, groupId } = req.query as Record<string, string>;
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const rows = await tdb.execute(sql`
+        SELECT lgr.id, lgr.receipt_number, lgr.group_id, lgr.group_name,
+               lgr.amount, lgr.currency, lgr.payment_date, lgr.notes, lgr.recorded_at
+        FROM legacy_group_receipts lgr
+        WHERE lgr.organization_id = ${user.organizationId}
+          ${from ? sql`AND lgr.payment_date >= ${from}::date` : sql``}
+          ${to   ? sql`AND lgr.payment_date <= ${to}::date`   : sql``}
+          ${groupId ? sql`AND lgr.group_id = ${groupId}::uuid` : sql``}
+        ORDER BY lgr.payment_date DESC, lgr.receipt_number ASC
+      `);
+      return res.json(rows.rows ?? rows);
+    } catch (err: any) {
+      structuredLog("error", "GET /api/groups/legacy-receipts failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.post("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { groupId, amount, currency, paymentDate, notes } = req.body;
+    if (!groupId || !amount || !currency || !paymentDate) {
+      return res.status(400).json({ message: "groupId, amount, currency and paymentDate are required" });
+    }
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    try {
+      const tdb = await getDbForOrg(user.organizationId);
+      const countRow = await tdb.execute(
+        sql`SELECT COUNT(*) AS cnt FROM legacy_group_receipts WHERE organization_id = ${user.organizationId}`
+      );
+      const cnt = parseInt((countRow.rows ?? countRow)[0].cnt as string, 10) + 1;
+      const datePart = paymentDate.replace(/-/g, "");
+      const receiptNumber = `LGR-${datePart}-${String(cnt).padStart(3, "0")}`;
+      const rows = await tdb.execute(sql`
+        INSERT INTO legacy_group_receipts
+          (organization_id, group_id, group_name, receipt_number, amount, currency, payment_date, notes)
+        VALUES
+          (${user.organizationId}, ${groupId}::uuid, ${group.name}, ${receiptNumber},
+           ${String(amount)}::numeric, ${String(currency).toUpperCase()}, ${paymentDate}::date, ${notes ?? null})
+        RETURNING *
+      `);
+      const created = (rows.rows ?? rows)[0];
+      await auditLog(req, "create", "legacy_group_receipt", created.id as string, null, created);
+      return res.status(201).json(created);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/groups/legacy-receipts failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   // ─── Directory Contacts (undertakers, underwriters, transport, general) ──
 
   app.get("/api/directory-contacts", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {

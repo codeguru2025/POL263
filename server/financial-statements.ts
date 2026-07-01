@@ -147,6 +147,24 @@ async function queryCommissions(tdb: any, orgId: string, from: string, to: strin
     .groupBy(commissionLedgerEntries.currency);
 }
 
+// ─── Legacy group receipts (no policy — cash subscriptions) ───────────────
+
+async function queryLegacyGroupReceipts(tdb: any, orgId: string, from: string, to: string) {
+  try {
+    const rows = await tdb.execute(
+      sql`SELECT currency, SUM(amount)::text AS total
+          FROM legacy_group_receipts
+          WHERE organization_id = ${orgId}
+            AND payment_date >= ${from}::date
+            AND payment_date <= ${to}::date
+          GROUP BY currency`
+    );
+    return (rows.rows ?? rows) as { currency: string; total: string }[];
+  } catch {
+    return [];
+  }
+}
+
 // ─── Income Statement ──────────────────────────────────────────────────────
 
 export async function buildIncomeStatement(orgId: string, params: StatementParams) {
@@ -155,6 +173,7 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   const fx = await fxMapFor(orgId);
 
   const { premiumRows, serviceRows } = await queryReceipts(tdb, orgId, from, to, branchId);
+  const legacyRows = await queryLegacyGroupReceipts(tdb, orgId, from, to);
   const disbRows = await queryDisbursements(tdb, orgId, from, to, branchId);
   const commRows = await queryCommissions(tdb, orgId, from, to);
 
@@ -167,6 +186,8 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   }
   const cashServices: AmountMap = {};
   for (const r of serviceRows) add(cashServices, r.currency, parseFloat(r.total));
+  const legacyGroupIncome: AmountMap = {};
+  for (const r of legacyRows) add(legacyGroupIncome, r.currency, parseFloat(r.total));
 
   // ── Expenses — look up entity categories in bulk ──
   // Collect unique entity IDs per type so we can join category labels.
@@ -211,7 +232,7 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
 
   // ── Totals ──
   const incomeTotal: AmountMap = {};
-  for (const m of [premiumIndividual, premiumGroup, cashServices]) for (const [c, v] of Object.entries(m)) add(incomeTotal, c, v);
+  for (const m of [premiumIndividual, premiumGroup, cashServices, legacyGroupIncome]) for (const [c, v] of Object.entries(m)) add(incomeTotal, c, v);
   const expenseTotal: AmountMap = {};
   for (const line of expenseLines) for (const [c, v] of Object.entries(line.amounts)) add(expenseTotal, c, v);
   const net: AmountMap = {};
@@ -229,6 +250,7 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
       premiumIndividual: round2(premiumIndividual),
       premiumGroup: round2(premiumGroup),
       cashServices: round2(cashServices),
+      legacyGroupIncome: round2(legacyGroupIncome),
       total: round2(incomeTotal),
     },
     expenses: {
@@ -253,6 +275,7 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
   const fx = await fxMapFor(orgId);
 
   const { premiumRows, serviceRows } = await queryReceipts(tdb, orgId, from, to, branchId);
+  const legacyRows = await queryLegacyGroupReceipts(tdb, orgId, from, to);
   const disbRows = await queryDisbursements(tdb, orgId, from, to, branchId);
   const commRows = await queryCommissions(tdb, orgId, from, to);
 
@@ -265,6 +288,7 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
   };
   for (const r of premiumRows) addIn(r.channel, r.currency, parseFloat(r.total));
   for (const r of serviceRows) addIn(r.channel, r.currency, parseFloat(r.total));
+  for (const r of legacyRows) addIn("cash", r.currency, parseFloat(r.total));
 
   // ── Cash OUT — from payment_disbursements ledger + commissions ──
   const requisitionsOut: AmountMap = {};
