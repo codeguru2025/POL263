@@ -15,4 +15,6 @@ export default defineConfig({
     url,
     ssl: { rejectUnauthorized: false },
   },
+  // schema_migrations is our internal migration tracker, not a Drizzle-managed table
+  tablesFilter: ["!schema_migrations"],
 });
