@@ -3379,6 +3379,51 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       policy = await storage.getPolicy(policyIdPreview, user.organizationId) ?? null;
     }
 
+    // Premium-amount override: a receipt whose amount doesn't match the policy's system
+    // premium (× months) is held for approval instead of clearing immediately. Only
+    // edit:premium holders may submit a mismatched amount at all; approval requires
+    // approve:finance (see POST /api/payment-receipts/:id/approve).
+    if (isClearedWithPolicy && policy && policy.clientId) {
+      const requestedAmount = parseFloat(String(req.body.amount ?? 0));
+      const explicitMonths = req.body.months != null ? parseInt(String(req.body.months), 10) : 1;
+      const monthsForCheck = Number.isFinite(explicitMonths) && explicitMonths >= 1 ? Math.min(12, explicitMonths) : 1;
+      const expectedAmount = parseFloat(String(policy.premiumAmount ?? "0")) * monthsForCheck;
+      const isOverridden = Number.isFinite(requestedAmount) && Math.abs(requestedAmount - expectedAmount) >= 0.01;
+
+      if (isOverridden) {
+        const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+        const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
+        if (!canEditPremium) {
+          return res.status(403).json({ message: "Missing permission: edit:premium — the receipt amount must match the policy premium." });
+        }
+        const submitterNote = typeof req.body.submitterNote === "string" ? req.body.submitterNote.trim() : "";
+        if (!submitterNote) {
+          return res.status(400).json({ message: "Notes for the approver are required when the receipt amount differs from the policy premium." });
+        }
+        const pendingReceipt = await withOrgTransaction(user.organizationId, async (txDb) => {
+          const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
+          const [created] = await txDb.insert(paymentReceipts).values({
+            organizationId: user.organizationId,
+            branchId: policy.branchId ?? undefined,
+            receiptNumber,
+            policyId: policy.id,
+            clientId: policy.clientId!,
+            amount: requestedAmount.toFixed(2),
+            currency: req.body.currency || policy.currency || "USD",
+            paymentChannel: req.body.paymentMethod || "cash",
+            issuedByUserId: user.id,
+            status: "issued",
+            approvalStatus: "pending",
+            submitterNote,
+            metadataJson: { premiumOverride: true, systemPremium: policy.premiumAmount, requestedAmount: requestedAmount.toFixed(2), months: monthsForCheck },
+          }).returning();
+          return created;
+        });
+        await auditLog(req, "create", "payment_receipt_pending_override", pendingReceipt.id, null, pendingReceipt);
+        return res.status(201).json({ receipt: pendingReceipt, pendingApproval: true });
+      }
+    }
+
     const result = await withOrgTransaction(user.organizationId, async (txDb) => {
       await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
       const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
@@ -4108,6 +4153,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const policy = await storage.getPolicy(receipt.policyId, user.organizationId);
       if (!policy) return res.status(404).json({ message: "Policy not found." });
       const effectiveDate = receipt.backdatedDate || new Date().toISOString().split("T")[0];
+      const isPremiumOverride = !!(receipt.metadataJson as any)?.premiumOverride;
+      const approvedNoteText = isPremiumOverride
+        ? `Premium override approved — receipted ${receipt.amount} vs system premium ${(receipt.metadataJson as any)?.systemPremium ?? "?"}`
+        : `Backdated group receipt approved — original date: ${effectiveDate}`;
       await withOrgTransaction(user.organizationId, async (txDb) => {
         await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
         const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
@@ -4124,7 +4173,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           receivedAt: new Date(),
           postedDate: effectiveDate,
           valueDate: effectiveDate,
-          notes: `Backdated group receipt approved — original date: ${effectiveDate}`,
+          notes: approvedNoteText,
           recordedBy: recordedBy ?? undefined,
         }).returning();
         await txDb.update(paymentReceipts)
@@ -4137,7 +4186,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           } as any)
           .where(eq(paymentReceipts.id, receiptId));
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
-        await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, effectiveDate, " (backdated group receipt, approved)", recordedBy ?? undefined);
+        await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, effectiveDate, isPremiumOverride ? " (premium override, approved)" : " (backdated group receipt, approved)", recordedBy ?? undefined);
         if (policy.status === "lapsed") {
           await rollbackClawbacksInTx(txDb, user.organizationId, policy);
         }
@@ -4146,9 +4195,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         organizationId: user.organizationId,
         amount: (parseFloat(String(receipt.amount)) * 0.025).toFixed(2),
         currency: receipt.currency,
-        description: `2.5% on approved backdated receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`,
+        description: isPremiumOverride
+          ? `2.5% on approved premium-override receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`
+          : `2.5% on approved backdated receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`,
         isSettled: false,
-      }).catch((err: Error) => structuredLog("error", "Platform fee failed (approved backdated receipt)", { receiptId, error: err.message }));
+      }).catch((err: Error) => structuredLog("error", "Platform fee failed (approved receipt)", { receiptId, error: err.message }));
       await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
       return res.json({ message: "Receipt approved and applied." });
     } catch (err: any) {
@@ -5031,6 +5082,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const dispatchBody = { ...req.body };
     if (dispatchBody.dispatchedAt && typeof dispatchBody.dispatchedAt === "string") { const d = new Date(dispatchBody.dispatchedAt); dispatchBody.dispatchedAt = isNaN(d.getTime()) ? undefined : d; }
     else if (!dispatchBody.dispatchedAt) dispatchBody.dispatchedAt = undefined;
+    // Auto-calculate the chapel & wash bay fee for partner-parlour cases that use our facilities.
+    if (dispatchBody.chapelWashBayUsed && intake.partnerParlourId) {
+      dispatchBody.chapelWashBayFeeAmount = "20.00";
+      dispatchBody.chapelWashBayFeeCurrency = "USD";
+      if (!dispatchBody.chapelWashBayFeeStatus) dispatchBody.chapelWashBayFeeStatus = "unpaid";
+    } else {
+      dispatchBody.chapelWashBayUsed = false;
+      dispatchBody.chapelWashBayFeeAmount = undefined;
+      dispatchBody.chapelWashBayFeeStatus = undefined;
+    }
     const parsed = insertMortuaryDispatchSchema.parse({
       ...dispatchBody,
       intakeId: req.params.id as string,
@@ -5041,6 +5102,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const dispatch = await storage.dispatchIntake(req.params.id as string, user.organizationId, parsed);
     await auditLog(req, "DISPATCH_BODY", "MortuaryDispatch", dispatch.id, null, dispatch);
     return res.json(dispatch);
+  });
+
+  app.post("/api/mortuary-intakes/:id/chapel-wash-bay-payment", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const dispatch = await storage.getMortuaryDispatch(req.params.id as string, user.organizationId);
+    if (!dispatch) return res.status(404).json({ message: "Dispatch not found for this intake" });
+    if (!dispatch.chapelWashBayUsed) return res.status(400).json({ message: "Chapel & wash bay was not used on this dispatch" });
+    if (dispatch.chapelWashBayFeeStatus === "paid") return res.status(400).json({ message: "Chapel & wash bay fee is already paid" });
+    const { paidBy } = req.body;
+    if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
+    const before = dispatch;
+    const updated = await storage.recordChapelWashBayPayment(req.params.id as string, user.organizationId, {
+      chapelWashBayFeePaidBy: paidBy,
+      chapelWashBayFeePaidAt: new Date(),
+      chapelWashBayFeeStatus: "paid",
+    });
+    await auditLog(req, "RECORD_CHAPEL_WASH_BAY_PAYMENT", "MortuaryDispatch", dispatch.id, before, updated);
+    return res.json(updated);
   });
 
   // Belongings
@@ -7223,13 +7302,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const created = (rows.rows ?? rows)[0];
       await auditLog(req, "create", "legacy_group_receipt", created.id as string, null, created);
 
-      // 2.5% platform fee on each legacy group receipt, same as regular group receipts
+      // 2.5% platform fee on each legacy group receipt, same as regular group receipts.
+      // Stamped with the receipt's own payment date (not "now") so backdated legacy
+      // entries land in the correct month on date-filtered platform-fee reports.
       storage.createPlatformReceivable({
         organizationId: user.organizationId,
         amount: (parseFloat(String(amount)) * 0.025).toFixed(2),
         currency: String(currency).toUpperCase(),
         description: `2.5% on legacy group receipt ${receiptNumber} (group ${group.name})`,
         isSettled: false,
+        createdAt: new Date(`${paymentDate}T12:00:00.000Z`),
       }).catch((err: Error) => structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err.message }));
 
       return res.status(201).json(created);

@@ -546,6 +546,20 @@ export const productVersions = pgTable(
     additionalMemberPremiumMonthlyUsd: numeric("additional_member_premium_monthly_usd"),
     /** Client-facing premium per additional member (per month, ZAR) for members beyond the product's included count. */
     additionalMemberPremiumMonthlyZar: numeric("additional_member_premium_monthly_zar"),
+    /**
+     * Optional age-band rates for additional (paying) members, on top of the flat rate above.
+     * All nullable — a version with none of these set keeps using the flat rate untouched.
+     * The "child" band uses this same version's dependentMaxAge cutoff; the other three
+     * bands cover 21-65, 66-84, and 85+.
+     */
+    additionalMemberRateChildUsd: numeric("additional_member_rate_child_usd"),
+    additionalMemberRateChildZar: numeric("additional_member_rate_child_zar"),
+    additionalMemberRate21To65Usd: numeric("additional_member_rate_21_65_usd"),
+    additionalMemberRate21To65Zar: numeric("additional_member_rate_21_65_zar"),
+    additionalMemberRate66To84Usd: numeric("additional_member_rate_66_84_usd"),
+    additionalMemberRate66To84Zar: numeric("additional_member_rate_66_84_zar"),
+    additionalMemberRate85PlusUsd: numeric("additional_member_rate_85_plus_usd"),
+    additionalMemberRate85PlusZar: numeric("additional_member_rate_85_plus_zar"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -1382,6 +1396,13 @@ export const mortuaryDispatches = pgTable(
     destination: text("destination"),
     collectorAcknowledgedName: text("collector_acknowledged_name"),
     notes: text("notes"),
+    // Chapel & wash bay usage — for partner-parlour cases that use our facilities on dispatch.
+    chapelWashBayUsed: boolean("chapel_wash_bay_used").default(false),
+    chapelWashBayFeeAmount: numeric("chapel_wash_bay_fee_amount", { precision: 10, scale: 2 }),
+    chapelWashBayFeeCurrency: text("chapel_wash_bay_fee_currency").default("USD"),
+    chapelWashBayFeeStatus: text("chapel_wash_bay_fee_status").default("unpaid"), // 'unpaid' | 'paid'
+    chapelWashBayFeePaidAt: timestamp("chapel_wash_bay_fee_paid_at"),
+    chapelWashBayFeePaidBy: text("chapel_wash_bay_fee_paid_by"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("md_intake_idx").on(t.intakeId)]

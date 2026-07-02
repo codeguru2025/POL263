@@ -212,13 +212,22 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
   const togglePolicy = (id: string) =>
     setPolicyIds((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
+  // The backend applies a single currency to the whole batch receipt, so all selected
+  // policies must share one. Derive it from the selection instead of assuming USD, so
+  // ZAR-priced policies get receipted in ZAR rather than mislabeled as USD.
+  const selectedCurrencies = Array.from(new Set(
+    groupPolicies.filter((p: any) => policyIds.has(p.id)).map((p: any) => p.currency || "USD")
+  ));
+  const mixedCurrencies = selectedCurrencies.length > 1;
+  const receiptCurrency = selectedCurrencies[0] || "USD";
+
   const mutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/group-receipt", {
         groupId: group.id,
         policyIds: Array.from(policyIds),
         totalAmount: parseFloat(totalAmount),
-        currency: "USD",
+        currency: receiptCurrency,
         receiptDate,
         notes: notes.trim() || undefined,
         submitterNote: isBackdated ? submitterNote.trim() : undefined,
@@ -244,7 +253,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
   const paynowMutation = useMutation({
     mutationFn: async () => {
       const createRes = await apiRequest("POST", "/api/group-payment-intents", {
-        groupId: group.id, policyIds: Array.from(policyIds), totalAmount: parseFloat(totalAmount), currency: "USD",
+        groupId: group.id, policyIds: Array.from(policyIds), totalAmount: parseFloat(totalAmount), currency: receiptCurrency,
       });
       const { id: intentId } = await createRes.json() as { id: string };
       const initRes = await apiRequest("POST", `/api/group-payment-intents/${intentId}/initiate`, { method: "visa_mastercard" });
@@ -350,10 +359,13 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
             </div>
           )}
 
+          {mixedCurrencies && (
+            <p className="text-sm text-destructive">Selected policies use different currencies ({selectedCurrencies.join(", ")}) — select policies in a single currency to issue a group receipt.</p>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button
               onClick={() => mutation.mutate()}
-              disabled={policyIds.size === 0 || !totalAmount || mutation.isPending || (isBackdated && !submitterNote.trim())}
+              disabled={policyIds.size === 0 || !totalAmount || mutation.isPending || mixedCurrencies || (isBackdated && !submitterNote.trim())}
               data-testid="button-submit-group-receipt-inline"
             >
               {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
@@ -361,7 +373,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
             </Button>
             {!isBackdated && paynowConfig?.enabled && (
               <Button variant="outline" onClick={() => paynowMutation.mutate()}
-                disabled={policyIds.size === 0 || !totalAmount || paynowMutation.isPending || polling}>
+                disabled={policyIds.size === 0 || !totalAmount || paynowMutation.isPending || polling || mixedCurrencies}>
                 {(paynowMutation.isPending || polling) && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                 {polling ? "Waiting for PayNow…" : "Pay via PayNow"}
               </Button>

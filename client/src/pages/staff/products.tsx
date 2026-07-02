@@ -84,6 +84,14 @@ type ProductVersion = {
   underwriterAdvanceMonths: number;
   additionalMemberPremiumMonthlyUsd: string | null;
   additionalMemberPremiumMonthlyZar: string | null;
+  additionalMemberRateChildUsd: string | null;
+  additionalMemberRateChildZar: string | null;
+  additionalMemberRate21To65Usd: string | null;
+  additionalMemberRate21To65Zar: string | null;
+  additionalMemberRate66To84Usd: string | null;
+  additionalMemberRate66To84Zar: string | null;
+  additionalMemberRate85PlusUsd: string | null;
+  additionalMemberRate85PlusZar: string | null;
   reinstatementRequiresArrears: boolean | null;
   reinstatementNewWaitingPeriod: boolean | null;
   isActive: boolean;
@@ -1124,6 +1132,14 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState("0");
   const [additionalMemberPremiumMonthlyUsd, setAdditionalMemberPremiumMonthlyUsd] = useState("");
   const [additionalMemberPremiumMonthlyZar, setAdditionalMemberPremiumMonthlyZar] = useState("");
+  const [ageBandRateChildUsd, setAgeBandRateChildUsd] = useState("");
+  const [ageBandRateChildZar, setAgeBandRateChildZar] = useState("");
+  const [ageBandRate21To65Usd, setAgeBandRate21To65Usd] = useState("");
+  const [ageBandRate21To65Zar, setAgeBandRate21To65Zar] = useState("");
+  const [ageBandRate66To84Usd, setAgeBandRate66To84Usd] = useState("");
+  const [ageBandRate66To84Zar, setAgeBandRate66To84Zar] = useState("");
+  const [ageBandRate85PlusUsd, setAgeBandRate85PlusUsd] = useState("");
+  const [ageBandRate85PlusZar, setAgeBandRate85PlusZar] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1157,6 +1173,14 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
       additionalMemberPremiumMonthlyUsd: additionalMemberPremiumMonthlyUsd.trim() || undefined,
       additionalMemberPremiumMonthlyZar: additionalMemberPremiumMonthlyZar.trim() || undefined,
+      additionalMemberRateChildUsd: ageBandRateChildUsd.trim() || undefined,
+      additionalMemberRateChildZar: ageBandRateChildZar.trim() || undefined,
+      additionalMemberRate21To65Usd: ageBandRate21To65Usd.trim() || undefined,
+      additionalMemberRate21To65Zar: ageBandRate21To65Zar.trim() || undefined,
+      additionalMemberRate66To84Usd: ageBandRate66To84Usd.trim() || undefined,
+      additionalMemberRate66To84Zar: ageBandRate66To84Zar.trim() || undefined,
+      additionalMemberRate85PlusUsd: ageBandRate85PlusUsd.trim() || undefined,
+      additionalMemberRate85PlusZar: ageBandRate85PlusZar.trim() || undefined,
     });
   };
 
@@ -1357,6 +1381,45 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             </div>
           </div>
 
+          <p className="text-sm text-muted-foreground">
+            Optional: price additional members by age band instead of one flat rate above. Leave all blank to keep the flat rate.
+            "Child" uses the dependent age cutoff set above; this does not affect any existing policy on this version until you fill these in.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Child / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-version-ageband-child-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>Child / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-version-ageband-child-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label>21–65 / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Usd} onChange={(e) => setAgeBandRate21To65Usd(e.target.value)} data-testid="input-version-ageband-21-65-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>21–65 / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-version-ageband-21-65-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label>66–84 / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-version-ageband-66-84-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>66–84 / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-version-ageband-66-84-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label>85+ / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-version-ageband-85-plus-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>85+ / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-version-ageband-85-plus-zar" />
+            </div>
+          </div>
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={isPending || !effectiveFrom} data-testid="button-submit-version">
@@ -1401,6 +1464,14 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState(String(version.underwriterAdvanceMonths ?? 0));
   const [additionalMemberPremiumMonthlyUsd, setAdditionalMemberPremiumMonthlyUsd] = useState(version.additionalMemberPremiumMonthlyUsd || "");
   const [additionalMemberPremiumMonthlyZar, setAdditionalMemberPremiumMonthlyZar] = useState(version.additionalMemberPremiumMonthlyZar || "");
+  const [ageBandRateChildUsd, setAgeBandRateChildUsd] = useState(version.additionalMemberRateChildUsd || "");
+  const [ageBandRateChildZar, setAgeBandRateChildZar] = useState(version.additionalMemberRateChildZar || "");
+  const [ageBandRate21To65Usd, setAgeBandRate21To65Usd] = useState(version.additionalMemberRate21To65Usd || "");
+  const [ageBandRate21To65Zar, setAgeBandRate21To65Zar] = useState(version.additionalMemberRate21To65Zar || "");
+  const [ageBandRate66To84Usd, setAgeBandRate66To84Usd] = useState(version.additionalMemberRate66To84Usd || "");
+  const [ageBandRate66To84Zar, setAgeBandRate66To84Zar] = useState(version.additionalMemberRate66To84Zar || "");
+  const [ageBandRate85PlusUsd, setAgeBandRate85PlusUsd] = useState(version.additionalMemberRate85PlusUsd || "");
+  const [ageBandRate85PlusZar, setAgeBandRate85PlusZar] = useState(version.additionalMemberRate85PlusZar || "");
   const [reinstatementRequiresArrears, setReinstatementRequiresArrears] = useState(version.reinstatementRequiresArrears ?? true);
   const [reinstatementNewWaitingPeriod, setReinstatementNewWaitingPeriod] = useState(version.reinstatementNewWaitingPeriod ?? true);
 
@@ -1437,6 +1508,14 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
       additionalMemberPremiumMonthlyUsd: additionalMemberPremiumMonthlyUsd.trim() || null,
       additionalMemberPremiumMonthlyZar: additionalMemberPremiumMonthlyZar.trim() || null,
+      additionalMemberRateChildUsd: ageBandRateChildUsd.trim() || null,
+      additionalMemberRateChildZar: ageBandRateChildZar.trim() || null,
+      additionalMemberRate21To65Usd: ageBandRate21To65Usd.trim() || null,
+      additionalMemberRate21To65Zar: ageBandRate21To65Zar.trim() || null,
+      additionalMemberRate66To84Usd: ageBandRate66To84Usd.trim() || null,
+      additionalMemberRate66To84Zar: ageBandRate66To84Zar.trim() || null,
+      additionalMemberRate85PlusUsd: ageBandRate85PlusUsd.trim() || null,
+      additionalMemberRate85PlusZar: ageBandRate85PlusZar.trim() || null,
     });
   };
 
@@ -1625,6 +1704,45 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
             <div className="space-y-2">
               <Label>Per additional member / month (ZAR)</Label>
               <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-edit-version-additional-member-zar" />
+            </div>
+          </div>
+
+          <p className="text-sm text-muted-foreground">
+            Optional: price additional members by age band instead of one flat rate above. Leave all blank to keep the flat rate.
+            "Child" uses the dependent age cutoff set above; existing policies on this version are unaffected until you fill these in.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Child / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-edit-version-ageband-child-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>Child / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-edit-version-ageband-child-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label>21–65 / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Usd} onChange={(e) => setAgeBandRate21To65Usd(e.target.value)} data-testid="input-edit-version-ageband-21-65-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>21–65 / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-edit-version-ageband-21-65-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label>66–84 / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-edit-version-ageband-66-84-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>66–84 / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-edit-version-ageband-66-84-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label>85+ / month (USD)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-edit-version-ageband-85-plus-usd" />
+            </div>
+            <div className="space-y-2">
+              <Label>85+ / month (ZAR)</Label>
+              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-edit-version-ageband-85-plus-zar" />
             </div>
           </div>
 

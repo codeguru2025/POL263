@@ -240,6 +240,10 @@ export async function streamMortuaryDispatchPDF(
   y = infoRow(doc, "Dispatched By (Staff):", dispatchedByUser ? fmt(dispatchedByUser.displayName) : "—", y);
   y = infoRow(doc, "Date & Time of Dispatch:", fmtDateTime(dispatch?.dispatchedAt), y);
   y = infoRow(doc, "Destination:", fmt(dispatch?.destination), y);
+  if (dispatch?.chapelWashBayUsed) {
+    const feeStatus = dispatch.chapelWashBayFeeStatus === "paid" ? "Paid" : "Unpaid";
+    y = infoRow(doc, "Chapel & Wash Bay Fee:", `USD ${parseFloat(String(dispatch.chapelWashBayFeeAmount ?? "20.00")).toFixed(2)} (${feeStatus})`, y);
+  }
   y += 8;
 
   y = sectionHeader(doc, "3. Collector Details", y);
@@ -419,6 +423,8 @@ export async function streamMortuaryDispatchBlankPDF(orgId: string, res: Respons
   y = sectionHeader(doc, "3. Dispatch Details", y);
   y = blankField(doc, "Date & Time of Dispatch", MARGIN + 8, y, half);
   y = blankField(doc, "Destination", MARGIN + 8, y, COL - 16);
+  y = blankCheck(doc, "Chapel & wash bay used (USD 20.00 fee — partner parlours)", MARGIN + 8, y, false);
+  y = blankField(doc, "Chapel/Wash Bay Fee Paid By & Date", MARGIN + 8, y, COL - 16);
   y += 4;
 
   y = sectionHeader(doc, "4. Collector Details", y);

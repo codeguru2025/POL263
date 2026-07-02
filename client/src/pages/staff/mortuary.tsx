@@ -112,6 +112,7 @@ export default function StaffMortuary() {
   const [showAddBelonging, setShowAddBelonging] = useState(false);
   const [showBodyWash, setShowBodyWash] = useState(false);
   const [showRecordPayment, setShowRecordPayment] = useState(false);
+  const [showChapelWashBayPayment, setShowChapelWashBayPayment] = useState(false);
 
   const { data: intakes = [], isLoading: intakesLoading } = useQuery<any[]>({
     queryKey: ["/api/mortuary-intakes"],
@@ -211,6 +212,19 @@ export default function StaffMortuary() {
       queryClient.invalidateQueries({ queryKey: ["/api/mortuary-intakes"] });
       setShowRecordPayment(false);
       toast({ title: "Payment recorded" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const recordChapelWashBayPaymentMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = await apiRequest("POST", `/api/mortuary-intakes/${selectedIntakeId}/chapel-wash-bay-payment`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/mortuary-intakes/${selectedIntakeId}/dispatch`] });
+      setShowChapelWashBayPayment(false);
+      toast({ title: "Chapel & wash bay fee recorded as paid" });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -484,6 +498,20 @@ export default function StaffMortuary() {
                     {dispatch.collectedByOrganization && <DetailRow label="Collector org" value={dispatch.collectedByOrganization} />}
                     <DetailRow label="Destination" value={dispatch.destination} />
                     {dispatch.collectorAcknowledgedName && <DetailRow label="Collector acknowledged" value={dispatch.collectorAcknowledgedName} />}
+                    {dispatch.chapelWashBayUsed && (
+                      <div className="flex items-center justify-between py-1">
+                        <span className="text-xs text-muted-foreground">Chapel & wash bay fee</span>
+                        <span className="flex items-center gap-2 text-sm">
+                          USD {parseFloat(dispatch.chapelWashBayFeeAmount || "0").toFixed(2)}
+                          {dispatch.chapelWashBayFeeStatus === "paid"
+                            ? <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Paid</Badge>
+                            : <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200">Unpaid</Badge>}
+                          {dispatch.chapelWashBayFeeStatus === "unpaid" && (
+                            <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => setShowChapelWashBayPayment(true)}>Record payment</Button>
+                          )}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </CardSection>
               )}
@@ -574,6 +602,19 @@ export default function StaffMortuary() {
           intake={selectedIntake}
           onSubmit={(data) => upsertDispatchMutation.mutate(data)}
           isPending={upsertDispatchMutation.isPending}
+        />
+      )}
+
+      {/* Chapel & Wash Bay Payment Dialog */}
+      {selectedIntakeId && dispatch && (
+        <RecordPaymentDialog
+          open={showChapelWashBayPayment}
+          onOpenChange={setShowChapelWashBayPayment}
+          feeAmount={dispatch.chapelWashBayFeeAmount}
+          onSubmit={(data) => recordChapelWashBayPaymentMutation.mutate(data)}
+          isPending={recordChapelWashBayPaymentMutation.isPending}
+          title="Record Chapel & Wash Bay Payment"
+          statusOptions={[{ value: "paid", label: "Paid" }]}
         />
       )}
 
@@ -940,17 +981,23 @@ function CreateParlourDialog({ open, onOpenChange, onCreated }: {
 
 // ─── Record Payment Dialog ────────────────────────────────────────────────────
 
-function RecordPaymentDialog({ open, onOpenChange, feeAmount, onSubmit, isPending }: {
+function RecordPaymentDialog({ open, onOpenChange, feeAmount, onSubmit, isPending, title = "Record Storage Payment", statusOptions }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   feeAmount?: string | null;
   onSubmit: (data: Record<string, any>) => void;
   isPending: boolean;
+  title?: string;
+  statusOptions?: { value: string; label: string }[];
 }) {
+  const options = statusOptions ?? [
+    { value: "paid_at_collection", label: "Paid on Collection" },
+    { value: "paid_at_admission", label: "Paid at Admission (backdating)" },
+  ];
   const [form, setForm] = useState({
     paidBy: "",
     paidAt: new Date().toISOString().slice(0, 16),
-    status: "paid_at_collection",
+    status: options[0].value,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -962,22 +1009,23 @@ function RecordPaymentDialog({ open, onOpenChange, feeAmount, onSubmit, isPendin
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Record Storage Payment</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             Fee due: <strong>USD {parseFloat(feeAmount || "0").toFixed(2)}</strong>
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Payment Type *</Label>
-            <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="paid_at_collection">Paid on Collection</SelectItem>
-                <SelectItem value="paid_at_admission">Paid at Admission (backdating)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          {options.length > 1 && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Payment Type *</Label>
+              <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label className="text-xs">Received From (Name) *</Label>
             <Input value={form.paidBy} onChange={(e) => setForm((f) => ({ ...f, paidBy: e.target.value }))} required placeholder="Name of person who paid" />
@@ -1013,6 +1061,7 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
     destination: "",
     collectorAcknowledgedName: "",
     notes: "",
+    chapelWashBayUsed: false,
   });
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1024,6 +1073,7 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
       destination: form.destination || null,
       collectorAcknowledgedName: form.collectorAcknowledgedName || null,
       notes: form.notes || null,
+      chapelWashBayUsed: form.chapelWashBayUsed,
     });
   };
 
@@ -1079,6 +1129,15 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
               <Label className="text-xs">Notes</Label>
               <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
             </div>
+            {intake?.partnerParlourId && (
+              <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+                <Checkbox id="chapel-wash-bay-used" checked={form.chapelWashBayUsed}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, chapelWashBayUsed: v === true }))} />
+                <Label htmlFor="chapel-wash-bay-used" className="text-sm font-normal cursor-pointer leading-snug">
+                  Client used our chapel & wash bay <span className="text-muted-foreground">(USD 20.00 fee)</span>
+                </Label>
+              </div>
+            )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
               <Button type="submit" disabled={isPending || !form.collectedByName}>

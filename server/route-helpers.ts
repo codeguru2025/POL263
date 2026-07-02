@@ -64,6 +64,30 @@ function monthlyToScheduleFactor(paymentSchedule: string): number {
   return 1;
 }
 
+/**
+ * Rate for one additional (chargeable) member, by age band. "Child" uses this product
+ * version's own dependentMaxAge cutoff; the rest split into 21-65 / 66-84 / 85+.
+ */
+function ageBandRate(pv: any, currency: string, age: number | null, childThresholdAge: number): number {
+  const pick = (usdField: string, zarField: string) =>
+    parseFloat(String((currency === "ZAR" ? pv[zarField] : pv[usdField]) ?? 0));
+  if (age !== null && age < childThresholdAge) {
+    return pick("additionalMemberRateChildUsd", "additionalMemberRateChildZar");
+  }
+  if (age !== null && age >= 85) return pick("additionalMemberRate85PlusUsd", "additionalMemberRate85PlusZar");
+  if (age !== null && age >= 66) return pick("additionalMemberRate66To84Usd", "additionalMemberRate66To84Zar");
+  return pick("additionalMemberRate21To65Usd", "additionalMemberRate21To65Zar");
+}
+
+function hasAgeBandRates(pv: any): boolean {
+  return [
+    pv.additionalMemberRateChildUsd, pv.additionalMemberRateChildZar,
+    pv.additionalMemberRate21To65Usd, pv.additionalMemberRate21To65Zar,
+    pv.additionalMemberRate66To84Usd, pv.additionalMemberRate66To84Zar,
+    pv.additionalMemberRate85PlusUsd, pv.additionalMemberRate85PlusZar,
+  ].some((v) => v != null);
+}
+
 export async function computePolicyPremium(
   orgId: string,
   productVersionId: string,
@@ -134,8 +158,22 @@ export async function computePolicyPremium(
     const additionalRateZar = parseFloat(String(pv.additionalMemberPremiumMonthlyZar ?? 0));
     const additionalRate = currency === "ZAR" ? additionalRateZar : additionalRateUsd;
 
-    if (additionalRate > 0) {
-      // New behaviour: flat per-additional-member rate, counting ALL excess over the
+    if (hasAgeBandRates(pv)) {
+      // Age-band behaviour: each member beyond the product's included count is priced
+      // individually by their own age band, instead of one flat additional-member rate.
+      // Members are covered for free in the order they were added (policy holder first);
+      // whichever were added last are the ones counted as "additional" once the included
+      // count is exceeded.
+      const totalIncluded = includedAdults + includedChildren + includedExtended;
+      const ages: (number | null)[] = [null, ...((dependentDateOfBirths || []).map((dob) => ageAt(dob ?? null)))];
+      const extraCount = Math.max(0, ages.length - totalIncluded);
+      if (extraCount > 0) {
+        const chargeableAges = ages.slice(ages.length - extraCount);
+        const perMemberTotal = chargeableAges.reduce((sum: number, age) => sum + ageBandRate(pv, currency, age, childThresholdAge), 0);
+        dependantSurcharge = perMemberTotal * monthlyToScheduleFactor(paymentSchedule);
+      }
+    } else if (additionalRate > 0) {
+      // Flat behaviour: single per-additional-member rate, counting ALL excess over the
       // product's covered count (adults + children + extended family).
       const totalIncluded = includedAdults + includedChildren + includedExtended;
       const extraTotal = Math.max(0, (adults + children) - totalIncluded);

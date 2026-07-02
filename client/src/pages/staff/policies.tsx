@@ -124,6 +124,8 @@ export default function StaffPolicies() {
   const [inPolicyReceiptRef, setInPolicyReceiptRef] = useState("");
   const [inPolicyReceiptNotes, setInPolicyReceiptNotes] = useState("");
   const [inPolicyReceiptMonths, setInPolicyReceiptMonths] = useState(1);
+  const [inPolicyReceiptAmountOverride, setInPolicyReceiptAmountOverride] = useState<string | null>(null);
+  const [inPolicyReceiptSubmitterNote, setInPolicyReceiptSubmitterNote] = useState("");
   const [pnIntentId, setPnIntentId] = useState<string | null>(null);
   const [pnPolling, setPnPolling] = useState(false);
   const [pnPollStartTime, setPnPollStartTime] = useState<number>(0);
@@ -1170,6 +1172,7 @@ export default function StaffPolicies() {
     setPnInnbucksCode(""); setPnInnbucksExpiry("");
     setPnNeedsOtp(false); setPnOtpRef(""); setPnOtp(""); setPnPhase("select");
     setInPolicyReceiptMethod("cash"); setInPolicyReceiptRef(""); setInPolicyReceiptNotes(""); setInPolicyReceiptMonths(1);
+    setInPolicyReceiptAmountOverride(null); setInPolicyReceiptSubmitterNote("");
   };
 
   const inPolicyReceiptMutation = useMutation({
@@ -1186,7 +1189,9 @@ export default function StaffPolicies() {
       }
       setShowInPolicyReceiptDialog(false);
       resetPnState();
-      if (data?.receipt?.id) {
+      if (data?.pendingApproval) {
+        toast({ title: "Submitted for approval", description: `Receipt ${data.receipt?.receiptNumber ?? ""} won't apply to the policy until a manager approves the amount.` });
+      } else if (data?.receipt?.id) {
         setReceiptSuccessData({ ...data, receipt: data.receipt, policyNumber: displayPolicy?.policyNumber });
         setShowReceiptSuccess(true);
       } else {
@@ -3088,9 +3093,11 @@ export default function StaffPolicies() {
                   <Label className="text-xs">Amount</Label>
                   <Input
                     type="number"
-                    value={displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0.00"}
-                    readOnly
-                    className="bg-muted cursor-not-allowed"
+                    value={inPolicyReceiptAmountOverride ?? (displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0.00")}
+                    onChange={canEditPremium ? (e) => setInPolicyReceiptAmountOverride(e.target.value) : undefined}
+                    readOnly={!canEditPremium}
+                    className={!canEditPremium ? "bg-muted cursor-not-allowed" : undefined}
+                    data-testid="input-in-policy-receipt-amount"
                   />
                 </div>
                 <div>
@@ -3098,6 +3105,24 @@ export default function StaffPolicies() {
                   <CurrencySelect value={inPolicyReceiptCurrency} onValueChange={setInPolicyReceiptCurrency} />
                 </div>
               </div>
+              {(() => {
+                const systemAmount = displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths : 0;
+                const enteredAmount = inPolicyReceiptAmountOverride != null ? parseFloat(inPolicyReceiptAmountOverride) : systemAmount;
+                const isOverridden = canEditPremium && Number.isFinite(enteredAmount) && Math.abs(enteredAmount - systemAmount) >= 0.01;
+                if (!isOverridden) return null;
+                return (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 space-y-2">
+                    <p className="text-sm font-medium text-amber-800 dark:text-amber-400">
+                      Amount differs from system premium ({inPolicyReceiptCurrency} {systemAmount.toFixed(2)}) — this receipt will be held for approval and won't apply to the policy until approved.
+                    </p>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Notes for approver *</Label>
+                      <Textarea value={inPolicyReceiptSubmitterNote} onChange={(e) => setInPolicyReceiptSubmitterNote(e.target.value)}
+                        placeholder="Explain why this amount differs from the system premium..." rows={2} className="text-sm" data-testid="textarea-in-policy-submitter-note" />
+                    </div>
+                  </div>
+                );
+              })()}
               {inPolicyReceiptMonths > 1 && (
                 <p className="text-xs text-muted-foreground">
                   {inPolicyReceiptMonths}× premium of {inPolicyReceiptCurrency} {displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "0.00"} = <strong>{inPolicyReceiptCurrency} {displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0.00"}</strong>
@@ -3225,16 +3250,19 @@ export default function StaffPolicies() {
                   onClick={() => {
                     const paynowMethods = ["ecocash", "onemoney", "innbucks", "omari", "visa_mastercard"];
                     if (inPolicyReceiptMethod === "cash") {
+                      const systemAmount = displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths : 0;
+                      const finalAmount = inPolicyReceiptAmountOverride != null ? parseFloat(inPolicyReceiptAmountOverride) : systemAmount;
                       inPolicyReceiptMutation.mutate({
                         policyId: selectedPolicy.id,
                         clientId: displayPolicy.clientId,
-                        amount: displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0",
+                        amount: Number.isFinite(finalAmount) ? finalAmount.toFixed(2) : systemAmount.toFixed(2),
                         months: inPolicyReceiptMonths,
                         currency: inPolicyReceiptCurrency,
                         paymentMethod: inPolicyReceiptMethod,
                         status: "cleared",
                         reference: inPolicyReceiptRef || undefined,
                         notes: inPolicyReceiptNotes || undefined,
+                        submitterNote: inPolicyReceiptSubmitterNote.trim() || undefined,
                       });
                     } else if (paynowMethods.includes(inPolicyReceiptMethod)) {
                       if (!inPolicyReceiptRef || inPolicyReceiptRef.trim().length < 5) {
@@ -3249,7 +3277,10 @@ export default function StaffPolicies() {
                     !displayPolicy.premiumAmount ||
                     inPolicyReceiptMutation.isPending ||
                     pnInitiateMutation.isPending ||
-                    (["ecocash", "onemoney"].includes(inPolicyReceiptMethod) && (!inPolicyReceiptRef || inPolicyReceiptRef.trim().replace(/\D/g, "").length < 9))
+                    (["ecocash", "onemoney"].includes(inPolicyReceiptMethod) && (!inPolicyReceiptRef || inPolicyReceiptRef.trim().replace(/\D/g, "").length < 9)) ||
+                    (canEditPremium && inPolicyReceiptMethod === "cash" && inPolicyReceiptAmountOverride != null &&
+                      Math.abs(parseFloat(inPolicyReceiptAmountOverride) - (displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths : 0)) >= 0.01 &&
+                      !inPolicyReceiptSubmitterNote.trim())
                   }
                 >
                   {(inPolicyReceiptMutation.isPending || pnInitiateMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

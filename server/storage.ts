@@ -612,7 +612,7 @@ export interface IStorage {
   getMonthEndRunById(id: string, orgId: string): Promise<MonthEndRun | undefined>;
   getNextMonthEndRunNumber(orgId: string): Promise<string>;
   getPlatformReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PlatformReceivable[]>;
-  createPlatformReceivable(entry: InsertPlatformReceivable): Promise<PlatformReceivable>;
+  createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
   getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }>;
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
@@ -5139,7 +5139,7 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(platformReceivables).where(and(...conditions))
       .orderBy(desc(platformReceivables.createdAt)).limit(limit).offset(offset);
   }
-  async createPlatformReceivable(entry: InsertPlatformReceivable): Promise<PlatformReceivable> {
+  async createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
     const tdb = await getDbForOrg(entry.organizationId);
     const [created] = await tdb.insert(platformReceivables).values(entry).returning();
     return created;
@@ -5445,6 +5445,15 @@ export class DatabaseStorage implements IStorage {
     const [row] = await tdb.update(mortuaryIntakes)
       .set(data)
       .where(and(eq(mortuaryIntakes.id, intakeId), eq(mortuaryIntakes.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+
+  async recordChapelWashBayPayment(intakeId: string, orgId: string, data: { chapelWashBayFeePaidBy: string; chapelWashBayFeePaidAt: Date; chapelWashBayFeeStatus: string }): Promise<MortuaryDispatch> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(mortuaryDispatches)
+      .set(data)
+      .where(and(eq(mortuaryDispatches.intakeId, intakeId), eq(mortuaryDispatches.organizationId, orgId)))
       .returning();
     return row;
   }

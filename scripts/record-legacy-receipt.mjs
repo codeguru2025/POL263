@@ -34,12 +34,14 @@ const ins = await client.query(
   [orgId, group.rows[0].id, group.rows[0].name, receiptNum, amount, currency, paymentDate]
 );
 
-// 2.5% platform fee, matching /api/groups/legacy-receipts
+// 2.5% platform fee, matching /api/groups/legacy-receipts.
+// created_at is pinned to the receipt's own payment date (not now()) so it lands
+// in the right month on date-filtered platform-fee reports.
 const fee = (parseFloat(amount) * 0.025).toFixed(2);
 await client.query(
-  `INSERT INTO platform_receivables (organization_id, amount, currency, description, is_settled)
-   VALUES ($1, $2, $3, $4, false)`,
-  [orgId, fee, currency.toUpperCase(), `2.5% on legacy group receipt ${ins.rows[0].receipt_number} (group ${ins.rows[0].group_name})`]
+  `INSERT INTO platform_receivables (organization_id, amount, currency, description, is_settled, created_at)
+   VALUES ($1, $2, $3, $4, false, $5::date + time '12:00')`,
+  [orgId, fee, currency.toUpperCase(), `2.5% on legacy group receipt ${ins.rows[0].receipt_number} (group ${ins.rows[0].group_name})`, paymentDate]
 );
 
 console.log(`✓ ${ins.rows[0].group_name} | ${ins.rows[0].currency} ${ins.rows[0].amount} | ${ins.rows[0].payment_date} | ${ins.rows[0].receipt_number} | fee ${fee}`);

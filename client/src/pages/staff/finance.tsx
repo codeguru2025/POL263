@@ -120,11 +120,11 @@ function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }) {
   };
 
   return (
-    <CardSection title="Pending receipt approvals" description="Backdated group receipts awaiting approval. Approving applies the payment to the policy and financial statements." icon={Clock}>
+    <CardSection title="Pending receipt approvals" description="Backdated receipts and premium overrides awaiting approval. Approving applies the payment to the policy and financial statements." icon={Clock}>
       {isLoading ? (
         <div className="p-8 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : pending.length === 0 ? (
-        <EmptyState icon={CheckCircle2} title="No pending approvals" description="All backdated receipts have been reviewed." className="border-0 rounded-none bg-transparent py-10" />
+        <EmptyState icon={CheckCircle2} title="No pending approvals" description="All pending receipts have been reviewed." className="border-0 rounded-none bg-transparent py-10" />
       ) : (
         <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
           <TableHeader className={dataTableStickyHeaderClass}>
@@ -132,20 +132,26 @@ function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }) {
               <TableHead className="pl-6">Receipt #</TableHead>
               <TableHead>Policy</TableHead>
               <TableHead>Client</TableHead>
+              <TableHead>Reason</TableHead>
               <TableHead>Amount</TableHead>
-              <TableHead>Backdated To</TableHead>
               <TableHead>Submitter Note</TableHead>
               <TableHead className="text-right pr-6">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {pending.map((r: any) => (
+            {pending.map((r: any) => {
+              const isOverride = !!r.metadataJson?.premiumOverride;
+              return (
               <TableRow key={r.id} data-testid={`row-pending-approval-${r.id}`}>
                 <TableCell className="pl-6 font-mono text-sm">{r.receiptNumber}</TableCell>
                 <TableCell className="text-sm">{r.policyNumber || r.policyId?.slice(0, 8)}</TableCell>
                 <TableCell className="text-sm">{r.clientName || "—"}</TableCell>
+                <TableCell className="text-sm">
+                  {isOverride
+                    ? <span className="text-amber-700">Premium override <span className="text-muted-foreground">(system: {r.currency} {parseFloat(r.metadataJson?.systemPremium ?? 0).toFixed(2)})</span></span>
+                    : <span>Backdated to {r.backdatedDate || "—"}</span>}
+                </TableCell>
                 <TableCell className="text-sm font-medium">{r.currency} {parseFloat(r.amount).toFixed(2)}</TableCell>
-                <TableCell className="text-sm">{r.backdatedDate || "—"}</TableCell>
                 <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate" title={r.submitterNote}>{r.submitterNote || "—"}</TableCell>
                 <TableCell className="text-right pr-6">
                   <div className="flex items-center justify-end gap-1">
@@ -158,7 +164,8 @@ function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }) {
                   </div>
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
           </TableBody>
         </DataTable>
       )}
