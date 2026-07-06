@@ -3398,6 +3398,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const pendingReceipt = await withOrgTransaction(user.organizationId, async (txDb) => {
           await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
+          // Mirroring is skipped when this email already exists under a different id in the
+          // tenant DB (safety guard against overwriting a different account) — re-check
+          // existence and fall back to null rather than blindly trusting user.id, same as
+          // the non-overridden payment path below.
+          const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
+          const issuedByResolved = actorRow?.id ?? undefined;
           const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
           const [created] = await txDb.insert(paymentReceipts).values({
             organizationId: user.organizationId,
@@ -3408,7 +3414,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             amount: requestedAmount.toFixed(2),
             currency: req.body.currency || policy.currency || "USD",
             paymentChannel: req.body.paymentMethod || "cash",
-            issuedByUserId: user.id,
+            issuedByUserId: issuedByResolved,
             status: "issued",
             approvalStatus: "pending",
             submitterNote,
