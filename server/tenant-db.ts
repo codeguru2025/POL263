@@ -108,24 +108,41 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
     // Read routing config from the control plane (authoritative source).
     // Falls back to the shared DB organizations table during the migration window.
     let url: string | undefined;
+    let controlPlaneFailed = false;
     try {
       const [row] = await cpDb
         .select({ databaseUrl: tenantDatabases.databaseUrl })
         .from(tenantDatabases)
         .where(eq(tenantDatabases.tenantId, orgId));
       url = row?.databaseUrl?.trim() || undefined;
-    } catch {
+    } catch (err: any) {
       // Control plane unreachable — fall back to shared DB lookup so the app
       // keeps working during a control plane outage or before migration runs.
-      structuredLog("warn", "Control plane lookup failed, falling back to shared DB", { orgId });
-      const { db } = await import("./db");
-      const [org] = await db
-        .select({ databaseUrl: organizations.databaseUrl })
-        .from(organizations)
-        .where(eq(organizations.id, orgId));
-      url = org?.databaseUrl?.trim() || undefined;
+      // IMPORTANT: this fallback is NOT authoritative (organizations.database_url is
+      // frequently empty even for orgs that do have a dedicated tenant DB registered
+      // only in the control plane) — a false "no dedicated DB" here must not get cached,
+      // or a single transient control-plane blip permanently misroutes this org onto the
+      // shared DB (silently returning zero/empty results for all its real data) until
+      // the process restarts or the pool cache evicts under LRU pressure.
+      controlPlaneFailed = true;
+      structuredLog("error", "Control plane lookup failed — using shared-DB fallback for this request only (not cached)", { orgId, error: err?.message });
+      try {
+        const { db } = await import("./db");
+        const [org] = await db
+          .select({ databaseUrl: organizations.databaseUrl })
+          .from(organizations)
+          .where(eq(organizations.id, orgId));
+        url = org?.databaseUrl?.trim() || undefined;
+      } catch (fallbackErr: any) {
+        structuredLog("error", "Shared-DB fallback lookup also failed", { orgId, error: fallbackErr?.message });
+      }
     }
     if (!url) {
+      if (controlPlaneFailed) {
+        // Don't poison the cache with an unconfirmed routing decision — retry the
+        // control plane fresh on the next request instead of getting stuck on defaultPool.
+        return defaultPool;
+      }
       poolCache.set(orgId, defaultPool);
       poolLastAccess.set(orgId, Date.now());
       return defaultPool;

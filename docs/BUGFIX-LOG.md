@@ -12,6 +12,43 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-07-06
 
+### -1. Daily Report showed 0 for premiums (and everything else) for an isolated-tenant org — silent, sticky tenant misrouting
+
+- **Symptom:** The new Daily Report / income statement for Falakhe (an isolated-tenant-DB org)
+  displayed 0 for premium receipts even though real receipts existed for that day. No error was
+  shown anywhere — the page loaded "successfully" with wrong (empty) numbers.
+- **Root cause:** `getPoolForOrg()` in `server/tenant-db.ts` resolves which database an org's data
+  lives in by querying the control-plane `tenant_databases` table. If that query **throws** (a
+  transient control-plane blip — timeout, brief outage, etc.), it falls back to reading
+  `organizations.database_url` from the shared registry DB. For Falakhe (and likely other
+  isolated-tenant orgs), that registry column is **empty** — the real tenant DB URL only exists in
+  the control plane. So the fallback found no URL, and the code treated this as "this org has no
+  dedicated database" and cached `defaultPool` (the shared registry DB) for that org **permanently**
+  (`poolCache.set(orgId, defaultPool)`), not just for the failing request. Every subsequent request
+  for Falakhe's data — for the lifetime of the server process — silently queried the shared DB,
+  which has no rows for Falakhe's real operational data, returning empty/zero results with no error.
+  A single transient control-plane hiccup, once triggered, poisoned the tenant routing until the
+  next process restart.
+- **Fix:** In `server/tenant-db.ts`, when the control-plane lookup throws (as opposed to
+  succeeding and legitimately reporting "no dedicated DB configured"), the resulting `defaultPool`
+  fallback is **no longer cached**. The failing request still gets a best-effort answer, but the
+  *next* request retries the control-plane lookup fresh instead of being stuck. Also upgraded the
+  log level from `warn` to `error` for control-plane failures (this is a serious, not routine,
+  event) and added a matching `error` log if the shared-DB fallback query itself also fails.
+- **Files:** `server/tenant-db.ts` (`getPoolForOrg`).
+- **Verification:** Reproduced live — hit the exact "Control plane lookup failed" fallback path
+  once from a transient connection blip while testing, then confirmed a fresh call to
+  `buildDailyReport`/`buildIncomeStatement` immediately after returned correct, non-zero figures
+  (matching previously-verified totals) rather than staying stuck on empty. Full test suite green.
+- **Lesson for next time:** any "this org's data is showing as empty/zero but the org definitely
+  has data" report on an isolated-tenant org should immediately raise suspicion of stale/wrong
+  pool routing in `tenant-db.ts`'s in-memory `poolCache` — check the server logs for a "Control
+  plane lookup failed" entry around when the symptom started. A process restart is the immediate
+  workaround (clears the poisoned cache entry); this fix prevents the poisoning from happening
+  in the first place. More generally: **never cache a fallback decision that was reached because
+  the authoritative source failed** — only cache when the authoritative source was actually
+  consulted successfully, even if its answer is "nothing configured."
+
 ### 0. Recording a payment on a funeral case (and creating/editing quotations) threw "Internal Server Error"
 
 - **Symptom:** Recording a cash-service payment against an existing funeral case failed with a
