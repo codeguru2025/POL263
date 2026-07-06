@@ -111,6 +111,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   async function recalculatePolicyPremiumIfNeeded(policy: any, orgId: string): Promise<any> {
     if (!policy?.id || !policy?.productVersionId) return policy;
+    // A manually-set premium override (e.g. legacy/custom-premium policies) is authoritative —
+    // recomputing from the product's own pricing table would silently discard it (this exact
+    // bug zeroed out several Legacy Individual policies' premiumAmount on their first list view).
+    if (policy.premiumOverride != null && String(policy.premiumOverride).trim() !== "") return policy;
     const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, orgId);
     const rawAddOns = await storage.getPolicyAddOns(policy.id, orgId);
     const memberAddOns = rawAddOns
@@ -2240,6 +2244,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/policies", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     try {
+    // Captured before computePolicyPremium overwrites req.body.premiumAmount below — needed to
+    // persist a genuinely custom premium (e.g. Legacy Individual/Group products, whose own
+    // pricing is always 0) as premiumOverride once the product is resolved further down.
+    const userSubmittedPremium = req.body.premiumAmount;
     const policyNumber = await storage.generatePolicyNumber(user.organizationId);
 
     let agentId = req.body.agentId || null;
@@ -2375,11 +2383,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!branchRow) resolvedBranchId = null;
     }
     const changedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
-    const policyInsert = {
+    const policyInsert: typeof parsed & { premiumOverride?: string | null; premiumOverrideNote?: string | null } = {
       ...parsed,
       agentId: resolvedAgentId,
       branchId: resolvedBranchId,
     };
+
+    // Legacy Individual / Legacy Group products always price at 0 (their whole point is a
+    // manually-agreed premium) — computePolicyPremium above therefore always returns 0 for
+    // them, discarding whatever the user typed. Persist that as premiumOverride (not just
+    // premiumAmount) so it survives recalculatePolicyPremiumIfNeeded, which otherwise
+    // silently resets premiumAmount back to the product's 0 base on the next policy-list view.
+    const issuedProduct = await storage.getProduct(productVersion.productId, user.organizationId);
+    const isCustomPremiumProduct = issuedProduct?.code === "LEGIND" || issuedProduct?.code === "LEGGRP";
+    if (isCustomPremiumProduct) {
+      const customAmt = parseFloat(String(userSubmittedPremium ?? ""));
+      if (Number.isFinite(customAmt) && customAmt >= 0) {
+        policyInsert.premiumAmount = customAmt.toFixed(2);
+        policyInsert.premiumOverride = customAmt.toFixed(2);
+        policyInsert.premiumOverrideNote = "Legacy custom premium set at issuance";
+      }
+    }
 
     // Prevent duplicate policies: same client + same product version (unless existing is cancelled)
     const existingForClient = await storage.getPoliciesByClient(policyInsert.clientId, user.organizationId);

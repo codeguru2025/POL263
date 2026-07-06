@@ -31,6 +31,19 @@ function fmtDate(v: string | Date | null | undefined): string {
 function money(n: any): string {
   return Number(n || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+/**
+ * Measures the string against the CURRENT font/size on `doc` and truncates with an ellipsis
+ * if it's wider than `maxWidth` — a table cell must never wrap or overflow into its neighbour.
+ */
+function fitText(doc: InstanceType<typeof PDFDocument>, text: string, maxWidth: number): string {
+  if (doc.widthOfString(text) <= maxWidth) return text;
+  let lo = 0, hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (doc.widthOfString(text.slice(0, mid) + "…") <= maxWidth) lo = mid; else hi = mid - 1;
+  }
+  return text.slice(0, lo) + "…";
+}
 function currencyLines(m: Record<string, number> | undefined): string {
   if (!m || Object.keys(m).length === 0) return "—";
   const parts = Object.entries(m).filter(([, v]) => Math.abs(v) > 0.004).map(([c, v]) => `${c} ${money(v)}`);
@@ -128,7 +141,9 @@ function drawTable(ctx: DocContext, cols: ColDef[], rows: any[], emptyMsg = "No 
   doc.rect(M, ctx.y, COL, 15).fill("#e2e8f0");
   let cx = M + 4;
   for (const col of cols) {
-    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(C_ACCENT).text(col.header, cx, ctx.y + 3, { width: col.width - 6, align: col.align ?? "left" });
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(C_ACCENT);
+    const headerVal = fitText(doc, col.header, col.width - 6);
+    doc.text(headerVal, cx, ctx.y + 3, { width: col.width - 6, align: col.align ?? "left", lineBreak: false });
     cx += col.width;
   }
   ctx.y += 17;
@@ -137,9 +152,10 @@ function drawTable(ctx: DocContext, cols: ColDef[], rows: any[], emptyMsg = "No 
     if (i % 2 === 1) doc.rect(M, ctx.y, COL, 13).fill(C_ROW_ALT);
     cx = M + 4;
     for (const col of cols) {
-      const val = col.getter(rows[i]);
-      doc.font("Helvetica").fontSize(7.5).fillColor(col.color ? col.color(rows[i]) : C_TEXT)
-        .text(val, cx, ctx.y + 2, { width: col.width - 6, align: col.align ?? "left", lineBreak: false });
+      const raw = col.getter(rows[i]);
+      doc.font("Helvetica").fontSize(7.5).fillColor(col.color ? col.color(rows[i]) : C_TEXT);
+      const val = fitText(doc, raw, col.width - 6);
+      doc.text(val, cx, ctx.y + 2, { width: col.width - 6, align: col.align ?? "left", lineBreak: false });
       cx += col.width;
     }
     ctx.y += 14;
@@ -157,11 +173,18 @@ function finish(ctx: DocContext, res: Response, filename: string, download: bool
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
     const fy = A4_H - M + 6;
+    // Footer sits inside the bottom margin band (below A4_H - M). Drawing text past that
+    // boundary makes PDFKit think it overflowed the page and silently insert a brand-new
+    // blank page to "continue" onto — which is where all the trailing blank pages came from.
+    // Zeroing the bottom margin for these two calls draws in the margin without triggering that.
+    const savedBottomMargin = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
     doc.font("Helvetica").fontSize(7).fillColor(C_MUTED)
       .text(`${ctx.org.name || ""}  ·  ${ctx.title}  ·  Confidential  ·  Page ${i + 1} of ${range.count}`, M, fy, { width: COL, align: "center", lineBreak: false });
     if (ctx.org.footerText) {
       doc.font("Helvetica").fontSize(6.5).fillColor(C_MUTED).text(ctx.org.footerText, M, fy + 9, { width: COL, align: "center", lineBreak: false });
     }
+    doc.page.margins.bottom = savedBottomMargin;
   }
   doc.end();
 }
@@ -254,12 +277,12 @@ export async function streamDailyReportPdf(orgId: string, date: string, res: Res
 
   sectionBand(ctx, `Transaction Ledger (${report.financials.ledger.total})`);
   drawTable(ctx, [
-    { header: "Type", width: 45, getter: (r) => r.type === "income" ? "IN" : "OUT", color: (r) => r.type === "income" ? C_INCOME : C_EXPENSE },
-    { header: "Description", width: 190, getter: (r) => r.description },
-    { header: "Ref", width: 75, getter: (r) => r.reference || "—" },
-    { header: "Person", width: 90, getter: (r) => r.person || "—" },
-    { header: "Dept / cost centre", width: 90, getter: (r) => r.department || "—" },
-    { header: "Amount", width: COL - 490, align: "right", getter: (r) => `${r.type === "expense" ? "-" : ""}${r.currency} ${money(r.amount)}`, color: (r) => r.type === "income" ? C_INCOME : C_EXPENSE },
+    { header: "Type", width: 35, getter: (r) => r.type === "income" ? "IN" : "OUT", color: (r) => r.type === "income" ? C_INCOME : C_EXPENSE },
+    { header: "Description", width: 150, getter: (r) => r.description },
+    { header: "Ref", width: 65, getter: (r) => r.reference || "—" },
+    { header: "Person", width: 78, getter: (r) => r.person || "—" },
+    { header: "Dept / cost centre", width: 80, getter: (r) => r.department || "—" },
+    { header: "Amount", width: COL - 408, align: "right", getter: (r) => `${r.type === "expense" ? "-" : ""}${r.currency} ${money(r.amount)}`, color: (r) => r.type === "income" ? C_INCOME : C_EXPENSE },
   ], report.financials.ledger.entries);
 
   sectionBand(ctx, "Operations Summary");

@@ -12,7 +12,96 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-07-06
 
-### -1. Daily Report showed 0 for premiums (and everything else) for an isolated-tenant org — silent, sticky tenant misrouting
+### -3. PDF export: trailing blank pages, one per real page
+
+- **Symptom:** Downloaded/previewed PDFs (Daily Report, Income Statement, Cash Flow) had extra
+  blank pages appended after the real content — e.g. a 3-page report came out as 6 pages, pages
+  4–6 each blank except for a lone footer line floating mid-page.
+- **Root cause:** The footer-drawing loop in `finish()` (`server/financial-statement-pdf.ts`)
+  drew the "Page X of Y" text at `y = A4_H - M + 6` — a y-coordinate **past** `doc.page.height -
+  doc.page.margins.bottom`. PDFKit treats any `.text()` call that would land past that boundary
+  as content that "doesn't fit," and silently calls `.addPage()` to continue the text there
+  instead of drawing it on the current page. So every one of the 3 real pages triggered one
+  extra phantom page purely to hold its own footer.
+- **Fix:** Temporarily zero out `doc.page.margins.bottom` for the two footer `.text()` calls
+  (restoring it immediately after) — draws inside the bottom margin band without PDFKit
+  interpreting it as an overflow needing a new page.
+- **Verification:** Rendered the actual PDF (not just checked byte size) before and after —
+  before: 6 pages, 3 of them blank with a stray footer line. After: exactly 3 pages, each with
+  real content and its own correctly-placed footer. A crude regex-based page-count check
+  (`/Count N` in the raw PDF bytes) had earlier given a **false positive** of "already correct"
+  — it was matching an unrelated `/Count` elsewhere in the file. `doc.bufferedPageRange().count`
+  compared against a manual page counter is the only reliable page-count check for PDFKit.
+- **Lesson for next time:** any manual `.text()` call meant to sit inside a PDFKit document's
+  margin area (footers, watermarks, page numbers) must temporarily zero the relevant margin
+  first — PDFKit's automatic pagination doesn't know "this text is decorative, don't overflow
+  onto a new page for it." And never trust a regex over raw PDF bytes to answer "how many pages
+  does this have" — use `bufferedPageRange()`.
+
+### -2. PDF export: table cells overlapping/wrapping despite `lineBreak: false`
+
+- **Symptom:** Long ledger/description cells (e.g. "Premium — FLK00359 (PENINA BHEBHE)") visibly
+  wrapped onto a second line and overlapped the row below, even though the table renderer passed
+  `lineBreak: false` to every cell's `.text()` call — which, in an isolated reproduction with the
+  same font/width/text, correctly did NOT wrap. It only wrapped inside the real, much longer
+  document (many prior `.text()`/`.rect()` calls, multiple pages).
+- **Root cause:** Not fully root-caused (a PDFKit state quirk under a long real document that an
+  isolated minimal repro didn't reproduce) — rather than keep chasing it, fixed it by removing
+  the precondition for the bug to matter at all.
+- **Fix:** Added `fitText(doc, text, maxWidth)` — measures the string against the document's
+  *current* font/size via `doc.widthOfString()` and truncates with an ellipsis if it's wider than
+  the column. Applied to every table cell (`drawTable`'s header row and data rows) in
+  `server/financial-statement-pdf.ts`, so a cell can never overflow or wrap regardless of
+  whatever is causing `lineBreak: false` to be unreliable in a long document.
+- **Files:** `server/financial-statement-pdf.ts`.
+- **Lesson for next time:** don't rely on a PDFKit text-fitting option ("it worked in my
+  isolated test") when the real render is a long, multi-page document — measure-and-truncate
+  yourself (`widthOfString` + ellipsis) is the only guarantee that survives whatever PDFKit's
+  internal state does after hundreds of prior draw calls.
+
+### -1. Daily Report showed 0 for premiums (data drift, not a display bug) and Legacy Individual policies can't actually get a custom premium via the real UI
+
+- **Symptom:** The Daily Report's "Policies activated" list showed `USD 0.00` for 5 legacy
+  individual policies created earlier the same day, even though they were created with real
+  custom premiums (13, 8, 140, 30, 20).
+- **Root cause (two layered bugs):**
+  1. `recalculatePolicyPremiumIfNeeded()` in `server/routes.ts` (called on every policy list/detail
+     fetch) recomputes `premiumAmount` from the product's own pricing via `computePolicyPremium`
+     and overwrites the DB row whenever the computed value differs from what's stored — with
+     **no check for `premiumOverride`**. For LEGIND/LEGGRP ("Legacy Individual"/"Legacy Group"),
+     whose whole point is a manually-agreed premium, the product's own price is 0, so the very
+     first time anyone loaded the policy list after creation, their real premium got silently
+     zeroed.
+  2. Worse: this isn't just a recompute-drift bug — `POST /api/policies` (the real issuance route)
+     **always** overwrites `req.body.premiumAmount` with `computePolicyPremium(...)` before
+     insert, discarding whatever premium the staff member actually typed in the create form. For
+     a normal product this is intentional (system-priced premium), but it means the "Legacy
+     Individual/Group: premium always entered manually at issuance" feature built earlier this
+     session never actually worked end-to-end through the real UI — only a one-off direct-DB
+     script (used to batch-create these 5 policies) bypassed this and set `premiumAmount`
+     directly, which is exactly what made them vulnerable to bug #1 the moment anyone viewed the
+     policy list.
+- **Fix:**
+  - `recalculatePolicyPremiumIfNeeded`: now returns the policy unchanged if `premiumOverride` is
+    set — a manual override is authoritative and must never be silently recomputed away.
+  - `POST /api/policies`: captures the user-submitted premium before it's overwritten; if the
+    issued product's code is `LEGIND`/`LEGGRP`, persists that value as **both** `premiumAmount`
+    and `premiumOverride` (with a note), so it survives future recomputes.
+  - `server/daily-report.ts`: `policiesActivated` now selects `premiumOverride` and displays
+    `premiumOverride ?? premiumAmount` (the "effective premium"), matching the convention already
+    used elsewhere in the app for legacy premium overrides.
+  - Data remediation: directly restored `premiumAmount`/`premiumOverride` for the 5 affected
+    policies (FLK00355–FLK00359) to their correct amounts.
+- **Files:** `server/routes.ts`, `server/daily-report.ts`.
+- **Verification:** Re-ran `buildDailyReport` live after the data fix — all 8 policies (5 fixed +
+  2 pre-existing legacy + 1 unrelated) now show correct premiums. Full test suite green.
+- **Lesson for next time:** a "custom premium" product/policy is only actually protected once
+  `premiumOverride` is set — not `premiumAmount` alone. Any code path that writes a policy's
+  premium at creation or via a script must set `premiumOverride`, or it will get silently
+  overwritten the next time `recalculatePolicyPremiumIfNeeded` runs (which is on nearly every
+  policy read). If a policy's premium mysteriously "resets," check `premiumOverride` first.
+
+### 0. Recording a payment on a funeral case (and creating/editing quotations) threw "Internal Server Error" (and everything else) for an isolated-tenant org — silent, sticky tenant misrouting
 
 - **Symptom:** The new Daily Report / income statement for Falakhe (an isolated-tenant-DB org)
   displayed 0 for premium receipts even though real receipts existed for that day. No error was

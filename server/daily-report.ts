@@ -67,15 +67,23 @@ export async function buildDailyReport(orgId: string, date: string) {
     .where(and(eq(funeralQuotations.organizationId, orgId), gte(funeralQuotations.createdAt, dayStart(date)), lte(funeralQuotations.createdAt, dayEnd(date))))
     .orderBy(desc(funeralQuotations.createdAt));
 
-  const policiesActivated = await tdb
+  const policiesActivatedRaw = await tdb
     .select({
       id: policies.id, policyNumber: policies.policyNumber, premiumAmount: policies.premiumAmount,
+      premiumOverride: policies.premiumOverride,
       currency: policies.currency, isLegacy: policies.isLegacy, clientFirstName: clients.firstName, clientLastName: clients.lastName,
     })
     .from(policies)
     .leftJoin(clients, eq(policies.clientId, clients.id))
     .where(and(eq(policies.organizationId, orgId), eq(policies.inceptionDate, date)))
     .orderBy(desc(policies.createdAt));
+
+  // Effective premium: a manual override always wins over the raw stored premiumAmount
+  // (which self-heals back to the product's base pricing — 0 for legacy/custom-premium products).
+  const policiesActivated = policiesActivatedRaw.map((p) => ({
+    ...p,
+    premiumAmount: p.premiumOverride ?? p.premiumAmount,
+  }));
 
   const claimsSubmitted = await tdb
     .select({

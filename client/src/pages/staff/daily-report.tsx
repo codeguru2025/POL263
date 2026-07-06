@@ -11,7 +11,7 @@ import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useBranding } from "@/hooks/use-branding";
 import { useAuth } from "@/hooks/use-auth";
-import { Loader2, Printer, FileDown, Download } from "lucide-react";
+import { Loader2, FileDown, Download } from "lucide-react";
 
 function money(n: any) {
   return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -66,11 +66,8 @@ export default function DailyReport() {
           actions={
             <div className="flex items-center gap-2">
               <Input type="date" value={date} max={today} onChange={(e) => changeDate(e.target.value)} className="w-40 h-9" />
-              <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1.5">
-                <Printer className="h-3.5 w-3.5" /> Print
-              </Button>
               <Button variant="outline" size="sm" onClick={() => window.open(`${getApiBase()}/api/reports/daily/pdf?date=${date}`, "_blank")} className="gap-1.5">
-                <FileDown className="h-3.5 w-3.5" /> Preview PDF
+                <FileDown className="h-3.5 w-3.5" /> Preview / Print PDF
               </Button>
               <Button size="sm" onClick={() => window.open(`${getApiBase()}/api/reports/daily/pdf?date=${date}&download=1`, "_blank")} className="gap-1.5">
                 <Download className="h-3.5 w-3.5" /> Download PDF
