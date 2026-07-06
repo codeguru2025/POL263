@@ -3720,6 +3720,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return streamReceiptToResponse(id, user.organizationId, res, { attachment: false });
   });
 
+  app.get("/api/legacy-group-receipts/:id/download", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!user.organizationId) return res.status(400).json({ message: "Select a tenant before downloading receipts" });
+    const inline = req.query.inline === "1" || req.query.view === "1";
+    const { streamLegacyGroupReceiptToResponse } = await import("./receipt-pdf");
+    return streamLegacyGroupReceiptToResponse(id, user.organizationId, res, { attachment: !inline });
+  });
+
+  app.get("/api/legacy-group-receipts/:id/view", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!user.organizationId) return res.status(400).json({ message: "Select a tenant" });
+    const { streamLegacyGroupReceiptToResponse } = await import("./receipt-pdf");
+    return streamLegacyGroupReceiptToResponse(id, user.organizationId, res, { attachment: false });
+  });
+
   app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     try {

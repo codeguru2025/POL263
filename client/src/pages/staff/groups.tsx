@@ -18,7 +18,10 @@ import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import {
   Plus, Search, Pencil, Layers, FileStack, Loader2, LinkIcon, UserPlus,
   Receipt, Printer, ArrowRight, ChevronDown, ChevronRight, Clock, History, ShieldCheck, Save,
+  Eye, Download, ScrollText, Share2,
 } from "lucide-react";
+import { printDocument } from "@/lib/print-document";
+import { shareDocument } from "@/lib/share-document";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -160,23 +163,53 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
                     <TableHead>Policy #</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Receipt #</TableHead>
-                    <TableHead className="pr-4">Status</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="pr-4 text-right print:hidden">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((r: any) => (
-                    <TableRow key={r.id}>
-                      <TableCell className="pl-4 text-sm">{r.isLegacyReceipt ? "Group lump-sum payment" : `${r.first_name || ""} ${r.last_name || ""}`}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.policy_number || "—"}</TableCell>
-                      <TableCell className="text-sm font-medium">{r.currency} {parseFloat(r.amount).toFixed(2)}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.receipt_number}</TableCell>
-                      <TableCell className="pr-4">
-                        <Badge variant={r.approval_status === "pending" ? "outline" : r.approval_status === "rejected" ? "destructive" : "default"} className="text-xs">
-                          {r.approval_status || "issued"}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {rows.map((r: any) => {
+                    const base = r.isLegacyReceipt ? `/api/legacy-group-receipts/${r.id}` : `/api/receipts/${r.id}`;
+                    const viewUrl = getApiBase() + `${base}/view`;
+                    const downloadUrl = getApiBase() + `${base}/download`;
+                    const displayNum = /^\d+$/.test(String(r.receipt_number).trim())
+                      ? `RCP-${String(r.receipt_number).padStart(5, "0")}`
+                      : r.receipt_number;
+                    return (
+                      <TableRow key={r.id}>
+                        <TableCell className="pl-4 text-sm">{r.isLegacyReceipt ? "Group lump-sum payment" : `${r.first_name || ""} ${r.last_name || ""}`}</TableCell>
+                        <TableCell className="font-mono text-sm">{r.policy_number || "—"}</TableCell>
+                        <TableCell className="text-sm font-medium">{r.currency} {parseFloat(r.amount).toFixed(2)}</TableCell>
+                        <TableCell className="font-mono text-sm">{r.receipt_number}</TableCell>
+                        <TableCell>
+                          <Badge variant={r.approval_status === "pending" ? "outline" : r.approval_status === "rejected" ? "destructive" : "default"} className="text-xs">
+                            {r.approval_status || "issued"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="pr-4 print:hidden">
+                          <div className="flex items-center justify-end gap-0.5">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="View receipt" onClick={() => window.open(viewUrl, "_blank", "noopener")}>
+                              <Eye className="h-3.5 w-3.5" />
+                            </Button>
+                            {!r.isLegacyReceipt && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Thermal receipt" onClick={() => window.open(viewUrl + "?format=thermal", "_blank", "noopener")}>
+                                <ScrollText className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Download" onClick={() => window.open(downloadUrl, "_blank", "noopener")}>
+                              <Download className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Print" onClick={() => printDocument(viewUrl)}>
+                              <Printer className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Share" onClick={() => shareDocument(downloadUrl, `Receipt-${displayNum}`)}>
+                              <Share2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

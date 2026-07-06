@@ -17,6 +17,8 @@ import { resolveImage } from "./object-storage";
 import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
 import { buildVerifyUrl, buildEnrollUrl, buildVerifyQrBuffer, drawCompanyStamp, drawVerifyQrPanel } from "./pdf-utils";
+import { getDbForOrg } from "./tenant-db";
+import { sql } from "drizzle-orm";
 
 /** Exported for tests. */
 export const RECEIPT_PDF_WIDTH_PT = 226; // 80mm in points (kept for tests)
@@ -651,6 +653,135 @@ export async function streamThermalReceiptToResponse(
     doc.end();
   } catch (err: any) {
     structuredLog("error", "Thermal receipt PDF generation failed", { receiptId, sizeMm, error: err?.message });
+    try { doc.end(); } catch { /* already ended */ }
+    res.destroy();
+  }
+}
+
+/**
+ * Legacy group receipts have no linked policy/client (they're a lump-sum
+ * payment against the group itself, recorded before individual member
+ * policies exist), so they need their own simplified layout rather than
+ * reusing loadReceiptContext (which requires a policy + client).
+ */
+export async function streamLegacyGroupReceiptToResponse(
+  receiptId: string,
+  orgId: string,
+  res: import("express").Response,
+  opts?: { attachment?: boolean }
+): Promise<void> {
+  const tdb = await getDbForOrg(orgId);
+  const rows = await tdb.execute(sql`
+    SELECT id, receipt_number, group_id, group_name, amount, currency, payment_date, notes, recorded_at
+    FROM legacy_group_receipts WHERE id = ${receiptId} AND organization_id = ${orgId}
+  `);
+  const receipt = (rows.rows ?? rows)[0] as any;
+  if (!receipt) {
+    res.status(404).json({ message: "Receipt not found" });
+    return;
+  }
+  const [org, activeAdvert] = await Promise.all([
+    storage.getOrganization(orgId),
+    storage.getActiveReceiptAdvert(orgId),
+  ]);
+  if (!org) {
+    res.status(404).json({ message: "Receipt data incomplete" });
+    return;
+  }
+  const advertImageData = activeAdvert?.imageUrl ? await resolveImage(activeAdvert.imageUrl) : null;
+
+  const displayReceiptNum = /^\d+$/.test(String(receipt.receipt_number).trim())
+    ? `RCP-${String(receipt.receipt_number).padStart(5, "0")}`
+    : receipt.receipt_number;
+
+  const filename = `Receipt-${displayReceiptNum}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", opts?.attachment
+    ? `attachment; filename="${filename}"`
+    : `inline; filename="${filename}"`);
+
+  const logoData = await resolveImage(org.logoUrl);
+  const qrBuffer = await buildReceiptQr(orgId);
+  const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
+  doc.pipe(res);
+
+  try {
+    let y = MARGIN;
+    if (logoData) {
+      try { doc.image(logoData, MARGIN, y, { height: 50, fit: [120, 50] }); } catch { /* skip */ }
+    }
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(C_PRIMARY)
+      .text(org.name || "POL263", MARGIN + 130, y, { width: COL - 130, align: "right" });
+    y += 16;
+    doc.font("Helvetica").fontSize(8).fillColor(C_MUTED);
+    const contactParts: string[] = [];
+    if (org.phone) contactParts.push(org.phone);
+    if (org.email) contactParts.push(org.email);
+    if (org.address) contactParts.push(org.address);
+    if (org.website) contactParts.push(org.website);
+    contactParts.forEach((part) => {
+      doc.text(part, MARGIN + 130, y, { width: COL - 130, align: "right" });
+      y += 11;
+    });
+    y = Math.max(y, MARGIN + 56) + 12;
+    doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
+    y += 8;
+
+    doc.font("Helvetica-Bold").fontSize(17).fillColor(C_TEXT)
+      .text("GROUP RECEIPT", MARGIN, y, { width: COL, align: "center" });
+    y += 22;
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(C_TEXT)
+      .text(displayReceiptNum, MARGIN, y, { width: COL, align: "center" });
+    y += 14;
+    doc.font("Helvetica").fontSize(9).fillColor(C_MUTED)
+      .text(`Recorded: ${fmtDateTime(new Date(receipt.recorded_at))}`, MARGIN, y, { width: COL, align: "center" });
+    y += 20;
+
+    const sectionHeader = (title: string) => {
+      doc.rect(MARGIN, y, COL, 18).fill(C_PRIMARY);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff")
+        .text(title.toUpperCase(), MARGIN + 8, y + 4, { width: COL - 16 });
+      y += 22;
+    };
+    const row = (label: string, value: string) => {
+      const lw = 140; const vw = COL - lw - 8;
+      const startY = y;
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text(label, MARGIN, startY, { width: lw, lineBreak: false });
+      doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(value, MARGIN + lw + 8, startY, { width: vw });
+      y = doc.y + 2;
+      if (y - startY < 14) y = startY + 14;
+    };
+
+    sectionHeader("Group");
+    row("Group Name", receipt.group_name);
+    row("Receipt Number", displayReceiptNum);
+    y += 6;
+
+    sectionHeader("Payment Details");
+    row("Amount", `${receipt.currency} ${Number(receipt.amount).toFixed(2)}`);
+    row("Payment Date", fmtDate(new Date(receipt.payment_date + "T00:00:00")));
+    row("Recorded At", fmtDateTime(new Date(receipt.recorded_at)));
+    y += 6;
+
+    if (receipt.notes) {
+      sectionHeader("Notes");
+      doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
+        .text(String(receipt.notes), MARGIN, y, { width: COL });
+      y = doc.y + 10;
+    }
+
+    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55, org.name || "POL263");
+
+    const footerY = A4_H - MARGIN - 28;
+    doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(C_PRIMARY)
+      .text(org.footerText || "Thank you for your payment.", MARGIN, footerY + 6, { width: COL, align: "center", height: 11, lineBreak: false });
+    doc.font("Helvetica").fontSize(7).fillColor(C_MUTED)
+      .text(`Generated by ${org.name || "POL263"} · ${fmtDateTime(new Date())}`, MARGIN, footerY + 18, { width: COL, align: "center", height: 10, lineBreak: false });
+
+    doc.end();
+  } catch (err: any) {
+    structuredLog("error", "Legacy group receipt PDF generation failed", { receiptId, error: err?.message });
     try { doc.end(); } catch { /* already ended */ }
     res.destroy();
   }
