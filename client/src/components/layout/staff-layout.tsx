@@ -66,6 +66,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import { NotificationBell } from "@/components/notification-bell";
 import { useBranding } from "@/hooks/use-branding";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -703,6 +704,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
               <Clock className="h-3.5 w-3.5" />
               {dateTimeStr}
             </span>
+
+            <NotificationBell />
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

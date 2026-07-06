@@ -132,8 +132,20 @@ Schema is defined in `shared/schema.ts` using Drizzle ORM. To make schema change
 
 Session table is managed by `connect-pg-simple`. Rate limiting optionally uses Redis; without it, limits are per-process.
 
+## Bug Fix Documentation Convention
+
+**After fixing any real bug (not a feature addition), add an entry to `docs/BUGFIX-LOG.md`
+before considering the task done — in the same session, not as a follow-up.** Each entry
+must cover: the symptom, the actual root cause (not just the surface error), the fix (with
+file paths), how it was verified, and a "lesson for next time" — a concrete signal to watch
+for so a future session recognizes the same class of bug instead of re-diagnosing it from
+scratch. Check `docs/BUGFIX-LOG.md` at the start of debugging anything that looks familiar
+(auth/tenant id mismatches, transaction atomicity, permission-loading race conditions, etc.)
+before guessing at a fix.
+
 ## Further Reading
 
+- `docs/BUGFIX-LOG.md` — Log of past bugs: root cause, fix, and lessons for next time
 - `docs/HOW-TO-RUN.md` — Local setup and deployment walkthrough
 - `docs/DATABASE-SETUP.md` — PostgreSQL setup (Neon, Supabase, local)
 - `docs/ERD.md` — Entity relationship diagram
