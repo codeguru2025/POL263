@@ -10,6 +10,55 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-07 — codebase-wide audit (architecture, ACID, edge cases, PayNow)
+
+### PayNow: status polling verified against the wrong hash key for any tenant with its own dedicated integration
+
+- **Symptom (inferred, not directly reported):** for an org with its own PayNow merchant
+  account (integration ID/key stored on `organizations`, e.g. Falakhe — ID 25145, live mode),
+  the client-facing "check my payment status" polling would never confirm a payment — it
+  would keep returning "Verifying payment with gateway..." indefinitely. Plausibly connects to
+  a previously-noted, previously-unexplained observation: two of Falakhe's payment intents
+  (`96740ab6`, `fe51eae6`) were stuck in `status: 'failed'` with no clear cause.
+- **Root cause:** `pollPaynowStatus()` and `pollGroupPaynowStatus()` in `server/payment-service.ts`
+  called `verifyPaynowHash(fields)` with **no second argument**. `verifyPaynowHash`'s signature
+  is `(fields, integrationKey?)` — when the key is omitted, it falls back to
+  `getPaynowIntegrationKey()`, which reads **only** `process.env.PAYNOW_INTEGRATION_KEY` (the
+  platform-level default), never the per-org key stored in `organizations.paynow_integration_key`.
+  Every other Paynow-hash call site in the file (`handlePaynowResult`'s webhook, and the two
+  `generatePaynowHash` calls for outbound requests) correctly resolves and passes the org-specific
+  key via `getOrgPaynowConfig(orgId)` — only the two poll functions missed it. Confirmed live:
+  Falakhe's `organizations` row has its own distinct `paynow_integration_id`/key in `live` mode,
+  separate from the platform's env-var credentials, so polling for Falakhe was verifying against
+  the wrong key on every call and always failing.
+- **Fix:** both poll functions now call `getOrgPaynowConfig(orgId)` first and pass
+  `config.integrationKey` into `verifyPaynowHash`.
+- **Files:** `server/payment-service.ts`.
+- **Verification:** Confirmed live that Falakhe's org row has a distinct integration ID/key from
+  the platform env vars (so the bug was real, not theoretical). Typecheck + full test suite
+  (179/179) green after the fix.
+- **Lesson for next time:** in a multi-tenant integration with per-org credentials, **every**
+  call to a hash/signature verification helper must be checked for whether it received the
+  tenant-specific key — a helper with an "optional key, falls back to platform default" signature
+  is exactly the shape that lets one call site quietly regress to single-tenant behavior. Grep for
+  all call sites of `verifyPaynowHash`/`generatePaynowHash` (or any per-tenant-secret function)
+  whenever touching Paynow code, not just the one you're editing.
+
+### PayNow: 4 of 5 outbound HTTP calls had no timeout
+
+- **Symptom:** not yet reported, found during audit. A slow/unresponsive Paynow endpoint (init,
+  O'Mari OTP submit, or group init) would hang the awaiting request indefinitely — only
+  `pollPaynowStatus`'s fetch had `AbortSignal.timeout(8000)`.
+- **Fix:** added `AbortSignal.timeout(...)` to all remaining outbound fetches in
+  `server/payment-service.ts` — 15s for user-initiated actions (initiate, OTP submit, group
+  initiate), 8s for polls (matching the existing convention).
+- **Files:** `server/payment-service.ts`.
+- **Lesson for next time:** any new outbound HTTP call to an external gateway needs a timeout
+  from the moment it's written — it's easy for this to get added to one call site (usually
+  whichever one broke in production first) and never propagated to its siblings.
+
+---
+
 ## 2026-07-06
 
 ### -3. PDF export: trailing blank pages, one per real page

@@ -20,6 +20,11 @@ import { insertOutboxMessageInTx, requestOutboxDrain, OUTBOX_TYPE_PAYNOW_APPLY_F
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
 const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
 
+// Every outbound call to Paynow must have a hard timeout — without one, a slow/unresponsive
+// gateway hangs the awaiting request indefinitely (previously only pollPaynowStatus had this).
+const PAYNOW_INITIATE_TIMEOUT_MS = 15_000;
+const PAYNOW_POLL_TIMEOUT_MS = 8_000;
+
 const REINSTATEMENT_PURPOSE = "reinstatement";
 const GROUP_PAYMENT_STATUS_PAID = "paid";
 
@@ -275,6 +280,7 @@ export async function initiatePaynowPayment(input: InitiatePaynowInput): Promise
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
+      signal: AbortSignal.timeout(PAYNOW_INITIATE_TIMEOUT_MS),
     });
   } catch (err) {
     structuredLog("error", "Paynow initiate request failed", { error: (err as Error).message });
@@ -377,6 +383,7 @@ export async function submitOmariOtp(intentId: string, orgId: string, otp: strin
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
+      signal: AbortSignal.timeout(PAYNOW_INITIATE_TIMEOUT_MS),
     });
   } catch (err) {
     structuredLog("error", "O'Mari OTP submit failed", { error: (err as Error).message });
@@ -587,13 +594,19 @@ export async function pollPaynowStatus(intentId: string, orgId: string): Promise
   const pollUrl = intent.paynowPollUrl;
   if (!pollUrl) return { status: intent.status, error: "No poll URL" };
 
+  // Must verify with THIS org's integration key — orgs on their own dedicated Paynow merchant
+  // account (not the platform's) would otherwise always fail hash verification here (the
+  // no-arg fallback only checks the platform env var key), leaving polling permanently unable
+  // to confirm a payment even though the webhook path (which does pass the org key) works fine.
+  const orgCfgForPoll = await getOrgPaynowConfig(orgId);
+
   try {
-    const res = await fetch(pollUrl, { method: "POST", body: "", signal: AbortSignal.timeout(8000) });
+    const res = await fetch(pollUrl, { method: "POST", body: "", signal: AbortSignal.timeout(PAYNOW_POLL_TIMEOUT_MS) });
     const text = await res.text();
     structuredLog("info", "Paynow poll raw response", { intentId: intent.id, responseText: text.slice(0, 600) });
     const parsed = new URLSearchParams(text);
     const status = (parsed.get("status") ?? "").toLowerCase();
-    const hashValid = verifyPaynowHash(Object.fromEntries(parsed));
+    const hashValid = verifyPaynowHash(Object.fromEntries(parsed), orgCfgForPoll.integrationKey);
     if (!hashValid) {
       structuredLog("warn", "Paynow poll hash mismatch", {
         intentId: intent.id,
@@ -1009,7 +1022,12 @@ export async function initiatePaynowForGroup(input: InitiatePaynowForGroupInput)
   const body = toFormUrlEncoded(params);
   let res: Response;
   try {
-    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      signal: AbortSignal.timeout(PAYNOW_INITIATE_TIMEOUT_MS),
+    });
   } catch (err) {
     structuredLog("error", "Paynow group initiate failed", { error: (err as Error).message });
     return { ok: false, error: "Payment gateway unavailable" };
@@ -1050,12 +1068,15 @@ export async function pollGroupPaynowStatus(groupIntentId: string, orgId: string
   const pollUrl = groupIntent.paynowPollUrl;
   if (!pollUrl) return { status: groupIntent.status, error: "No poll URL" };
 
+  // Same org-key requirement as pollPaynowStatus — see comment there.
+  const orgCfgForGroupPoll = await getOrgPaynowConfig(orgId);
+
   try {
-    const res = await fetch(pollUrl, { method: "POST", body: "" });
+    const res = await fetch(pollUrl, { method: "POST", body: "", signal: AbortSignal.timeout(PAYNOW_POLL_TIMEOUT_MS) });
     const text = await res.text();
     const parsed = new URLSearchParams(text);
     const status = (parsed.get("status") ?? "").toLowerCase();
-    if (!verifyPaynowHash(Object.fromEntries(parsed))) {
+    if (!verifyPaynowHash(Object.fromEntries(parsed), orgCfgForGroupPoll.integrationKey)) {
       return { status: groupIntent.status, error: "Invalid poll response hash" };
     }
     if (isPaynowPaidStatus(status)) {
