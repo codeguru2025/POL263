@@ -18,7 +18,7 @@ import {
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
   partnerParlours, parlourPersonnel,
   mortuaryIntakes, mortuaryDispatches, deceasedBelongings, bodyWashRequirements, driverChecklists,
-  mortuaryPostMortemMovements, partnerParlourVehicleUsage,
+  mortuaryPostMortemMovements, partnerParlourVehicleUsage, dailyReportNotes,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
   payrollEmployees, payrollRuns, payslips, attendanceLogs,
@@ -91,6 +91,7 @@ import {
   type DeceasedBelonging, type InsertDeceasedBelonging,
   type BodyWashRequirement, type InsertBodyWashRequirement,
   type MortuaryPostMortemMovement, type InsertMortuaryPostMortemMovement,
+  type DailyReportNote, type InsertDailyReportNote,
   type PartnerParlourVehicleUsage, type InsertPartnerParlourVehicleUsage,
   type DriverChecklist, type InsertDriverChecklist,
   type CommissionPlan, type InsertCommissionPlan,
@@ -5433,6 +5434,31 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(mortuaryIntakes.id, id), eq(mortuaryIntakes.organizationId, orgId)))
       .returning();
     return updated;
+  }
+
+  // ─── Daily Report Notes ─────────────────────────────────────
+  async getDailyReportNotes(orgId: string, date: string): Promise<(DailyReportNote & { authorName: string | null })[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb
+      .select({
+        id: dailyReportNotes.id,
+        organizationId: dailyReportNotes.organizationId,
+        reportDate: dailyReportNotes.reportDate,
+        note: dailyReportNotes.note,
+        createdByUserId: dailyReportNotes.createdByUserId,
+        createdAt: dailyReportNotes.createdAt,
+        authorName: users.displayName,
+      })
+      .from(dailyReportNotes)
+      .leftJoin(users, eq(dailyReportNotes.createdByUserId, users.id))
+      .where(and(eq(dailyReportNotes.organizationId, orgId), eq(dailyReportNotes.reportDate, date)))
+      .orderBy(dailyReportNotes.createdAt);
+    return rows;
+  }
+  async createDailyReportNote(data: InsertDailyReportNote): Promise<DailyReportNote> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(dailyReportNotes).values(data).returning();
+    return created;
   }
 
   // ─── Mortuary Dispatches ────────────────────────────────────

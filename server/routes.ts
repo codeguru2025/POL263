@@ -17,6 +17,7 @@ import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger } from "./financial-statements";
+import { buildDailyReport } from "./daily-report";
 import { generateRequisitionPdf } from "./requisition-pdf";
 import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
 import { z } from "zod";
@@ -8212,6 +8213,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     return res.json(await buildTransactionLedger(user.organizationId, { from, to, branchId, limit, offset }));
+  });
+
+  app.get("/api/reports/daily", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : new Date().toISOString().slice(0, 10);
+    return res.json(await buildDailyReport(user.organizationId, date));
+  });
+
+  app.post("/api/reports/daily/notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : new Date().toISOString().slice(0, 10);
+    const note = typeof req.body.note === "string" ? req.body.note.trim() : "";
+    if (!note) return res.status(400).json({ message: "Note text is required" });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const created = await storage.createDailyReportNote({
+      organizationId: user.organizationId, reportDate: date, note, createdByUserId: effectiveUserId,
+    });
+    await auditLog(req, "CREATE_DAILY_REPORT_NOTE", "DailyReportNote", created.id, null, created);
+    return res.status(201).json(created);
   });
 
   app.get("/api/reports/balance-sheet", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

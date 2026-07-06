@@ -1469,6 +1469,22 @@ export const mortuaryPostMortemMovements = pgTable(
   (t) => [index("pmm_intake_idx").on(t.intakeId)]
 );
 
+// Free-text notes/insights staff attach to a given day's daily report (e.g. operational
+// context, management decisions) — surfaced alongside the auto-fetched financial/operations
+// data on that report, not derived from any other table.
+export const dailyReportNotes = pgTable(
+  "daily_report_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    reportDate: date("report_date").notNull(),
+    note: text("note").notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("drn_org_date_idx").on(t.organizationId, t.reportDate)]
+);
+
 // Partner parlours borrowing our vehicles/drivers for their own removals or
 // burials — not tied to one of our funeral cases, since it's the other
 // parlour's case.
@@ -2579,6 +2595,7 @@ export const insertMortuaryDispatchSchema = createInsertSchema(mortuaryDispatche
 export const insertDeceasedBelongingSchema = createInsertSchema(deceasedBelongings).omit({ id: true, createdAt: true });
 export const insertBodyWashRequirementSchema = createInsertSchema(bodyWashRequirements).omit({ id: true, createdAt: true });
 export const insertMortuaryPostMortemMovementSchema = createInsertSchema(mortuaryPostMortemMovements).omit({ id: true, createdAt: true });
+export const insertDailyReportNoteSchema = createInsertSchema(dailyReportNotes).omit({ id: true, createdAt: true });
 export const insertPartnerParlourVehicleUsageSchema = createInsertSchema(partnerParlourVehicleUsage).omit({ id: true, createdAt: true });
 export const insertDriverChecklistSchema = createInsertSchema(driverChecklists).omit({ id: true, createdAt: true });
 export const insertFleetVehicleSchema = createInsertSchema(fleetVehicles).omit({ id: true, createdAt: true });
@@ -2704,6 +2721,8 @@ export type InsertDeceasedBelonging = z.infer<typeof insertDeceasedBelongingSche
 export type BodyWashRequirement = typeof bodyWashRequirements.$inferSelect;
 export type InsertBodyWashRequirement = z.infer<typeof insertBodyWashRequirementSchema>;
 export type MortuaryPostMortemMovement = typeof mortuaryPostMortemMovements.$inferSelect;
+export type DailyReportNote = typeof dailyReportNotes.$inferSelect;
+export type InsertDailyReportNote = typeof dailyReportNotes.$inferInsert;
 export type InsertMortuaryPostMortemMovement = z.infer<typeof insertMortuaryPostMortemMovementSchema>;
 export type PartnerParlourVehicleUsage = typeof partnerParlourVehicleUsage.$inferSelect;
 export type InsertPartnerParlourVehicleUsage = z.infer<typeof insertPartnerParlourVehicleUsageSchema>;
