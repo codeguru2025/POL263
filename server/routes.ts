@@ -45,6 +45,7 @@ import {
   insertPartnerParlourSchema,
   insertMortuaryIntakeSchema, insertMortuaryDispatchSchema,
   insertDeceasedBelongingSchema, insertBodyWashRequirementSchema, insertDriverChecklistSchema,
+  insertMortuaryPostMortemMovementSchema, insertPartnerParlourVehicleUsageSchema,
   insertFleetVehicleSchema, insertCommissionPlanSchema,
   insertNotificationTemplateSchema, insertLeadSchema, insertExpenditureSchema,
   insertPriceBookItemSchema, insertBenefitCatalogItemSchema,
@@ -697,10 +698,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { runBackupSync } = await import("./backup-sync");
       // Run async — don't block the response
-      runBackupSync().catch((err) => structuredLog("error", "Manual backup failed", { error: (err as Error).message }));
+      runBackupSync("manual").catch((err) => structuredLog("error", "Manual backup failed", { error: (err as Error).message }));
       return res.json({ message: "Backup sync triggered. Check logs for progress." });
     } catch (err) {
       return res.status(500).json({ message: "Failed to trigger backup" });
+    }
+  });
+
+  app.get("/api/platform/backup-status", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.isPlatformOwner) {
+      return res.status(403).json({ message: "Platform owner access required" });
+    }
+    try {
+      const { getRecentBackupRuns } = await import("./backup-sync");
+      const runs = await getRecentBackupRuns(20);
+      return res.json({ runs });
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
     }
   });
 
@@ -5078,6 +5093,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (intake.partnerParlourId && intake.storageFeeStatus === "unpaid") {
       return res.status(400).json({ message: "Storage fee must be paid before this body can be released. Record payment first." });
     }
+    // Block release if the body is currently out for post-mortem and hasn't returned
+    if (intake.status === "out_for_post_mortem") {
+      return res.status(400).json({ message: "This body is currently out for post-mortem. Record its return before dispatch." });
+    }
     await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
     const dispatchBody = { ...req.body };
     if (dispatchBody.dispatchedAt && typeof dispatchBody.dispatchedAt === "string") { const d = new Date(dispatchBody.dispatchedAt); dispatchBody.dispatchedAt = isNaN(d.getTime()) ? undefined : d; }
@@ -5150,6 +5169,109 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await storage.deleteDeceasedBelonging(req.params.id as string, user.organizationId);
     await auditLog(req, "DELETE_BELONGING", "DeceasedBelonging", req.params.id as string, null, null);
     return res.status(204).end();
+  });
+
+  // Post-mortem out-and-back (applies to both our own bodies and partner-parlour bodies)
+  app.get("/api/mortuary-intakes/:id/post-mortem", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getPostMortemMovements(req.params.id as string, user.organizationId));
+  });
+
+  app.post("/api/mortuary-intakes/:id/post-mortem", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const intake = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
+    if (!intake) return res.status(404).json({ message: "Mortuary intake not found" });
+    if (intake.status === "out_for_post_mortem") {
+      return res.status(400).json({ message: "This body is already recorded as out for post-mortem." });
+    }
+    if (intake.status === "dispatched") {
+      return res.status(400).json({ message: "This body has already been dispatched." });
+    }
+    if (req.body.takenOutByUserId && typeof req.body.takenOutByUserId === "string") {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.takenOutByUserId);
+    }
+    const body = { ...req.body };
+    if (body.takenOutAt && typeof body.takenOutAt === "string") { const d = new Date(body.takenOutAt); body.takenOutAt = isNaN(d.getTime()) ? new Date() : d; }
+    else if (!body.takenOutAt) body.takenOutAt = new Date();
+    const parsed = insertMortuaryPostMortemMovementSchema.parse({
+      ...body,
+      intakeId: req.params.id as string,
+      funeralCaseId: intake.funeralCaseId ?? undefined,
+      organizationId: user.organizationId,
+      takenOutByUserId: req.body.takenOutByUserId || user.id,
+    });
+    const movement = await storage.createPostMortemMovement(parsed);
+    await auditLog(req, "CREATE_POST_MORTEM_MOVEMENT", "MortuaryPostMortemMovement", movement.id, null, movement);
+    return res.status(201).json(movement);
+  });
+
+  app.post("/api/post-mortem-movements/:id/return", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { receivedBackByUserId, returnedAt } = req.body;
+    if (receivedBackByUserId && typeof receivedBackByUserId === "string") {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, receivedBackByUserId);
+    }
+    const parsedReturnedAt = returnedAt && typeof returnedAt === "string" ? new Date(returnedAt) : new Date();
+    const updated = await storage.recordPostMortemReturn(req.params.id as string, user.organizationId, {
+      returnedAt: isNaN(parsedReturnedAt.getTime()) ? new Date() : parsedReturnedAt,
+      receivedBackByUserId: receivedBackByUserId || user.id,
+    });
+    if (!updated) return res.status(404).json({ message: "Post-mortem movement not found" });
+    await auditLog(req, "RECORD_POST_MORTEM_RETURN", "MortuaryPostMortemMovement", updated.id, null, updated);
+    return res.json(updated);
+  });
+
+  // Partner parlour vehicle usage — other parlours borrowing our vehicles/drivers
+  // for their own removals or burials (not tied to one of our funeral cases).
+  app.get("/api/partner-parlour-vehicle-usage", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const parlourId = typeof req.query.parlourId === "string" ? req.query.parlourId : undefined;
+    return res.json(await storage.getPartnerParlourVehicleUsage(user.organizationId, { parlourId }));
+  });
+
+  app.post("/api/partner-parlour-vehicle-usage", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    if (!req.body.partnerParlourId || !req.body.vehicleId || !req.body.purpose) {
+      return res.status(400).json({ message: "partnerParlourId, vehicleId, and purpose are required" });
+    }
+    if (!["removal", "burial"].includes(req.body.purpose)) {
+      return res.status(400).json({ message: "purpose must be 'removal' or 'burial'" });
+    }
+    if (req.body.driverId && typeof req.body.driverId === "string") {
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.driverId);
+    }
+    const body = { ...req.body };
+    if (body.usageDateTime && typeof body.usageDateTime === "string") { const d = new Date(body.usageDateTime); body.usageDateTime = isNaN(d.getTime()) ? new Date() : d; }
+    else if (!body.usageDateTime) body.usageDateTime = new Date();
+    const parsed = insertPartnerParlourVehicleUsageSchema.parse({
+      ...body,
+      organizationId: user.organizationId,
+    });
+    const usage = await storage.createPartnerParlourVehicleUsage(parsed);
+    await auditLog(req, "CREATE_VEHICLE_USAGE", "PartnerParlourVehicleUsage", usage.id, null, usage);
+    return res.status(201).json(usage);
+  });
+
+  app.post("/api/partner-parlour-vehicle-usage/:id/return", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const updated = await storage.updatePartnerParlourVehicleUsage(req.params.id as string, user.organizationId, { returnedAt: new Date() } as any);
+    if (!updated) return res.status(404).json({ message: "Vehicle usage record not found" });
+    await auditLog(req, "RECORD_VEHICLE_RETURN", "PartnerParlourVehicleUsage", updated.id, null, updated);
+    return res.json(updated);
+  });
+
+  app.post("/api/partner-parlour-vehicle-usage/:id/fee-payment", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { paidBy } = req.body;
+    if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
+    const updated = await storage.recordVehicleUsageFeePayment(req.params.id as string, user.organizationId, {
+      feePaidBy: paidBy,
+      feePaidAt: new Date(),
+      feeStatus: "paid",
+    });
+    if (!updated) return res.status(404).json({ message: "Vehicle usage record not found" });
+    await auditLog(req, "RECORD_VEHICLE_USAGE_FEE_PAYMENT", "PartnerParlourVehicleUsage", updated.id, null, updated);
+    return res.json(updated);
   });
 
   // Body wash requirements
@@ -5307,6 +5429,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const policyIds = agentPolicies.map(p => p.id);
     let collectionsRows: any[] = [];
     if (policyIds.length > 0) {
+      const policyIdsSql = sql.join(policyIds.map((id: string) => sql`${id}`), sql`, `);
       const result = await tdb.execute(sql`
         SELECT
           currency,
@@ -5315,7 +5438,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         FROM payment_receipts
         WHERE organization_id = ${orgId}
           AND status = 'issued'
-          AND policy_id = ANY(${policyIds}::uuid[])
+          AND policy_id = ANY(ARRAY[${policyIdsSql}]::uuid[])
           AND issued_at >= ${from + 'T00:00:00.000Z'}
           AND issued_at <= ${to   + 'T23:59:59.999Z'}
         GROUP BY currency, TO_CHAR(issued_at, 'YYYY-MM')
@@ -7371,6 +7494,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/platform/summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getPlatformRevenueSummary(user.organizationId));
+  });
+
+  // Receipting activity by staff member and branch, for a given period.
+  app.get("/api/reports/receipting-by-user", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : new Date().toISOString().slice(0, 10);
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : new Date().toISOString().slice(0, 10);
+    return res.json(await storage.getReceiptingByUserAndBranch(user.organizationId, fromDate, toDate));
   });
 
   app.get("/api/settlements", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

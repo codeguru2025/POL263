@@ -10,7 +10,7 @@
  * converts to USD using fx_rates; currencies without a rate are listed as
  * unconvertible and excluded from that total.
  */
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, eq, gte, lte, sql, inArray } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import {
@@ -21,6 +21,8 @@ import {
   platformReceivables,
   claims,
   policies,
+  requisitions,
+  expenditures,
 } from "@shared/schema";
 
 export interface StatementParams {
@@ -197,17 +199,15 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   // Fetch categories for requisitions and expenditures in one query each.
   const reqCategoryMap: Record<string, string> = {};
   if (reqIds.length) {
-    const rows = await tdb.execute(
-      sql`SELECT id, category FROM requisitions WHERE id = ANY(${reqIds}::uuid[])`
-    );
-    for (const r of (rows.rows ?? rows) as any[]) reqCategoryMap[r.id] = r.category || "Uncategorised";
+    const rows = await tdb.select({ id: requisitions.id, category: requisitions.category })
+      .from(requisitions).where(inArray(requisitions.id, reqIds));
+    for (const r of rows) reqCategoryMap[r.id] = r.category || "Uncategorised";
   }
   const expCategoryMap: Record<string, string> = {};
   if (expIds.length) {
-    const rows = await tdb.execute(
-      sql`SELECT id, category FROM expenditures WHERE id = ANY(${expIds}::uuid[])`
-    );
-    for (const r of (rows.rows ?? rows) as any[]) expCategoryMap[r.id] = r.category || "Uncategorised";
+    const rows = await tdb.select({ id: expenditures.id, category: expenditures.category })
+      .from(expenditures).where(inArray(expenditures.id, expIds));
+    for (const r of rows) expCategoryMap[r.id] = r.category || "Uncategorised";
   }
 
   const expenseLines: { label: string; source: "requisition" | "expenditure" | "commission"; amounts: AmountMap }[] = [];

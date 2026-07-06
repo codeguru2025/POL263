@@ -113,6 +113,7 @@ export default function StaffMortuary() {
   const [showBodyWash, setShowBodyWash] = useState(false);
   const [showRecordPayment, setShowRecordPayment] = useState(false);
   const [showChapelWashBayPayment, setShowChapelWashBayPayment] = useState(false);
+  const [showSendForPostMortem, setShowSendForPostMortem] = useState(false);
 
   const { data: intakes = [], isLoading: intakesLoading } = useQuery<any[]>({
     queryKey: ["/api/mortuary-intakes"],
@@ -139,6 +140,10 @@ export default function StaffMortuary() {
   });
   const { data: bodyWash } = useQuery<any>({
     queryKey: [`/api/mortuary-intakes/${selectedIntakeId}/body-wash`],
+    enabled: !!selectedIntakeId,
+  });
+  const { data: postMortemMovements = [] } = useQuery<any[]>({
+    queryKey: [`/api/mortuary-intakes/${selectedIntakeId}/post-mortem`],
     enabled: !!selectedIntakeId,
   });
 
@@ -187,6 +192,35 @@ export default function StaffMortuary() {
       await apiRequest("DELETE", `/api/belongings/${id}`);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/mortuary-intakes/${selectedIntakeId}/belongings`] }),
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const sendForPostMortemMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = await apiRequest("POST", `/api/mortuary-intakes/${selectedIntakeId}/post-mortem`, data);
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.message || "Failed");
+      return j;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/mortuary-intakes"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/mortuary-intakes/${selectedIntakeId}/post-mortem`] });
+      setShowSendForPostMortem(false);
+      toast({ title: "Recorded as sent for post-mortem" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const recordPostMortemReturnMutation = useMutation({
+    mutationFn: async (movementId: string) => {
+      const res = await apiRequest("POST", `/api/post-mortem-movements/${movementId}/return`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/mortuary-intakes"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/mortuary-intakes/${selectedIntakeId}/post-mortem`] });
+      toast({ title: "Body recorded as returned to mortuary" });
+    },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
@@ -487,6 +521,39 @@ export default function StaffMortuary() {
                 )}
               </CardSection>
 
+              {/* Post-mortem out-and-back */}
+              <CardSection title="Post-Mortem" icon={Box}
+                headerRight={selectedIntake.status !== "dispatched" && selectedIntake.status !== "out_for_post_mortem" && (
+                  <Button size="sm" variant="outline" onClick={() => setShowSendForPostMortem(true)}>Send for Post-Mortem</Button>
+                )}
+              >
+                {postMortemMovements.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-3">No post-mortem movements recorded.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {postMortemMovements.map((m: any) => (
+                      <div key={m.id} className="space-y-0.5 border-b border-border last:border-0 pb-2 last:pb-0">
+                        <DetailRow label="Taken out at" value={fmtDateTime(m.takenOutAt)} />
+                        {m.takenToLocation && <DetailRow label="Taken to" value={m.takenToLocation} />}
+                        {m.authorizedBy && <DetailRow label="Authorized by" value={m.authorizedBy} />}
+                        {m.collectedByName && <DetailRow label="Collected by" value={m.collectedByName} />}
+                        {m.returnedAt ? (
+                          <DetailRow label="Returned at" value={fmtDateTime(m.returnedAt)} />
+                        ) : (
+                          <div className="flex items-center justify-between py-1">
+                            <span className="text-xs text-amber-700">Still out for post-mortem</span>
+                            <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => recordPostMortemReturnMutation.mutate(m.id)}
+                              disabled={recordPostMortemReturnMutation.isPending}>
+                              Record return
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardSection>
+
               {/* Dispatch info */}
               {dispatch && (
                 <CardSection title="Dispatch Record" icon={Box}>
@@ -602,6 +669,16 @@ export default function StaffMortuary() {
           intake={selectedIntake}
           onSubmit={(data) => upsertDispatchMutation.mutate(data)}
           isPending={upsertDispatchMutation.isPending}
+        />
+      )}
+
+      {/* Send for Post-Mortem Dialog */}
+      {selectedIntakeId && (
+        <SendForPostMortemDialog
+          open={showSendForPostMortem}
+          onOpenChange={setShowSendForPostMortem}
+          onSubmit={(data) => sendForPostMortemMutation.mutate(data)}
+          isPending={sendForPostMortemMutation.isPending}
         />
       )}
 
@@ -1146,6 +1223,71 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
             </DialogFooter>
           </form>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Send for Post-Mortem Dialog ──────────────────────────────────────────────
+
+function SendForPostMortemDialog({ open, onOpenChange, onSubmit, isPending }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  onSubmit: (data: Record<string, any>) => void; isPending: boolean;
+}) {
+  const [form, setForm] = useState({
+    takenOutAt: new Date().toISOString().slice(0, 16),
+    takenToLocation: "",
+    authorizedBy: "",
+    collectedByName: "",
+    notes: "",
+  });
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit({
+      takenOutAt: form.takenOutAt || null,
+      takenToLocation: form.takenToLocation || null,
+      authorizedBy: form.authorizedBy || null,
+      collectedByName: form.collectedByName || null,
+      notes: form.notes || null,
+    });
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Send for Post-Mortem</DialogTitle>
+          <DialogDescription>Record the body leaving the mortuary for post-mortem examination.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Date & Time Taken Out</Label>
+            <Input type="datetime-local" value={form.takenOutAt} onChange={(e) => setForm((f) => ({ ...f, takenOutAt: e.target.value }))} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Taken To (location)</Label>
+            <Input value={form.takenToLocation} onChange={(e) => setForm((f) => ({ ...f, takenToLocation: e.target.value }))} placeholder="e.g. State Pathologist, hospital name" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Authorized By</Label>
+              <Input value={form.authorizedBy} onChange={(e) => setForm((f) => ({ ...f, authorizedBy: e.target.value }))} placeholder="Doctor / police officer" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Collected By (Name)</Label>
+              <Input value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} placeholder="Person/ambulance collecting" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Notes</Label>
+            <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Send for Post-Mortem
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

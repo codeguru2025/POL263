@@ -194,9 +194,29 @@ export const tenantFeatureFlags = pgTable(
   ]
 );
 
+// ─── BACKUP SYNC HISTORY ──────────────────────────────────────────────────────
+
+/**
+ * One row per backup-sync run (see server/backup-sync.ts), so backup health is
+ * queryable instead of only visible in server logs. Kept in the control plane
+ * since it's platform-wide operational state, not tenant data.
+ */
+export const backupSyncRuns = pgTable("backup_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  startedAt: timestamp("started_at").notNull(),
+  completedAt: timestamp("completed_at"),
+  status: text("status").notNull(), // 'running' | 'success' | 'partial' | 'failed'
+  totalRows: text("total_rows"),
+  tableCount: text("table_count"),
+  errorCount: text("error_count"),
+  errors: jsonb("errors"),
+  triggeredBy: text("triggered_by"), // 'scheduler' | 'manual'
+});
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 export type Tenant = typeof tenants.$inferSelect;
 export type TenantDatabase = typeof tenantDatabases.$inferSelect;
 export type TenantIntegration = typeof tenantIntegrations.$inferSelect;
 export type TenantBranding = typeof tenantBranding.$inferSelect;
+export type BackupSyncRun = typeof backupSyncRuns.$inferSelect;

@@ -27,11 +27,13 @@ const connectionTimeoutMillis =
     parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10)) ||
   5_000;
 
-// Supabase (and some poolers) use certs Node doesn't trust by default. Allow bypass for dev/local.
+// Supabase and DigitalOcean managed databases (and some other poolers) use certs Node
+// doesn't trust by default. Allow bypass for dev/local — mirrors the host detection
+// already used in script/run-migrations.ts and server/control-plane-db.ts.
 const acceptSelfSigned =
   process.env.DB_ACCEPT_SELF_SIGNED === "true" ||
   process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
-  (typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.includes("supabase"));
+  (typeof process.env.DATABASE_URL === "string" && /supabase|digitalocean|\.ondigitalocean\.com/i.test(process.env.DATABASE_URL));
 const sslConfig = acceptSelfSigned ? { rejectUnauthorized: false } : undefined;
 
 // When we set our own SSL config, strip sslmode from URL so pg doesn't override with strict verification

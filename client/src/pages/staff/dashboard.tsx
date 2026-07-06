@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useLocation } from "wouter";
+import { PeriodSelector, periodForPreset, type Period } from "@/components/period-selector";
 import {
   Users,
   Building2,
@@ -114,15 +115,22 @@ interface ControlPlaneDashboard {
 }
 
 // ─── Executive Finance Summary ────────────────────────────────────────────
-function ExecutiveSummarySection({ execSummary, execLoading, branchesList }: { execSummary: any; execLoading: boolean; branchesList: any[] }) {
+function ExecutiveSummarySection({ execSummary, execLoading, branchesList, period, onPeriodChange }: {
+  execSummary: any; execLoading: boolean; branchesList: any[];
+  period: Period; onPeriodChange: (p: Period) => void;
+}) {
   if (execLoading) {
     return (
-      <CardSection title="Executive finance summary" icon={BarChart3}>
+      <CardSection title="Executive finance summary" icon={BarChart3} headerRight={<PeriodSelector value={period} onChange={onPeriodChange} />}>
         <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
       </CardSection>
     );
   }
-  if (!execSummary) return null;
+  if (!execSummary) return (
+    <CardSection title="Executive finance summary" icon={BarChart3} headerRight={<PeriodSelector value={period} onChange={onPeriodChange} />}>
+      <p className="text-sm text-muted-foreground text-center py-8">No data for this period.</p>
+    </CardSection>
+  );
 
   const ex = execSummary;
   const cu = ex.consolidatedUsd || {};
@@ -157,6 +165,7 @@ function ExecutiveSummarySection({ execSummary, execLoading, branchesList }: { e
         title={`Executive summary — ${ex.period?.from} to ${ex.period?.to}`}
         description="Cash-basis P&L for the selected period, derived from issued receipts and paid disbursements."
         icon={BarChart3}
+        headerRight={<PeriodSelector value={period} onChange={onPeriodChange} />}
       >
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4">
           <div className="rounded-md border p-3">
@@ -285,6 +294,10 @@ export default function StaffDashboard() {
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
+  // Revenue/activity figures (executive summary, revenue trend) default to "today" and are
+  // period-selectable independently of the portfolio filters above, which stay unfiltered
+  // (current-state) by default — see period-selector.tsx.
+  const [execPeriod, setExecPeriod] = useState<Period>(() => periodForPreset("today"));
   const { data: controlPlaneData, isLoading: cpLoading } = useQuery<ControlPlaneDashboard>({
     queryKey: ["/api/platform/dashboard"],
     enabled: isControlPlaneMode,
@@ -333,12 +346,12 @@ export default function StaffDashboard() {
   });
 
   const { data: revenueTrend } = useQuery<{ date: string; total: number }[]>({
-    queryKey: ["/api/dashboard/revenue-trend", filterKey],
+    queryKey: ["/api/dashboard/revenue-trend", execPeriod.from, execPeriod.to],
     queryFn: async () => {
       const p = new URLSearchParams();
-      if (dateFrom) p.set("dateFrom", dateFrom);
-      if (dateTo) p.set("dateTo", dateTo);
-      const url = base + "/api/dashboard/revenue-trend" + (p.toString() ? `?${p}` : "");
+      p.set("dateFrom", execPeriod.from);
+      p.set("dateTo", execPeriod.to);
+      const url = base + "/api/dashboard/revenue-trend" + `?${p}`;
       const res = await fetch(url, { credentials: "include" });
       if (res.status === 401 || res.status === 403) return [];
       if (!res.ok) throw new Error("Failed to load revenue trend");
@@ -387,14 +400,14 @@ export default function StaffDashboard() {
   const canApproveFinance = permissions.includes("approve:finance");
   const execParams = useMemo(() => {
     const p = new URLSearchParams();
-    if (dateFrom) p.set("fromDate", dateFrom);
-    if (dateTo) p.set("toDate", dateTo);
+    p.set("fromDate", execPeriod.from);
+    p.set("toDate", execPeriod.to);
     if (branchFilter && branchFilter !== "all") p.set("branchId", branchFilter);
-    return p.toString() ? `?${p}` : "";
-  }, [dateFrom, dateTo, branchFilter]);
+    return `?${p}`;
+  }, [execPeriod, branchFilter]);
 
   const { data: execSummary, isLoading: execLoading } = useQuery<any>({
-    queryKey: ["/api/dashboard/executive-summary", dateFrom, dateTo, branchFilter],
+    queryKey: ["/api/dashboard/executive-summary", execPeriod.from, execPeriod.to, branchFilter],
     queryFn: async () => {
       const res = await fetch(base + "/api/dashboard/executive-summary" + execParams, { credentials: "include" });
       if (!res.ok) return null;
@@ -706,7 +719,7 @@ export default function StaffDashboard() {
 
         {canReadFinance && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CardSection title="Revenue trend" icon={DollarSign} contentClassName="pt-2">
+          <CardSection title="Revenue trend" icon={DollarSign} contentClassName="pt-2" headerRight={<PeriodSelector value={execPeriod} onChange={setExecPeriod} />}>
               {filteredRevenueTrend.length > 0 ? (
                 <ResponsiveContainer width="100%" height={280}>
                   <AreaChart data={filteredRevenueTrend}>
@@ -829,7 +842,7 @@ export default function StaffDashboard() {
 
         {/* ── Executive Finance Dashboard ──────────────────── */}
         {canReadFinance && !isAgent && (
-          <ExecutiveSummarySection execSummary={execSummary} execLoading={execLoading} branchesList={branchesList || []} />
+          <ExecutiveSummarySection execSummary={execSummary} execLoading={execLoading} branchesList={branchesList || []} period={execPeriod} onPeriodChange={setExecPeriod} />
         )}
 
       </PageShell>

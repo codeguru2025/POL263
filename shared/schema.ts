@@ -1444,6 +1444,59 @@ export const bodyWashRequirements = pgTable(
   (t) => [index("bwr_intake_idx").on(t.intakeId)]
 );
 
+// Post-mortem out-and-back: a body (ours or a partner parlour's) leaves the
+// mortuary for post-mortem examination and later returns. Multiple rows per
+// intake are allowed (rare, but a body could go out more than once).
+export const mortuaryPostMortemMovements = pgTable(
+  "mortuary_post_mortem_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    intakeId: uuid("intake_id").notNull().references(() => mortuaryIntakes.id),
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    takenOutAt: timestamp("taken_out_at").notNull(),
+    takenOutByUserId: uuid("taken_out_by_user_id").references(() => users.id),
+    takenToLocation: text("taken_to_location"),
+    authorizedBy: text("authorized_by"),
+    collectedByName: text("collected_by_name"),
+    returnedAt: timestamp("returned_at"),
+    receivedBackByUserId: uuid("received_back_by_user_id").references(() => users.id),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("pmm_intake_idx").on(t.intakeId)]
+);
+
+// Partner parlours borrowing our vehicles/drivers for their own removals or
+// burials — not tied to one of our funeral cases, since it's the other
+// parlour's case.
+export const partnerParlourVehicleUsage = pgTable(
+  "partner_parlour_vehicle_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    partnerParlourId: uuid("partner_parlour_id").notNull().references(() => partnerParlours.id),
+    vehicleId: uuid("vehicle_id").notNull().references(() => fleetVehicles.id),
+    driverId: uuid("driver_id").references(() => users.id),
+    purpose: text("purpose").notNull(), // 'removal' | 'burial'
+    deceasedName: text("deceased_name"),
+    usageDateTime: timestamp("usage_date_time").notNull(),
+    destination: text("destination"),
+    returnedAt: timestamp("returned_at"),
+    feeAmount: numeric("fee_amount", { precision: 10, scale: 2 }),
+    feeCurrency: text("fee_currency").default("USD"),
+    feeStatus: text("fee_status").default("unpaid"), // 'unpaid' | 'paid'
+    feePaidAt: timestamp("fee_paid_at"),
+    feePaidBy: text("fee_paid_by"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("ppvu_org_idx").on(t.organizationId),
+    index("ppvu_parlour_idx").on(t.partnerParlourId),
+  ]
+);
+
 export const driverChecklists = pgTable(
   "driver_checklists",
   {
@@ -2114,6 +2167,8 @@ export const requisitions = pgTable(
     notes: text("notes"),
     neededByDate: date("needed_by_date"),
     approverNotes: text("approver_notes"),
+    department: text("department"), // classification for departmental spend reporting
+    costFlag: text("cost_flag"), // e.g. 'CEO_PERSONAL' | 'SOUTH_AFRICA' — special cost-center tagging
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -2521,6 +2576,8 @@ export const insertMortuaryIntakeSchema = createInsertSchema(mortuaryIntakes).om
 export const insertMortuaryDispatchSchema = createInsertSchema(mortuaryDispatches).omit({ id: true, createdAt: true });
 export const insertDeceasedBelongingSchema = createInsertSchema(deceasedBelongings).omit({ id: true, createdAt: true });
 export const insertBodyWashRequirementSchema = createInsertSchema(bodyWashRequirements).omit({ id: true, createdAt: true });
+export const insertMortuaryPostMortemMovementSchema = createInsertSchema(mortuaryPostMortemMovements).omit({ id: true, createdAt: true });
+export const insertPartnerParlourVehicleUsageSchema = createInsertSchema(partnerParlourVehicleUsage).omit({ id: true, createdAt: true });
 export const insertDriverChecklistSchema = createInsertSchema(driverChecklists).omit({ id: true, createdAt: true });
 export const insertFleetVehicleSchema = createInsertSchema(fleetVehicles).omit({ id: true, createdAt: true });
 export const insertCommissionPlanSchema = createInsertSchema(commissionPlans).omit({ id: true, createdAt: true });
@@ -2644,6 +2701,10 @@ export type DeceasedBelonging = typeof deceasedBelongings.$inferSelect;
 export type InsertDeceasedBelonging = z.infer<typeof insertDeceasedBelongingSchema>;
 export type BodyWashRequirement = typeof bodyWashRequirements.$inferSelect;
 export type InsertBodyWashRequirement = z.infer<typeof insertBodyWashRequirementSchema>;
+export type MortuaryPostMortemMovement = typeof mortuaryPostMortemMovements.$inferSelect;
+export type InsertMortuaryPostMortemMovement = z.infer<typeof insertMortuaryPostMortemMovementSchema>;
+export type PartnerParlourVehicleUsage = typeof partnerParlourVehicleUsage.$inferSelect;
+export type InsertPartnerParlourVehicleUsage = z.infer<typeof insertPartnerParlourVehicleUsageSchema>;
 export type DriverChecklist = typeof driverChecklists.$inferSelect;
 export type InsertDriverChecklist = z.infer<typeof insertDriverChecklistSchema>;
 export type FleetVehicle = typeof fleetVehicles.$inferSelect;

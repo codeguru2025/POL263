@@ -18,6 +18,7 @@ import {
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
   partnerParlours, parlourPersonnel,
   mortuaryIntakes, mortuaryDispatches, deceasedBelongings, bodyWashRequirements, driverChecklists,
+  mortuaryPostMortemMovements, partnerParlourVehicleUsage,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
   payrollEmployees, payrollRuns, payslips, attendanceLogs,
@@ -89,6 +90,8 @@ import {
   type MortuaryDispatch, type InsertMortuaryDispatch,
   type DeceasedBelonging, type InsertDeceasedBelonging,
   type BodyWashRequirement, type InsertBodyWashRequirement,
+  type MortuaryPostMortemMovement, type InsertMortuaryPostMortemMovement,
+  type PartnerParlourVehicleUsage, type InsertPartnerParlourVehicleUsage,
   type DriverChecklist, type InsertDriverChecklist,
   type CommissionPlan, type InsertCommissionPlan,
   type CommissionLedgerEntry, type InsertCommissionLedgerEntry,
@@ -5164,6 +5167,79 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // ── Receipting activity by staff member and branch ────────────
+  async getReceiptingByUserAndBranch(orgId: string, fromDate: string, toDate: string): Promise<{
+    byUser: Array<{ userId: string | null; displayName: string; currency: string; total: string; count: number }>;
+    byBranch: Array<{ branchId: string | null; branchName: string; currency: string; total: string; count: number }>;
+    legacyUnattributed: Array<{ currency: string; total: string; count: number }>;
+  }> {
+    const tdb = await getDbForOrg(orgId);
+    const fromTs = new Date(fromDate + "T00:00:00.000Z");
+    const toTs = new Date(toDate + "T23:59:59.999Z");
+
+    const rows = await tdb.execute(sql`
+      SELECT issued_by_user_id AS user_id, branch_id, currency, amount
+      FROM payment_receipts
+      WHERE organization_id = ${orgId} AND status = 'issued'
+        AND issued_at >= ${fromTs} AND issued_at <= ${toTs}
+      UNION ALL
+      SELECT issued_by_user_id AS user_id, branch_id, currency, amount
+      FROM service_receipts
+      WHERE organization_id = ${orgId} AND status = 'issued'
+        AND issued_at >= ${fromTs} AND issued_at <= ${toTs}
+    `);
+    const allRows = (rows.rows ?? rows) as { user_id: string | null; branch_id: string | null; currency: string; amount: string }[];
+
+    const legacyRows = await tdb.execute(sql`
+      SELECT currency, amount FROM legacy_group_receipts
+      WHERE organization_id = ${orgId} AND payment_date >= ${fromDate}::date AND payment_date <= ${toDate}::date
+    `);
+    const legacyAll = (legacyRows.rows ?? legacyRows) as { currency: string; amount: string }[];
+
+    const userTotals = new Map<string, { userId: string | null; currency: string; total: number; count: number }>();
+    const branchTotals = new Map<string, { branchId: string | null; currency: string; total: number; count: number }>();
+    for (const r of allRows) {
+      const uKey = `${r.user_id ?? "unattributed"}:${r.currency}`;
+      const u = userTotals.get(uKey) ?? { userId: r.user_id, currency: r.currency, total: 0, count: 0 };
+      u.total += parseFloat(r.amount); u.count += 1;
+      userTotals.set(uKey, u);
+
+      const bKey = `${r.branch_id ?? "unattributed"}:${r.currency}`;
+      const b = branchTotals.get(bKey) ?? { branchId: r.branch_id, currency: r.currency, total: 0, count: 0 };
+      b.total += parseFloat(r.amount); b.count += 1;
+      branchTotals.set(bKey, b);
+    }
+
+    const userIds = Array.from(new Set(allRows.map(r => r.user_id).filter((id): id is string => !!id)));
+    const userRows = userIds.length ? await tdb.select({ id: users.id, displayName: users.displayName }).from(users).where(inArray(users.id, userIds)) : [];
+    const userNameMap = new Map(userRows.map(u => [u.id, u.displayName]));
+
+    const branchIds = Array.from(new Set(allRows.map(r => r.branch_id).filter((id): id is string => !!id)));
+    const branchRows = branchIds.length ? await tdb.select({ id: branches.id, name: branches.name }).from(branches).where(inArray(branches.id, branchIds)) : [];
+    const branchNameMap = new Map(branchRows.map(b => [b.id, b.name]));
+
+    const legacyTotals = new Map<string, { currency: string; total: number; count: number }>();
+    for (const r of legacyAll) {
+      const l = legacyTotals.get(r.currency) ?? { currency: r.currency, total: 0, count: 0 };
+      l.total += parseFloat(r.amount); l.count += 1;
+      legacyTotals.set(r.currency, l);
+    }
+
+    return {
+      byUser: Array.from(userTotals.values()).map(u => ({
+        userId: u.userId,
+        displayName: u.userId ? (userNameMap.get(u.userId) ?? "Unknown user") : "Not recorded",
+        currency: u.currency, total: u.total.toFixed(2), count: u.count,
+      })).sort((a, b) => b.total.localeCompare(a.total, undefined, { numeric: true })),
+      byBranch: Array.from(branchTotals.values()).map(b => ({
+        branchId: b.branchId,
+        branchName: b.branchId ? (branchNameMap.get(b.branchId) ?? "Unknown branch") : "Not recorded",
+        currency: b.currency, total: b.total.toFixed(2), count: b.count,
+      })).sort((a, b) => b.total.localeCompare(a.total, undefined, { numeric: true })),
+      legacyUnattributed: Array.from(legacyTotals.values()).map(l => ({ currency: l.currency, total: l.total.toFixed(2), count: l.count })),
+    };
+  }
+
   // ─── Settlements ────────────────────────────────────────
   async getSettlements(orgId: string): Promise<Settlement[]> {
     const tdb = await getDbForOrg(orgId);
@@ -5454,6 +5530,67 @@ export class DatabaseStorage implements IStorage {
     const [row] = await tdb.update(mortuaryDispatches)
       .set(data)
       .where(and(eq(mortuaryDispatches.intakeId, intakeId), eq(mortuaryDispatches.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+
+  // ─── Post-Mortem Movements ───────────────────────────────────
+  async getPostMortemMovements(intakeId: string, orgId: string): Promise<MortuaryPostMortemMovement[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(mortuaryPostMortemMovements)
+      .where(and(eq(mortuaryPostMortemMovements.intakeId, intakeId), eq(mortuaryPostMortemMovements.organizationId, orgId)))
+      .orderBy(desc(mortuaryPostMortemMovements.takenOutAt));
+  }
+  async createPostMortemMovement(data: InsertMortuaryPostMortemMovement): Promise<MortuaryPostMortemMovement> {
+    return withOrgTransaction(data.organizationId, async (tx) => {
+      const [created] = await tx.insert(mortuaryPostMortemMovements).values(data).returning();
+      await tx.update(mortuaryIntakes)
+        .set({ status: "out_for_post_mortem" })
+        .where(and(eq(mortuaryIntakes.id, data.intakeId), eq(mortuaryIntakes.organizationId, data.organizationId)));
+      return created;
+    });
+  }
+  async recordPostMortemReturn(id: string, orgId: string, data: { returnedAt: Date; receivedBackByUserId?: string | null }): Promise<MortuaryPostMortemMovement> {
+    return withOrgTransaction(orgId, async (tx) => {
+      const [updated] = await tx.update(mortuaryPostMortemMovements)
+        .set(data)
+        .where(and(eq(mortuaryPostMortemMovements.id, id), eq(mortuaryPostMortemMovements.organizationId, orgId)))
+        .returning();
+      if (updated) {
+        await tx.update(mortuaryIntakes)
+          .set({ status: "in_storage" })
+          .where(and(eq(mortuaryIntakes.id, updated.intakeId), eq(mortuaryIntakes.organizationId, orgId)));
+      }
+      return updated;
+    });
+  }
+
+  // ─── Partner Parlour Vehicle Usage ───────────────────────────
+  async getPartnerParlourVehicleUsage(orgId: string, filters?: { parlourId?: string }): Promise<PartnerParlourVehicleUsage[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds = [eq(partnerParlourVehicleUsage.organizationId, orgId)];
+    if (filters?.parlourId) conds.push(eq(partnerParlourVehicleUsage.partnerParlourId, filters.parlourId));
+    return tdb.select().from(partnerParlourVehicleUsage).where(and(...conds))
+      .orderBy(desc(partnerParlourVehicleUsage.usageDateTime));
+  }
+  async createPartnerParlourVehicleUsage(data: InsertPartnerParlourVehicleUsage): Promise<PartnerParlourVehicleUsage> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(partnerParlourVehicleUsage).values(data).returning();
+    return created;
+  }
+  async updatePartnerParlourVehicleUsage(id: string, orgId: string, data: Partial<InsertPartnerParlourVehicleUsage>): Promise<PartnerParlourVehicleUsage | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(partnerParlourVehicleUsage)
+      .set(data)
+      .where(and(eq(partnerParlourVehicleUsage.id, id), eq(partnerParlourVehicleUsage.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  async recordVehicleUsageFeePayment(id: string, orgId: string, data: { feePaidBy: string; feePaidAt: Date; feeStatus: string }): Promise<PartnerParlourVehicleUsage> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(partnerParlourVehicleUsage)
+      .set(data)
+      .where(and(eq(partnerParlourVehicleUsage.id, id), eq(partnerParlourVehicleUsage.organizationId, orgId)))
       .returning();
     return row;
   }

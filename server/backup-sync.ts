@@ -1,5 +1,6 @@
 /**
- * Incremental Backup Sync — mirrors recent changes to a Supabase backup DB.
+ * Backup Sync — full daily mirror of every tenant/registry/control-plane table
+ * into a Supabase backup DB.
  *
  * Runs daily at midnight (00:00 UTC+2) via an in-process scheduler.
  * Syncs data from ALL THREE DigitalOcean databases into one Supabase DB:
@@ -9,6 +10,24 @@
  *
  * Uses ON CONFLICT upserts so it is idempotent and safe to re-run.
  *
+ * Every table below is a FULL re-select each run (not filtered by created_at).
+ * This used to be an incremental sync keyed on created_at, which had two silent
+ * failure modes at our current data scale (a few thousand rows per table, so a
+ * full daily sync costs nothing): (1) any row whose fields changed AFTER
+ * creation — e.g. a requisition moving submitted → approved → paid, a mortuary
+ * intake being dispatched, a receipt being voided — was never re-synced, since
+ * only created_at was checked; the backup would silently drift from reality.
+ * (2) the window was "now minus 24h" rather than "since the last successful
+ * run", so a missed/failed run created a permanent gap for anything older than
+ * 24h by the time the next run fired. A full re-sync has neither problem: it
+ * always reflects current state. Revisit if any table grows large enough that
+ * a full daily SELECT * becomes expensive.
+ *
+ * Known limitation: this is an upsert-only mirror — rows deleted from the
+ * source are never deleted from the backup. That's intentional (a transient
+ * query hiccup should never be able to delete backup data), but it means the
+ * backup can accumulate rows the source has since removed.
+ *
  * ENV: SUPABASE_BACKUP_URL — the Supabase pooler connection string (port 6543).
  *      If not set, the backup is silently skipped.
  */
@@ -17,67 +36,96 @@ import { structuredLog } from "./logger";
 import { getDbForOrg } from "./tenant-db";
 import { sql } from "drizzle-orm";
 
-const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-interface SyncTableDef { table: string; timestampCol: string; primaryKey: string }
 interface FullSyncTableDef { table: string; primaryKey: string }
 
-// ─── TENANT DB TABLES (per-org: Falakhe, future tenants) ───────────────────
-const TENANT_SYNC_TABLES: SyncTableDef[] = [
-  { table: "organizations", timestampCol: "created_at", primaryKey: "id" },
-  { table: "branches", timestampCol: "created_at", primaryKey: "id" },
-  { table: "users", timestampCol: "created_at", primaryKey: "id" },
-  { table: "roles", timestampCol: "created_at", primaryKey: "id" },
-  { table: "user_roles", timestampCol: "created_at", primaryKey: "id" },
-  { table: "clients", timestampCol: "created_at", primaryKey: "id" },
-  { table: "dependents", timestampCol: "created_at", primaryKey: "id" },
-  { table: "products", timestampCol: "created_at", primaryKey: "id" },
-  { table: "product_versions", timestampCol: "created_at", primaryKey: "id" },
-  { table: "policies", timestampCol: "created_at", primaryKey: "id" },
-  { table: "policy_members", timestampCol: "created_at", primaryKey: "id" },
-  { table: "policy_status_history", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payment_transactions", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payment_intents", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payment_events", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payment_receipts", timestampCol: "created_at", primaryKey: "id" },
-  { table: "claims", timestampCol: "created_at", primaryKey: "id" },
-  { table: "claim_documents", timestampCol: "uploaded_at", primaryKey: "id" },
-  { table: "claim_status_history", timestampCol: "created_at", primaryKey: "id" },
-  { table: "funeral_cases", timestampCol: "created_at", primaryKey: "id" },
-  { table: "funeral_tasks", timestampCol: "created_at", primaryKey: "id" },
-  { table: "commission_ledger_entries", timestampCol: "created_at", primaryKey: "id" },
-  { table: "commission_plans", timestampCol: "created_at", primaryKey: "id" },
-  { table: "leads", timestampCol: "created_at", primaryKey: "id" },
-  { table: "expenditures", timestampCol: "created_at", primaryKey: "id" },
-  { table: "cashups", timestampCol: "created_at", primaryKey: "id" },
-  { table: "notification_logs", timestampCol: "created_at", primaryKey: "id" },
-  { table: "audit_logs", timestampCol: "timestamp", primaryKey: "id" },
-  { table: "groups", timestampCol: "created_at", primaryKey: "id" },
-  { table: "fleet_vehicles", timestampCol: "created_at", primaryKey: "id" },
-  { table: "outbox_messages", timestampCol: "created_at", primaryKey: "id" },
-  { table: "month_end_runs", timestampCol: "created_at", primaryKey: "id" },
-  { table: "credit_notes", timestampCol: "created_at", primaryKey: "id" },
-  { table: "receipts", timestampCol: "issued_at", primaryKey: "id" },
-  { table: "reversal_entries", timestampCol: "created_at", primaryKey: "id" },
-  { table: "platform_receivables", timestampCol: "created_at", primaryKey: "id" },
-  { table: "settlements", timestampCol: "created_at", primaryKey: "id" },
-  { table: "settlement_allocations", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payroll_employees", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payroll_runs", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payslips", timestampCol: "created_at", primaryKey: "id" },
-  { table: "approval_requests", timestampCol: "created_at", primaryKey: "id" },
-  { table: "requisitions", timestampCol: "created_at", primaryKey: "id" },
-  { table: "funeral_quotations", timestampCol: "created_at", primaryKey: "id" },
-  { table: "service_receipts", timestampCol: "created_at", primaryKey: "id" },
-  { table: "client_feedback", timestampCol: "created_at", primaryKey: "id" },
-  { table: "dependent_change_requests", timestampCol: "created_at", primaryKey: "id" },
-  { table: "group_payment_intents", timestampCol: "created_at", primaryKey: "id" },
-  { table: "group_payment_allocations", timestampCol: "created_at", primaryKey: "id" },
-  { table: "payment_automation_runs", timestampCol: "created_at", primaryKey: "id" },
-  { table: "directory_contacts", timestampCol: "created_at", primaryKey: "id" },
-];
-
+// ─── TENANT DB TABLES (per-org: Falakhe, future tenants) — full sync ───────
 const TENANT_FULL_SYNC_TABLES: FullSyncTableDef[] = [
+  { table: "organizations", primaryKey: "id" },
+  { table: "branches", primaryKey: "id" },
+  { table: "users", primaryKey: "id" },
+  { table: "roles", primaryKey: "id" },
+  { table: "user_roles", primaryKey: "id" },
+  { table: "clients", primaryKey: "id" },
+  { table: "client_documents", primaryKey: "id" },
+  { table: "dependents", primaryKey: "id" },
+  { table: "products", primaryKey: "id" },
+  { table: "product_versions", primaryKey: "id" },
+  { table: "policies", primaryKey: "id" },
+  { table: "policy_members", primaryKey: "id" },
+  { table: "policy_status_history", primaryKey: "id" },
+  { table: "policy_documents", primaryKey: "id" },
+  { table: "policy_premium_changes", primaryKey: "id" },
+  { table: "policy_credit_balances", primaryKey: "id" },
+  { table: "waiting_period_waivers", primaryKey: "id" },
+  { table: "payment_transactions", primaryKey: "id" },
+  { table: "payment_intents", primaryKey: "id" },
+  { table: "payment_events", primaryKey: "id" },
+  { table: "payment_receipts", primaryKey: "id" },
+  { table: "payment_disbursements", primaryKey: "id" },
+  { table: "claims", primaryKey: "id" },
+  { table: "claim_documents", primaryKey: "id" },
+  { table: "claim_status_history", primaryKey: "id" },
+  { table: "funeral_cases", primaryKey: "id" },
+  { table: "funeral_tasks", primaryKey: "id" },
+  { table: "funeral_quotations", primaryKey: "id" },
+  { table: "funeral_quotation_items", primaryKey: "id" },
+  { table: "quotation_guarantors", primaryKey: "id" },
+  { table: "quotation_collateral", primaryKey: "id" },
+  { table: "commission_ledger_entries", primaryKey: "id" },
+  { table: "commission_plans", primaryKey: "id" },
+  { table: "leads", primaryKey: "id" },
+  { table: "expenditures", primaryKey: "id" },
+  { table: "requisitions", primaryKey: "id" },
+  { table: "requisition_items", primaryKey: "id" },
+  { table: "cashups", primaryKey: "id" },
+  { table: "bank_accounts", primaryKey: "id" },
+  { table: "bank_deposits", primaryKey: "id" },
+  { table: "bank_statement_balances", primaryKey: "id" },
+  { table: "balance_sheet_entries", primaryKey: "id" },
+  { table: "debit_orders", primaryKey: "id" },
+  { table: "notification_logs", primaryKey: "id" },
+  { table: "notification_templates", primaryKey: "id" },
+  { table: "user_notifications", primaryKey: "id" },
+  { table: "user_device_tokens", primaryKey: "id" },
+  { table: "audit_logs", primaryKey: "id" },
+  { table: "groups", primaryKey: "id" },
+  { table: "fleet_vehicles", primaryKey: "id" },
+  { table: "fleet_maintenance", primaryKey: "id" },
+  { table: "fleet_fuel_logs", primaryKey: "id" },
+  { table: "driver_assignments", primaryKey: "id" },
+  { table: "vehicle_trip_logs", primaryKey: "id" },
+  { table: "outbox_messages", primaryKey: "id" },
+  { table: "month_end_runs", primaryKey: "id" },
+  { table: "credit_notes", primaryKey: "id" },
+  { table: "receipts", primaryKey: "id" },
+  { table: "receipt_adverts", primaryKey: "id" },
+  { table: "reversal_entries", primaryKey: "id" },
+  { table: "platform_receivables", primaryKey: "id" },
+  { table: "settlements", primaryKey: "id" },
+  { table: "settlement_allocations", primaryKey: "id" },
+  { table: "payroll_employees", primaryKey: "id" },
+  { table: "payroll_runs", primaryKey: "id" },
+  { table: "payslips", primaryKey: "id" },
+  { table: "attendance_logs", primaryKey: "id" },
+  { table: "approval_requests", primaryKey: "id" },
+  { table: "service_receipts", primaryKey: "id" },
+  { table: "client_feedback", primaryKey: "id" },
+  { table: "dependent_change_requests", primaryKey: "id" },
+  { table: "group_payment_intents", primaryKey: "id" },
+  { table: "group_payment_allocations", primaryKey: "id" },
+  { table: "payment_automation_runs", primaryKey: "id" },
+  { table: "directory_contacts", primaryKey: "id" },
+  { table: "legacy_group_receipts", primaryKey: "id" },
+  { table: "partner_parlours", primaryKey: "id" },
+  { table: "parlour_personnel", primaryKey: "id" },
+  { table: "mortuary_intakes", primaryKey: "id" },
+  { table: "mortuary_dispatches", primaryKey: "id" },
+  { table: "mortuary_post_mortem_movements", primaryKey: "id" },
+  { table: "partner_parlour_vehicle_usage", primaryKey: "id" },
+  { table: "deceased_belongings", primaryKey: "id" },
+  { table: "body_wash_requirements", primaryKey: "id" },
+  { table: "driver_checklists", primaryKey: "id" },
+  { table: "reminders", primaryKey: "id" },
   { table: "org_member_sequences", primaryKey: "organization_id" },
   { table: "org_policy_sequences", primaryKey: "organization_id" },
   { table: "permissions", primaryKey: "id" },
@@ -91,21 +139,13 @@ const TENANT_FULL_SYNC_TABLES: FullSyncTableDef[] = [
   { table: "policy_add_ons", primaryKey: "id" },
   { table: "terms_and_conditions", primaryKey: "id" },
   { table: "price_book_items", primaryKey: "id" },
-  // fx_rates is a small reference table; funeral_quotation_items has no timestamp column,
-  // so both are full-synced rather than incrementally synced by created_at.
   { table: "fx_rates", primaryKey: "id" },
-  { table: "funeral_quotation_items", primaryKey: "id" },
   { table: "cost_sheets", primaryKey: "id" },
   { table: "cost_line_items", primaryKey: "id" },
-  { table: "notification_templates", primaryKey: "id" },
   { table: "user_permission_overrides", primaryKey: "id" },
   { table: "client_device_tokens", primaryKey: "id" },
   { table: "client_payment_methods", primaryKey: "id" },
   { table: "payment_automation_settings", primaryKey: "id" },
-  { table: "policy_credit_balances", primaryKey: "id" },
-  { table: "fleet_maintenance", primaryKey: "id" },
-  { table: "fleet_fuel_logs", primaryKey: "id" },
-  { table: "driver_assignments", primaryKey: "id" },
 ];
 
 // ─── CONTROL PLANE TABLES (small, always full-synced) ──────────────────────
@@ -145,9 +185,9 @@ function extractRows(result: any): Record<string, any>[] {
 }
 
 /**
- * Run incremental backup across all 3 DO databases → one Supabase DB.
+ * Run full backup across all 3 DO databases → one Supabase DB.
  */
-export async function runBackupSync(): Promise<void> {
+export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "scheduler"): Promise<void> {
   const supabaseUrl = getSupabaseUrl();
   if (!supabaseUrl) {
     structuredLog("info", "Backup sync skipped: SUPABASE_BACKUP_URL not set");
@@ -169,7 +209,19 @@ export async function runBackupSync(): Promise<void> {
   let totalRows = 0;
   let tableCount = 0;
   const errors: string[] = [];
-  const cutoff = new Date(Date.now() - BACKUP_INTERVAL_MS).toISOString();
+
+  const { cpDb: runLogDb } = await import("./control-plane-db");
+  const { backupSyncRuns } = await import("@shared/control-plane-schema");
+  const { eq: eqOp } = await import("drizzle-orm");
+  let runId: string | null = null;
+  try {
+    const [created] = await runLogDb.insert(backupSyncRuns)
+      .values({ startedAt: new Date(startTime), status: "running", triggeredBy })
+      .returning({ id: backupSyncRuns.id });
+    runId = created?.id ?? null;
+  } catch (err) {
+    structuredLog("warn", "Backup run-history insert failed (continuing without it)", { error: (err as Error).message });
+  }
 
   try {
     backupPool = await getBackupPool();
@@ -199,17 +251,17 @@ export async function runBackupSync(): Promise<void> {
     try {
       const { db: registryDb } = await import("./db");
       structuredLog("info", "Backup: syncing registry (shared) DB");
-      // The shared DB has the same schema tables but only organizations + users matter
-      const registryTables: SyncTableDef[] = [
-        { table: "organizations", timestampCol: "created_at", primaryKey: "id" },
-        { table: "users", timestampCol: "created_at", primaryKey: "id" },
-        { table: "sessions", timestampCol: "expire", primaryKey: "sid" },
+      // The shared DB has the same schema tables but only these are meaningful there.
+      const registryTables: FullSyncTableDef[] = [
+        { table: "organizations", primaryKey: "id" },
+        { table: "users", primaryKey: "id" },
+        { table: "sessions", primaryKey: "sid" },
+        { table: "app_download_interests", primaryKey: "id" },
+        { table: "app_releases", primaryKey: "id" },
       ];
-      for (const { table, timestampCol, primaryKey } of registryTables) {
+      for (const { table, primaryKey } of registryTables) {
         try {
-          const rows = extractRows(await registryDb.execute(
-            sql.raw(`SELECT * FROM "${table}" WHERE "${timestampCol}" >= '${cutoff}'`)
-          ));
+          const rows = extractRows(await registryDb.execute(sql.raw(`SELECT * FROM "${table}"`)));
           if (rows.length === 0) continue;
           await upsertRows(backupPool, table, primaryKey, rows);
           totalRows += rows.length;
@@ -245,23 +297,6 @@ export async function runBackupSync(): Promise<void> {
       syncedOrgIds.add(org.id);
       const tenantDb = await getDbForOrg(org.id);
 
-      // Incremental sync
-      for (const { table, timestampCol, primaryKey } of TENANT_SYNC_TABLES) {
-        try {
-          const rows = extractRows(await tenantDb.execute(
-            sql.raw(`SELECT * FROM "${table}" WHERE "${timestampCol}" >= '${cutoff}'`)
-          ));
-          if (rows.length === 0) continue;
-          await upsertRows(backupPool, table, primaryKey, rows);
-          totalRows += rows.length;
-          tableCount++;
-        } catch (err) {
-          const msg = (err as Error).message;
-          if (!msg.includes("does not exist")) errors.push(`${org.name}:${table}: ${msg}`);
-        }
-      }
-
-      // Full sync for reference tables
       for (const { table, primaryKey } of TENANT_FULL_SYNC_TABLES) {
         try {
           const rows = extractRows(await tenantDb.execute(sql.raw(`SELECT * FROM "${table}"`)));
@@ -282,11 +317,9 @@ export async function runBackupSync(): Promise<void> {
       structuredLog("info", "Backup: syncing shared-DB tenant", { orgId: org.id, orgName: org.name });
       const tenantDb = await getDbForOrg(org.id);
 
-      for (const { table, timestampCol, primaryKey } of TENANT_SYNC_TABLES) {
+      for (const { table, primaryKey } of TENANT_FULL_SYNC_TABLES) {
         try {
-          const rows = extractRows(await tenantDb.execute(
-            sql.raw(`SELECT * FROM "${table}" WHERE "${timestampCol}" >= '${cutoff}'`)
-          ));
+          const rows = extractRows(await tenantDb.execute(sql.raw(`SELECT * FROM "${table}"`)));
           if (rows.length === 0) continue;
           await upsertRows(backupPool, table, primaryKey, rows);
           totalRows += rows.length;
@@ -305,8 +338,30 @@ export async function runBackupSync(): Promise<void> {
       durationSec: duration,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
     });
+    if (runId) {
+      await runLogDb.update(backupSyncRuns).set({
+        completedAt: new Date(),
+        status: errors.length === 0 ? "success" : "partial",
+        totalRows: String(totalRows),
+        tableCount: String(tableCount),
+        errorCount: String(errors.length),
+        errors: errors.length > 0 ? errors.slice(0, 20) : null,
+      }).where(eqOp(backupSyncRuns.id, runId)).catch((err) => {
+        structuredLog("warn", "Backup run-history update failed", { error: (err as Error).message });
+      });
+    }
   } catch (err) {
     structuredLog("error", "Backup sync failed", { error: (err as Error).message });
+    if (runId) {
+      await runLogDb.update(backupSyncRuns).set({
+        completedAt: new Date(),
+        status: "failed",
+        totalRows: String(totalRows),
+        tableCount: String(tableCount),
+        errorCount: String(errors.length + 1),
+        errors: [...errors.slice(0, 19), `fatal: ${(err as Error).message}`],
+      }).where(eqOp(backupSyncRuns.id, runId)).catch(() => {});
+    }
   } finally {
     if (backupPool) await backupPool.end().catch(() => {});
     await mainPool.query("SELECT pg_advisory_unlock(987654321)").catch(() => {});
@@ -417,4 +472,12 @@ export function stopBackupScheduler(): void {
     clearTimeout(backupTimer);
     backupTimer = null;
   }
+}
+
+/** Recent backup run history, most recent first — for a health-check UI/route. */
+export async function getRecentBackupRuns(limit = 20) {
+  const { cpDb } = await import("./control-plane-db");
+  const { backupSyncRuns } = await import("@shared/control-plane-schema");
+  const { desc } = await import("drizzle-orm");
+  return cpDb.select().from(backupSyncRuns).orderBy(desc(backupSyncRuns.startedAt)).limit(limit);
 }
