@@ -4277,7 +4277,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.update(paymentReceipts)
           .set({
             approvalStatus: "approved",
-            approvedByUserId: user.id,
+            approvedByUserId: recordedBy ?? undefined,
             approvedAt: new Date(),
             approvalNote: String(approvalNote).trim(),
             metadataJson: { ...(receipt.metadataJson as any || {}), approvedTransactionId: tx.id },
@@ -4318,10 +4318,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [receipt] = await tdb.select().from(paymentReceipts).where(and(eq(paymentReceipts.id, receiptId), eq(paymentReceipts.organizationId, user.organizationId))).limit(1);
       if (!receipt) return res.status(404).json({ message: "Receipt not found." });
       if (receipt.approvalStatus !== "pending") return res.status(400).json({ message: "Receipt is not pending approval." });
+      const resolvedRejectUserId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
       await tdb.update(paymentReceipts)
         .set({
           approvalStatus: "rejected",
-          approvedByUserId: user.id,
+          approvedByUserId: resolvedRejectUserId ?? undefined,
           approvedAt: new Date(),
           approvalNote: String(approvalNote).trim(),
         } as any)
@@ -4461,9 +4462,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (fromDate) filters.fromDate = fromDate;
     if (toDate) filters.toDate = toDate;
     if (status) filters.status = status;
-    if (isAgent) filters.preparedBy = user.id;
+    // preparedBy is stored as the resolved tenant-db id — filter by that, not the raw registry id.
+    const resolvedSelfId = (isAgent || !canReadFinance) ? await resolveUserIdForOrgDatabase(user.id, user.organizationId) : null;
+    if (isAgent) filters.preparedBy = resolvedSelfId ?? user.id;
     else if (canReadFinance && userId) filters.preparedBy = userId;
-    else if (!canReadFinance) filters.preparedBy = user.id;
+    else if (!canReadFinance) filters.preparedBy = resolvedSelfId ?? user.id;
     const list = await storage.getCashups(user.organizationId, 100, filters);
     return res.json(list);
   });
@@ -4471,6 +4474,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/cashups", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+    // preparedBy is NOT NULL — must resolve to a real tenant-db user id, not just fall back to null.
+    const preparerId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const body = req.body as any;
     const amountsByMethod = body.amountsByMethod && typeof body.amountsByMethod === "object" ? body.amountsByMethod : { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
     let totalAmount = 0;
@@ -4479,7 +4484,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const parsed = insertCashupSchema.parse({
       organizationId: user.organizationId,
-      preparedBy: user.id,
+      preparedBy: preparerId,
       branchId: body.branchId || undefined,
       cashupDate: body.cashupDate,
       totalAmount: String(totalAmount.toFixed(2)),
@@ -4501,7 +4506,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
-    if ((isAgent || !perms.includes("read:finance")) && cashup.preparedBy !== user.id) return res.status(403).json({ message: "You can only view your own cashups" });
+    // Compare against the resolved tenant-db id — preparedBy is stored as that, not the raw
+    // registry id, so an unresolved comparison would wrongly deny the platform owner (whose
+    // registry/tenant ids can differ) access to their own cashup.
+    const resolvedViewerId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+    if ((isAgent || !perms.includes("read:finance")) && cashup.preparedBy !== resolvedViewerId) return res.status(403).json({ message: "You can only view your own cashups" });
     return res.json(cashup);
   });
 
@@ -4513,13 +4522,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const hasFinance = perms.includes("write:finance");
     const body = req.body as any;
+    const resolvedActorId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
 
     if (cashup.status === "draft" && body.action === "submit") {
-      if (cashup.preparedBy !== user.id) return res.status(403).json({ message: "Only the preparer can submit" });
+      if (cashup.preparedBy !== resolvedActorId) return res.status(403).json({ message: "Only the preparer can submit" });
       const updated = await storage.updateCashup(cashup.id, {
         status: "submitted",
         submittedAt: new Date(),
-        submittedBy: user.id,
+        submittedBy: resolvedActorId ?? undefined,
       }, user.organizationId);
       await auditLog(req, "SUBMIT_CASHUP", "Cashup", cashup.id, cashup, updated);
       return res.json(updated);
@@ -4545,14 +4555,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const updated = await storage.updateCashup(cashup.id, {
         status,
         confirmedAt: new Date(),
-        confirmedBy: user.id,
+        confirmedBy: resolvedActorId ?? undefined,
         countedTotal: finalCounted.toFixed(2),
         countedAmountsByMethod: countedAmountsByMethod || undefined,
         discrepancyAmount: hasDiscrepancy ? String(discrepancyAmount.toFixed(2)) : undefined,
         discrepancyNotes,
         isLocked: true,
         lockedAt: new Date(),
-        lockedBy: user.id,
+        lockedBy: resolvedActorId ?? undefined,
       }, user.organizationId);
       await auditLog(req, "CONFIRM_CASHUP", "Cashup", cashup.id, cashup, updated);
       return res.json(updated);
@@ -4586,14 +4596,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       const parsed = insertClaimSchema.parse({
         ...req.body,
         organizationId: user.organizationId,
         claimNumber: "PENDING",
         status: "submitted",
-        submittedBy: user.id,
+        submittedBy: effectiveUserId,
       });
-      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       const claim = await withOrgTransaction(user.organizationId, async (txDb) => {
         // Everything below must use txDb directly, not storage.* helpers — those open their
         // own connection via getDbForOrg() and would commit outside this transaction, silently
@@ -6838,9 +6848,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "Cannot approve own request (maker-checker)" });
     }
     await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+    const resolvedApproverId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const updated = await storage.updateApprovalRequest(approval.id, {
       status: action === "approve" ? "approved" : "rejected",
-      approvedBy: user.id,
+      approvedBy: resolvedApproverId ?? undefined,
       rejectionReason: rejectionReason || null,
     }, user.organizationId);
     await auditLog(req, `RESOLVE_APPROVAL_${action.toUpperCase()}`, "ApprovalRequest", approval.id, approval, updated);
@@ -6995,9 +7006,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!existing) return res.status(404).json({ message: "Log not found" });
     if (existing.status !== "pending") return res.status(409).json({ message: `Cannot approve a log that is already ${existing.status}.` });
     await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+    const resolvedAttendanceApprover = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const updated = await storage.updateAttendanceLog(existing.id, {
       status: "approved",
-      approvedBy: user.id,
+      approvedBy: resolvedAttendanceApprover ?? undefined,
       approvedAt: new Date(),
       approvalNotes: typeof req.body.notes === "string" ? req.body.notes.trim() || null : null,
     }, user.organizationId);
@@ -7012,9 +7024,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!existing) return res.status(404).json({ message: "Log not found" });
     if (existing.status !== "pending") return res.status(409).json({ message: `Cannot reject a log that is already ${existing.status}.` });
     await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+    const resolvedAttendanceRejecter = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const updated = await storage.updateAttendanceLog(existing.id, {
       status: "rejected",
-      approvedBy: user.id,
+      approvedBy: resolvedAttendanceRejecter ?? undefined,
       approvedAt: new Date(),
       approvalNotes: typeof req.body.notes === "string" ? req.body.notes.trim() || null : null,
     }, user.organizationId);
@@ -7721,7 +7734,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const settlement = existing.find(s => s.id === id);
     if (!settlement) return res.status(404).json({ message: "Settlement not found" });
     if (settlement.initiatedBy === user.id) return res.status(400).json({ message: "Cannot approve own settlement" });
-    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: user.id }, user.organizationId);
+    const resolvedSettlementApprover = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: resolvedSettlementApprover ?? undefined }, user.organizationId);
     await auditLog(req, "APPROVE_SETTLEMENT", "Settlement", id, settlement, updated);
     return res.json(updated);
   });

@@ -12,6 +12,46 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-07-07 — codebase-wide audit (architecture, ACID, edge cases, PayNow)
 
+### Registry/tenant user-id mismatch: scoped the blast radius, then swept the highest-value remaining sites
+
+- **Context:** earlier entries in this log fixed this bug (registry user id ≠ tenant-db user id
+  for isolated-tenant orgs) on a handful of routes as they were hit, and flagged "not audited
+  codebase-wide" as an open item. Before sweeping further, checked how many real users can
+  actually hit this: queried Falakhe's 33 registry-linked staff accounts against the tenant DB —
+  **zero** mismatches. The mismatch only exists for the **platform owner**, whose registry
+  `organization_id` is `NULL` (they don't belong to any org row directly — they switch into
+  tenants). So this bug is not "any staff member, any time" — it's specifically "the platform
+  owner, when acting inside a tenant they've switched into."
+- **New finding, higher severity than previously known:** `cashups.prepared_by` is **NOT NULL**.
+  `POST /api/cashups` inserted `preparedBy: user.id` directly — for the platform owner this is
+  the exact same FK-violation crash as the original requisition bug, just not yet reported.
+  Fixed with `resolveOrSyncTenantUserId` (guarantees a valid, non-null id) rather than the
+  nullable-column helper.
+- **Related bug this surfaced:** once `preparedBy` is correctly stored as the *resolved tenant
+  id*, every ownership check comparing `cashup.preparedBy !== user.id` (view-own-cashup, submit,
+  list-filter-by-self) would wrongly deny the platform owner access to their own cashups, because
+  the comparison used the raw registry id. Fixed all three comparison sites to resolve the same
+  way before comparing.
+- **Also fixed (nullable columns, `resolveUserIdForOrgDatabase`):** approval resolve
+  (`approved_by`), payment-receipt approve/reject (`approved_by_user_id` — reused the already-
+  resolved `recordedBy` from the same transaction instead of a second lookup), attendance
+  approve/reject (`approved_by`), settlement approve (`approved_by`).
+- **Gap in an earlier fix, closed:** the claim-creation ACID fix (previous entry) resolved the
+  user id for the status-history row but missed that the claim's own `submitted_by` field was
+  still built from raw `user.id` one line above it — fixed to use the same resolved id.
+- **Files:** `server/routes.ts`.
+- **Verification:** Typecheck + full test suite (179/179) green.
+- **Lesson for next time:** when a column this bug affects is used for both a **write** and a
+  **read-side ownership comparison** (`row.field !== user.id`), fixing only the write half-fixes
+  it — the comparison must resolve the same way or it silently inverts into a new bug (denying
+  the very user who owns the row). Also: before assuming a known bug pattern needs a full
+  codebase sweep, check how many real accounts can actually trigger it — it changes whether
+  "fix everything" or "fix the highest-traffic remaining sites" is the right amount of effort.
+  Remaining un-swept sites (mortuary dispatch, quotation `createdBy`, balance-sheet
+  `enteredByUserId`/`verifiedByUserId`, payroll run `preparedBy`): lower priority since they're
+  narrower workflows less likely to be personally exercised by the platform owner — fix
+  opportunistically if one of them throws.
+
 ### ACID: 6 routes updated an entity's status and wrote its status-history row as two separate, non-atomic writes (one case: mixed-connection transaction that wasn't really atomic at all)
 
 - **Symptom:** not yet reported, found during audit. A crash/DB blip between the two writes
