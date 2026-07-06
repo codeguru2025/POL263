@@ -12,6 +12,40 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-07-06
 
+### 0. Recording a payment on a funeral case (and creating/editing quotations) threw "Internal Server Error"
+
+- **Symptom:** Recording a cash-service payment against an existing funeral case failed with a
+  raw 500.
+- **Root cause:** Exactly the same registry/tenant user-id mismatch class as entry #1 below,
+  in a different set of routes: `POST /api/funeral-cases/:id/receipts` inserted
+  `issuedByUserId: user.id` (the **registry** user id) directly into `service_receipts`, whose
+  `issued_by_user_id` column has a FK to the **tenant** DB's `users.id`. For a Falakhe user whose
+  registry id and tenant-DB id diverge (see entry #1), this violates
+  `service_receipts_issued_by_user_id_users_id_fk` and crashes. Reproduced directly against the
+  Falakhe DB: inserting a row with the registry id `bafebbe0-...` fails with exactly that FK
+  violation; inserting with the resolved tenant id `2f92a3a9-...` succeeds.
+  The same pattern existed in three sibling routes using `createdBy: user.id` against a
+  FK'd `created_by` column: `POST /api/funeral-cases/:id/quotation` (case-linked quote upsert),
+  `POST /api/quotations` (standalone quote create), `PATCH /api/quotations/:id` (standalone quote
+  update).
+- **Fix:** Added `const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId,
+  user.id);` to all four routes and used `effectiveUserId` instead of `user.id` for the
+  FK'd column.
+- **Files:** `server/routes.ts` (funeral quotation upsert, service-receipt creation, standalone
+  quotation create/patch).
+- **Verification:** Reproduced the FK violation with a direct insert against the live Falakhe
+  DB using the registry id, then confirmed an identical insert succeeds using the resolved
+  tenant id; both test rows cleaned up afterward. Typecheck + full test suite (179/179) green.
+- **Lesson for next time:** this is the exact "not yet audited" gap flagged as an open item after
+  fixing the requisition version of this bug — `resolveOrSyncTenantUserId` was only applied to
+  requisition/expenditure routes at first. **Any route on an isolated-tenant-DB org that inserts
+  `user.id` directly into a column with `.references(() => users.id)` in `shared/schema.ts` is
+  exposed to this**, not just requisitions. When a new "Internal Server Error" report comes in
+  for a write route, grep the target table's schema for `.references(() => users.id)` columns
+  first — if the route sets one of those columns to `user.id` directly instead of via
+  `resolveOrSyncTenantUserId`, that's very likely the cause. A full codebase-wide sweep of all
+  `user.id` write sites has still not been done (see Open Items).
+
 ### 1. Requisition creation threw "Internal Server Error"
 
 - **Symptom:** Saving a new requisition failed with a raw 500, no useful message to the user.
@@ -160,10 +194,14 @@ convention" note in `CLAUDE.md`.
   Recording and approving a platform-fee settlement currently does nothing to reduce
   "Outstanding" or increase "Total Settled" on the Platform Fees screen. Flagged to the user;
   they have not yet asked for this to be fixed.
-- **`resolveOrSyncTenantUserId` has only been wired into requisition/expenditure routes.** Any
-  other route on an isolated-tenant-DB org that inserts/updates a NOT NULL `users.id`-referencing
-  column using `user.id` directly is still exposed to the same class of FK-violation crash
-  described in entry #1 above. Not yet audited across the full route file.
+- **`resolveOrSyncTenantUserId` has only been wired into requisition/expenditure routes and the
+  funeral-quotation/service-receipt routes (entry #0).** A grep of `server/routes.ts` for
+  `: user\.id[,)]` turns up 40+ more sites passing `user.id` straight into a mutation
+  (`actorId`, `approvedBy`, `preparedBy`, `dispatchedByUserId`, `verifiedByUserId`,
+  `enteredByUserId`, `initiatedBy`, etc.) — each one is a potential repeat of this exact bug if
+  the target column has `.references(() => users.id)` in `shared/schema.ts` and the acting user's
+  registry/tenant ids diverge. Not yet audited across the full route file; fix opportunistically
+  as each one is hit (per entry #0's lesson), or do a full sweep if this keeps recurring.
 - **`auditLog()` silently swallows its own DB errors** (by design, to avoid crashing a mutation
   over a logging failure) — which means the registry/tenant id mismatch in entry #1 has likely
   caused this user's actions to be silently missing from the audit trail in the past, with no

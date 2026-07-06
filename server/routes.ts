@@ -6378,6 +6378,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
     if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const currency = normalizeCurrency(req.body.currency || "USD");
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
     const items = rawItems.map((it: any) => {
@@ -6394,7 +6395,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const quote = await storage.upsertFuneralQuotation(
       user.organizationId, fc.id,
       {
-        currency, status: req.body.status, notes: req.body.notes, createdBy: user.id,
+        currency, status: req.body.status, notes: req.body.notes, createdBy: effectiveUserId,
         informantFullNames: req.body.informantFullNames, informantPhone: req.body.informantPhone,
         informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
         deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
@@ -6418,6 +6419,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
     if (!fc || fc.organizationId !== user.organizationId) return res.status(404).json({ message: "Funeral case not found" });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const amount = parseFloat(String(req.body.amount));
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: "amount must be a positive number" });
     const currency = normalizeCurrency(req.body.currency || "USD");
@@ -6447,7 +6449,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       amount: amount.toFixed(2),
       currency,
       paymentChannel: channel,
-      issuedByUserId: user.id,
+      issuedByUserId: effectiveUserId,
       issuedAt: new Date(),
       status: "issued",
       idempotencyKey,
@@ -6497,6 +6499,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/quotations", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const currency = normalizeCurrency(req.body.currency || "USD");
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
     const items = rawItems.map((it: any) => {
@@ -6511,7 +6514,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
     });
     const quote = await storage.createStandaloneQuotation(user.organizationId, {
-      currency, status: req.body.status, notes: req.body.notes, createdBy: user.id,
+      currency, status: req.body.status, notes: req.body.notes, createdBy: effectiveUserId,
       informantFullNames: req.body.informantFullNames, informantPhone: req.body.informantPhone,
       informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
       deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
@@ -6540,6 +6543,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const existing = await storage.getQuotationById(req.params.id as string, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Quotation not found" });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     // Re-use upsertFuneralQuotation if linked to a case, otherwise createStandaloneQuotation update path
     const currency = normalizeCurrency(req.body.currency || existing.currency || "USD");
     const rawItems = Array.isArray(req.body.items) ? req.body.items : existing.items;
@@ -6555,7 +6559,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
     });
     const dataPayload = {
-      currency, status: req.body.status, notes: req.body.notes, createdBy: user.id,
+      currency, status: req.body.status, notes: req.body.notes, createdBy: effectiveUserId,
       informantFullNames: req.body.informantFullNames, informantPhone: req.body.informantPhone,
       informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
       deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
