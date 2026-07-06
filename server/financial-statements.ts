@@ -10,7 +10,7 @@
  * converts to USD using fx_rates; currencies without a rate are listed as
  * unconvertible and excluded from that total.
  */
-import { and, eq, gte, lte, sql, inArray } from "drizzle-orm";
+import { and, eq, gte, lte, sql, inArray, desc } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import {
@@ -23,6 +23,10 @@ import {
   policies,
   requisitions,
   expenditures,
+  clients,
+  users,
+  branches,
+  funeralCases,
 } from "@shared/schema";
 
 export interface StatementParams {
@@ -347,6 +351,235 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
       totalAmount: c.totalAmount, countedTotal: c.countedTotal, discrepancyAmount: c.discrepancyAmount,
     })),
   };
+}
+
+// ─── Transaction Ledger ─────────────────────────────────────────────────────
+// Row-level detail behind the income statement / cash flow totals above —
+// every individual transaction in the period, with who recorded it and which
+// department / cost-centre it belongs to.
+
+export interface LedgerEntry {
+  date: string;          // YYYY-MM-DD
+  type: "income" | "expense";
+  source: "premium" | "cash_service" | "legacy_group" | "requisition" | "expenditure" | "commission";
+  description: string;
+  reference: string | null;
+  person: string | null;
+  department: string | null;
+  amount: number;
+  currency: string;
+}
+
+export interface LedgerParams extends StatementParams {
+  limit?: number;
+  offset?: number;
+}
+
+function fullName(first: string | null | undefined, last: string | null | undefined): string | null {
+  const n = [first, last].filter(Boolean).join(" ").trim();
+  return n || null;
+}
+
+export async function buildTransactionLedger(orgId: string, params: LedgerParams): Promise<{ from: string; to: string; branchId: string | null; total: number; entries: LedgerEntry[] }> {
+  const tdb = await getDbForOrg(orgId);
+  const { from, to, branchId } = params;
+  const limit = Math.min(params.limit ?? 500, 2000);
+  const offset = params.offset ?? 0;
+
+  const entries: LedgerEntry[] = [];
+
+  // ── Premium receipts (individual + group policies) ──
+  const prConds: any[] = [
+    eq(paymentReceipts.organizationId, orgId),
+    eq(paymentReceipts.status, "issued"),
+    gte(paymentReceipts.issuedAt, fromTs(from)),
+    lte(paymentReceipts.issuedAt, toTs(to)),
+  ];
+  if (branchId) prConds.push(eq(paymentReceipts.branchId, branchId));
+  const premiumRows = await tdb
+    .select({
+      issuedAt: paymentReceipts.issuedAt,
+      receiptNumber: paymentReceipts.receiptNumber,
+      amount: paymentReceipts.amount,
+      currency: paymentReceipts.currency,
+      policyNumber: policies.policyNumber,
+      clientFirstName: clients.firstName,
+      clientLastName: clients.lastName,
+      branchName: branches.name,
+      issuerFirstName: users.displayName,
+    })
+    .from(paymentReceipts)
+    .innerJoin(policies, eq(paymentReceipts.policyId, policies.id))
+    .leftJoin(clients, eq(paymentReceipts.clientId, clients.id))
+    .leftJoin(branches, eq(paymentReceipts.branchId, branches.id))
+    .leftJoin(users, eq(paymentReceipts.issuedByUserId, users.id))
+    .where(and(...prConds));
+  for (const r of premiumRows) {
+    entries.push({
+      date: new Date(r.issuedAt).toISOString().slice(0, 10),
+      type: "income",
+      source: "premium",
+      description: `Premium — ${r.policyNumber}${r.clientFirstName ? ` (${fullName(r.clientFirstName, r.clientLastName)})` : ""}`,
+      reference: r.receiptNumber,
+      person: r.issuerFirstName ?? null,
+      department: r.branchName ?? null,
+      amount: parseFloat(r.amount),
+      currency: r.currency,
+    });
+  }
+
+  // ── Cash-service receipts (funeral cases) ──
+  const srConds: any[] = [
+    eq(serviceReceipts.organizationId, orgId),
+    eq(serviceReceipts.status, "issued"),
+    gte(serviceReceipts.issuedAt, fromTs(from)),
+    lte(serviceReceipts.issuedAt, toTs(to)),
+  ];
+  if (branchId) srConds.push(eq(serviceReceipts.branchId, branchId));
+  const serviceRows = await tdb
+    .select({
+      issuedAt: serviceReceipts.issuedAt,
+      receiptNumber: serviceReceipts.receiptNumber,
+      amount: serviceReceipts.amount,
+      currency: serviceReceipts.currency,
+      deceasedName: funeralCases.deceasedName,
+      issuerName: users.displayName,
+    })
+    .from(serviceReceipts)
+    .leftJoin(funeralCases, eq(serviceReceipts.funeralCaseId, funeralCases.id))
+    .leftJoin(users, eq(serviceReceipts.issuedByUserId, users.id))
+    .where(and(...srConds));
+  for (const r of serviceRows) {
+    entries.push({
+      date: new Date(r.issuedAt).toISOString().slice(0, 10),
+      type: "income",
+      source: "cash_service",
+      description: `Cash service${r.deceasedName ? ` — ${r.deceasedName}` : ""}`,
+      reference: r.receiptNumber,
+      person: r.issuerName ?? null,
+      department: "Funeral Services",
+      amount: parseFloat(r.amount),
+      currency: r.currency,
+    });
+  }
+
+  // ── Legacy group receipts (Falakhe-style tenants only — table may not exist elsewhere) ──
+  try {
+    const rows = await tdb.execute(sql`
+      SELECT receipt_number, amount, currency, group_name, payment_date
+      FROM legacy_group_receipts
+      WHERE organization_id = ${orgId}
+        AND payment_date >= ${from}::date
+        AND payment_date <= ${to}::date
+    `);
+    const legacyRows = (rows.rows ?? rows) as { receipt_number: string; amount: string; currency: string; group_name: string; payment_date: string }[];
+    for (const r of legacyRows) {
+      entries.push({
+        date: new Date(r.payment_date).toISOString().slice(0, 10),
+        type: "income",
+        source: "legacy_group",
+        description: `Legacy group receipt — ${r.group_name}`,
+        reference: r.receipt_number,
+        person: null,
+        department: r.group_name,
+        amount: parseFloat(r.amount),
+        currency: r.currency,
+      });
+    }
+  } catch { /* legacy_group_receipts table doesn't exist for this org — skip */ }
+
+  // ── Disbursements (requisitions + expenditures paid out) ──
+  const disbConds: any[] = [
+    eq(paymentDisbursements.organizationId, orgId),
+    sql`${paymentDisbursements.paidDate} >= ${from}`,
+    sql`${paymentDisbursements.paidDate} <= ${to}`,
+  ];
+  if (branchId) disbConds.push(eq(paymentDisbursements.branchId, branchId));
+  const disbRows = await tdb
+    .select({
+      paidDate: paymentDisbursements.paidDate,
+      voucherNumber: paymentDisbursements.voucherNumber,
+      entityType: paymentDisbursements.entityType,
+      entityId: paymentDisbursements.entityId,
+      amount: paymentDisbursements.amount,
+      currency: paymentDisbursements.currency,
+      paidByUserId: paymentDisbursements.paidByUserId,
+    })
+    .from(paymentDisbursements)
+    .where(and(...disbConds));
+
+  const reqIds = disbRows.filter((d: any) => d.entityType === "requisition").map((d: any) => d.entityId as string);
+  const expIds = disbRows.filter((d: any) => d.entityType === "expenditure").map((d: any) => d.entityId as string);
+  const reqMap: Record<string, { description: string; category: string; department: string | null }> = {};
+  if (reqIds.length) {
+    const rows = await tdb.select({
+      id: requisitions.id, description: requisitions.description, category: requisitions.category, department: requisitions.department,
+    }).from(requisitions).where(inArray(requisitions.id, reqIds));
+    for (const r of rows) reqMap[r.id] = { description: r.description, category: r.category, department: r.department };
+  }
+  const expMap: Record<string, { description: string; category: string }> = {};
+  if (expIds.length) {
+    const rows = await tdb.select({
+      id: expenditures.id, description: expenditures.description, category: expenditures.category,
+    }).from(expenditures).where(inArray(expenditures.id, expIds));
+    for (const r of rows) expMap[r.id] = { description: r.description, category: r.category };
+  }
+  const payerIds = Array.from(new Set(disbRows.map((d: any) => d.paidByUserId).filter(Boolean))) as string[];
+  const payerMap: Record<string, string | null> = {};
+  if (payerIds.length) {
+    const rows = await tdb.select({ id: users.id, displayName: users.displayName }).from(users).where(inArray(users.id, payerIds));
+    for (const r of rows) payerMap[r.id] = r.displayName;
+  }
+  for (const d of disbRows) {
+    const isReq = d.entityType === "requisition";
+    const info = isReq ? reqMap[d.entityId] : expMap[d.entityId];
+    entries.push({
+      date: String(d.paidDate),
+      type: "expense",
+      source: isReq ? "requisition" : "expenditure",
+      description: info?.description || (isReq ? "Requisition" : "Expenditure"),
+      reference: d.voucherNumber ?? null,
+      person: d.paidByUserId ? (payerMap[d.paidByUserId] ?? null) : null,
+      department: (isReq ? (info as any)?.department : null) || info?.category || "Uncategorised",
+      amount: parseFloat(d.amount),
+      currency: d.currency,
+    });
+  }
+
+  // ── Paid agent commissions ──
+  const commRows = await tdb
+    .select({
+      createdAt: commissionLedgerEntries.createdAt,
+      amount: commissionLedgerEntries.amount,
+      currency: commissionLedgerEntries.currency,
+      description: commissionLedgerEntries.description,
+      agentName: users.displayName,
+    })
+    .from(commissionLedgerEntries)
+    .leftJoin(users, eq(commissionLedgerEntries.agentId, users.id))
+    .where(and(
+      eq(commissionLedgerEntries.organizationId, orgId),
+      eq(commissionLedgerEntries.status, "paid"),
+      gte(commissionLedgerEntries.createdAt, fromTs(from)),
+      lte(commissionLedgerEntries.createdAt, toTs(to)),
+    ));
+  for (const r of commRows) {
+    entries.push({
+      date: new Date(r.createdAt).toISOString().slice(0, 10),
+      type: "expense",
+      source: "commission",
+      description: r.description || "Agent commission",
+      reference: null,
+      person: r.agentName ?? null,
+      department: "Commissions",
+      amount: parseFloat(r.amount),
+      currency: r.currency,
+    });
+  }
+
+  entries.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const total = entries.length;
+  return { from, to, branchId: branchId ?? null, total, entries: entries.slice(offset, offset + limit) };
 }
 
 // ─── Balance Sheet ─────────────────────────────────────────────────────────

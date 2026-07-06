@@ -16,7 +16,7 @@ import { requireAuth, requirePermission, requireAnyPermission, requireTenantScop
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
-import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger } from "./financial-statements";
 import { generateRequisitionPdf } from "./requisition-pdf";
 import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
 import { z } from "zod";
@@ -8201,6 +8201,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
     return res.json(await buildCashFlowStatement(user.organizationId, { from, to, branchId }));
+  });
+
+  app.get("/api/reports/transaction-ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
+    return res.json(await buildTransactionLedger(user.organizationId, { from, to, branchId, limit, offset }));
   });
 
   app.get("/api/reports/balance-sheet", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

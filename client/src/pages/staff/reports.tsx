@@ -677,6 +677,15 @@ export default function StaffReports() {
     },
     enabled: need("cashFlow"),
   });
+  const { data: ledger, isLoading: loadingLedger } = useQuery<any>({
+    queryKey: ["reports", "ledger", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/transaction-ledger?limit=1000" + qAppend, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: need("transactionLedger"),
+  });
   const asOfParam = filters.toDate ? `?asOf=${filters.toDate}${filters.branchId ? `&branchId=${filters.branchId}` : ""}` : `?asOf=${new Date().toISOString().slice(0, 10)}${filters.branchId ? `&branchId=${filters.branchId}` : ""}`;
   const { data: balanceSheet, isLoading: loadingBalanceSheet } = useQuery<any>({
     queryKey: ["reports", "balance-sheet", runKey, filters.toDate, filters.branchId],
@@ -822,7 +831,7 @@ export default function StaffReports() {
                   <SelectItem value="rejected">Rejected</SelectItem>
                 </SelectContent>
               </Select>
-            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "balance-sheet", "funerals", "payments"].includes(activeReport) ? (
+            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "ledger", "balance-sheet", "funerals", "payments"].includes(activeReport) ? (
               <Select value={statusFilter || "__all__"} onValueChange={(v) => setStatusFilter(v === "__all__" ? "" : v)}>
                 <SelectTrigger className="w-44 h-9"><SelectValue placeholder="All statuses" /></SelectTrigger>
                 <SelectContent>
@@ -1146,6 +1155,61 @@ export default function StaffReports() {
                   </div>
                 );
               })()}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="ledger">
+            <CardSection
+              title="Transaction Ledger"
+              description="Every income and expense transaction in the selected period, in the order they occurred, with who recorded it and which department / cost-centre it belongs to."
+              icon={DollarSign}
+              flush
+            >
+              {loadingLedger ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : !ledger || ledger.entries.length === 0 ? (
+                <EmptyState title="No transactions for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+              ) : (
+                <div className="overflow-x-auto">
+                  {ledger.total > ledger.entries.length && (
+                    <p className="text-xs text-muted-foreground px-4 pt-3">
+                      Showing {ledger.entries.length} of {ledger.total} transactions — narrow the date range to see the rest.
+                    </p>
+                  )}
+                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[900px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead>Reference</TableHead>
+                        <TableHead>Person</TableHead>
+                        <TableHead>Department / Cost centre</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {ledger.entries.map((e: any, i: number) => (
+                        <TableRow key={i}>
+                          <TableCell className="whitespace-nowrap">{e.date}</TableCell>
+                          <TableCell>
+                            <span className={e.type === "income" ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>
+                              {e.type === "income" ? "Income" : "Expense"}
+                            </span>
+                          </TableCell>
+                          <TableCell className="max-w-[280px] truncate" title={e.description}>{e.description}</TableCell>
+                          <TableCell className="whitespace-nowrap">{e.reference || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{e.person || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{e.department || "—"}</TableCell>
+                          <TableCell className={`text-right tabular-nums whitespace-nowrap ${e.type === "income" ? "text-emerald-600" : "text-destructive"}`}>
+                            {e.type === "expense" ? "-" : ""}{e.currency} {Number(e.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
+              )}
             </CardSection>
           </TabsContent>
 
