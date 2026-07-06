@@ -12,6 +12,48 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-07-07 — codebase-wide audit (architecture, ACID, edge cases, PayNow)
 
+### ACID: 6 routes updated an entity's status and wrote its status-history row as two separate, non-atomic writes (one case: mixed-connection transaction that wasn't really atomic at all)
+
+- **Symptom:** not yet reported, found during audit. A crash/DB blip between the two writes
+  leaves an entity (claim/policy) at its new status with **no record** of who/when/why changed
+  it — or, in the worst case found, a phantom history row for a change that got rolled back.
+- **Root cause, three distinct variants of the same underlying mistake:**
+  1. **No transaction at all** — `POST /api/claims/:id/transition` and
+     `POST /api/policies/:id/transition` called `storage.updateX(...)` then
+     `storage.createXStatusHistory(...)` as two plain sequential calls.
+  2. **`withOrgTransaction` called but the callback ignored the `txDb` it was given** —
+     `POST /api/claims` built a claim number, inserted the claim, and inserted its status
+     history all via `storage.*` helpers inside a `withOrgTransaction(...)` block whose callback
+     took no parameter at all. Every one of those `storage.*` calls opens its **own** connection
+     via `getDbForOrg()`, so the surrounding transaction provided zero actual atomicity — pure
+     decoration. `POST /api/client-auth/claims` (the client-portal equivalent) had the same
+     three writes with no transaction wrapper at all.
+  3. **Transaction real, but one write inside it used a `storage.*` helper anyway** —
+     `POST /api/waivers/:id/resolve` correctly used `txDb` for the waiver + policy updates, but
+     the policy-status-history insert still went through `storage.createPolicyStatusHistory()`,
+     which opens its own connection and would commit **outside** the transaction — so a later
+     rollback in that same callback would leave an orphaned history row behind instead of
+     rolling back cleanly.
+  All six sites also passed the acting user's raw `user.id` into a `users.id`-referencing
+  column, the same registry/tenant id-mismatch risk documented in earlier entries below.
+- **Fix:** rewrote all six to do every write directly against the transaction's `txDb` (no
+  `storage.*` helper calls inside a transaction callback — `storage.generateClaimNumber` etc.
+  each open their own connection and must never be called from inside one), and resolved the
+  acting user id via `resolveOrSyncTenantUserId`/`resolveUserIdForOrgDatabase` (matching the
+  column's nullability) before using it.
+- **Files:** `server/routes.ts` (claim transition, policy transition, waiver resolve, claim
+  creation, legacy-policy auto-activation on create), `server/client-auth.ts` (client-portal
+  claim creation).
+- **Verification:** Typecheck + full test suite (179/179) green after each fix.
+- **Lesson for next time:** `withOrgTransaction(orgId, async (txDb) => {...})` only provides
+  atomicity for statements that actually run on `txDb`. If the callback calls a `storage.*`
+  method instead of `txDb.insert/update/select`, that write runs on a **different** connection
+  and is not part of the transaction — grep for `storage\.` calls inside any `withOrgTransaction`
+  callback as a smell; every one of them is a candidate for silently defeating the transaction
+  around it. This is a repeat of the same defeated-transaction shape documented in the June 2026
+  audit's clawback-rollback fix — it keeps recurring because it's an easy mistake to make when a
+  `storage.*` helper already exists and looks like the "normal" way to do the write.
+
 ### PayNow: status polling verified against the wrong hash key for any tenant with its own dedicated integration
 
 - **Symptom (inferred, not directly reported):** for an org with its own PayNow merchant

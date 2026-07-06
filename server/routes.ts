@@ -61,7 +61,7 @@ import {
   insertPaymentDisbursementSchema,
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
-  policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases, waitingPeriodWaivers,
+  policies, paymentTransactions, paymentReceipts, users, clients, claims, claimStatusHistory, policyStatusHistory, leads, branches, appReleases, waitingPeriodWaivers,
   paymentDisbursements, requisitions, expenditures,
 } from "@shared/schema";
 import { sql, eq, count, and, max } from "drizzle-orm";
@@ -2466,14 +2466,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Legacy/backfilled policies: auto-activate and waive waiting period immediately.
     if ((policyInsert as any).isLegacy) {
       const today = new Date().toISOString().split("T")[0];
-      await storage.updatePolicy(policy.id, {
-        status: "active",
-        isLegacy: true,
-        waitingPeriodEndDate: today,
-        inceptionDate: (policyInsert as any).inceptionDate || today,
-        ...(!( policyInsert as any).effectiveDate ? { effectiveDate: today } : {}),
-      }, user.organizationId);
-      await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "Legacy policy — auto-activated on capture", changedBy || undefined, user.organizationId);
+      await withOrgTransaction(user.organizationId, async (txDb) => {
+        await txDb.update(policies).set({
+          status: "active",
+          isLegacy: true,
+          waitingPeriodEndDate: today,
+          inceptionDate: (policyInsert as any).inceptionDate || today,
+          ...(!( policyInsert as any).effectiveDate ? { effectiveDate: today } : {}),
+        }).where(and(eq(policies.id, policy.id), eq(policies.organizationId, user.organizationId)));
+        await txDb.insert(policyStatusHistory).values({
+          policyId: policy.id, fromStatus: "inactive", toStatus: "active",
+          reason: "Legacy policy — auto-activated on capture", changedBy: changedBy || undefined,
+        });
+      });
       await auditLog(req, "LEGACY_POLICY_ACTIVATED", "Policy", policy.id, { status: "inactive" }, { status: "active", isLegacy: true });
     }
 
@@ -2608,6 +2613,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const waiver = await storage.getWaiverById(req.params.id as string, user.organizationId);
     if (!waiver) return res.status(404).json({ message: "Waiver not found" });
     if (waiver.status !== "pending") return res.status(400).json({ message: "This waiver has already been resolved." });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const result = await withOrgTransaction(user.organizationId, async (txDb) => {
       // Lock the waiver row to prevent concurrent approvals
       await txDb.execute(sql`SELECT id FROM waiting_period_waivers WHERE id = ${waiver.id} FOR UPDATE`);
@@ -2615,7 +2621,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!recheck || recheck.status !== "pending") throw Object.assign(new Error("This waiver has already been resolved."), { statusCode: 400 });
       const [updated] = await txDb.update(waitingPeriodWaivers).set({
         status: action === "approve" ? "approved" : "rejected",
-        resolvedBy: user.id,
+        resolvedBy: effectiveUserId,
         resolvedAt: new Date(),
         rejectionReason: rejectionReason || null,
       }).where(eq(waitingPeriodWaivers.id, waiver.id)).returning();
@@ -2625,7 +2631,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const [policy] = await txDb.select().from(policies).where(eq(policies.id, waiver.policyId)).limit(1);
         if (policy?.status === "inactive") {
           await txDb.update(policies).set({ status: "active", inceptionDate: today, ...(!policy.effectiveDate ? { effectiveDate: today } : {}) }).where(eq(policies.id, policy.id));
-          await storage.createPolicyStatusHistory(policy.id, "inactive", "active", "Waiting period waiver approved", user.id, user.organizationId);
+          // Direct txDb write, not storage.createPolicyStatusHistory() — that helper opens its
+          // own connection via getDbForOrg() and would commit outside this transaction, so a
+          // later rollback in this callback would leave an orphaned history row behind.
+          await txDb.insert(policyStatusHistory).values({
+            policyId: policy.id, fromStatus: "inactive", toStatus: "active", reason: "Waiting period waiver approved", changedBy: effectiveUserId,
+          });
         }
       }
       return updated;
@@ -2742,14 +2753,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     if (isLegacyRequest) {
       const today = new Date().toISOString().split("T")[0];
-      updated = (await storage.updatePolicy(req.params.id as string, {
-        isLegacy: true,
-        status: "active",
-        waitingPeriodEndDate: today,
-        inceptionDate: updated.inceptionDate || today,
-        ...(!updated.effectiveDate ? { effectiveDate: today } : {}),
-      }, user.organizationId)) ?? updated;
-      await storage.createPolicyStatusHistory(req.params.id as string, before.status, "active", "Legacy policy — marked by admin on edit", user.id, user.organizationId);
+      const legacyEffectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      updated = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const [row] = await txDb.update(policies).set({
+          isLegacy: true,
+          status: "active",
+          waitingPeriodEndDate: today,
+          inceptionDate: updated.inceptionDate || today,
+          ...(!updated.effectiveDate ? { effectiveDate: today } : {}),
+        }).where(and(eq(policies.id, req.params.id as string), eq(policies.organizationId, user.organizationId))).returning();
+        await txDb.insert(policyStatusHistory).values({
+          policyId: req.params.id as string, fromStatus: before.status, toStatus: "active",
+          reason: "Legacy policy — marked by admin on edit", changedBy: legacyEffectiveUserId,
+        });
+        return row;
+      }) ?? updated;
       await auditLog(req, "LEGACY_POLICY_ACTIVATED", "Policy", req.params.id as string, before, updated);
     }
 
@@ -2884,8 +2902,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const before = { ...policy };
-    const updated = await storage.updatePolicy(policy.id, { status: toStatus }, user.organizationId);
-    await storage.createPolicyStatusHistory(policy.id, policy.status, toStatus, reason, user.id, user.organizationId);
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    // Status update + history row must commit together — see the identical fix on the
+    // claim transition route above for why (a crash between the two leaves no audit trail
+    // of who/when/why changed the status).
+    const updated = await withOrgTransaction(user.organizationId, async (txDb) => {
+      const [row] = await txDb.update(policies).set({ status: toStatus })
+        .where(and(eq(policies.id, policy.id), eq(policies.organizationId, user.organizationId)))
+        .returning();
+      await txDb.insert(policyStatusHistory).values({
+        policyId: policy.id, fromStatus: policy.status, toStatus, reason, changedBy: effectiveUserId,
+      });
+      return row;
+    });
 
     if (policy.clientId) {
       const eventMap: Record<string, string> = {
@@ -4564,11 +4593,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         status: "submitted",
         submittedBy: user.id,
       });
-      const claim = await withOrgTransaction(user.organizationId, async () => {
-        // Generate claim number inside the transaction to prevent race-condition duplicates
-        const claimNumber = await storage.generateClaimNumber(user.organizationId);
-        const created = await storage.createClaim({ ...parsed, claimNumber });
-        await storage.createClaimStatusHistory(created.id, null, "submitted", "Claim submitted", user.id, created.organizationId);
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const claim = await withOrgTransaction(user.organizationId, async (txDb) => {
+        // Everything below must use txDb directly, not storage.* helpers — those open their
+        // own connection via getDbForOrg() and would commit outside this transaction, silently
+        // defeating the atomicity this withOrgTransaction call is here to provide (previously
+        // the claim number sequence bump, claim insert, and status history insert each ran on
+        // a separate auto-committing connection despite appearing to share one transaction).
+        const seqResult = await txDb.execute(sql`
+          INSERT INTO org_policy_sequences (organization_id, claim_next) VALUES (${user.organizationId}, 1)
+          ON CONFLICT (organization_id) DO UPDATE SET claim_next = org_policy_sequences.claim_next + 1
+          RETURNING claim_next
+        `);
+        const nextVal = (seqResult as unknown as { rows?: { claim_next: number }[] }).rows?.[0]?.claim_next ?? 1;
+        const claimNumber = `CLM-${String(nextVal).padStart(6, "0")}`;
+        const [created] = await txDb.insert(claims).values({ ...parsed, claimNumber }).returning();
+        await txDb.insert(claimStatusHistory).values({
+          claimId: created.id, fromStatus: null, toStatus: "submitted", reason: "Claim submitted", changedBy: effectiveUserId,
+        });
         return created;
       });
       await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
@@ -4620,12 +4662,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const before = { ...claim };
+    const effectiveUserId = await resolveOrSyncTenantUserId(claim.organizationId, user.id);
     const updateData: any = { status: toStatus };
-    if (toStatus === "verified") updateData.verifiedBy = user.id;
-    if (toStatus === "approved") updateData.approvedBy = user.id;
+    if (toStatus === "verified") updateData.verifiedBy = effectiveUserId;
+    if (toStatus === "approved") updateData.approvedBy = effectiveUserId;
 
-    const updated = await storage.updateClaim(claim.id, updateData, claim.organizationId);
-    await storage.createClaimStatusHistory(claim.id, claim.status, toStatus, reason, user.id, claim.organizationId);
+    // Status update + history row must commit together — a crash between the two would leave
+    // an approved/rejected claim with no record of who/when/why in its status history.
+    const updated = await withOrgTransaction(claim.organizationId, async (txDb) => {
+      const [row] = await txDb.update(claims).set(updateData)
+        .where(and(eq(claims.id, claim.id), eq(claims.organizationId, claim.organizationId)))
+        .returning();
+      await txDb.insert(claimStatusHistory).values({
+        claimId: claim.id, fromStatus: claim.status, toStatus, reason, changedBy: effectiveUserId,
+      });
+      return row;
+    });
     await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, updated);
     // Notify submitter of status change
     if (claim.submittedBy && claim.submittedBy !== user.id) {

@@ -7,7 +7,9 @@ import argon2 from "argon2";
 import { createPaymentIntent, initiatePaynowPayment, pollPaynowStatus } from "./payment-service";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { streamPolicyDocumentToResponse } from "./policy-document";
-import { insertClaimSchema, insertClientFeedbackSchema } from "@shared/schema";
+import { insertClaimSchema, insertClientFeedbackSchema, claims, claimStatusHistory } from "@shared/schema";
+import { withOrgTransaction } from "./tenant-db";
+import { sql } from "drizzle-orm";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -507,10 +509,8 @@ export function setupClientAuth(app: Express) {
     const policy = await storage.getPolicy(policyId, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
     try {
-      const claimNumber = await storage.generateClaimNumber(clientOrgId);
-      const parsed = insertClaimSchema.parse({
+      const parsedBase = {
         organizationId: clientOrgId,
-        claimNumber,
         policyId,
         clientId,
         claimType,
@@ -519,9 +519,22 @@ export function setupClientAuth(app: Express) {
         deceasedRelationship: deceasedRelationship || null,
         dateOfDeath: dateOfDeath || null,
         causeOfDeath: causeOfDeath || null,
+      };
+      const claim = await withOrgTransaction(clientOrgId, async (txDb) => {
+        const seqResult = await txDb.execute(sql`
+          INSERT INTO org_policy_sequences (organization_id, claim_next) VALUES (${clientOrgId}, 1)
+          ON CONFLICT (organization_id) DO UPDATE SET claim_next = org_policy_sequences.claim_next + 1
+          RETURNING claim_next
+        `);
+        const nextVal = (seqResult as unknown as { rows?: { claim_next: number }[] }).rows?.[0]?.claim_next ?? 1;
+        const claimNumber = `CLM-${String(nextVal).padStart(6, "0")}`;
+        const parsed = insertClaimSchema.parse({ ...parsedBase, claimNumber });
+        const [created] = await txDb.insert(claims).values(parsed).returning();
+        await txDb.insert(claimStatusHistory).values({
+          claimId: created.id, fromStatus: null, toStatus: "submitted", reason: "Submitted via client portal", changedBy: undefined,
+        });
+        return created;
       });
-      const claim = await storage.createClaim(parsed);
-      await storage.createClaimStatusHistory(claim.id, null, "submitted", "Submitted via client portal", undefined, claim.organizationId);
       return res.status(201).json(claim);
     } catch (err) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors?.[0]?.message || "Validation failed" });
