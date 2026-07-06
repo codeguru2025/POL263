@@ -24,6 +24,18 @@ import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 import { QuoteDialog } from "./quotations";
 import { useAuth } from "@/hooks/use-auth";
 
+// Funeral cases store date of birth, not age — the quotation form wants age directly.
+function ageFromDob(dob: string | null | undefined): string {
+  if (!dob) return "";
+  const birth = new Date(dob);
+  if (Number.isNaN(birth.getTime())) return "";
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const monthDelta = now.getMonth() - birth.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < birth.getDate())) age -= 1;
+  return age >= 0 ? String(age) : "";
+}
+
 // Convert a UTC timestamp from the DB into a value suitable for <input type="datetime-local">.
 // datetime-local expects local time; .toISOString() gives UTC, so we offset by the browser's TZ.
 function utcToDatetimeLocal(utcStr: string): string {
@@ -898,7 +910,15 @@ export default function StaffFunerals() {
             vatRate: caseQuotation.vatRate != null ? String(caseQuotation.vatRate) : "0",
             discountAmount: caseQuotation.discountAmount != null ? String(caseQuotation.discountAmount) : "0",
             notes: caseQuotation.notes || "",
-          } : undefined}
+          } : (selectedCase ? {
+            // No quotation exists yet for this case — pre-fill from the funeral case's own
+            // informant/deceased details instead of opening a blank form.
+            informantFullNames: selectedCase.informantName || "",
+            informantPhone: selectedCase.informantPhone || "",
+            deceasedName: selectedCase.deceasedName || "",
+            deceasedAge: ageFromDob(selectedCase.deceasedDob),
+            deceasedSex: (selectedCase.deceasedGender || "").toLowerCase(),
+          } : undefined)}
           initialItems={caseQuotation?.items?.length
             ? caseQuotation.items.map((i: any) => ({ description: i.description, qty: String(i.quantity ?? "1"), unitPrice: String(i.unitPrice ?? "") }))
             : undefined}

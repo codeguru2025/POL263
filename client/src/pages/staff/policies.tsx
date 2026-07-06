@@ -316,6 +316,11 @@ export default function StaffPolicies() {
     queryKey: ["/api/products"],
   });
   const products = rawProducts ?? [];
+  // Legacy Individual/Legacy Group products are for quickly capturing historical clients —
+  // same relaxation as a legacy group, since full details are frequently unknown up front.
+  const selectedProductForCreate = products.find((p: any) => p.id === createForm.selectedProductId);
+  const isLegacyProductIssuance = selectedProductForCreate?.code === "LEGIND" || selectedProductForCreate?.code === "LEGGRP";
+  const isLegacyIssuance = isLegacyGroupIssuance || isLegacyProductIssuance;
 
   const { data: rawAddOns } = useQuery<any[]>({
     queryKey: ["/api/add-ons"],
@@ -732,11 +737,15 @@ export default function StaffPolicies() {
         if (!data.newClient.firstName || !data.newClient.lastName) {
           throw new Error("First name and last name are required to create a new client.");
         }
-        if (!data.newClient.nationalId?.trim()) throw new Error("National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38).");
-        if (!isValidNationalId(data.newClient.nationalId)) throw new Error("National ID must be digits, one letter, then two digits (e.g. 08833089H38).");
-        if (!data.newClient.phone?.trim()) throw new Error("Phone is required.");
-        if (!data.newClient.dateOfBirth) throw new Error("Date of birth is required.");
-        if (!data.newClient.gender) throw new Error("Gender is required.");
+        if (!isLegacyIssuance) {
+          if (!data.newClient.nationalId?.trim()) throw new Error("National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38).");
+          if (!isValidNationalId(data.newClient.nationalId)) throw new Error("National ID must be digits, one letter, then two digits (e.g. 08833089H38).");
+          if (!data.newClient.phone?.trim()) throw new Error("Phone is required.");
+          if (!data.newClient.dateOfBirth) throw new Error("Date of birth is required.");
+          if (!data.newClient.gender) throw new Error("Gender is required.");
+        } else if (data.newClient.nationalId?.trim() && !isValidNationalId(data.newClient.nationalId)) {
+          throw new Error("National ID must be digits, one letter, then two digits (e.g. 08833089H38).");
+        }
         const clientRes = await apiRequest("POST", "/api/clients", {
           firstName: toUpper(data.newClient.firstName),
           lastName: toUpper(data.newClient.lastName),
@@ -747,6 +756,7 @@ export default function StaffPolicies() {
           gender: data.newClient.gender ? toUpper(data.newClient.gender) : undefined,
           physicalAddress: data.newClient.physicalAddress?.trim() || undefined,
           postalAddress: data.newClient.postalAddress?.trim() || undefined,
+          legacyProductVersionId: isLegacyProductIssuance ? data.productVersionId : undefined,
         });
         const clientData = await clientRes.json();
         // Handle existing client returned instead of new creation
@@ -791,7 +801,7 @@ export default function StaffPolicies() {
           phone: dep.phone || "",
         };
       } else if (data.beneficiaryManual.firstName && data.beneficiaryManual.lastName) {
-        if (!isLegacyGroupIssuance && (!data.beneficiaryManual.relationship?.trim() || !data.beneficiaryManual.nationalId?.trim() || !data.beneficiaryManual.phone?.trim())) {
+        if (!isLegacyIssuance && (!data.beneficiaryManual.relationship?.trim() || !data.beneficiaryManual.nationalId?.trim() || !data.beneficiaryManual.phone?.trim())) {
           throw new Error("Beneficiary: all fields are required (first name, last name, relationship, national ID, phone).");
         }
         if (data.beneficiaryManual.nationalId?.trim() && !isValidNationalId(data.beneficiaryManual.nationalId)) {
@@ -4333,12 +4343,14 @@ export default function StaffPolicies() {
               if (clientMode === "new") {
                 if (!createForm.newClient.firstName?.trim()) missing.push("first name");
                 if (!createForm.newClient.lastName?.trim()) missing.push("last name");
-                if (!createForm.newClient.nationalId?.trim()) missing.push("national ID");
-                if (!createForm.newClient.phone?.trim()) missing.push("phone");
-                if (!createForm.newClient.dateOfBirth) missing.push("date of birth");
-                if (!createForm.newClient.gender) missing.push("gender");
+                if (!isLegacyIssuance) {
+                  if (!createForm.newClient.nationalId?.trim()) missing.push("national ID");
+                  if (!createForm.newClient.phone?.trim()) missing.push("phone");
+                  if (!createForm.newClient.dateOfBirth) missing.push("date of birth");
+                  if (!createForm.newClient.gender) missing.push("gender");
+                }
               }
-              if (!createForm.beneficiaryId && !isLegacyGroupIssuance) {
+              if (!createForm.beneficiaryId && !isLegacyIssuance) {
                 if (!createForm.beneficiaryManual.firstName?.trim()) missing.push("beneficiary first name");
                 if (!createForm.beneficiaryManual.lastName?.trim()) missing.push("beneficiary last name");
                 if (!createForm.beneficiaryManual.relationship?.trim()) missing.push("beneficiary relationship");
@@ -4375,12 +4387,14 @@ export default function StaffPolicies() {
                     (clientMode === "new" && (
                       !createForm.newClient.firstName?.trim() ||
                       !createForm.newClient.lastName?.trim() ||
-                      !createForm.newClient.nationalId?.trim() ||
-                      !createForm.newClient.phone?.trim() ||
-                      !createForm.newClient.dateOfBirth ||
-                      !createForm.newClient.gender
+                      (!isLegacyIssuance && (
+                        !createForm.newClient.nationalId?.trim() ||
+                        !createForm.newClient.phone?.trim() ||
+                        !createForm.newClient.dateOfBirth ||
+                        !createForm.newClient.gender
+                      ))
                     )) ||
-                    (!createForm.beneficiaryId && !isLegacyGroupIssuance && (
+                    (!createForm.beneficiaryId && !isLegacyIssuance && (
                       !createForm.beneficiaryManual.firstName?.trim() ||
                       !createForm.beneficiaryManual.lastName?.trim() ||
                       !createForm.beneficiaryManual.relationship?.trim() ||
@@ -4406,10 +4420,12 @@ export default function StaffPolicies() {
                   (clientMode === "new" && (
                     !createForm.newClient.firstName?.trim() ||
                     !createForm.newClient.lastName?.trim() ||
-                    !createForm.newClient.nationalId?.trim() ||
-                    !createForm.newClient.phone?.trim() ||
-                    !createForm.newClient.dateOfBirth ||
-                    !createForm.newClient.gender
+                    (!isLegacyIssuance && (
+                      !createForm.newClient.nationalId?.trim() ||
+                      !createForm.newClient.phone?.trim() ||
+                      !createForm.newClient.dateOfBirth ||
+                      !createForm.newClient.gender
+                    ))
                   )) ||
                   !createForm.productVersionId ||
                   !calculatedPremium?.total

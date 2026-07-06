@@ -1494,7 +1494,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "First name and last name are required." });
     }
 
-    // Check if this client is being captured into a legacy group — if so, only name is required.
+    // Check if this client is being captured into a legacy group, or directly under the
+    // Legacy Individual/Legacy Group product — either way, only name is required. The product
+    // check is verified server-side (looked up by id, not trusted from the request) same as
+    // the legacy-group check below, so a caller can't just claim "legacy" to skip validation.
     let isLegacyGroupCapture = false;
     if (req.body.legacyGroupId) {
       const legacyGroup = await storage.getGroup(String(req.body.legacyGroupId), user.organizationId);
@@ -1505,6 +1508,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ message: "Group is not marked as legacy. Full client details are required." });
       }
       isLegacyGroupCapture = true;
+    }
+    if (!isLegacyGroupCapture && req.body.legacyProductVersionId) {
+      const pv = await storage.getProductVersion(String(req.body.legacyProductVersionId), user.organizationId);
+      const product = pv ? await storage.getProduct(pv.productId, user.organizationId) : null;
+      if (product && (product.code === "LEGIND" || product.code === "LEGGRP")) {
+        isLegacyGroupCapture = true;
+      }
     }
 
     const nationalIdNorm = normalizeNationalId(req.body.nationalId);
@@ -1539,7 +1549,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (creatorHasAgentRole) {
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id, user.branchId || undefined);
     }
-    const { legacyGroupId: _lgid, ...bodyWithoutLegacyGroupId } = req.body;
+    const { legacyGroupId: _lgid, legacyProductVersionId: _lpvid, ...bodyWithoutLegacyGroupId } = req.body;
     const parsed = insertClientSchema.parse({
       ...bodyWithoutLegacyGroupId,
       firstName: firstName!,
@@ -2772,6 +2782,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         : (policy.paymentSchedule || "monthly");
 
       const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, user.organizationId);
+
+      // A product whose total covered-life capacity is 1 (e.g. Yedwana) can only be converted
+      // into from a policy that also covers exactly one person — converting a multi-member
+      // legacy policy into a single-person product would silently strand the extra members.
+      const targetProduct = await storage.getProduct(targetPv.productId, user.organizationId);
+      const targetCapacity = Number(targetProduct?.maxAdults ?? 0) + Number(targetProduct?.maxChildren ?? 0) + Number(targetProduct?.maxExtendedMembers ?? 0);
+      if (targetCapacity === 1 && dependentDateOfBirths.length > 0) {
+        return res.status(400).json({
+          message: `${targetProduct?.name || "This product"} only covers one person, but this policy has ${dependentDateOfBirths.length} additional member(s). Remove them first, or convert to a different product.`,
+        });
+      }
+
       const addOnIds = await getPolicyAddOnIds(policy.id, user.organizationId);
       const premiumAmount = await computePolicyPremium(
         user.organizationId,
