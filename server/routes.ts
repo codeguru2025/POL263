@@ -7,6 +7,7 @@ import {
   withOrgTransaction,
   getDbForOrg,
   resolveUserIdForOrgDatabase,
+  resolveOrSyncTenantUserId,
   ensureRegistryUserMirroredToOrgDataDbInTx,
   ensureRegistryUserMirroredToOrgDataDb,
   getPoolForOrg,
@@ -5766,19 +5767,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const itemsTotal = rawItems.reduce((sum, it) => sum + Number(it.qty || 1) * Number(it.unitPrice || 0), 0);
     const amount = rawItems.length > 0 ? itemsTotal.toFixed(2) : req.body.amount;
 
-    const parsed = insertRequisitionSchema.parse({
-      ...req.body,
-      amount,
-      organizationId: user.organizationId,
-      requisitionNumber,
-      raisedDate: req.body.raisedDate || new Date().toISOString().slice(0, 10),
-      requestedBy: user.id,
-      status: submit ? "submitted" : "draft",
-      neededByDate: req.body.neededByDate || null,
-      approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
-    });
     let created: any;
     try {
+      // requestedBy is NOT NULL — a plain mirror-and-use-registry-id won't work if this staff
+      // member's email already exists in the tenant DB under a different id (see
+      // resolveOrSyncTenantUserId for why that can legitimately happen).
+      const requestedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const parsed = insertRequisitionSchema.parse({
+        ...req.body,
+        amount,
+        organizationId: user.organizationId,
+        requisitionNumber,
+        raisedDate: req.body.raisedDate || new Date().toISOString().slice(0, 10),
+        requestedBy,
+        status: submit ? "submitted" : "draft",
+        neededByDate: req.body.neededByDate || null,
+        approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
+      });
       created = await storage.createRequisition(parsed);
     } catch (err: any) {
       if (handleZodError(err, res)) return;
@@ -5818,6 +5823,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const today = new Date().toISOString().split("T")[0];
     const patch: Record<string, any> = {};
     let updated: typeof existing | undefined;
+    // approvedBy/paidBy reference the tenant DB's users table — resolve the same way
+    // requestedBy does above, in case this account's mirror was skipped (see
+    // resolveOrSyncTenantUserId).
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
 
     if (action === "submit") {
       if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be submitted" });
@@ -5826,7 +5835,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!canApprove) return res.status(403).json({ message: "Requires approve:finance" });
       if (existing.status !== "submitted") return res.status(400).json({ message: "Only submitted requisitions can be approved or rejected" });
       patch.status = action === "approve" ? "approved" : "rejected";
-      patch.approvedBy = user.id;
+      patch.approvedBy = effectiveUserId;
       patch.approvedAt = new Date();
       if (action === "reject") patch.rejectionReason = typeof req.body.rejectionReason === "string" ? req.body.rejectionReason : "Rejected";
       // Approver may adjust the amount before approving
@@ -5846,7 +5855,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const fullyPaid = newAmountPaid >= Number(existing.amount);
       patch.status = fullyPaid ? "paid" : "partial";
       patch.amountPaid = String(newAmountPaid.toFixed(2));
-      patch.paidBy = user.id;
+      patch.paidBy = effectiveUserId;
       patch.paidAt = new Date();
       patch.paidDate = paidDate;
       if (typeof req.body.paymentMethod === "string") patch.paymentMethod = req.body.paymentMethod;
@@ -5865,14 +5874,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           entityId: existing.id,
           amount: String(payAmount.toFixed(2)),
           currency: existing.currency,
-          paidByUserId: user.id,
+          paidByUserId: effectiveUserId,
           receivedBy: typeof req.body.receivedBy === "string" ? req.body.receivedBy : undefined,
           receivedByUserId: typeof req.body.receivedByUserId === "string" ? req.body.receivedByUserId : undefined,
           paidDate,
           paymentMethod: typeof req.body.paymentMethod === "string" ? req.body.paymentMethod : "cash",
           reference: typeof req.body.reference === "string" ? req.body.reference : undefined,
           notes: typeof req.body.notes === "string" ? req.body.notes : undefined,
-          createdByUserId: user.id,
+          createdByUserId: effectiveUserId,
         });
         const [row] = await txDb.update(requisitions).set(patch)
           .where(and(eq(requisitions.id, existing.id), eq(requisitions.organizationId, user.organizationId)))
@@ -6016,6 +6025,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // a crash between the two calls leaves either an orphaned disbursement (money recorded as
       // spent with no matching requisition status) or a "paid" requisition with no disbursement
       // backing it (exactly the drift a historical backfill script had to patch for Falakhe).
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       const { disbursement, updated } = await withOrgTransaction(user.organizationId, async (txDb) => {
         const voucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
@@ -6025,7 +6035,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           entityId: existing.id,
           amount: String(amount.toFixed(2)),
           currency: existing.currency,
-          paidByUserId: user.id,
+          paidByUserId: effectiveUserId,
           receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
           receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
           paidDate,
@@ -6033,12 +6043,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
           notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
           voucherNumber,
-          createdByUserId: user.id,
+          createdByUserId: effectiveUserId,
         }).returning();
         const patch: Record<string, any> = {
           amountPaid: String(newAmountPaid.toFixed(2)),
           status: fullyPaid ? "paid" : "partial",
-          paidBy: user.id,
+          paidBy: effectiveUserId,
           paidAt: new Date(),
           paidDate,
           paymentMethod: disbursement.paymentMethod,
@@ -6087,6 +6097,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       // Same atomicity concern as the requisitions payment endpoint above — disbursement and
       // expenditure status/amountPaid must commit or roll back together.
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       const { disbursement, updatedExp } = await withOrgTransaction(user.organizationId, async (txDb) => {
         const expVoucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
@@ -6096,7 +6107,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           entityId: existing.id,
           amount: String(amount.toFixed(2)),
           currency: existing.currency,
-          paidByUserId: user.id,
+          paidByUserId: effectiveUserId,
           receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
           receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
           paidDate,
@@ -6104,12 +6115,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
           notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
           voucherNumber: expVoucherNumber,
-          createdByUserId: user.id,
+          createdByUserId: effectiveUserId,
         }).returning();
         const patch: Record<string, any> = {
           amountPaid: String(newAmountPaid.toFixed(2)),
           status: fullyPaid ? "paid" : "partial",
-          paidBy: user.id,
+          paidBy: effectiveUserId,
           paidDate,
           paymentMethod: disbursement.paymentMethod,
           reference: disbursement.reference ?? existing.reference,

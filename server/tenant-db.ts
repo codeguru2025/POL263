@@ -280,6 +280,44 @@ export async function ensureRegistryUserMirroredToOrgDataDbInTx(
 }
 
 /**
+ * For NOT NULL user-reference columns (e.g. `requisitions.requested_by`) where a null
+ * fallback isn't possible — {@link resolveUserIdForOrgDatabase} degrades to null, which
+ * only works for nullable FKs.
+ *
+ * Returns the id to actually use for this org: normally the registry user's own id, mirrored
+ * as usual. But if that email already exists in the tenant DB under a *different* id (the
+ * mirror-skip case in {@link upsertRegistryUserIntoTenantDb} — e.g. an old account created
+ * under this email before the person's registry id existed, or before two of their Google
+ * accounts diverged), that pre-existing row is already referenced by historical records
+ * (audit logs, receipts, ...). Rather than fail, treat it as this person's tenant-local
+ * identity going forward: keep its id stable, but sync its non-id fields from the registry
+ * row so display name/avatar/etc. stay current.
+ */
+export async function resolveOrSyncTenantUserId(orgId: string, userId: string): Promise<string> {
+  if (!(await orgUsesDedicatedDatabase(orgId))) return userId;
+  const [registryUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!registryUser) return userId;
+  const tdb = await getDbForOrg(orgId);
+  const [existById] = await tdb.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (existById) {
+    await upsertRegistryUserIntoTenantDb(tdb, orgId, registryUser);
+    return userId;
+  }
+  const [existByEmail] = await tdb.select({ id: users.id }).from(users).where(eq(users.email, registryUser.email)).limit(1);
+  if (existByEmail) {
+    await tdb.update(users).set({
+      googleId: registryUser.googleId,
+      displayName: registryUser.displayName,
+      avatarUrl: registryUser.avatarUrl,
+      isActive: registryUser.isActive,
+    }).where(eq(users.id, existByEmail.id));
+    return existByEmail.id;
+  }
+  await upsertRegistryUserIntoTenantDb(tdb, orgId, registryUser);
+  return userId;
+}
+
+/**
  * Returns userId only if a row with that id exists in the org's data database (the same DB as
  * policies, payment_transactions, etc.). Otherwise null — avoids FK violations when the session user
  * lives only on the default/registry database (e.g. platform owner on a switched tenant, or staff
