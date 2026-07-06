@@ -60,6 +60,7 @@ import {
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, leads, branches, appReleases, waitingPeriodWaivers,
+  paymentDisbursements, requisitions, expenditures,
 } from "@shared/schema";
 import { sql, eq, count, and, max } from "drizzle-orm";
 import { pool, db } from "./db";
@@ -5674,6 +5675,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // Permanently deletes an expenditure and any disbursement recorded against it — same
+  // atomicity reasoning as DELETE /api/requisitions/:id.
+  app.delete("/api/expenditures/:id", requireAuth, requireTenantScope, requirePermission("delete:expenditure"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = await storage.getExpenditure(id, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Expenditure not found" });
+    try {
+      const deletedDisbursements = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const removed = await txDb.delete(paymentDisbursements)
+          .where(and(
+            eq(paymentDisbursements.organizationId, user.organizationId),
+            eq(paymentDisbursements.entityType, "expenditure"),
+            eq(paymentDisbursements.entityId, id),
+          ))
+          .returning();
+        await txDb.delete(expenditures)
+          .where(and(eq(expenditures.id, id), eq(expenditures.organizationId, user.organizationId)));
+        return removed;
+      });
+      await auditLog(req, "DELETE_EXPENDITURE", "Expenditure", id, { ...existing, disbursements: deletedDisbursements }, null);
+      return res.status(204).end();
+    } catch (err: any) {
+      structuredLog("error", "DELETE /api/expenditures/:id failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   // ─── FX Rates (USD base for consolidated statements) ────────
 
   app.get("/api/fx-rates", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -5788,6 +5817,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const canApprove = !!user.isPlatformOwner || effPerms.includes("approve:finance");
     const today = new Date().toISOString().split("T")[0];
     const patch: Record<string, any> = {};
+    let updated: typeof existing | undefined;
 
     if (action === "submit") {
       if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be submitted" });
@@ -5823,22 +5853,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (typeof req.body.reference === "string") patch.reference = req.body.reference;
       if (typeof req.body.receivedBy === "string") patch.receivedBy = req.body.receivedBy;
       if (typeof req.body.receivedByUserId === "string") patch.receivedByUserId = req.body.receivedByUserId;
-      // Record in disbursements ledger
-      await storage.createPaymentDisbursement({
-        organizationId: user.organizationId,
-        branchId: existing.branchId ?? undefined,
-        entityType: "requisition",
-        entityId: existing.id,
-        amount: String(payAmount.toFixed(2)),
-        currency: existing.currency,
-        paidByUserId: user.id,
-        receivedBy: typeof req.body.receivedBy === "string" ? req.body.receivedBy : undefined,
-        receivedByUserId: typeof req.body.receivedByUserId === "string" ? req.body.receivedByUserId : undefined,
-        paidDate,
-        paymentMethod: typeof req.body.paymentMethod === "string" ? req.body.paymentMethod : "cash",
-        reference: typeof req.body.reference === "string" ? req.body.reference : undefined,
-        notes: typeof req.body.notes === "string" ? req.body.notes : undefined,
-        createdByUserId: user.id,
+      // Disbursement + requisition update happen in one transaction — see the dedicated
+      // POST /api/requisitions/:id/payments endpoint for why (same atomicity concern: a crash
+      // between the two calls would otherwise leave an orphaned disbursement or a "paid"
+      // requisition with no disbursement backing it).
+      updated = await withOrgTransaction(user.organizationId, async (txDb) => {
+        await txDb.insert(paymentDisbursements).values({
+          organizationId: user.organizationId,
+          branchId: existing.branchId ?? undefined,
+          entityType: "requisition",
+          entityId: existing.id,
+          amount: String(payAmount.toFixed(2)),
+          currency: existing.currency,
+          paidByUserId: user.id,
+          receivedBy: typeof req.body.receivedBy === "string" ? req.body.receivedBy : undefined,
+          receivedByUserId: typeof req.body.receivedByUserId === "string" ? req.body.receivedByUserId : undefined,
+          paidDate,
+          paymentMethod: typeof req.body.paymentMethod === "string" ? req.body.paymentMethod : "cash",
+          reference: typeof req.body.reference === "string" ? req.body.reference : undefined,
+          notes: typeof req.body.notes === "string" ? req.body.notes : undefined,
+          createdByUserId: user.id,
+        });
+        const [row] = await txDb.update(requisitions).set(patch)
+          .where(and(eq(requisitions.id, existing.id), eq(requisitions.organizationId, user.organizationId)))
+          .returning();
+        return row;
       });
     } else {
       // Plain edit (only while draft)
@@ -5848,7 +5887,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
-    const updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
+    if (action !== "pay") {
+      updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
+    }
     await auditLog(req, "UPDATE_REQUISITION", "Requisition", existing.id, existing, updated);
 
     // ── Notifications ──────────────────────────────────────
@@ -5894,6 +5935,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     return res.json(updated);
+  });
+
+  // Permanently deletes a requisition and any disbursement recorded against it — these must go
+  // together or the deletion leaves either a dangling disbursement (money the ledger still says
+  // went out) or a requisition alive with no record of its payment being reversed.
+  app.delete("/api/requisitions/:id", requireAuth, requireTenantScope, requirePermission("delete:requisition"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = await storage.getRequisition(id, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Requisition not found" });
+    try {
+      const deletedDisbursements = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const removed = await txDb.delete(paymentDisbursements)
+          .where(and(
+            eq(paymentDisbursements.organizationId, user.organizationId),
+            eq(paymentDisbursements.entityType, "requisition"),
+            eq(paymentDisbursements.entityId, id),
+          ))
+          .returning();
+        await txDb.delete(requisitions)
+          .where(and(eq(requisitions.id, id), eq(requisitions.organizationId, user.organizationId)));
+        return removed;
+      });
+      await auditLog(req, "DELETE_REQUISITION", "Requisition", id, { ...existing, disbursements: deletedDisbursements }, null);
+      return res.status(204).end();
+    } catch (err: any) {
+      structuredLog("error", "DELETE /api/requisitions/:id failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   // ─── Payment Disbursements ───────────────────────────────────
@@ -5942,36 +6012,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= Number(existing.amount) - 0.001;
     try {
-      const voucherNumber = await storage.generateVoucherNumber(user.organizationId);
-      const disbursement = await storage.createPaymentDisbursement({
-        organizationId: user.organizationId,
-        branchId: existing.branchId ?? undefined,
-        entityType: "requisition",
-        entityId: existing.id,
-        amount: String(amount.toFixed(2)),
-        currency: existing.currency,
-        paidByUserId: user.id,
-        receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
-        receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
-        paidDate,
-        paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
-        reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
-        notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
-        voucherNumber,
-        createdByUserId: user.id,
+      // Disbursement + requisition status/amountPaid update happen in one transaction — otherwise
+      // a crash between the two calls leaves either an orphaned disbursement (money recorded as
+      // spent with no matching requisition status) or a "paid" requisition with no disbursement
+      // backing it (exactly the drift a historical backfill script had to patch for Falakhe).
+      const { disbursement, updated } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const voucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
+        const [disbursement] = await txDb.insert(paymentDisbursements).values({
+          organizationId: user.organizationId,
+          branchId: existing.branchId ?? undefined,
+          entityType: "requisition",
+          entityId: existing.id,
+          amount: String(amount.toFixed(2)),
+          currency: existing.currency,
+          paidByUserId: user.id,
+          receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
+          receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
+          paidDate,
+          paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
+          reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
+          notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+          voucherNumber,
+          createdByUserId: user.id,
+        }).returning();
+        const patch: Record<string, any> = {
+          amountPaid: String(newAmountPaid.toFixed(2)),
+          status: fullyPaid ? "paid" : "partial",
+          paidBy: user.id,
+          paidAt: new Date(),
+          paidDate,
+          paymentMethod: disbursement.paymentMethod,
+          reference: disbursement.reference ?? existing.reference,
+          receivedBy: disbursement.receivedBy ?? existing.receivedBy,
+          receivedByUserId: disbursement.receivedByUserId ?? existing.receivedByUserId,
+        };
+        const [updated] = await txDb.update(requisitions).set(patch)
+          .where(and(eq(requisitions.id, reqId), eq(requisitions.organizationId, user.organizationId)))
+          .returning();
+        return { disbursement, updated };
       });
-      const patch: Record<string, any> = {
-        amountPaid: String(newAmountPaid.toFixed(2)),
-        status: fullyPaid ? "paid" : "partial",
-        paidBy: user.id,
-        paidAt: new Date(),
-        paidDate,
-        paymentMethod: disbursement.paymentMethod,
-        reference: disbursement.reference ?? existing.reference,
-        receivedBy: disbursement.receivedBy ?? existing.receivedBy,
-        receivedByUserId: disbursement.receivedByUserId ?? existing.receivedByUserId,
-      };
-      const updated = await storage.updateRequisition(reqId, user.organizationId, patch);
       await auditLog(req, fullyPaid ? "PAY_REQUISITION" : "PARTIAL_PAY_REQUISITION", "Requisition", existing.id, existing, updated);
       if (fullyPaid) {
         notifyUser(user.organizationId, existing.requestedBy, {
@@ -6006,35 +6085,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= totalAmt - 0.001;
     try {
-      const expVoucherNumber = await storage.generateVoucherNumber(user.organizationId);
-      const disbursement = await storage.createPaymentDisbursement({
-        organizationId: user.organizationId,
-        branchId: existing.branchId ?? undefined,
-        entityType: "expenditure",
-        entityId: existing.id,
-        amount: String(amount.toFixed(2)),
-        currency: existing.currency,
-        paidByUserId: user.id,
-        receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
-        receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
-        paidDate,
-        paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
-        reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
-        notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
-        voucherNumber: expVoucherNumber,
-        createdByUserId: user.id,
+      // Same atomicity concern as the requisitions payment endpoint above — disbursement and
+      // expenditure status/amountPaid must commit or roll back together.
+      const { disbursement, updatedExp } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const expVoucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
+        const [disbursement] = await txDb.insert(paymentDisbursements).values({
+          organizationId: user.organizationId,
+          branchId: existing.branchId ?? undefined,
+          entityType: "expenditure",
+          entityId: existing.id,
+          amount: String(amount.toFixed(2)),
+          currency: existing.currency,
+          paidByUserId: user.id,
+          receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
+          receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
+          paidDate,
+          paymentMethod: typeof req.body.paymentMethod === "string" && req.body.paymentMethod ? req.body.paymentMethod : "cash",
+          reference: typeof req.body.reference === "string" && req.body.reference.trim() ? req.body.reference.trim() : undefined,
+          notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+          voucherNumber: expVoucherNumber,
+          createdByUserId: user.id,
+        }).returning();
+        const patch: Record<string, any> = {
+          amountPaid: String(newAmountPaid.toFixed(2)),
+          status: fullyPaid ? "paid" : "partial",
+          paidBy: user.id,
+          paidDate,
+          paymentMethod: disbursement.paymentMethod,
+          reference: disbursement.reference ?? existing.reference,
+          receivedBy: disbursement.receivedBy ?? existing.receivedBy,
+          receivedByUserId: disbursement.receivedByUserId ?? existing.receivedByUserId,
+        };
+        const [updatedExp] = await txDb.update(expenditures).set(patch)
+          .where(and(eq(expenditures.id, expId), eq(expenditures.organizationId, user.organizationId)))
+          .returning();
+        return { disbursement, updatedExp };
       });
-      const patch: Record<string, any> = {
-        amountPaid: String(newAmountPaid.toFixed(2)),
-        status: fullyPaid ? "paid" : "partial",
-        paidBy: user.id,
-        paidDate,
-        paymentMethod: disbursement.paymentMethod,
-        reference: disbursement.reference ?? existing.reference,
-        receivedBy: disbursement.receivedBy ?? existing.receivedBy,
-        receivedByUserId: disbursement.receivedByUserId ?? existing.receivedByUserId,
-      };
-      const updatedExp = await storage.updateExpenditure(expId, user.organizationId, patch);
       await auditLog(req, fullyPaid ? "PAY_EXPENDITURE" : "PARTIAL_PAY_EXPENDITURE", "Expenditure", existing.id, existing, updatedExp);
       return res.status(201).json({ disbursement, expenditure: updatedExp, fullyPaid });
     } catch (err: any) {

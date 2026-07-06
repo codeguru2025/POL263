@@ -57,6 +57,8 @@ export const SYSTEM_PERMISSIONS = [
   { name: "approve:finance", description: "Approve financial actions (maker-checker)", category: "finance" },
   { name: "delete:payment", description: "Delete payment transactions", category: "finance" },
   { name: "delete:receipt", description: "Delete payment receipts", category: "finance" },
+  { name: "delete:requisition", description: "Permanently delete requisitions (and any linked disbursement)", category: "finance" },
+  { name: "delete:expenditure", description: "Permanently delete expenditures (and any linked disbursement)", category: "finance" },
   { name: "edit:payment", description: "Edit payment transactions", category: "finance" },
   { name: "edit:receipt", description: "Edit payment receipts", category: "finance" },
   { name: "backdate:payment", description: "Backdate payment value dates", category: "finance" },
@@ -114,6 +116,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:own_clients", "view:all_clients",
     "delete:policy", "delete:payment", "delete:receipt", "edit:payment", "edit:receipt",
+    "delete:requisition", "delete:expenditure",
   ],
   cashier: [
     "read:policy", "read:client", "read:finance", "write:finance", "read:report",

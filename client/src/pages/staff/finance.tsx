@@ -12,10 +12,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown, ChevronRight, ShieldCheck, ShieldX, Building2, ArrowDownToLine, Banknote, TriangleAlert, Printer, Users } from "lucide-react";
+import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown, ChevronRight, ShieldCheck, ShieldX, Building2, ArrowDownToLine, Banknote, TriangleAlert, Printer, Users, Trash2 } from "lucide-react";
 import { PeriodSelector, periodForPreset, type Period } from "@/components/period-selector";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
@@ -1212,6 +1213,8 @@ export default function StaffFinance() {
   const canReadFinance = permissions.includes("read:finance");
   const canWriteFinance = permissions.includes("write:finance");
   const canApproveFinance = permissions.includes("approve:finance") || (authUser as any)?.isPlatformOwner;
+  const canDeleteRequisition = permissions.includes("delete:requisition") || (authUser as any)?.isPlatformOwner;
+  const canDeleteExpenditure = permissions.includes("delete:expenditure") || (authUser as any)?.isPlatformOwner;
   const canReadCommission = permissions.includes("read:commission");
   const commissionOnly = canReadCommission && !canReadFinance;
 
@@ -1374,6 +1377,32 @@ export default function StaffFinance() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
       toast({ title: "Requisition updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const [confirmDeleteRequisition, setConfirmDeleteRequisition] = useState<any | null>(null);
+  const deleteRequisitionMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/requisitions/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-disbursements"] });
+      setConfirmDeleteRequisition(null);
+      toast({ title: "Requisition deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const [confirmDeleteExpenditure, setConfirmDeleteExpenditure] = useState<any | null>(null);
+  const deleteExpenditureMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/expenditures/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/expenditures"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-disbursements"] });
+      setConfirmDeleteExpenditure(null);
+      toast({ title: "Expenditure deleted" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -2638,6 +2667,11 @@ export default function StaffFinance() {
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print requisition" onClick={(e) => { e.stopPropagation(); window.open(`/api/requisitions/${r.id}/pdf`, "_blank"); }}>
                               <Printer className="h-3.5 w-3.5" />
                             </Button>
+                            {canDeleteRequisition && (
+                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" title="Delete requisition" onClick={(e) => { e.stopPropagation(); setConfirmDeleteRequisition(r); }}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -2698,12 +2732,19 @@ export default function StaffFinance() {
                             <TableCell className="text-sm text-muted-foreground tabular-nums">{e.spentAt || e.paidDate || "—"}</TableCell>
                             <TableCell><StatusBadge status={e.status || "pending"} /></TableCell>
                             <TableCell className="text-right pr-6" onClick={(ev) => ev.stopPropagation()}>
-                              {(e.status === "pending" || e.status === "partial") && canWriteFinance && (
-                                <Button size="sm" variant="outline" onClick={() => openPayDialog("expenditure", e)} data-testid={`btn-pay-exp-${e.id}`}>
-                                  {e.status === "partial" ? "Pay Balance" : "Record Payment"}
-                                </Button>
-                              )}
-                              {e.status === "paid" && <span className="text-xs text-muted-foreground">Paid ✓</span>}
+                              <div className="flex justify-end gap-1.5 flex-wrap">
+                                {(e.status === "pending" || e.status === "partial") && canWriteFinance && (
+                                  <Button size="sm" variant="outline" onClick={() => openPayDialog("expenditure", e)} data-testid={`btn-pay-exp-${e.id}`}>
+                                    {e.status === "partial" ? "Pay Balance" : "Record Payment"}
+                                  </Button>
+                                )}
+                                {e.status === "paid" && <span className="text-xs text-muted-foreground self-center">Paid ✓</span>}
+                                {canDeleteExpenditure && (
+                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" title="Delete expenditure" onClick={() => setConfirmDeleteExpenditure(e)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
                           {isExpExp && (
@@ -3642,6 +3683,54 @@ export default function StaffFinance() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!confirmDeleteRequisition} onOpenChange={(v) => !v && setConfirmDeleteRequisition(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permanently delete requisition?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete requisition <strong>{confirmDeleteRequisition?.requisitionNumber}</strong> and any
+              disbursement recorded against it (currently {confirmDeleteRequisition?.currency}{" "}
+              {Number(confirmDeleteRequisition?.amount ?? 0).toFixed(2)}). This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteRequisitionMutation.mutate(confirmDeleteRequisition.id)}
+              disabled={deleteRequisitionMutation.isPending}
+            >
+              {deleteRequisitionMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete Permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!confirmDeleteExpenditure} onOpenChange={(v) => !v && setConfirmDeleteExpenditure(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permanently delete expenditure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this <strong>{confirmDeleteExpenditure?.description}</strong> expenditure and any
+              disbursement recorded against it (currently {confirmDeleteExpenditure?.currency}{" "}
+              {Number(confirmDeleteExpenditure?.amount ?? 0).toFixed(2)}). This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteExpenditureMutation.mutate(confirmDeleteExpenditure.id)}
+              disabled={deleteExpenditureMutation.isPending}
+            >
+              {deleteExpenditureMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete Permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </StaffLayout>
   );
 }

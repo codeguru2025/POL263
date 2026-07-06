@@ -4171,7 +4171,11 @@ export class DatabaseStorage implements IStorage {
 
   async generateVoucherNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);
-    const result = await tdb.execute(sql`
+    return this.generateVoucherNumberInTx(tdb, orgId);
+  }
+  /** Bump `org_policy_sequences.disbursement_next` on the same connection as `tx` (participates in outer BEGIN/COMMIT) — use inside `withOrgTransaction` so the sequence bump rolls back with the rest of the payment. */
+  async generateVoucherNumberInTx(tx: OrgDrizzleDb, orgId: string): Promise<string> {
+    const result = await tx.execute(sql`
       INSERT INTO org_policy_sequences (organization_id, disbursement_next) VALUES (${orgId}, 1)
       ON CONFLICT (organization_id) DO UPDATE SET disbursement_next = org_policy_sequences.disbursement_next + 1
       RETURNING disbursement_next
