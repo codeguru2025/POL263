@@ -1,0 +1,1 @@
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS is_south_africa BOOLEAN NOT NULL DEFAULT false;

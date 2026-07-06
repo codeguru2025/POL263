@@ -698,6 +698,8 @@ export const policies = pgTable(
     beneficiaryDependentId: uuid("beneficiary_dependent_id").references(() => dependents.id),
     version: integer("version").default(1).notNull(),
     isLegacy: boolean("is_legacy").default(false).notNull(),
+    /** South African-based policy (paid in ZAR, or by a client based in SA) — surfaced as a badge/filter in the UI. */
+    isSouthAfrica: boolean("is_south_africa").default(false).notNull(),
     /** Manually set premium that overrides the system-calculated premiumAmount. When set, this is the effective premium. */
     premiumOverride: numeric("premium_override", { precision: 12, scale: 2 }),
     premiumOverrideNote: text("premium_override_note"),
