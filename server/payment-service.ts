@@ -39,10 +39,13 @@ function isPaynowFailedStatus(status: string): boolean {
  * Verify the amount the gateway reports as paid matches what we expected to charge.
  * Prevents a `paid` status for a lesser amount from activating a policy in full.
  * Returns true when the amount is within a 1-cent tolerance, or when the gateway
- * did not report an amount (cannot verify — logged by the caller).
+ * did not report an amount (cannot verify — logged here so the bypass has an audit trail).
  */
 function paynowAmountMatches(postedAmount: string | null | undefined, expectedAmount: string | number): boolean {
-  if (postedAmount == null || String(postedAmount).trim() === "") return true; // nothing to compare
+  if (postedAmount == null || String(postedAmount).trim() === "") {
+    structuredLog("warn", "Paynow response omitted amount — proceeding without amount verification", { expectedAmount: String(expectedAmount) });
+    return true; // nothing to compare
+  }
   const posted = parseFloat(String(postedAmount));
   const expected = parseFloat(String(expectedAmount));
   if (!Number.isFinite(posted) || !Number.isFinite(expected)) return false;
