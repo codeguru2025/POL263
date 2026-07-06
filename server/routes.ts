@@ -8204,6 +8204,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await buildCashFlowStatement(user.organizationId, { from, to, branchId }));
   });
 
+  app.get("/api/reports/income-statement/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const { streamIncomeStatementPdf } = await import("./financial-statement-pdf");
+    await streamIncomeStatementPdf(user.organizationId, from, to, branchId, res, { attachment: req.query.download === "1" });
+  });
+
+  app.get("/api/reports/cash-flow/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const { streamCashFlowPdf } = await import("./financial-statement-pdf");
+    await streamCashFlowPdf(user.organizationId, from, to, branchId, res, { attachment: req.query.download === "1" });
+  });
+
   app.get("/api/reports/transaction-ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const def = defaultStatementRange();
@@ -8219,6 +8239,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const date = typeof req.query.date === "string" && req.query.date ? req.query.date : new Date().toISOString().slice(0, 10);
     return res.json(await buildDailyReport(user.organizationId, date));
+  });
+
+  app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : new Date().toISOString().slice(0, 10);
+    const { streamDailyReportPdf } = await import("./financial-statement-pdf");
+    await streamDailyReportPdf(user.organizationId, date, res, { attachment: req.query.download === "1" });
   });
 
   app.post("/api/reports/daily/notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

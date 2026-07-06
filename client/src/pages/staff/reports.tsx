@@ -1027,6 +1027,11 @@ export default function StaffReports() {
               description="Cash basis — income from issued receipts (premium individual/group + cash services) less paid requisitions and expenditures, for the selected period. Per-currency, with a consolidated USD total."
               icon={DollarSign}
               flush
+              headerRight={
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(`${getApiBase()}/api/reports/income-statement/pdf${q}${q ? "&" : "?"}download=1`, "_blank")}>
+                  <Download className="h-3.5 w-3.5" /> PDF
+                </Button>
+              }
             >
               {loadingIncomeStatement ? (
                 <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
@@ -1083,6 +1088,11 @@ export default function StaffReports() {
               description="Cash basis — cash received (by method) less cash paid out, for the selected period, reconciled against confirmed daily cash-ups."
               icon={DollarSign}
               flush
+              headerRight={
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(`${getApiBase()}/api/reports/cash-flow/pdf${q}${q ? "&" : "?"}download=1`, "_blank")}>
+                  <Download className="h-3.5 w-3.5" /> PDF
+                </Button>
+              }
             >
               {loadingCashFlow ? (
                 <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
