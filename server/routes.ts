@@ -3397,6 +3397,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return res.status(400).json({ message: "Notes for the approver are required when the receipt amount differs from the policy premium." });
         }
         const pendingReceipt = await withOrgTransaction(user.organizationId, async (txDb) => {
+          await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
           const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
           const [created] = await txDb.insert(paymentReceipts).values({
             organizationId: user.organizationId,
