@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useSearch, useLocation } from "wouter";
+import { useSearch, useLocation, Link } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, KpiStatCard, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge, FilterBar } from "@/components/ds";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -348,7 +348,7 @@ function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged }: { ba
 }
 
 export default function StaffReports() {
-  const { permissions } = useAuth();
+  const { permissions, isLoading: authLoading } = useAuth();
   const canReadFinance = permissions.includes("read:finance");
   const canReadClaim = permissions.includes("read:claim");
   const canReadFuneralOps = permissions.includes("read:funeral_ops");
@@ -379,18 +379,24 @@ export default function StaffReports() {
   const { reportSection, activeReport } = useMemo(() => {
     const parsed = parseReportSearchParams(searchString);
     let section: ReportSectionId = parsed.section;
-    if (!visibleSections.includes(section)) section = visibleSections[0]!;
+    // While permissions are still loading, visibleSections is a placeholder (empty perms ⇒
+    // only "policies"/"agents" look visible) — trust the URL's section as-is rather than
+    // falling back, otherwise every fresh/full page load of e.g. ?section=finance briefly
+    // (but deterministically, since the effect below fires before permissions resolve)
+    // bounces the user to a default section before permissions are known.
+    if (!authLoading && !visibleSections.includes(section)) section = visibleSections[0]!;
     const tabs = tabsForSection(section, sectionOpts);
     let tab = parsed.tab;
     if (!tabs.some((x) => x.value === tab)) tab = tabs[0]!.value;
     return { reportSection: section, activeReport: tab };
-  }, [searchString, visibleSections, sectionOpts]);
+  }, [searchString, visibleSections, sectionOpts, authLoading]);
 
   useEffect(() => {
+    if (authLoading) return;
     const parsed = parseReportSearchParams(searchString);
     if (parsed.section === reportSection && parsed.tab === activeReport) return;
     setLocation(buildStaffReportHref(reportSection, activeReport));
-  }, [searchString, reportSection, activeReport, setLocation]);
+  }, [searchString, reportSection, activeReport, setLocation, authLoading]);
 
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -748,7 +754,7 @@ export default function StaffReports() {
             const isActive = s === reportSection;
             const firstTab = tabsForSection(s, sectionOpts)[0]?.value ?? "";
             return (
-              <a
+              <Link
                 key={s}
                 href={buildStaffReportHref(s, firstTab)}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors border ${
@@ -759,7 +765,7 @@ export default function StaffReports() {
               >
                 <Icon className="h-3.5 w-3.5 shrink-0" />
                 {meta.label}
-              </a>
+              </Link>
             );
           })}
         </div>
@@ -848,7 +854,7 @@ export default function StaffReports() {
             {tabsForSection(reportSection, sectionOpts).map((t) => {
               const isActive = t.value === activeReport;
               return (
-                <a
+                <Link
                   key={t.value}
                   href={buildStaffReportHref(reportSection, t.value)}
                   data-testid={t.testId}
@@ -859,7 +865,7 @@ export default function StaffReports() {
                   }`}
                 >
                   {t.label}
-                </a>
+                </Link>
               );
             })}
           </div>
