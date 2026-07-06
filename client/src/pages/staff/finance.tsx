@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
@@ -24,6 +25,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { CurrencySelect } from "@/components/currency-select";
 import { formatAmount } from "@shared/validation";
 import { isAgentScoped } from "@shared/roles";
+
+function formatCurrencyMap(m: Record<string, string | number> | undefined): string {
+  if (!m) return "0.00";
+  const entries = Object.entries(m).filter(([, v]) => Number(v) !== 0);
+  if (entries.length === 0) return "0.00";
+  return entries.map(([c, v]) => `${c} ${Number(v).toFixed(2)}`).join("  ·  ");
+}
 
 function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
@@ -537,7 +545,8 @@ function PaymentHistoryTable({ disbursements, currency }: { disbursements: any[]
               <TableHead className="text-xs">Method</TableHead>
               <TableHead className="text-xs">Paid by</TableHead>
               <TableHead className="text-xs">Received by</TableHead>
-              <TableHead className="text-xs pr-4">Reference</TableHead>
+              <TableHead className="text-xs">Reference</TableHead>
+              <TableHead className="text-xs pr-4 text-right">Voucher</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -548,13 +557,20 @@ function PaymentHistoryTable({ disbursements, currency }: { disbursements: any[]
                 <TableCell className="capitalize">{(d.paymentMethod || "cash").replace(/_/g, " ")}</TableCell>
                 <TableCell>{d.paidByName || "—"}</TableCell>
                 <TableCell>{d.receivedByName || d.receivedBy || "—"}</TableCell>
-                <TableCell className="pr-4 font-mono">{d.reference || "—"}</TableCell>
+                <TableCell className="font-mono">{d.reference || "—"}</TableCell>
+                <TableCell className="pr-4 text-right">
+                  <a href={getApiBase() + `/api/payment-disbursements/${d.id}/pdf`} target="_blank" rel="noopener noreferrer" title="Print payment voucher">
+                    <Button size="icon" variant="ghost" className="h-6 w-6" type="button">
+                      <Printer className="h-3.5 w-3.5" />
+                    </Button>
+                  </a>
+                </TableCell>
               </TableRow>
             ))}
             <TableRow className="bg-muted/30 font-semibold text-xs">
               <TableCell className="pl-4">Total paid</TableCell>
               <TableCell className="tabular-nums">{currency} {total.toFixed(2)}</TableCell>
-              <TableCell colSpan={4} />
+              <TableCell colSpan={5} />
             </TableRow>
           </TableBody>
         </Table>
@@ -639,6 +655,27 @@ function BankingPanel() {
       setShowAccountDialog(false);
       setAccountForm({ accountName: "", bankName: "", accountNumber: "", currency: "USD", notes: "" });
       toast({ title: "Bank account added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // Edit bank account
+  const [editAccount, setEditAccount] = useState<any | null>(null);
+  const [editAccountForm, setEditAccountForm] = useState({ accountName: "", bankName: "", accountNumber: "", currency: "USD", notes: "", isActive: true });
+  const updateAccountMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/bank-accounts/${editAccount.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": await getCsrfToken() ?? "" },
+        credentials: "include",
+        body: JSON.stringify(editAccountForm),
+      });
+      if (!res.ok) throw new Error((await res.json()).message);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bank-accounts"] });
+      setEditAccount(null);
+      toast({ title: "Bank account updated" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -799,14 +836,18 @@ function BankingPanel() {
                 <TableHead>Account #</TableHead>
                 <TableHead>Currency</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {bankAccounts.map((a: any) => {
                 const latestBal = statementBalances.find((b: any) => b.bankAccountId === a.id);
                 return (
-                  <TableRow key={a.id}>
-                    <TableCell className="font-medium">{a.accountName}</TableCell>
+                  <TableRow key={a.id} className={a.isActive === false ? "opacity-60" : ""}>
+                    <TableCell className="font-medium">
+                      {a.accountName}
+                      {a.isActive === false && <Badge variant="secondary" className="ml-2 text-[10px]">Inactive</Badge>}
+                    </TableCell>
                     <TableCell>{a.bankName}</TableCell>
                     <TableCell className="font-mono text-sm">{a.accountNumber}</TableCell>
                     <TableCell>{a.currency}</TableCell>
@@ -821,6 +862,22 @@ function BankingPanel() {
                           + Enter balance
                         </Button>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          setEditAccount(a);
+                          setEditAccountForm({
+                            accountName: a.accountName, bankName: a.bankName, accountNumber: a.accountNumber,
+                            currency: a.currency, notes: a.notes || "", isActive: a.isActive !== false,
+                          });
+                        }}
+                      >
+                        Edit
+                      </Button>
                     </TableCell>
                   </TableRow>
                 );
@@ -933,6 +990,53 @@ function BankingPanel() {
         </DialogContent>
       </Dialog>
 
+      {/* ── Edit Bank Account Dialog ────────────────────────── */}
+      <Dialog open={!!editAccount} onOpenChange={(v) => !v && setEditAccount(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Edit bank account</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Account name</Label>
+              <Input value={editAccountForm.accountName} onChange={e => setEditAccountForm(f => ({ ...f, accountName: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Bank</Label>
+              <Input value={editAccountForm.bankName} onChange={e => setEditAccountForm(f => ({ ...f, bankName: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Account number</Label>
+              <Input value={editAccountForm.accountNumber} onChange={e => setEditAccountForm(f => ({ ...f, accountNumber: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Currency</Label>
+              <Select value={editAccountForm.currency} onValueChange={v => setEditAccountForm(f => ({ ...f, currency: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="ZAR">ZAR</SelectItem>
+                  <SelectItem value="ZIG">ZIG</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes (optional)</Label>
+              <Textarea rows={2} value={editAccountForm.notes} onChange={e => setEditAccountForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={editAccountForm.isActive} onCheckedChange={(v) => setEditAccountForm(f => ({ ...f, isActive: !!v }))} />
+              Active (available for new deposits)
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditAccount(null)}>Cancel</Button>
+            <Button disabled={!editAccountForm.accountName || !editAccountForm.bankName || !editAccountForm.accountNumber || updateAccountMutation.isPending} onClick={() => updateAccountMutation.mutate()}>
+              {updateAccountMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Record Deposit Dialog ───────────────────────────── */}
       <Dialog open={showDepositDialog} onOpenChange={setShowDepositDialog}>
         <DialogContent className="sm:max-w-md">
@@ -943,7 +1047,7 @@ function BankingPanel() {
               <Select value={depositForm.bankAccountId} onValueChange={v => setDepositForm(f => ({ ...f, bankAccountId: v }))}>
                 <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
                 <SelectContent>
-                  {bankAccounts.map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
+                  {bankAccounts.filter((a: any) => a.isActive !== false).map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -997,7 +1101,7 @@ function BankingPanel() {
               <Select value={balForm.bankAccountId} onValueChange={v => setBalForm(f => ({ ...f, bankAccountId: v }))}>
                 <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
                 <SelectContent>
-                  {bankAccounts.map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
+                  {bankAccounts.filter((a: any) => a.isActive !== false).map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -1319,7 +1423,7 @@ export default function StaffFinance() {
     enabled: !!cashReceiptSelectedPolicyId,
   });
   const { data: rawPlatformReceivables } = useQuery<any[]>({ queryKey: ["/api/platform/receivables"] });
-  const { data: platformSummary } = useQuery<{ totalDue: string; totalSettled: string; outstanding: string }>({ queryKey: ["/api/platform/summary"] });
+  const { data: platformSummary } = useQuery<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }>({ queryKey: ["/api/platform/summary"] });
   const { data: rawSettlements } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
   const { data: rawPaymentIntents, isLoading: loadingIntents, refetch: refetchIntents } = useQuery<any[]>({ queryKey: ["/api/payment-intents"] });
   const platformReceivables = Array.isArray(rawPlatformReceivables) ? rawPlatformReceivables : [];
@@ -1510,32 +1614,38 @@ export default function StaffFinance() {
     setPaynowPhase("select");
   };
 
+  // All of these are keyed by currency — platform_receivables holds USD, ZAR, and ZIG
+  // amounts, and summing across currencies would silently blend them into one meaningless number.
   const platformDailyDue = useMemo(() => {
     const today = new Date().toISOString().split("T")[0];
-    return platformReceivables
+    const map: Record<string, number> = {};
+    platformReceivables
       .filter((r: any) => !r.isSettled && r.createdAt?.startsWith(today))
-      .reduce((sum: number, r: any) => sum + parseFloat(r.amount || "0"), 0);
+      .forEach((r: any) => { map[r.currency] = (map[r.currency] || 0) + parseFloat(r.amount || "0"); });
+    return map;
   }, [platformReceivables]);
 
   const platformMTD = useMemo(() => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    return platformReceivables
+    const map: Record<string, number> = {};
+    platformReceivables
       .filter((r: any) => r.createdAt >= monthStart)
-      .reduce((sum: number, r: any) => sum + parseFloat(r.amount || "0"), 0);
+      .forEach((r: any) => { map[r.currency] = (map[r.currency] || 0) + parseFloat(r.amount || "0"); });
+    return map;
   }, [platformReceivables]);
 
   const platformAging = useMemo(() => {
     const now = Date.now();
     const unsettled = platformReceivables.filter((r: any) => !r.isSettled);
-    const buckets = { current: 0, days30: 0, days60: 0, days90plus: 0 };
+    const buckets: Record<"current" | "days30" | "days60" | "days90plus", Record<string, number>> = {
+      current: {}, days30: {}, days60: {}, days90plus: {},
+    };
     unsettled.forEach((r: any) => {
       const age = (now - new Date(r.createdAt).getTime()) / (1000 * 60 * 60 * 24);
       const amt = parseFloat(r.amount || "0");
-      if (age <= 30) buckets.current += amt;
-      else if (age <= 60) buckets.days30 += amt;
-      else if (age <= 90) buckets.days60 += amt;
-      else buckets.days90plus += amt;
+      const bucket = age <= 30 ? buckets.current : age <= 60 ? buckets.days30 : age <= 90 ? buckets.days60 : buckets.days90plus;
+      bucket[r.currency] = (bucket[r.currency] || 0) + amt;
     });
     return buckets;
   }, [platformReceivables]);
@@ -2567,19 +2677,19 @@ export default function StaffFinance() {
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <KpiStatCard
                     label="Daily Due"
-                    value={<span data-testid="text-platform-daily">{platformDailyDue.toFixed(2)}</span>}
+                    value={<span data-testid="text-platform-daily">{formatCurrencyMap(platformDailyDue)}</span>}
                     icon={CalendarDays}
                   />
                   <KpiStatCard
                     label="MTD Accrued"
-                    value={<span data-testid="text-platform-mtd">{platformMTD.toFixed(2)}</span>}
+                    value={<span data-testid="text-platform-mtd">{formatCurrencyMap(platformMTD)}</span>}
                     icon={TrendingUp}
                   />
                   <KpiStatCard
                     label="Outstanding"
                     value={
                       <span data-testid="text-platform-outstanding">
-                        {platformSummary ? parseFloat(platformSummary.outstanding).toFixed(2) : "0.00"}
+                        {formatCurrencyMap(platformSummary?.outstanding)}
                       </span>
                     }
                     icon={ArrowUpRight}
@@ -2588,7 +2698,7 @@ export default function StaffFinance() {
                     label="Total Settled"
                     value={
                       <span data-testid="text-platform-settled">
-                        {platformSummary ? parseFloat(platformSummary.totalSettled).toFixed(2) : "0.00"}
+                        {formatCurrencyMap(platformSummary?.totalSettled)}
                       </span>
                     }
                     icon={CheckCircle2}
@@ -2600,19 +2710,19 @@ export default function StaffFinance() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   <div className="text-center p-4 rounded-lg bg-green-50 dark:bg-green-950/20">
                     <p className="text-xs text-muted-foreground mb-1">0–30 Days</p>
-                    <p className="text-xl font-bold text-green-700 dark:text-green-400 tabular-nums" data-testid="text-aging-current">{platformAging.current.toFixed(2)}</p>
+                    <p className="text-xl font-bold text-green-700 dark:text-green-400 tabular-nums" data-testid="text-aging-current">{formatCurrencyMap(platformAging.current)}</p>
                   </div>
                   <div className="text-center p-4 rounded-lg bg-yellow-50 dark:bg-yellow-950/20">
                     <p className="text-xs text-muted-foreground mb-1">31–60 Days</p>
-                    <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400 tabular-nums" data-testid="text-aging-30">{platformAging.days30.toFixed(2)}</p>
+                    <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400 tabular-nums" data-testid="text-aging-30">{formatCurrencyMap(platformAging.days30)}</p>
                   </div>
                   <div className="text-center p-4 rounded-lg bg-orange-50 dark:bg-orange-950/20">
                     <p className="text-xs text-muted-foreground mb-1">61–90 Days</p>
-                    <p className="text-xl font-bold text-orange-700 dark:text-orange-400 tabular-nums" data-testid="text-aging-60">{platformAging.days60.toFixed(2)}</p>
+                    <p className="text-xl font-bold text-orange-700 dark:text-orange-400 tabular-nums" data-testid="text-aging-60">{formatCurrencyMap(platformAging.days60)}</p>
                   </div>
                   <div className="text-center p-4 rounded-lg bg-red-50 dark:bg-red-950/20">
                     <p className="text-xs text-muted-foreground mb-1">90+ Days</p>
-                    <p className="text-xl font-bold text-red-700 dark:text-red-400 tabular-nums" data-testid="text-aging-90plus">{platformAging.days90plus.toFixed(2)}</p>
+                    <p className="text-xl font-bold text-red-700 dark:text-red-400 tabular-nums" data-testid="text-aging-90plus">{formatCurrencyMap(platformAging.days90plus)}</p>
                   </div>
                 </div>
               </CardSection>

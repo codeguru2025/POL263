@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
+import { CurrencySelect } from "@/components/currency-select";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Loader2, ChevronRight, Archive, FileDown, Box, DollarSign, ChevronDown } from "lucide-react";
 import type { FleetVehicle } from "@shared/schema";
@@ -585,6 +586,7 @@ export default function StaffMortuary() {
             </div>
           </div>
         ) : (
+          <div className="space-y-6">
           <CardSection title="Mortuary Register" icon={Archive} flush
             headerRight={(
               <div className="flex items-center gap-2">
@@ -646,6 +648,13 @@ export default function StaffMortuary() {
               </Table>
             )}
           </CardSection>
+
+          <PartnerParlourVehicleUsageSection
+            vehicleOptions={vehicleOptions}
+            userOptions={userOptions}
+            partnerParlours={partnerParlours}
+          />
+          </div>
         )}
       </PageShell>
 
@@ -727,6 +736,306 @@ export default function StaffMortuary() {
         />
       )}
     </StaffLayout>
+  );
+}
+
+// ─── Partner Parlour Vehicle Usage ─────────────────────────────────────────────
+
+function PartnerParlourVehicleUsageSection({ vehicleOptions, userOptions, partnerParlours }: {
+  vehicleOptions: SearchableOption[];
+  userOptions: SearchableOption[];
+  partnerParlours: any[];
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showLogUsage, setShowLogUsage] = useState(false);
+  const [feePaymentTarget, setFeePaymentTarget] = useState<any | null>(null);
+
+  const { data: usageRecords = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/partner-parlour-vehicle-usage"],
+  });
+
+  const logUsageMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = await apiRequest("POST", "/api/partner-parlour-vehicle-usage", data);
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.message || "Failed");
+      return j;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/partner-parlour-vehicle-usage"] });
+      setShowLogUsage(false);
+      toast({ title: "Vehicle usage logged" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const returnMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/partner-parlour-vehicle-usage/${id}/return`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/partner-parlour-vehicle-usage"] });
+      toast({ title: "Vehicle recorded as returned" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const feePaymentMutation = useMutation({
+    mutationFn: async ({ id, paidBy }: { id: string; paidBy: string }) => {
+      const res = await apiRequest("POST", `/api/partner-parlour-vehicle-usage/${id}/fee-payment`, { paidBy });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.message || "Failed");
+      return j;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/partner-parlour-vehicle-usage"] });
+      setFeePaymentTarget(null);
+      toast({ title: "Fee recorded as paid" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const parlourName = (id: string | null) => (partnerParlours as any[]).find((p) => p.id === id)?.name || "—";
+  const vehicleLabel = (id: string | null) => vehicleOptions.find((v) => v.value === id)?.label || "—";
+  const driverLabel = (id: string | null) => id ? (userOptions.find((u) => u.value === id)?.label || "—") : "—";
+
+  return (
+    <>
+      <CardSection
+        title="Partner Parlour Vehicle Usage"
+        description="Vehicles/drivers lent to other parlours for their own removals or burials."
+        icon={Box}
+        headerRight={<Button size="sm" onClick={() => setShowLogUsage(true)}><Plus className="h-4 w-4 mr-1.5" />Log Usage</Button>}
+      >
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+        ) : usageRecords.length === 0 ? (
+          <EmptyState title="No vehicle usage recorded" description="Logged when we lend a vehicle/driver to a partner parlour." className="border-0 rounded-none bg-transparent py-8" />
+        ) : (
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead className="pl-6">Parlour</TableHead>
+                <TableHead>Vehicle</TableHead>
+                <TableHead>Driver</TableHead>
+                <TableHead>Purpose</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Fee</TableHead>
+                <TableHead className="text-right pr-6">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {usageRecords.map((u: any) => (
+                <TableRow key={u.id}>
+                  <TableCell className="pl-6 font-medium">{parlourName(u.partnerParlourId)}</TableCell>
+                  <TableCell>{vehicleLabel(u.vehicleId)}</TableCell>
+                  <TableCell>{driverLabel(u.driverId)}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground capitalize">{u.purpose}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{fmtDateTime(u.usageDateTime)}</TableCell>
+                  <TableCell className="text-xs">
+                    {u.feeAmount ? `${u.feeCurrency} ${parseFloat(u.feeAmount).toFixed(2)}` : "—"}
+                  </TableCell>
+                  <TableCell className="text-right pr-6">
+                    <div className="flex justify-end gap-1.5 flex-wrap">
+                      {!u.returnedAt && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => returnMutation.mutate(u.id)} disabled={returnMutation.isPending}>
+                          Record Return
+                        </Button>
+                      )}
+                      {u.feeAmount && u.feeStatus !== "paid" && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setFeePaymentTarget(u)}>
+                          Mark Fee Paid
+                        </Button>
+                      )}
+                      {u.returnedAt && (!u.feeAmount || u.feeStatus === "paid") && (
+                        <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Closed</Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardSection>
+
+      <LogVehicleUsageDialog
+        open={showLogUsage}
+        onOpenChange={setShowLogUsage}
+        vehicleOptions={vehicleOptions}
+        userOptions={userOptions}
+        partnerParlours={partnerParlours}
+        onSubmit={(data) => logUsageMutation.mutate(data)}
+        isPending={logUsageMutation.isPending}
+      />
+
+      {feePaymentTarget && (
+        <FeePaymentDialog
+          open={!!feePaymentTarget}
+          onOpenChange={(v) => !v && setFeePaymentTarget(null)}
+          feeAmount={feePaymentTarget.feeAmount}
+          feeCurrency={feePaymentTarget.feeCurrency}
+          onSubmit={(paidBy) => feePaymentMutation.mutate({ id: feePaymentTarget.id, paidBy })}
+          isPending={feePaymentMutation.isPending}
+        />
+      )}
+    </>
+  );
+}
+
+function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, onSubmit, isPending }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  vehicleOptions: SearchableOption[]; userOptions: SearchableOption[]; partnerParlours: any[];
+  onSubmit: (data: Record<string, any>) => void; isPending: boolean;
+}) {
+  const [form, setForm] = useState({
+    partnerParlourId: "",
+    vehicleId: "",
+    driverId: "",
+    purpose: "removal",
+    deceasedName: "",
+    usageDateTime: new Date().toISOString().slice(0, 16),
+    destination: "",
+    feeAmount: "",
+    feeCurrency: "USD",
+    notes: "",
+  });
+
+  const setSel = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit({
+      partnerParlourId: form.partnerParlourId || null,
+      vehicleId: form.vehicleId || null,
+      driverId: form.driverId || null,
+      purpose: form.purpose,
+      deceasedName: form.deceasedName || null,
+      usageDateTime: form.usageDateTime || null,
+      destination: form.destination || null,
+      feeAmount: form.feeAmount || null,
+      feeCurrency: form.feeAmount ? form.feeCurrency : null,
+      notes: form.notes || null,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Log Partner Parlour Vehicle Usage</DialogTitle>
+          <DialogDescription>Record a vehicle/driver lent to another parlour for their own removal or burial.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Partner Parlour *</Label>
+            <Select value={form.partnerParlourId || "__none__"} onValueChange={setSel("partnerParlourId")}>
+              <SelectTrigger><SelectValue placeholder="Select parlour…" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— Select parlour —</SelectItem>
+                {partnerParlours.map((p: any) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Vehicle *</Label>
+              <SearchableSelect options={vehicleOptions} value={form.vehicleId} onChange={setSel("vehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search…" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Driver</Label>
+              <SearchableSelect options={userOptions} value={form.driverId} onChange={setSel("driverId")} placeholder="Select driver…" searchPlaceholder="Search…" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Purpose *</Label>
+              <Select value={form.purpose} onValueChange={setSel("purpose")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="removal">Removal</SelectItem>
+                  <SelectItem value="burial">Burial</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Date & Time</Label>
+              <Input type="datetime-local" value={form.usageDateTime} onChange={set("usageDateTime")} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Deceased Name</Label>
+            <Input value={form.deceasedName} onChange={set("deceasedName")} placeholder="Whose removal/burial this is for" />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Destination</Label>
+            <Input value={form.destination} onChange={set("destination")} placeholder="Where the vehicle is going" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Fee Amount</Label>
+              <Input type="number" step="0.01" min="0" value={form.feeAmount} onChange={set("feeAmount")} placeholder="0.00" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Fee Currency</Label>
+              <CurrencySelect value={form.feeCurrency} onValueChange={setSel("feeCurrency")} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Notes</Label>
+            <Textarea value={form.notes} onChange={set("notes")} rows={2} />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={isPending || !form.partnerParlourId || !form.vehicleId}>
+              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Log Usage
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function FeePaymentDialog({ open, onOpenChange, feeAmount, feeCurrency, onSubmit, isPending }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  feeAmount: string | number | null; feeCurrency: string | null;
+  onSubmit: (paidBy: string) => void; isPending: boolean;
+}) {
+  const [paidBy, setPaidBy] = useState("");
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit(paidBy);
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Mark Vehicle Usage Fee Paid</DialogTitle>
+          <DialogDescription>
+            {feeAmount ? `${feeCurrency} ${parseFloat(String(feeAmount)).toFixed(2)}` : "Fee"} for this vehicle usage.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Paid By *</Label>
+            <Input value={paidBy} onChange={(e) => setPaidBy(e.target.value)} required placeholder="Name of person who paid" />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={isPending || !paidBy}>
+              {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Confirm Paid
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

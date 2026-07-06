@@ -5,7 +5,6 @@ import {
   streamAttendanceLogBlankPDF,
   streamEmployeeEnrollmentPDF,
   streamEmployeeEnrollmentBlankPDF,
-  streamPayslipBlankPDF,
   streamVehicleRegistrationPDF,
   streamVehicleRegistrationBlankPDF,
   streamFuelLogPDF,
@@ -177,12 +176,6 @@ export function registerHrFleetFormRoutes(app: Express): void {
   app.get("/api/forms/blank/employee-enrollment", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try { await streamEmployeeEnrollmentBlankPDF(user.organizationId, res, { attachment: true }); }
-    catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
-  });
-
-  app.get("/api/forms/blank/payslip", requireAuth, requireTenantScope, async (req, res) => {
-    const user = req.user as any;
-    try { await streamPayslipBlankPDF(user.organizationId, res, { attachment: true }); }
     catch (err: any) { if (!res.headersSent) res.status(500).json({ message: err.message }); }
   });
 

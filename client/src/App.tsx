@@ -56,6 +56,7 @@ const StaffSettings = lazy(() => retryLazy(() => import("@/pages/staff/settings"
 const ProductBuilder = lazy(() => retryLazy(() => import("@/pages/staff/products")));
 const StaffPolicies = lazy(() => retryLazy(() => import("@/pages/staff/policies")));
 const StaffClients = lazy(() => retryLazy(() => import("@/pages/staff/clients")));
+const StaffFeedback = lazy(() => retryLazy(() => import("@/pages/staff/feedback")));
 const StaffClaims = lazy(() => retryLazy(() => import("@/pages/staff/claims")));
 const StaffFunerals = lazy(() => retryLazy(() => import("@/pages/staff/funerals")));
 const StaffMortuary = lazy(() => retryLazy(() => import("@/pages/staff/mortuary")));
@@ -178,6 +179,7 @@ function Router() {
       <SafeRoute path="/staff/products" component={ProductBuilder} />
       <SafeRoute path="/staff/policies" component={StaffPolicies} />
       <SafeRoute path="/staff/clients" component={StaffClients} />
+      <SafeRoute path="/staff/feedback" component={StaffFeedback} />
       <SafeRoute path="/staff/claims" component={StaffClaims} />
       <SafeRoute path="/staff/funerals" component={StaffFunerals} />
       <SafeRoute path="/staff/mortuary" component={StaffMortuary} />

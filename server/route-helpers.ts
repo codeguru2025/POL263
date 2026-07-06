@@ -173,10 +173,13 @@ export async function computePolicyPremium(
         dependantSurcharge = perMemberTotal * monthlyToScheduleFactor(paymentSchedule);
       }
     } else if (additionalRate > 0) {
-      // Flat behaviour: single per-additional-member rate, counting ALL excess over the
-      // product's covered count (adults + children + extended family).
-      const totalIncluded = includedAdults + includedChildren + includedExtended;
-      const extraTotal = Math.max(0, (adults + children) - totalIncluded);
+      // Flat behaviour: single per-additional-member rate. Adults and children are checked
+      // against their own caps separately (not pooled into one combined total) — otherwise
+      // a product with e.g. maxAdults=2/maxChildren=4 would let a 3rd adult ride free by
+      // "borrowing" an unused child slot, silently undercharging the adult cap.
+      const extraAdults = Math.max(0, adults - includedAdults);
+      const extraChildren = Math.max(0, children - includedChildren);
+      const extraTotal = extraAdults + extraChildren;
       dependantSurcharge = extraTotal * additionalRate * monthlyToScheduleFactor(paymentSchedule);
     } else {
       // Legacy behaviour: use underwriter rates per member type (backwards compatible).

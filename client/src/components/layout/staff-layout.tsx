@@ -60,6 +60,7 @@ import {
   Coins,
   RefreshCw,
   UserCircle,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -359,6 +360,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/admin/invoice-items", label: "Invoice Items Admin", icon: ClipboardList, agentHidden: true },
         // Clients & groups
         { href: "/staff/clients", label: isAgent ? "My Clients" : "Clients", icon: Users, permission: "read:client" },
+        { href: "/staff/feedback", label: "Client Feedback", icon: MessageSquare, permission: "read:client", agentHidden: true },
         { href: "/staff/groups", label: "Employer Admin", icon: Layers, permissions: ["write:policy"], agentHidden: true },
         { href: "/staff/admin/sub-groups", label: "Sub Group Admin", icon: GitBranch, agentHidden: true },
         { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard, agentHidden: true },

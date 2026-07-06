@@ -16,8 +16,8 @@ import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet } from "./financial-statements";
-import { generateRequisitionPdf, generateBlankRequisitionPdf } from "./requisition-pdf";
-import { generatePaymentVoucherPdf, generateBlankPaymentVoucherPdf } from "./payment-voucher-pdf";
+import { generateRequisitionPdf } from "./requisition-pdf";
+import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -761,24 +761,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     await auditLog(req, "SWITCH_TENANT", "Organization", tenantId, { previousTenantId }, { newTenantId: tenantId, tenantName: tenant.name }, tenantId);
     return res.json({ activeTenantId: tenantId, tenantName: tenant.name });
-  });
-
-  app.get("/api/platform/active-tenant", requireAuth, async (req, res) => {
-    const user = req.user as any;
-    if (!user.isPlatformOwner) {
-      return res.status(403).json({ message: "Platform owner access required" });
-    }
-    const activeTenantId = (req.session as any)?.activeTenantId || user.organizationId || null;
-    if (!activeTenantId) return res.json({ activeTenantId: null, tenant: null });
-    const [tenant] = await cpDb
-      .select({ id: cpTenants.id, name: cpTenants.name, slug: cpTenants.slug, isActive: cpTenants.isActive })
-      .from(cpTenants)
-      .where(eq(cpTenants.id, activeTenantId))
-      .limit(1);
-    if (!tenant || !tenant.isActive) {
-      return res.json({ activeTenantId: null, tenant: null });
-    }
-    return res.json({ activeTenantId, tenant });
   });
 
   app.get("/api/platform/dashboard", requireAuth, async (req, res) => {
@@ -1789,15 +1771,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(saved);
   });
 
-  // ─── Client Policies ─────────────────────────────────────────
-
-  app.get("/api/clients/:clientId/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
-    const user = req.user as any;
-    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
-    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
-    const clientPolicies = await storage.getPoliciesByClient(req.params.clientId as string, user.organizationId);
-    return res.json(clientPolicies);
-  });
 
   // ─── Products ───────────────────────────────────────────────
 
@@ -2304,6 +2277,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete body.premiumAmount;
     delete body.paymentMethod;
 
+    // Legacy groups are backfilled from paper records — full beneficiary details (relationship,
+    // national ID, phone) are frequently unknown, so they're optional for policies issued into one.
+    let isLegacyGroupIssuance = false;
+    if (req.body.groupId) {
+      const targetGroup = await storage.getGroup(String(req.body.groupId), user.organizationId);
+      isLegacyGroupIssuance = !!targetGroup?.isLegacy;
+    }
+
     const beneficiary = req.body.beneficiary || null;
     if (beneficiary && (beneficiary.firstName || beneficiary.lastName)) {
       const benFirst = toUpperTrim(beneficiary.firstName, false);
@@ -2318,20 +2299,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         structuredLog("warn", "POST /api/policies 400", { reason: "beneficiary name missing", userId: user?.id, orgId: user?.organizationId });
         return res.status(400).json({ message: "Beneficiary first and last name are required." });
       }
-      if (!benRel) {
+      if (!isLegacyGroupIssuance && !benRel) {
         structuredLog("warn", "POST /api/policies 400", { reason: "beneficiary relationship missing", userId: user?.id, orgId: user?.organizationId });
         return res.status(400).json({ message: "Beneficiary relationship is required." });
       }
       if (!isDepLinked) {
-        if (!benNationalId) {
+        if (!isLegacyGroupIssuance && !benNationalId) {
           structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary national ID missing", userId: user?.id, orgId: user?.organizationId });
           return res.status(400).json({ message: "Beneficiary national ID is required." });
         }
-        if (!isValidNationalId(beneficiary.nationalId)) {
+        if (benNationalId && !isValidNationalId(beneficiary.nationalId)) {
           structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary national ID invalid", userId: user?.id, orgId: user?.organizationId });
           return res.status(400).json({ message: "Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
         }
-        if (!benPhone) {
+        if (!isLegacyGroupIssuance && !benPhone) {
           structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary phone missing", userId: user?.id, orgId: user?.organizationId });
           return res.status(400).json({ message: "Beneficiary phone is required." });
         }
@@ -4939,14 +4920,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Requisition / Voucher Print ───────────────────────────
-  app.get("/api/requisitions/blank-form", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
-    const user = req.user as any;
-    const org = await storage.getOrganization(user.organizationId);
-    const buf = await generateBlankRequisitionPdf(org);
-    res.set({ "Content-Type": "application/pdf", "Content-Disposition": 'inline; filename="requisition-blank.pdf"' });
-    return res.end(buf);
-  });
-
   app.get("/api/requisitions/:id/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const req2 = await storage.getRequisition(String(req.params.id), user.organizationId);
@@ -4959,14 +4932,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const reqData = { ...req2, items: allItems, requesterName: requester?.displayName || requester?.email || "Unknown" };
     const buf = await generateRequisitionPdf(reqData, user.organizationId);
     res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="REQ-${req2.requisitionNumber}.pdf"` });
-    return res.end(buf);
-  });
-
-  app.get("/api/payment-vouchers/blank-form", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
-    const user = req.user as any;
-    const org = await storage.getOrganization(user.organizationId);
-    const buf = await generateBlankPaymentVoucherPdf(org);
-    res.set({ "Content-Type": "application/pdf", "Content-Disposition": 'inline; filename="payment-voucher-blank.pdf"' });
     return res.end(buf);
   });
 
@@ -8013,13 +7978,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const status = req.query.status ? String(req.query.status) : undefined;
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     return res.json(await storage.getClaimsReportByOrg(user.organizationId, limit, 0, { ...filters, status }));
-  });
-  app.get("/api/reports/issued-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
-    const user = req.user as any;
-    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
-    const offset = parseInt(String(req.query.offset)) || 0;
-    return res.json(await storage.getNewJoiningsReportByOrg(user.organizationId, limit, offset, filters));
   });
   app.get("/api/reports/new-joinings", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;

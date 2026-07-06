@@ -97,7 +97,9 @@ const GROUP_TYPES = [
 function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; group: Group; onClose: () => void }) {
   const printRef = useRef<HTMLDivElement>(null);
   const grouped = receipts.reduce<Record<string, any[]>>((acc, r) => {
-    const ref = (r.metadata_json as any)?.groupRef || "session";
+    // Each legacy lump-sum receipt is its own independent payment (no per-member allocation),
+    // so it gets its own session key rather than collapsing into the shared "session" bucket.
+    const ref = r.isLegacyReceipt ? `legacy-${r.id}` : ((r.metadata_json as any)?.groupRef || "session");
     acc[ref] = acc[ref] || [];
     acc[ref].push(r);
     return acc;
@@ -129,17 +131,21 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
         {sessions.map(([ref, rows]) => {
           const sessionTotal = rows.reduce((s: number, r: any) => s + parseFloat(r.amount || 0), 0);
           const sessionDate = new Date((rows[0] as any).created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
-          const note = (rows[0] as any).submitter_note;
+          const note = (rows[0] as any).submitter_note || (rows[0] as any).notes;
+          const isLegacy = !!(rows[0] as any).isLegacyReceipt;
           return (
             <div key={ref} className="border rounded-lg overflow-hidden">
               <div className="bg-primary/10 px-4 py-2 flex items-center justify-between">
                 <div>
-                  <p className="font-semibold text-sm">{sessionDate}</p>
+                  <p className="font-semibold text-sm">
+                    {sessionDate}
+                    {isLegacy && <Badge variant="secondary" className="ml-2 text-[10px] align-middle">Legacy</Badge>}
+                  </p>
                   <p className="text-xs text-muted-foreground font-mono">{ref}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-bold">{rows[0]?.currency} {sessionTotal.toFixed(2)}</p>
-                  <p className="text-xs text-muted-foreground">{rows.length} member{rows.length !== 1 ? "s" : ""}</p>
+                  <p className="text-xs text-muted-foreground">{isLegacy ? "Group lump sum" : `${rows.length} member${rows.length !== 1 ? "s" : ""}`}</p>
                 </div>
               </div>
               {note && (
@@ -160,8 +166,8 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
                 <TableBody>
                   {rows.map((r: any) => (
                     <TableRow key={r.id}>
-                      <TableCell className="pl-4 text-sm">{r.first_name} {r.last_name}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.policy_number}</TableCell>
+                      <TableCell className="pl-4 text-sm">{r.isLegacyReceipt ? "Group lump-sum payment" : `${r.first_name || ""} ${r.last_name || ""}`}</TableCell>
+                      <TableCell className="font-mono text-sm">{r.policy_number || "—"}</TableCell>
                       <TableCell className="text-sm font-medium">{r.currency} {parseFloat(r.amount).toFixed(2)}</TableCell>
                       <TableCell className="font-mono text-sm">{r.receipt_number}</TableCell>
                       <TableCell className="pr-4">
@@ -426,6 +432,32 @@ function GroupDetailPanel({ group }: { group: Group }) {
     enabled: activeSection === "history" || showPrintView,
   });
 
+  // Legacy lump-sum receipts (recorded before the group has member policies) live in a
+  // separate table — merge them into the same print/history view, normalized to the
+  // same shape GroupReceiptPrintView expects.
+  const { data: legacyReceiptHistory = [] } = useQuery<any[]>({
+    queryKey: ["/api/groups/legacy-receipts", group.id],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/legacy-receipts?groupId=${group.id}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: activeSection === "history" || showPrintView,
+  });
+  const combinedReceiptHistory = [
+    ...receiptHistory,
+    ...legacyReceiptHistory.map((r: any) => ({
+      id: r.id,
+      receipt_number: r.receipt_number,
+      amount: r.amount,
+      currency: r.currency,
+      created_at: r.recorded_at || r.payment_date,
+      approval_status: "issued",
+      isLegacyReceipt: true,
+      notes: r.notes,
+    })),
+  ];
+
   const legacyMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/clients", { firstName: legacyFirst.trim(), lastName: legacyLast.trim(), legacyGroupId: group.id });
@@ -641,7 +673,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
       {/* Receipt history section */}
       {activeSection === "history" && (
         <div className="p-4">
-          <GroupReceiptPrintView receipts={receiptHistory as any[]} group={group} onClose={() => setActiveSection("members")} />
+          <GroupReceiptPrintView receipts={combinedReceiptHistory} group={group} onClose={() => setActiveSection("members")} />
         </div>
       )}
 

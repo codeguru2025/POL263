@@ -616,7 +616,7 @@ export interface IStorage {
   getNextMonthEndRunNumber(orgId: string): Promise<string>;
   getPlatformReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PlatformReceivable[]>;
   createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
-  getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }>;
+  getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }>;
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
   updateSettlement(id: string, data: Partial<InsertSettlement>, orgId: string): Promise<Settlement | undefined>;
@@ -5147,24 +5147,33 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(platformReceivables).values(entry).returning();
     return created;
   }
-  async getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: string; totalSettled: string; outstanding: string }> {
+  async getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }> {
+    // Grouped by currency — platform_receivables holds USD, ZAR, and ZIG amounts,
+    // and summing across currencies would silently blend them into one meaningless number.
     const tdb = await getDbForOrg(orgId);
-    const [totals] = await tdb.select({
-      totalDue: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')`,
-    }).from(platformReceivables).where(eq(platformReceivables.organizationId, orgId));
-    const [settled] = await tdb.select({
-      totalSettled: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')`,
+    const dueRows = await tdb.select({
+      currency: platformReceivables.currency,
+      total: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')`,
+    }).from(platformReceivables)
+      .where(eq(platformReceivables.organizationId, orgId))
+      .groupBy(platformReceivables.currency);
+    const settledRows = await tdb.select({
+      currency: platformReceivables.currency,
+      total: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')`,
     }).from(platformReceivables).where(and(
       eq(platformReceivables.organizationId, orgId),
       eq(platformReceivables.isSettled, true)
-    ));
-    const due = parseFloat(totals?.totalDue || "0");
-    const stl = parseFloat(settled?.totalSettled || "0");
-    return {
-      totalDue: due.toFixed(2),
-      totalSettled: stl.toFixed(2),
-      outstanding: (due - stl).toFixed(2),
-    };
+    )).groupBy(platformReceivables.currency);
+
+    const totalDue: Record<string, string> = {};
+    for (const r of dueRows) totalDue[r.currency] = parseFloat(r.total).toFixed(2);
+    const totalSettled: Record<string, string> = {};
+    for (const r of settledRows) totalSettled[r.currency] = parseFloat(r.total).toFixed(2);
+    const outstanding: Record<string, string> = {};
+    for (const currency of Array.from(new Set([...Object.keys(totalDue), ...Object.keys(totalSettled)]))) {
+      outstanding[currency] = (parseFloat(totalDue[currency] || "0") - parseFloat(totalSettled[currency] || "0")).toFixed(2);
+    }
+    return { totalDue, totalSettled, outstanding };
   }
 
   // ── Receipting activity by staff member and branch ────────────

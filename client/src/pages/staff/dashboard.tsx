@@ -28,11 +28,14 @@ import {
   TriangleAlert,
   ArrowUpRight,
   ShieldCheck,
+  Database,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -264,6 +267,91 @@ function ExecutiveSummarySection({ execSummary, execLoading, branchesList, perio
         </CardSection>
       </div>
     </div>
+  );
+}
+
+// ─── Backup Sync Health (platform owner) ──────────────────────────────────
+function BackupHealthSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery<{ runs: any[] }>({ queryKey: ["/api/platform/backup-status"] });
+  const triggerMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/platform/backup-sync", {});
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.message || "Failed to trigger backup");
+      return j;
+    },
+    onSuccess: () => {
+      toast({ title: "Backup sync triggered", description: "Check back in a minute for the new run to appear." });
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ["/api/platform/backup-status"] }), 5000);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const runs = data?.runs ?? [];
+
+  const statusBadge = (status: string) => {
+    if (status === "success") return <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Success</Badge>;
+    if (status === "partial") return <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30">Partial</Badge>;
+    if (status === "failed") return <Badge variant="destructive">Failed</Badge>;
+    return <Badge variant="secondary">Running</Badge>;
+  };
+
+  return (
+    <CardSection
+      title="Backup sync health"
+      description="Nightly mirror of every tenant database into the Supabase backup — recent run history."
+      icon={Database}
+      headerRight={(
+        <Button size="sm" variant="outline" onClick={() => triggerMutation.mutate()} disabled={triggerMutation.isPending}>
+          {triggerMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
+          Run Backup Now
+        </Button>
+      )}
+    >
+      {isLoading ? (
+        <div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+      ) : runs.length === 0 ? (
+        <EmptyState title="No backup runs yet" description="Runs appear here after the nightly scheduler fires, or after triggering one manually." className="border-0 rounded-none bg-transparent py-10" />
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Started</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Rows</TableHead>
+              <TableHead className="text-right">Tables</TableHead>
+              <TableHead>Triggered by</TableHead>
+              <TableHead>Errors</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {runs.map((r: any) => {
+              const durationSec = r.completedAt
+                ? Math.round((new Date(r.completedAt).getTime() - new Date(r.startedAt).getTime()) / 1000)
+                : null;
+              return (
+                <TableRow key={r.id}>
+                  <TableCell className="text-sm">{new Date(r.startedAt).toLocaleString()}</TableCell>
+                  <TableCell className="text-sm tabular-nums">{durationSec !== null ? `${durationSec}s` : "—"}</TableCell>
+                  <TableCell>{statusBadge(r.status)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{r.totalRows ?? "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums">{r.tableCount ?? "—"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground capitalize">{r.triggeredBy || "—"}</TableCell>
+                  <TableCell
+                    className="text-xs text-destructive max-w-xs truncate"
+                    title={Array.isArray(r.errors) ? r.errors.join("; ") : ""}
+                  >
+                    {r.errorCount && parseInt(r.errorCount) > 0 ? `${r.errorCount} error(s)` : "—"}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+    </CardSection>
   );
 }
 
@@ -598,6 +686,8 @@ export default function StaffDashboard() {
                 </div>
               )}
           </CardSection>
+
+          <BackupHealthSection />
         </PageShell>
       </StaffLayout>
     );

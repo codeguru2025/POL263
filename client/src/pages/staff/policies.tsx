@@ -298,6 +298,9 @@ export default function StaffPolicies() {
     queryKey: ["/api/groups"],
   });
   const groups = rawGroups ?? [];
+  // Legacy groups are backfilled from paper records — full beneficiary details (national ID,
+  // phone, relationship) are frequently unknown, so the beneficiary section is optional here.
+  const isLegacyGroupIssuance = !!groups.find((g: any) => g.id === (createForm as any).groupId)?.isLegacy;
 
   const { data: selectedClient } = useQuery<any>({
     queryKey: ["/api/clients", createForm.clientId],
@@ -788,10 +791,10 @@ export default function StaffPolicies() {
           phone: dep.phone || "",
         };
       } else if (data.beneficiaryManual.firstName && data.beneficiaryManual.lastName) {
-        if (!data.beneficiaryManual.relationship?.trim() || !data.beneficiaryManual.nationalId?.trim() || !data.beneficiaryManual.phone?.trim()) {
+        if (!isLegacyGroupIssuance && (!data.beneficiaryManual.relationship?.trim() || !data.beneficiaryManual.nationalId?.trim() || !data.beneficiaryManual.phone?.trim())) {
           throw new Error("Beneficiary: all fields are required (first name, last name, relationship, national ID, phone).");
         }
-        if (!isValidNationalId(data.beneficiaryManual.nationalId)) {
+        if (data.beneficiaryManual.nationalId?.trim() && !isValidNationalId(data.beneficiaryManual.nationalId)) {
           throw new Error("Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38).");
         }
         beneficiary = {
@@ -807,6 +810,7 @@ export default function StaffPolicies() {
         const res = await apiRequest("POST", "/api/policies", {
           clientId,
           agentId: data.agentId || undefined,
+          groupId: (data as any).groupId || undefined,
           productVersionId: data.productVersionId,
           premiumAmount: data.premiumAmount,
           currency: data.currency,
@@ -4334,7 +4338,7 @@ export default function StaffPolicies() {
                 if (!createForm.newClient.dateOfBirth) missing.push("date of birth");
                 if (!createForm.newClient.gender) missing.push("gender");
               }
-              if (!createForm.beneficiaryId) {
+              if (!createForm.beneficiaryId && !isLegacyGroupIssuance) {
                 if (!createForm.beneficiaryManual.firstName?.trim()) missing.push("beneficiary first name");
                 if (!createForm.beneficiaryManual.lastName?.trim()) missing.push("beneficiary last name");
                 if (!createForm.beneficiaryManual.relationship?.trim()) missing.push("beneficiary relationship");
@@ -4376,7 +4380,7 @@ export default function StaffPolicies() {
                       !createForm.newClient.dateOfBirth ||
                       !createForm.newClient.gender
                     )) ||
-                    (!createForm.beneficiaryId && (
+                    (!createForm.beneficiaryId && !isLegacyGroupIssuance && (
                       !createForm.beneficiaryManual.firstName?.trim() ||
                       !createForm.beneficiaryManual.lastName?.trim() ||
                       !createForm.beneficiaryManual.relationship?.trim() ||
