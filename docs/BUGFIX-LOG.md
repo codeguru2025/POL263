@@ -12,6 +12,51 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-07-07 — codebase-wide audit (architecture, ACID, edge cases, PayNow)
 
+### Edge case: "yearly"-scheduled policies computed a $0 base premium and a 12x-undercharged surcharge
+
+- **Symptom:** not yet reported — no Falakhe policy currently uses anything but `monthly`
+  (checked live: 229/229 policies are monthly), so this has zero current production impact, but
+  it's a real, confirmed bug that would bite the moment any tenant used yearly billing.
+- **Root cause, two bugs in `computePolicyPremium()` / `monthlyToScheduleFactor()`
+  (`server/route-helpers.ts`):**
+  1. The base-premium calculation only handled `"monthly"`, `"weekly"`, `"biweekly"` — any other
+     schedule (including `"yearly"`, the value actually used elsewhere, e.g. `cycleDays()` in
+     `policy-status-on-payment.ts`) left `base` at its initial value of `0`.
+  2. `monthlyToScheduleFactor()` (used for the extra-dependent surcharge) checked for
+     `"annually"` — a string that appears nowhere else as a real schedule value — instead of
+     `"yearly"`. So a yearly policy's surcharge silently used the factor-of-1 default (i.e.
+     computed as if monthly), undercharging by 12x on top of the missing base.
+  Also `product_versions` has no dedicated yearly/quarterly premium field at all (only
+  monthly/weekly/biweekly), confirming yearly pricing was never fully wired up end-to-end.
+- **Fix:** `monthlyToScheduleFactor` now matches `"yearly"` (keeping `"annually"` too, harmlessly,
+  in case anything else ever used that spelling). Base premium calculation now falls back to
+  `monthly rate × monthlyToScheduleFactor(schedule)` for any schedule without a dedicated field,
+  instead of silently leaving `base = 0`.
+- **Files:** `server/route-helpers.ts`.
+- **Verification:** Confirmed via live query that no current policy is exposed to this (100%
+  monthly). Typecheck + full test suite (179/179, including premium-calculation.test.ts) green.
+- **Lesson for next time:** when a schedule/enum-like string is checked in multiple files, grep
+  for every literal string used for that concept across the codebase before trusting any single
+  file's spelling — `"yearly"` vs `"annually"` for the same concept in two files is exactly the
+  kind of thing that looks like it works (both branches return a sensible-looking number) but
+  silently computes the wrong one.
+
+### ACID: group PayNow payment intent + allocations created as two separate, non-atomic writes
+
+- **Symptom:** not yet reported. A crash between creating a group payment intent and creating
+  its allocations would leave an intent with zero allocations — `applyGroupPaymentToPolicies`
+  bails out on an empty allocation list (`"No allocations"`), so if Paynow later reported that
+  intent as paid, there would be no way to ever apply the payment to any policy. Money collected,
+  nothing credited.
+- **Fix:** wrapped `POST /api/group-payment-intents`'s intent creation, allocation computation,
+  and allocation insert in one `withOrgTransaction`, writing directly via `txDb` instead of the
+  two separate `storage.createGroupPaymentIntent`/`storage.createGroupPaymentAllocations` calls
+  (same defeated-transaction shape as the other ACID entries in this log).
+- **Files:** `server/routes.ts`.
+- **Verification:** Typecheck + full test suite (179/179) green. The proportional-allocation-
+  with-remainder-correction math itself was already correct (verified by reading it) — only the
+  atomicity of persisting it was the bug.
+
 ### Registry/tenant user-id mismatch: scoped the blast radius, then swept the highest-value remaining sites
 
 - **Context:** earlier entries in this log fixed this bug (registry user id ≠ tenant-db user id

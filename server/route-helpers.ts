@@ -60,7 +60,10 @@ function monthlyToScheduleFactor(paymentSchedule: string): number {
   if (paymentSchedule === "weekly") return 12 / 52;
   if (paymentSchedule === "biweekly") return 12 / 26;
   if (paymentSchedule === "quarterly") return 3;
-  if (paymentSchedule === "annually") return 12;
+  // "yearly" is the value actually used elsewhere (policies.paymentSchedule, cycleDays() in
+  // policy-status-on-payment.ts) — "annually" was never a real value anywhere else, so it
+  // silently fell through to the factor-of-1 default, undercharging a yearly surcharge by 12x.
+  if (paymentSchedule === "yearly" || paymentSchedule === "annually") return 12;
   return 1;
 }
 
@@ -108,6 +111,12 @@ export async function computePolicyPremium(
     base = currency === "ZAR" ? parseFloat(String((pv as any).premiumWeeklyZar ?? 0)) : parseFloat(String(pv.premiumWeeklyUsd ?? 0));
   } else if (paymentSchedule === "biweekly") {
     base = currency === "ZAR" ? parseFloat(String((pv as any).premiumBiweeklyZar ?? 0)) : parseFloat(String(pv.premiumBiweeklyUsd ?? 0));
+  } else {
+    // No dedicated quarterly/yearly premium field exists on product_versions — derive from the
+    // monthly rate rather than silently leaving base at 0 for any schedule other than the three
+    // handled above (this previously zeroed out the entire base premium for "yearly" policies).
+    const monthly = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
+    base = monthly * monthlyToScheduleFactor(paymentSchedule);
   }
 
   let addOnTotal = 0;

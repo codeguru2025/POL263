@@ -62,6 +62,7 @@ import {
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, claimStatusHistory, policyStatusHistory, leads, branches, appReleases, waitingPeriodWaivers,
+  groupPaymentIntents, groupPaymentAllocations,
   paymentDisbursements, requisitions, expenditures,
 } from "@shared/schema";
 import { sql, eq, count, and, max } from "drizzle-orm";
@@ -4358,28 +4359,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const orgCode = (org?.name ?? "ORG").replace(/\s+/g, "").slice(0, 8).toUpperCase();
     const merchantReference = generateGroupMerchantReference(orgCode, groupId);
     const initiatedByResolved = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
-    const intent = await storage.createGroupPaymentIntent({
-      organizationId: user.organizationId,
-      groupId,
-      totalAmount: amountNum.toFixed(2),
-      currency: cur,
-      status: "created",
-      idempotencyKey,
-      merchantReference,
-      initiatedByUserId: initiatedByResolved ?? undefined,
+    // Intent + allocations must commit together — an intent with zero allocations can never be
+    // applied even after Paynow reports it paid (applyGroupPaymentToPolicies bails out on an
+    // empty allocation list), which would mean money collected with no way to credit it.
+    const intent = await withOrgTransaction(user.organizationId, async (txDb) => {
+      const [created] = await txDb.insert(groupPaymentIntents).values({
+        organizationId: user.organizationId,
+        groupId,
+        totalAmount: amountNum.toFixed(2),
+        currency: cur,
+        status: "created",
+        idempotencyKey,
+        merchantReference,
+        initiatedByUserId: initiatedByResolved ?? undefined,
+        updatedAt: new Date(),
+      }).returning();
+      const allocations = valid.map((p) => {
+        const premium = parseFloat(String(p.premiumAmount || 0));
+        const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
+        return { groupPaymentIntentId: created.id, policyId: p.id, amount, currency: cur };
+      });
+      const allocSum = allocations.reduce((s, a) => s + parseFloat(a.amount), 0);
+      const remainder = Math.round((amountNum - allocSum) * 100) / 100;
+      if (allocations.length > 0 && Math.abs(remainder) >= 0.01) {
+        const last = allocations[allocations.length - 1];
+        last.amount = (parseFloat(last.amount) + remainder).toFixed(2);
+      }
+      await txDb.insert(groupPaymentAllocations).values(allocations);
+      return created;
     });
-    const allocations = valid.map((p) => {
-      const premium = parseFloat(String(p.premiumAmount || 0));
-      const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
-      return { groupPaymentIntentId: intent.id, policyId: p.id, amount, currency: cur };
-    });
-    const allocSum = allocations.reduce((s, a) => s + parseFloat(a.amount), 0);
-    const remainder = Math.round((amountNum - allocSum) * 100) / 100;
-    if (allocations.length > 0 && Math.abs(remainder) >= 0.01) {
-      const last = allocations[allocations.length - 1];
-      last.amount = (parseFloat(last.amount) + remainder).toFixed(2);
-    }
-    await storage.createGroupPaymentAllocations(user.organizationId, allocations);
     return res.status(201).json(intent);
   });
 
