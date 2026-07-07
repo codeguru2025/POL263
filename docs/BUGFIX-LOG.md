@@ -10,6 +10,46 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-07 — legacy policy premiums silently reset to $0.00 after ad-hoc creation
+
+Symptom: 7 Legacy Individual policies created for real Falakhe clients (FLK00363–FLK00369) via
+a one-off data-entry script showed `premium_amount: "0.00"` when checked shortly after creation,
+despite the script inserting the correct premiums (250 ZAR, 11 USD, 290 ZAR, 8 USD, 20 USD,
+20 USD, 8 USD).
+
+Root cause: `recalculatePolicyPremiumIfNeeded()` (`server/routes.ts`, fires on every policies-list
+view) recomputes `premiumAmount` from the product's own catalog pricing *unless*
+`policy.premiumOverride` is set. LEGIND/LEGGRP always price at $0 from their own catalog — the
+real premium only exists because a human typed it in. The real `POST /api/policies` route knows
+this and sets both `premiumAmount` **and** `premiumOverride` (+`premiumOverrideNote`) for these
+two product codes specifically. The ad-hoc script replicated the rest of the creation/activation/
+payment flow faithfully but only set `premiumAmount`, so the very next policies-list view (by
+Falakhe staff, minutes later) zeroed all 7 premiums out — the same failure mode already called
+out in a comment on `recalculatePolicyPremiumIfNeeded` referencing a prior incident.
+
+Diagnosis took three increasingly faithful isolated reproductions (single create+activate,
+full payment flow, 3-record loop) that all succeeded with no corruption, ruling out the script's
+own transaction logic before a broad grep for `premiumAmount` writes surfaced the real culprit.
+
+Fix: ran a follow-up script calling `storage.updatePolicy(id, { premiumAmount, premiumOverride,
+premiumOverrideNote: "Legacy custom premium set at issuance" }, orgId)` for all 7 policies.
+Re-verified by direct query — all 7 now carry matching `premium_amount`/`premium_override`.
+Payment transactions and receipts (already inserted correctly in the original run) were
+unaffected, since that bug only touches the `policies` row.
+
+- **Files:** none (data-only incident; no application code changed — the bug was in a throwaway
+  script, not in `server/routes.ts`, which was already correct).
+- **Verification:** direct SQL query against Falakhe's dedicated DB confirming
+  `premium_amount = premium_override` for all 7 policies, matching intended values.
+- **Lesson for next time:** any script that creates a LEGIND/LEGGRP policy outside the real
+  `POST /api/policies` route (data backfills, migrations, support scripts) MUST set
+  `premiumOverride` (+`premiumOverrideNote`) alongside `premiumAmount`, not just `premiumAmount`
+  — grep `server/routes.ts` for `isCustomPremiumProduct` to see the exact fields the real route
+  sets before writing a replacement script. `createPolicyWithInitialSetup()` itself does not
+  protect against this; it inserts exactly what it's given.
+
+---
+
 ## 2026-07-07 — bug/edge-case sweep of the same-day requisition/cost-sheet/mileage linking
 
 Found by deliberately re-reviewing the linking features just built (requisitions <-> funeral
