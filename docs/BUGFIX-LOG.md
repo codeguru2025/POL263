@@ -137,6 +137,34 @@ convention" note in `CLAUDE.md`.
   the same script run, right before the null — don't trust "the insert succeeded" as proof the
   encrypted value is recoverable.
 
+### Data drift: control_plane.tenant_branding never received writes, so the platform dashboard showed stale/empty branding
+
+- **Symptom:** not directly reported, found during the same-day secrets audit. `GET
+  /api/organizations` (platform-owner path) and `GET /api/platform/dashboard` both read
+  branding (logo, colors, contact info, `isWhitelabeled`) from `control_plane.tenant_branding`,
+  but `PATCH /api/organizations/:id` only ever wrote branding fields to the shared
+  `organizations` table. Every org's `tenant_branding` row was either missing entirely or frozen
+  at whatever it was during initial (manual) tenant setup — any branding change made through the
+  app since then was invisible to the platform dashboard.
+- **Root cause:** two different tables were each treated as "the" source for the same data by
+  different read paths, and only one of them (`organizations`) ever got written to.
+  `organizations` remains correct as the source of truth the live app actually uses (PDFs,
+  receipts, `useBranding()`) — the bug was that the dashboard's mirror was never kept current.
+- **Fix:** `PATCH /api/organizations/:id` (`server/routes.ts`) now mirrors every branding field
+  write (`logoUrl`, `signatureUrl`, `primaryColor`, `footerText`, `address`, `phone`, `email`,
+  `website`, `policyNumberPrefix`, `policyNumberPadding`, `isWhitelabeled`) into
+  `control_plane.tenant_branding` (upsert) immediately after writing `organizations`.
+  `scripts/backfill-tenant-branding.mjs` (new, idempotent) synced the *current* state for all 7
+  existing orgs, since the drift already existed and waiting for the next edit per org wasn't
+  good enough.
+- **Files:** `server/routes.ts`, `scripts/backfill-tenant-branding.mjs` (new).
+- **Verification:** backfill ran clean (7 inserted, 0 skipped — every org already had the
+  control-plane `tenants` row needed for the FK). Typecheck + full test suite (179/179) green.
+- **Lesson for next time:** when two tables (or a table and a mirror/cache) can answer "what's
+  this tenant's branding," check whether *every* write path updates *every* read path's source —
+  a read/write path pair that looks symmetric (both reference "branding") can silently diverge if
+  one was added later and nobody wired the write side for it.
+
 ### ACID: 6 routes updated an entity's status and wrote its status-history row as two separate, non-atomic writes (one case: mixed-connection transaction that wasn't really atomic at all)
 
 - **Symptom:** not yet reported, found during audit. A crash/DB blip between the two writes

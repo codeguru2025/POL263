@@ -956,6 +956,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // the drizzle-orm version) since that table has no such columns.
     const PLATFORM_ONLY_ORG_FIELDS = new Set(["isWhitelabeled", "databaseUrl"]);
     const PLATFORM_ONLY_TENANT_FIELDS = new Set(["slug", "isActive", "licenseStatus"]);
+    // Mirrored into control_plane.tenant_branding after every write — see comment at the sync
+    // site below for why (drift bug: the platform dashboard reads branding from there).
+    const BRANDING_SYNC_FIELDS = new Set([
+      "logoUrl", "signatureUrl", "primaryColor", "footerText",
+      "address", "phone", "email", "website",
+      "policyNumberPrefix", "policyNumberPadding", "isWhitelabeled",
+    ]);
     const sanitizedOrg: Record<string, any> = {};
     const sanitizedTenant: Record<string, any> = {};
     const sanitizedPaynow: Record<string, any> = {};
@@ -977,6 +984,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = Object.keys(sanitizedOrg).length > 0 ? await storage.updateOrganization(id, sanitizedOrg as any) : before;
     if (Object.keys(sanitizedTenant).length > 0) {
       await cpDb.update(cpTenants).set(sanitizedTenant as any).where(eq(cpTenants.id, id));
+    }
+    // The shared organizations table remains the source of truth the live app reads for
+    // branding (PDFs, receipts, useBranding()). control_plane.tenant_branding is a read-only
+    // mirror used only by the platform-owner dashboard list (GET /api/organizations,
+    // GET /api/platform/dashboard) — without this sync it silently drifted stale, since
+    // nothing ever wrote to it after the initial (manual) setup.
+    const brandingPatch: Record<string, any> = {};
+    for (const key of Object.keys(sanitizedOrg)) {
+      if (BRANDING_SYNC_FIELDS.has(key)) brandingPatch[key] = sanitizedOrg[key];
+    }
+    if (Object.keys(brandingPatch).length > 0) {
+      const [existingBranding] = await cpDb
+        .select({ tenantId: cpTenantBranding.tenantId })
+        .from(cpTenantBranding)
+        .where(eq(cpTenantBranding.tenantId, id))
+        .limit(1);
+      if (existingBranding) {
+        await cpDb.update(cpTenantBranding).set({ ...brandingPatch, updatedAt: new Date() }).where(eq(cpTenantBranding.tenantId, id));
+      } else {
+        await cpDb.insert(cpTenantBranding).values({ tenantId: id, ...brandingPatch });
+      }
     }
     if (Object.keys(sanitizedPaynow).length > 0) {
       await upsertOrgPaynowConfig(id, {
