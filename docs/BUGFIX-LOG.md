@@ -97,6 +97,46 @@ convention" note in `CLAUDE.md`.
   narrower workflows less likely to be personally exercised by the platform owner — fix
   opportunistically if one of them throws.
 
+### Security: Paynow merchant credentials stored as plaintext on the shared, multi-tenant DB
+
+- **Context:** surfaced while diagnosing a live Paynow failure for Falakhe (see the same-day
+  incident: Falakhe's Paynow account was stuck in test mode on Paynow's own servers — an
+  external, account-activation issue, not a code bug). While investigating, confirmed
+  `organizations.paynow_integration_key` (and every tenant's Paynow credentials) was plaintext
+  on the **shared** registry database that every tenant's rows live in — a DB-level compromise or
+  an over-privileged query on any one tenant's data would have exposed every other tenant's live
+  payment-gateway credentials. A separate control-plane DB and an AES-256-GCM encryption key
+  (`TENANT_CONFIG_ENCRYPTION_KEY`) already existed (fully provisioned) but were never wired into
+  any application code — `tenant_integrations` had zero references outside its schema file.
+- **Fix:**
+  1. `server/tenant-config-crypto.ts` (new) — AES-256-GCM `encryptSecret`/`decryptSecret`/
+     `encryptFields`/`decryptFields`, 12-byte IV, auth-tag tamper detection.
+  2. `server/paynow-config.ts`'s `getOrgPaynowConfig()` now reads `control_plane.tenant_integrations`
+     (provider `"paynow"`) first, decrypting `integrationKey`, and only falls back to the legacy
+     `organizations.paynow_*` columns for an org not yet migrated (or if the control-plane query
+     itself fails — logged, not silently swallowed). New `upsertOrgPaynowConfig()` writes there.
+  3. `PATCH /api/organizations/:id` (`server/routes.ts`) now routes the six `paynow*` fields to
+     `upsertOrgPaynowConfig()` instead of the shared `organizations` table, and the audit-log
+     before/after snapshots for this route now strip `paynowIntegrationKey` so the plaintext key
+     never lands in `audit_logs` either (a second, smaller instance of the same class of leak).
+  4. `scripts/migrate-paynow-config-to-control-plane.mjs` (new, `--apply`/`--null-legacy` flags,
+     dry-run by default) — moved Falakhe's existing plaintext config into an encrypted
+     `tenant_integrations` row, verified the round-trip decrypts to the exact original key, then
+     nulled `organizations.paynow_*` for Falakhe. Zero other orgs had Paynow configured yet.
+- **Files:** `server/tenant-config-crypto.ts` (new), `server/paynow-config.ts`, `server/routes.ts`,
+  `scripts/migrate-paynow-config-to-control-plane.mjs` (new).
+- **Verification:** live round-trip check — after nulling Falakhe's legacy columns,
+  `getOrgPaynowConfig(FALAKHE_ORG_ID)` still resolved the exact original `integrationId`,
+  decrypted `integrationKey`, and `mode: "live"` purely from the control plane. Typecheck + full
+  test suite (179/179, after adding `vi.mock("../../server/control-plane-db", ...)` to
+  `payment-service.test.ts`/`paynow-hash.test.ts`, which now transitively import it) green.
+- **Lesson for next time:** "we already built the secure infrastructure" and "the app actually
+  uses it" are different claims — grep for real references (not just the schema/type definition)
+  before assuming a security control is live. Also: when nulling out a legacy plaintext copy of a
+  secret after migrating it, verify the *decrypted* new copy equals the *original* plaintext in
+  the same script run, right before the null — don't trust "the insert succeeded" as proof the
+  encrypted value is recoverable.
+
 ### ACID: 6 routes updated an entity's status and wrote its status-history row as two separate, non-atomic writes (one case: mixed-connection transaction that wasn't really atomic at all)
 
 - **Symptom:** not yet reported, found during audit. A crash/DB blip between the two writes

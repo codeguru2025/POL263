@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../server/db", () => ({ pool: {}, db: {} }));
 vi.mock("../../server/storage", () => ({ storage: {} }));
+vi.mock("../../server/control-plane-db", () => ({ cpDb: {} }));
 
 import { verifyPaynowHash, generatePaynowHash } from "../../server/paynow-hash";
 

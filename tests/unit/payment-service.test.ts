@@ -4,6 +4,7 @@ vi.mock("../../server/db", () => ({
   db: {},
   pool: { query: vi.fn() },
 }));
+vi.mock("../../server/control-plane-db", () => ({ cpDb: {} }));
 
 let insertCallCount = 0;
 const txInsertData: Record<string, any>[] = [];

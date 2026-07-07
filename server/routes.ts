@@ -32,7 +32,7 @@ import { registerFinanceFormRoutes } from "./routes-pdf-finance";
 import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import * as objectStorage from "./object-storage";
-import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
+import { getPaynowConfig, getOrgPaynowConfig, upsertOrgPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS, ROLE_PERMISSION_MAP } from "./constants";
 import { cpDb } from "./control-plane-db";
@@ -941,6 +941,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const TENANT_WRITE_FIELDS = new Set([
       "name", "address", "phone", "email", "website", "logoUrl", "signatureUrl", "primaryColor",
       "footerText", "policyNumberPrefix", "policyNumberPadding",
+    ]);
+    // Paynow credentials are no longer written to the organizations table — they live
+    // encrypted in control_plane.tenant_integrations (see upsertOrgPaynowConfig). Kept as a
+    // separate field set so the write path (and permission model — same TENANT_WRITE_FIELDS
+    // permission, no platform-owner gate) stays identical to before the migration.
+    const PAYNOW_INTEGRATION_FIELDS = new Set([
       "paynowIntegrationId", "paynowIntegrationKey", "paynowAuthEmail",
       "paynowReturnUrl", "paynowResultUrl", "paynowMode",
     ]);
@@ -952,23 +958,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const PLATFORM_ONLY_TENANT_FIELDS = new Set(["slug", "isActive", "licenseStatus"]);
     const sanitizedOrg: Record<string, any> = {};
     const sanitizedTenant: Record<string, any> = {};
+    const sanitizedPaynow: Record<string, any> = {};
     for (const [key, value] of Object.entries(req.body)) {
-      if (TENANT_WRITE_FIELDS.has(key)) sanitizedOrg[key] = value;
+      if (PAYNOW_INTEGRATION_FIELDS.has(key)) sanitizedPaynow[key] = value;
+      else if (TENANT_WRITE_FIELDS.has(key)) sanitizedOrg[key] = value;
       else if (isPlatformOwner && PLATFORM_ONLY_ORG_FIELDS.has(key)) sanitizedOrg[key] = value;
       else if (isPlatformOwner && PLATFORM_ONLY_TENANT_FIELDS.has(key)) sanitizedTenant[key] = value;
     }
     // Narrow paynowMode to the literal union the schema expects
-    if (sanitizedOrg.paynowMode !== undefined && sanitizedOrg.paynowMode !== "test" && sanitizedOrg.paynowMode !== "live") {
-      delete sanitizedOrg.paynowMode;
+    if (sanitizedPaynow.paynowMode !== undefined && sanitizedPaynow.paynowMode !== "test" && sanitizedPaynow.paynowMode !== "live") {
+      delete sanitizedPaynow.paynowMode;
     }
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
-    if (Object.keys(sanitizedOrg).length === 0 && Object.keys(sanitizedTenant).length === 0) return res.json(before);
+    if (Object.keys(sanitizedOrg).length === 0 && Object.keys(sanitizedTenant).length === 0 && Object.keys(sanitizedPaynow).length === 0) {
+      return res.json(before);
+    }
     const updated = Object.keys(sanitizedOrg).length > 0 ? await storage.updateOrganization(id, sanitizedOrg as any) : before;
     if (Object.keys(sanitizedTenant).length > 0) {
       await cpDb.update(cpTenants).set(sanitizedTenant as any).where(eq(cpTenants.id, id));
     }
-    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, { ...updated, ...sanitizedTenant }, id);
+    if (Object.keys(sanitizedPaynow).length > 0) {
+      await upsertOrgPaynowConfig(id, {
+        integrationId: sanitizedPaynow.paynowIntegrationId,
+        integrationKey: sanitizedPaynow.paynowIntegrationKey,
+        authEmail: sanitizedPaynow.paynowAuthEmail,
+        returnUrl: sanitizedPaynow.paynowReturnUrl,
+        resultUrl: sanitizedPaynow.paynowResultUrl,
+        mode: sanitizedPaynow.paynowMode,
+      });
+    }
+    // Never persist plaintext Paynow keys into the audit trail.
+    const { paynowIntegrationKey: _bpik, ...beforeForAudit } = before as any;
+    const afterMerged = { ...updated, ...sanitizedTenant, paynowConfigChanged: Object.keys(sanitizedPaynow).length > 0 ? true : undefined };
+    const { paynowIntegrationKey: _apik, ...afterForAudit } = afterMerged as any;
+    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, beforeForAudit, afterForAudit, id);
     const { paynowIntegrationKey: _upik, databaseUrl: _udu, paynowAuthEmail: _upae, ...safeUpdatedOrg } = (updated || {}) as any;
     return res.json(isPlatformOwner ? { ...updated, ...sanitizedTenant } : safeUpdatedOrg);
   });
