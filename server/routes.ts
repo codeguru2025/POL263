@@ -2793,7 +2793,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "currency", "paymentSchedule", "effectiveDate", "branchId", "agentId", "groupId",
       "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryRelationship",
       "beneficiaryNationalId", "beneficiaryPhone", "beneficiaryDependentId",
-      "isSouthAfrica",
+      "isSouthAfrica", "externalReference",
       ...(canEditPremium ? ["inceptionDate", "waitingPeriodEndDate", "cancelReason", "status"] : []),
     ]);
     const sanitized: Record<string, any> = {};

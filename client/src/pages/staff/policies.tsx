@@ -178,6 +178,7 @@ export default function StaffPolicies() {
     premiumChangeReason: "",
     isLegacy: false,
     isSouthAfrica: false,
+    externalReference: "",
   });
 
   const [editMemberOpen, setEditMemberOpen] = useState(false);
@@ -207,6 +208,7 @@ export default function StaffPolicies() {
     newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", physicalAddress: "", postalAddress: "" },
     isLegacy: false,
     isSouthAfrica: false,
+    externalReference: "",
   });
   const [createStep, setCreateStep] = useState(1);
   const [clientMode, setClientMode] = useState<"search" | "new">("search");
@@ -835,6 +837,7 @@ export default function StaffPolicies() {
           beneficiary,
           isLegacy: data.isLegacy || undefined,
           isSouthAfrica: (data as any).isSouthAfrica || undefined,
+          externalReference: (data as any).externalReference?.trim() || undefined,
         });
         return res.json();
       } catch (err) {
@@ -873,6 +876,7 @@ export default function StaffPolicies() {
         newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", physicalAddress: "", postalAddress: "" },
         isLegacy: false,
         isSouthAfrica: false,
+        externalReference: "",
       });
       toast({ title: "Policy created", description: policy.isLegacy ? `Policy ${policy.policyNumber} has been created and auto-activated as a legacy policy.` : `Policy ${policy.policyNumber} has been created in inactive status.` });
     },
@@ -1062,6 +1066,7 @@ export default function StaffPolicies() {
       premiumChangeReason: "",
       isLegacy: !!policy.isLegacy,
       isSouthAfrica: !!policy.isSouthAfrica,
+      externalReference: policy.externalReference || "",
     });
     setShowEditDialog(true);
   };
@@ -1093,6 +1098,7 @@ export default function StaffPolicies() {
     }
     if (canEditPremium && editForm.isLegacy !== !!displayPolicy.isLegacy) data.isLegacy = editForm.isLegacy;
     if (editForm.isSouthAfrica !== !!displayPolicy.isSouthAfrica) data.isSouthAfrica = editForm.isSouthAfrica;
+    if (editForm.externalReference !== (displayPolicy.externalReference || "")) data.externalReference = editForm.externalReference.trim() || null;
     if (Object.keys(data).length === 0) {
       setShowEditDialog(false);
       return;
@@ -1423,6 +1429,9 @@ export default function StaffPolicies() {
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Policy</p>
                   <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight break-words tabular-nums" data-testid="text-policy-number">{displayPolicy.policyNumber}</h1>
                   <p className="text-muted-foreground mt-1 text-sm leading-relaxed max-w-2xl">Holder, cover, lifecycle, and ledger — structured for quick scanning.</p>
+                  {displayPolicy.isSouthAfrica && displayPolicy.externalReference && (
+                    <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-external-reference">RSA reference: <span className="font-medium text-foreground">{displayPolicy.externalReference}</span></p>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0" data-testid="badge-policy-status">
@@ -2836,6 +2845,17 @@ export default function StaffPolicies() {
                   <p className="text-xs text-muted-foreground">Client is based in South Africa. Leave unchecked for Zimbabwe-based policies.</p>
                 </div>
               </div>
+              {editForm.isSouthAfrica && (
+                <div>
+                  <Label className="text-xs">RSA Policy Number / Reference</Label>
+                  <Input
+                    value={editForm.externalReference}
+                    onChange={(e) => setEditForm({ ...editForm, externalReference: e.target.value })}
+                    placeholder="e.g. the South Africa branch's own policy number"
+                    data-testid="input-edit-external-reference"
+                  />
+                </div>
+              )}
 
               <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
                 <strong>Note:</strong> {canEditPremium
@@ -4343,6 +4363,17 @@ export default function StaffPolicies() {
                     <p className="text-xs text-muted-foreground">Client is based in South Africa (currency alone doesn't always indicate this — some SA clients pay in USD). Leave unchecked for Zimbabwe-based policies.</p>
                   </div>
                 </div>
+                {createForm.isSouthAfrica && (
+                  <div>
+                    <Label>RSA Policy Number / Reference</Label>
+                    <Input
+                      value={createForm.externalReference}
+                      onChange={(e) => setCreateForm({ ...createForm, externalReference: e.target.value })}
+                      placeholder="e.g. the South Africa branch's own policy number"
+                      data-testid="input-external-reference"
+                    />
+                  </div>
+                )}
                 <div className="space-y-3 border rounded-md p-3">
                   <p className="text-sm font-medium">Saved mobile wallet (automation)</p>
                   <p className="text-xs text-muted-foreground">When automation runs for overdue balances, we use this number so the client can approve on their phone. Stored cards are not used for recurring collection.</p>
