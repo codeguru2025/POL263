@@ -119,6 +119,16 @@ export async function createPaymentIntent(input: CreateIntentInput): Promise<{
   if (!Number.isFinite(amountNum) || amountNum <= 0) {
     return { intent: null as any, created: false, error: "Amount must be greater than zero" };
   }
+  // Paynow's initiate/remote transaction API has no currency field at all (see
+  // buildInitParams/buildRemoteParams below) — it processes the bare amount in whatever single
+  // currency the merchant account itself is configured for (USD, for every Zimbabwean Paynow
+  // integration this app uses). Silently letting a ZAR (or any non-USD) intent reach Paynow
+  // would charge the client that numeric amount in USD instead — e.g. a ZAR 140 premium would
+  // become a USD 140 charge, roughly a 20x overcharge. Block it here, before a merchant
+  // reference is even generated, rather than let it fail confusingly at the gateway.
+  if (currency.toUpperCase() !== "USD") {
+    return { intent: null as any, created: false, error: `Paynow only processes USD — this payment is ${currency}. Collect it via cash, EFT, or another method instead.` };
+  }
 
   const existing = await storage.getPaymentIntentByOrgAndIdempotencyKey(organizationId, idempotencyKey);
   if (existing) {

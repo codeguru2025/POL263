@@ -4352,6 +4352,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "totalAmount must be greater than zero" });
     }
     const cur = currency || "USD";
+    // Paynow's API has no currency field — see the matching guard/comment in
+    // createPaymentIntent (server/payment-service.ts) for why non-USD must be blocked here too.
+    if (cur.toUpperCase() !== "USD") {
+      return res.status(400).json({ message: `Paynow only processes USD — this group payment is ${cur}. Collect it via cash, EFT, or another method instead.` });
+    }
     const idempotencyKey = clientKey || `grp-${groupId}-${amountNum.toFixed(2)}-${valid.map((p) => p.id).sort().join(",")}`;
     const existing = await storage.getGroupPaymentIntentByOrgAndIdempotencyKey(user.organizationId, idempotencyKey);
     if (existing) return res.json(existing);
