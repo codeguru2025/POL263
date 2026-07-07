@@ -1133,8 +1133,10 @@ function CaseDetailView({
           </div>
         </CardSection>
 
-        {/* Vehicle trips & mileage — one trip log per vehicle (removal + burial) */}
-        {(fc.removalVehicleId || fc.burialVehicleId) && (
+        {/* Vehicle trips & mileage — one trip log per vehicle (removal + burial). Also shown
+            when there are no vehicles currently assigned but a trip log still exists from
+            before a reassignment, so it stays visible and closeable. */}
+        {(fc.removalVehicleId || fc.burialVehicleId || (vehicleTrips || []).length > 0) && (
           <CardSection title="Vehicle Trips & Mileage" icon={Car}>
             <div className="space-y-3">
               {[
@@ -1176,6 +1178,37 @@ function CaseDetailView({
                   </div>
                 );
               })}
+              {/* Trips left over from a vehicle that was later swapped off this case — still
+                  shown (and still closeable) so a reassignment can never leave an invisible
+                  open trip permanently blocking case completion. */}
+              {(vehicleTrips || [])
+                .filter((t: any) => t.vehicleId !== fc.removalVehicleId && t.vehicleId !== fc.burialVehicleId)
+                .map((trip: any) => (
+                  <div key={trip.id} className="border rounded-lg p-3 border-amber-300/50">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Reassigned Vehicle (no longer on this case)</p>
+                        <p className="text-sm font-medium">{vehicleLabel(trip.vehicleId)}</p>
+                      </div>
+                      {trip.endOdometer == null && (
+                        <Button size="sm" onClick={() => { setEndTripFor(trip); setTripOdometer(""); }} data-testid={`button-end-trip-orphaned-${trip.id}`}>
+                          End Trip
+                        </Button>
+                      )}
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground space-y-0.5">
+                      <div>Start odometer: {trip.startOdometer} km</div>
+                      {trip.endOdometer != null ? (
+                        <>
+                          <div>End odometer: {trip.endOdometer} km</div>
+                          <div className="font-medium text-foreground">Distance: {trip.distanceKm} km</div>
+                        </>
+                      ) : (
+                        <div className="text-amber-600 font-medium">Trip open — closing mileage not yet recorded</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
             </div>
           </CardSection>
         )}

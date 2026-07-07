@@ -518,9 +518,10 @@ export default function StaffPriceBook() {
           onSubmit={(data) => addLineItemMut.mutate(data)}
           isPending={addLineItemMut.isPending}
           priceBookItems={priceBookItems}
-          requisitions={selectedSheet?.funeralCaseId
+          requisitions={(selectedSheet?.funeralCaseId
             ? requisitions.filter((r: any) => r.funeralCaseId === selectedSheet.funeralCaseId)
-            : requisitions}
+            : requisitions
+          ).filter((r: any) => r.status === "paid" && !lineItems.some((li) => li.requisitionId === r.id))}
         />
       )}
     </StaffLayout>

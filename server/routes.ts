@@ -5135,20 +5135,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (openTrip) {
       return res.status(409).json({ message: "This vehicle already has an open trip for this case — close it before starting a new one.", trip: openTrip });
     }
-    const created = await storage.createVehicleTripLog({
-      organizationId: user.organizationId,
-      vehicleId,
-      driverId: typeof req.body.driverId === "string" && req.body.driverId ? req.body.driverId : null,
-      funeralCaseId: caseId,
-      tripDate: req.body.tripDate || new Date().toISOString().slice(0, 10),
-      purpose: typeof req.body.purpose === "string" ? req.body.purpose : null,
-      startLocation: typeof req.body.startLocation === "string" ? req.body.startLocation : null,
-      destination: typeof req.body.destination === "string" ? req.body.destination : null,
-      startOdometer: Math.round(startOdometer),
-      timeDeparted: typeof req.body.timeDeparted === "string" ? req.body.timeDeparted : null,
-    });
-    await auditLog(req, "START_VEHICLE_TRIP", "VehicleTripLog", created.id, null, created);
-    return res.status(201).json(created);
+    try {
+      const created = await storage.createVehicleTripLog({
+        organizationId: user.organizationId,
+        vehicleId,
+        driverId: typeof req.body.driverId === "string" && req.body.driverId ? req.body.driverId : null,
+        funeralCaseId: caseId,
+        tripDate: req.body.tripDate || new Date().toISOString().slice(0, 10),
+        purpose: typeof req.body.purpose === "string" ? req.body.purpose : null,
+        startLocation: typeof req.body.startLocation === "string" ? req.body.startLocation : null,
+        destination: typeof req.body.destination === "string" ? req.body.destination : null,
+        startOdometer: Math.round(startOdometer),
+        timeDeparted: typeof req.body.timeDeparted === "string" ? req.body.timeDeparted : null,
+      });
+      await auditLog(req, "START_VEHICLE_TRIP", "VehicleTripLog", created.id, null, created);
+      return res.status(201).json(created);
+    } catch (err: any) {
+      // Postgres unique-violation (23505) — the app-level openTrip check above has a race
+      // window between two concurrent "Start Trip" clicks; the DB constraint (vtl_one_open_
+      // per_vehicle_case_idx) is the real guard.
+      if (err?.code === "23505") {
+        return res.status(409).json({ message: "This vehicle already has an open trip for this case — close it before starting a new one." });
+      }
+      throw err;
+    }
   });
 
   app.patch("/api/vehicle-trips/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
@@ -6296,6 +6306,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes", "neededByDate"]) {
         if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
       }
+      // Editing the amount on an already fully-paid requisition (platform owner correcting a
+      // historical entry) must keep amountPaid consistent, or the requisition silently looks
+      // "partially paid" against its new amount even though it was paid in full at the time.
+      // Only auto-sync when it was fully paid before — a genuine partial payment is real
+      // history and shouldn't be silently overwritten by an amount correction.
+      if (patch.amount !== undefined && existing.status === "paid" && Number(existing.amountPaid) === Number(existing.amount)) {
+        patch.amountPaid = patch.amount;
+      }
       if (req.body.funeralCaseId !== undefined) {
         if (!req.body.funeralCaseId) {
           patch.funeralCaseId = null;
@@ -6380,6 +6398,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "DELETE_REQUISITION", "Requisition", id, { ...existing, disbursements: deletedDisbursements }, null);
       return res.status(204).end();
     } catch (err: any) {
+      // Postgres FK violation (23503) — most likely a cost-sheet line item still references
+      // this requisition (see cost_line_items.requisition_id). Give a clear, actionable message
+      // instead of a bare 500.
+      if (err?.code === "23503") {
+        return res.status(409).json({ message: "This requisition is still linked to a cost sheet line item — remove that link before deleting." });
+      }
       structuredLog("error", "DELETE /api/requisitions/:id failed", { error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
@@ -6931,8 +6955,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     // Costs: requisitions raised directly against this case, excluding ones already
     // represented by a cost-sheet line item (avoids double-counting the same spend).
-    const caseRequisitions = await storage.getRequisitions(user.organizationId, {});
-    const directRequisitions = caseRequisitions.filter((r) => r.funeralCaseId === caseId && r.status === "paid" && !requisitionIdsInCostSheets.has(r.id));
+    const caseRequisitions = await storage.getRequisitions(user.organizationId, { funeralCaseId: caseId });
+    const directRequisitions = caseRequisitions.filter((r) => r.status === "paid" && !requisitionIdsInCostSheets.has(r.id));
     const requisitionsByCurrency: Record<string, number> = {};
     for (const r of directRequisitions) {
       addToCurrencyMap(requisitionsByCurrency, r.currency, Number(r.amountPaid || r.amount));
@@ -8159,15 +8183,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const costSheetId = String(req.params.id);
     const body = { ...req.body, costSheetId };
     // When a line represents an actual paid cost (not a price-book estimate), validate the
-    // requisition belongs to this org before linking, and default amounts from its real spend.
+    // requisition belongs to this org and is actually paid before linking — an unpaid (or
+    // rejected) requisition represents no real cash outflow yet, and linking it would make
+    // the per-case profit/loss report overstate costs that were never actually incurred.
     if (typeof body.requisitionId === "string" && body.requisitionId) {
       const linkedReq = await storage.getRequisition(body.requisitionId, user.organizationId);
-      if (linkedReq) {
+      const alreadyLinked = linkedReq ? await storage.getCostLineItemByRequisitionId(linkedReq.id, user.organizationId) : undefined;
+      if (alreadyLinked) {
+        return res.status(409).json({ message: `Requisition ${linkedReq!.requisitionNumber} is already linked to another cost sheet line item.` });
+      }
+      if (linkedReq && linkedReq.status === "paid") {
         body.requisitionId = linkedReq.id;
-        if (body.unitPrice === undefined || body.unitPrice === "") body.unitPrice = linkedReq.amount;
-        if (body.totalPrice === undefined || body.totalPrice === "") body.totalPrice = linkedReq.amount;
+        if (body.unitPrice === undefined || body.unitPrice === "") body.unitPrice = linkedReq.amountPaid || linkedReq.amount;
+        if (body.totalPrice === undefined || body.totalPrice === "") body.totalPrice = linkedReq.amountPaid || linkedReq.amount;
         if (!body.description) body.description = linkedReq.description;
       } else {
+        if (linkedReq) {
+          return res.status(422).json({ message: `Requisition ${linkedReq.requisitionNumber} is not yet paid (status: ${linkedReq.status}) — only paid requisitions can be linked as an actual cost.` });
+        }
         body.requisitionId = null;
       }
     }

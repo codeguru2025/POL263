@@ -10,6 +10,52 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-07 — bug/edge-case sweep of the same-day requisition/cost-sheet/mileage linking
+
+Found by deliberately re-reviewing the linking features just built (requisitions <-> funeral
+cases, cost sheets <-> requisitions, vehicle trip logs) for correctness gaps, not from a user
+report. All six are fixed.
+
+1. **Unpaid/rejected requisitions could be linked into a cost sheet as an "actual" cost.** The
+   picker showed every requisition regardless of status, and the backend never checked it either
+   — a draft or rejected requisition (no real cash spent) could inflate the per-case profit/loss
+   report as if it were a real cost. Fixed: picker now only lists `status === "paid"` requisitions
+   (`client/src/pages/staff/pricebook.tsx`); backend rejects linking anything else with a clear
+   422 (`server/routes.ts`).
+2. **The same requisition could be linked into two different cost-sheet lines**, double-counting
+   one real expense in the profit/loss total. Fixed: picker excludes requisitions already used on
+   the open sheet; backend added `getCostLineItemByRequisitionId` and rejects a second link
+   org-wide with a 409.
+3. **Editing `amount` on an already fully-paid requisition (platform-owner correction) left
+   `amountPaid` stale**, making a fully-paid historical entry display as "partial" against its
+   new amount. Fixed: the edit path now syncs `amountPaid` to the new amount when the requisition
+   was previously fully paid (not touched for genuine partial-payment history).
+4. **Deleting a requisition still linked to a cost-sheet line item raised a bare 500** (Postgres
+   FK violation code 23503) instead of a clear message. Fixed: caught specifically and returned a
+   409 telling the user to unlink it first.
+5. **TOCTOU race on "Start Trip"**: the app-level "is there already an open trip for this
+   vehicle+case" check had a window between two rapid clicks/requests where both could pass the
+   check and insert. Fixed: added a partial unique index (migration 0062,
+   `vtl_one_open_per_vehicle_case_idx` on `(vehicle_id, funeral_case_id) WHERE end_odometer IS
+   NULL`) as the real guard, with the route translating the resulting 23505 into the same
+   friendly 409 the app-level check already returned.
+6. **Reassigning a case's removal/burial vehicle mid-workflow could orphan an open trip log** —
+   the Vehicle Trips UI only rendered rows for the *currently* assigned vehicles, so a trip
+   started under a vehicle that was later swapped off the case became invisible, yet still
+   counted as "open" by the case-completion gate — permanently blocking completion with no way
+   to see or close the offending trip. Fixed: the UI now also lists any trip whose vehicle no
+   longer matches the case's current assignment, labeled "Reassigned Vehicle," still closeable.
+- **Files:** `client/src/pages/staff/pricebook.tsx`, `client/src/pages/staff/funerals.tsx`,
+  `server/routes.ts`, `server/storage.ts`, `migrations/0062_vehicle_trip_one_open_per_vehicle_case.sql`.
+- **Verification:** typecheck + full test suite (179/179) green after each fix.
+- **Lesson for next time:** when a new feature links table A to table B for a downstream report
+  (here: profit/loss), check both directions of staleness — can B change status *after* linking
+  (unpaid → never paid, or paid → edited) in a way the report doesn't notice, and can the same B
+  row be linked from two different A rows. Both are easy to miss because the happy-path linking
+  flow looks correct in isolation.
+
+---
+
 ## 2026-07-07 — requisitions showing "Unknown" requester for the platform owner on a dedicated-DB tenant
 
 - **Symptom:** user reported requisitions paid "yesterday" by Augustus (the platform owner)

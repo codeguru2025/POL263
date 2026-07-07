@@ -4373,12 +4373,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Finance: requisitions ──
-  async getRequisitions(orgId: string, filters?: { status?: string; fromDate?: string; toDate?: string }): Promise<Requisition[]> {
+  async getRequisitions(orgId: string, filters?: { status?: string; fromDate?: string; toDate?: string; funeralCaseId?: string }): Promise<Requisition[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions: any[] = [eq(requisitions.organizationId, orgId)];
     if (filters?.status) conditions.push(eq(requisitions.status, filters.status));
     if (filters?.fromDate) conditions.push(gte(requisitions.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(requisitions.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.funeralCaseId) conditions.push(eq(requisitions.funeralCaseId, filters.funeralCaseId));
     return tdb.select().from(requisitions).where(and(...conditions)).orderBy(desc(requisitions.createdAt));
   }
   async getRequisition(id: string, orgId: string): Promise<Requisition | undefined> {
@@ -5318,6 +5319,13 @@ export class DatabaseStorage implements IStorage {
   async getCostLineItems(costSheetId: string, orgId: string): Promise<any[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(costLineItems).where(eq(costLineItems.costSheetId, costSheetId));
+  }
+  /** Any existing cost-line-item already linked to this requisition, org-wide — used to stop
+   *  the same real cost being pulled into two different cost-sheet lines (double counting). */
+  async getCostLineItemByRequisitionId(requisitionId: string, orgId: string): Promise<any | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(costLineItems).where(eq(costLineItems.requisitionId, requisitionId)).limit(1);
+    return row;
   }
   async createCostLineItem(data: any): Promise<any> {
     const orgs = await db.select({ id: organizations.id }).from(organizations);
