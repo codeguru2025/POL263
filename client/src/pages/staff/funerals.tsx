@@ -920,7 +920,7 @@ export default function StaffFunerals() {
             deceasedSex: (selectedCase.deceasedGender || "").toLowerCase(),
           } : undefined)}
           initialItems={caseQuotation?.items?.length
-            ? caseQuotation.items.map((i: any) => ({ description: i.description, qty: String(i.quantity ?? "1"), unitPrice: String(i.unitPrice ?? "") }))
+            ? caseQuotation.items.map((i: any) => ({ description: i.description, qty: String(i.quantity ?? "1"), unitPrice: String(i.unitPrice ?? ""), priceBookItemId: i.priceBookItemId ?? null }))
             : undefined}
           onSuccess={() => queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/quotation`] })}
         />

@@ -1694,13 +1694,16 @@ export const costLineItems = pgTable(
       .notNull()
       .references(() => costSheets.id),
     priceBookItemId: uuid("price_book_item_id").references(() => priceBookItems.id),
+    // When set, this line represents an *actual* paid cost (from a real requisition) rather
+    // than a price-book estimate — used so per-case profit/loss reflects real spend.
+    requisitionId: uuid("requisition_id").references(() => requisitions.id),
     description: text("description").notNull(),
     quantity: numeric("quantity").default("1").notNull(),
     unitPrice: numeric("unit_price").notNull(),
     totalPrice: numeric("total_price").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("cli_sheet_idx").on(t.costSheetId)]
+  (t) => [index("cli_sheet_idx").on(t.costSheetId), index("cli_requisition_idx").on(t.requisitionId)]
 );
 
 // ─── COMMISSIONS ────────────────────────────────────────────
@@ -2187,11 +2190,13 @@ export const requisitions = pgTable(
     approverNotes: text("approver_notes"),
     department: text("department"), // classification for departmental spend reporting
     costFlag: text("cost_flag"), // e.g. 'CEO_PERSONAL' | 'SOUTH_AFRICA' — special cost-center tagging
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id), // ties the spend to a case for per-case profit/loss
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
     index("req_org_idx").on(t.organizationId),
     index("req_status_idx").on(t.status),
+    index("req_case_idx").on(t.funeralCaseId),
     uniqueIndex("req_number_org_idx").on(t.organizationId, t.requisitionNumber),
   ]
 );

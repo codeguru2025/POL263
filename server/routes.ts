@@ -6077,6 +6077,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           requestedBy = await resolveOrSyncTenantUserId(user.organizationId, req.body.requestedByUserId);
         }
       }
+      // Optional link to the funeral case this spend was raised for (per-case profit/loss).
+      let funeralCaseId: string | null = null;
+      if (typeof req.body.funeralCaseId === "string" && req.body.funeralCaseId) {
+        const linkedCase = await storage.getFuneralCase(req.body.funeralCaseId, user.organizationId);
+        if (linkedCase) funeralCaseId = linkedCase.id;
+      }
       const parsed = insertRequisitionSchema.parse({
         ...req.body,
         amount,
@@ -6084,6 +6090,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         requisitionNumber,
         raisedDate: req.body.raisedDate || new Date().toISOString().slice(0, 10),
         requestedBy,
+        funeralCaseId,
         status: submit ? "submitted" : "draft",
         neededByDate: req.body.neededByDate || null,
         approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
@@ -6212,6 +6219,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes", "neededByDate"]) {
         if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
+      }
+      if (req.body.funeralCaseId !== undefined) {
+        if (!req.body.funeralCaseId) {
+          patch.funeralCaseId = null;
+        } else {
+          const linkedCase = await storage.getFuneralCase(String(req.body.funeralCaseId), user.organizationId);
+          if (linkedCase) patch.funeralCaseId = linkedCase.id;
+        }
       }
     }
 
@@ -7991,8 +8006,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/cost-sheets/:id/items", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
     const costSheetId = String(req.params.id);
-    const item = await storage.createCostLineItem({ ...req.body, costSheetId });
+    const body = { ...req.body, costSheetId };
+    // When a line represents an actual paid cost (not a price-book estimate), validate the
+    // requisition belongs to this org before linking, and default amounts from its real spend.
+    if (typeof body.requisitionId === "string" && body.requisitionId) {
+      const linkedReq = await storage.getRequisition(body.requisitionId, user.organizationId);
+      if (linkedReq) {
+        body.requisitionId = linkedReq.id;
+        if (body.unitPrice === undefined || body.unitPrice === "") body.unitPrice = linkedReq.amount;
+        if (body.totalPrice === undefined || body.totalPrice === "") body.totalPrice = linkedReq.amount;
+        if (!body.description) body.description = linkedReq.description;
+      } else {
+        body.requisitionId = null;
+      }
+    }
+    const item = await storage.createCostLineItem(body);
     return res.status(201).json(item);
   });
 

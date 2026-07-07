@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CurrencySelect } from "@/components/currency-select";
+import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import {
   Plus, Search, Loader2, BookOpen, DollarSign, FileSpreadsheet,
@@ -50,6 +51,7 @@ type CostLineItem = {
   id: string;
   costSheetId: string;
   priceBookItemId: string | null;
+  requisitionId: string | null;
   description: string;
   quantity: string;
   unitPrice: string;
@@ -111,6 +113,10 @@ export default function StaffPriceBook() {
 
   const { data: funeralCases = [] } = useQuery<FuneralCase[]>({
     queryKey: ["/api/funeral-cases"],
+  });
+
+  const { data: requisitions = [] } = useQuery<any[]>({
+    queryKey: ["/api/requisitions"],
   });
 
   const { data: lineItems = [], isLoading: loadingLineItems } = useQuery<CostLineItem[]>({
@@ -435,7 +441,14 @@ export default function StaffPriceBook() {
                             <TableBody>
                               {lineItems.map((li) => (
                                 <TableRow key={li.id} className="hover:bg-muted/40" data-testid={`row-lineitem-${li.id}`}>
-                                  <TableCell className="font-medium pl-6">{li.description}</TableCell>
+                                  <TableCell className="font-medium pl-6">
+                                    {li.description}
+                                    {li.requisitionId ? (
+                                      <Badge variant="outline" className="ml-2 text-[10px] bg-emerald-500/10 text-emerald-700 border-emerald-200">Actual</Badge>
+                                    ) : li.priceBookItemId ? (
+                                      <Badge variant="outline" className="ml-2 text-[10px]">Estimate</Badge>
+                                    ) : null}
+                                  </TableCell>
                                   <TableCell className="text-right tabular-nums">{parseFloat(li.quantity).toFixed(0)}</TableCell>
                                   <TableCell className="text-right tabular-nums">
                                     {selectedSheet.currency} {parseFloat(li.unitPrice).toFixed(2)}
@@ -505,6 +518,9 @@ export default function StaffPriceBook() {
           onSubmit={(data) => addLineItemMut.mutate(data)}
           isPending={addLineItemMut.isPending}
           priceBookItems={priceBookItems}
+          requisitions={selectedSheet?.funeralCaseId
+            ? requisitions.filter((r: any) => r.funeralCaseId === selectedSheet.funeralCaseId)
+            : requisitions}
         />
       )}
     </StaffLayout>
@@ -671,19 +687,13 @@ function CreateCostSheetDialog({
         <div className="space-y-4">
           <div className="space-y-2">
             <Label>Funeral Case (optional)</Label>
-            <Select value={funeralCaseId} onValueChange={setFuneralCaseId}>
-              <SelectTrigger data-testid="select-costsheet-case">
-                <SelectValue placeholder="Select funeral case..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No linked case</SelectItem>
-                {funeralCases.map((fc) => (
-                  <SelectItem key={fc.id} value={fc.id}>
-                    {fc.deceasedName} ({fc.caseNumber})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <SearchableSelect
+              options={funeralCases.map((fc) => ({ value: fc.id, label: `${fc.caseNumber} — ${fc.deceasedName}`, hint: fc.status || undefined }))}
+              value={funeralCaseId}
+              onChange={(v) => setFuneralCaseId(v === "__none__" ? "" : v)}
+              placeholder="Search by case number or deceased name…"
+              searchPlaceholder="Search…"
+            />
           </div>
           <div className="space-y-2">
             <Label>Currency</Label>
@@ -708,17 +718,26 @@ function AddLineItemDialog({
   onSubmit,
   isPending,
   priceBookItems,
+  requisitions,
 }: {
   open: boolean;
   onClose: () => void;
   onSubmit: (data: Record<string, unknown>) => void;
   isPending: boolean;
   priceBookItems: PriceBookItem[];
+  requisitions: any[];
 }) {
   const [selectedItemId, setSelectedItemId] = useState("");
+  const [selectedRequisitionId, setSelectedRequisitionId] = useState("");
   const [description, setDescription] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [unitPrice, setUnitPrice] = useState("");
+
+  const requisitionOptions: SearchableOption[] = requisitions.map((r: any) => ({
+    value: r.id,
+    label: `${r.requisitionNumber} — ${r.description} (${r.currency} ${Number(r.amount).toFixed(2)})`,
+    hint: r.status || undefined,
+  }));
 
   const handleSelectItem = (itemId: string) => {
     setSelectedItemId(itemId);
@@ -729,18 +748,31 @@ function AddLineItemDialog({
     }
   };
 
+  const handleSelectRequisition = (reqId: string) => {
+    const id = reqId === "__none__" ? "" : reqId;
+    setSelectedRequisitionId(id);
+    const req = requisitions.find((r: any) => r.id === id);
+    if (req) {
+      setDescription(req.description);
+      setUnitPrice(String(req.amount));
+      setQuantity("1");
+    }
+  };
+
   const total = (parseFloat(quantity || "0") * parseFloat(unitPrice || "0")).toFixed(2);
 
   const handleSubmit = () => {
     if (!description || !unitPrice) return;
     onSubmit({
       priceBookItemId: selectedItemId || null,
+      requisitionId: selectedRequisitionId || null,
       description,
       quantity: quantity || "1",
       unitPrice,
       totalPrice: total,
     });
     setSelectedItemId("");
+    setSelectedRequisitionId("");
     setDescription("");
     setQuantity("1");
     setUnitPrice("");
@@ -754,19 +786,27 @@ function AddLineItemDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>From Price Book (optional)</Label>
-            <Select value={selectedItemId} onValueChange={handleSelectItem}>
-              <SelectTrigger data-testid="select-lineitem-pricebook">
-                <SelectValue placeholder="Select item to auto-fill..." />
-              </SelectTrigger>
-              <SelectContent>
-                {priceBookItems.filter((i) => i.isActive).map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.name} — {item.currency} {parseFloat(item.priceAmount).toFixed(2)}/{item.unit}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label>From Price Book (estimate — optional)</Label>
+            <SearchableSelect
+              options={priceBookItems.filter((i) => i.isActive).map((item) => ({
+                value: item.id,
+                label: `${item.name} — ${item.currency} ${parseFloat(item.priceAmount).toFixed(2)}/${item.unit}`,
+              }))}
+              value={selectedItemId}
+              onChange={handleSelectItem}
+              placeholder="Select item to auto-fill…"
+              searchPlaceholder="Search…"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>From an Actual Requisition (real cost — optional)</Label>
+            <SearchableSelect
+              options={requisitionOptions}
+              value={selectedRequisitionId}
+              onChange={handleSelectRequisition}
+              placeholder="Select a paid requisition to auto-fill…"
+              searchPlaceholder="Search…"
+            />
           </div>
           <div className="space-y-2">
             <Label>Description *</Label>

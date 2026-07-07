@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -35,7 +36,7 @@ const CASKET_OPTIONS = [
   { value: "coffin_shaped", label: "Coffin Shaped" },
 ];
 
-type LineItem = { description: string; qty: string; unitPrice: string };
+type LineItem = { description: string; qty: string; unitPrice: string; priceBookItemId?: string | null };
 
 type QuoteForm = {
   informantFullNames: string;
@@ -113,6 +114,11 @@ export function QuoteDialog({
   const [form, setForm] = useState<QuoteForm>({ ...BLANK_QUOTE, ...initialData });
   const [items, setItems] = useState<LineItem[]>(initialItems ?? BLANK_ITEMS);
 
+  const { data: priceBookItems = [] } = useQuery<any[]>({ queryKey: ["/api/price-book"] });
+  const priceBookOptions: SearchableOption[] = (priceBookItems as any[])
+    .filter((i) => i.isActive)
+    .map((item) => ({ value: item.id, label: `${item.name} — ${item.currency} ${parseFloat(item.priceAmount).toFixed(2)}/${item.unit}` }));
+
   const set = (k: keyof QuoteForm, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   const totals = computeTotals(items, form.vatRate, form.discountAmount);
@@ -125,6 +131,7 @@ export function QuoteDialog({
           description: i.description,
           quantity: i.qty || "1",
           unitPrice: i.unitPrice || "0",
+          priceBookItemId: i.priceBookItemId || null,
         })),
       };
       const res = isEdit
@@ -142,10 +149,19 @@ export function QuoteDialog({
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
-  const addRow = () => setItems((prev) => [...prev, { description: "", qty: "1", unitPrice: "" }]);
+  const addRow = () => setItems((prev) => [...prev, { description: "", qty: "1", unitPrice: "", priceBookItemId: null }]);
   const removeRow = (i: number) => setItems((prev) => prev.filter((_, idx) => idx !== i));
   const updateRow = (i: number, field: keyof LineItem, val: string) =>
     setItems((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
+  const selectPriceBookItem = (i: number, itemId: string) => {
+    const pbItem = (priceBookItems as any[]).find((it) => it.id === itemId);
+    setItems((prev) => prev.map((r, idx) => (idx === i ? {
+      ...r,
+      priceBookItemId: itemId || null,
+      description: pbItem ? pbItem.name : r.description,
+      unitPrice: pbItem ? pbItem.priceAmount : r.unitPrice,
+    } : r)));
+  };
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -226,7 +242,7 @@ export function QuoteDialog({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b">
-                      <th className="text-left py-1 pr-2 font-medium text-muted-foreground w-1/2">Description</th>
+                      <th className="text-left py-1 pr-2 font-medium text-muted-foreground w-2/5">Description</th>
                       <th className="text-right py-1 pr-2 font-medium text-muted-foreground w-16">Qty</th>
                       <th className="text-right py-1 pr-2 font-medium text-muted-foreground w-28">Unit Price</th>
                       <th className="text-right py-1 pr-2 font-medium text-muted-foreground w-28">Total</th>
@@ -238,8 +254,16 @@ export function QuoteDialog({
                       const lineTotal = (parseFloat(row.qty) || 0) * (parseFloat(row.unitPrice) || 0);
                       return (
                         <tr key={i} className="border-b last:border-0">
-                          <td className="py-1 pr-2">
-                            <Input className="h-7 text-xs" value={row.description} onChange={(e) => updateRow(i, "description", e.target.value)} />
+                          <td className="py-1 pr-2 space-y-1">
+                            <SearchableSelect
+                              options={priceBookOptions}
+                              value={row.priceBookItemId || ""}
+                              onChange={(v) => selectPriceBookItem(i, v)}
+                              placeholder="From price book…"
+                              searchPlaceholder="Search…"
+                              className="h-7 text-xs"
+                            />
+                            <Input className="h-7 text-xs" value={row.description} onChange={(e) => updateRow(i, "description", e.target.value)} placeholder="Description" />
                           </td>
                           <td className="py-1 pr-2">
                             <Input className="h-7 text-xs text-right w-16" type="number" min="0" value={row.qty} onChange={(e) => updateRow(i, "qty", e.target.value)} />
@@ -914,7 +938,7 @@ export default function StaffQuotations() {
           }}
           initialItems={
             selectedQuoteData.items?.length
-              ? selectedQuoteData.items.map((i: any) => ({ description: i.description, qty: String(i.quantity ?? "1"), unitPrice: String(i.unitPrice ?? "") }))
+              ? selectedQuoteData.items.map((i: any) => ({ description: i.description, qty: String(i.quantity ?? "1"), unitPrice: String(i.unitPrice ?? ""), priceBookItemId: i.priceBookItemId ?? null }))
               : BLANK_ITEMS
           }
         />
