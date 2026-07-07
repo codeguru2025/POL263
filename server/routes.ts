@@ -6942,8 +6942,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (quote) addToCurrencyMap(quotedByCurrency, quote.currency, Number(quote.grandTotal || quote.total || 0));
 
     // Costs: cost-sheet line items for any cost sheet linked to this case.
-    const allCostSheets = await storage.getCostSheetsByOrg(user.organizationId);
-    const caseCostSheets = allCostSheets.filter((cs: any) => cs.funeralCaseId === caseId);
+    const caseCostSheets = await storage.getCostSheetsByOrg(user.organizationId, { funeralCaseId: caseId });
     const costSheetByCurrency: Record<string, number> = {};
     const requisitionIdsInCostSheets = new Set<string>();
     for (const cs of caseCostSheets) {

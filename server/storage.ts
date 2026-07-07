@@ -623,7 +623,7 @@ export interface IStorage {
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
   updateSettlement(id: string, data: Partial<InsertSettlement>, orgId: string): Promise<Settlement | undefined>;
-  getCostSheetsByOrg(orgId: string): Promise<any[]>;
+  getCostSheetsByOrg(orgId: string, filters?: { funeralCaseId?: string }): Promise<any[]>;
   getCostSheet(id: string, orgId: string): Promise<any>;
   createCostSheet(data: any): Promise<any>;
   getCostLineItems(costSheetId: string, orgId: string): Promise<any[]>;
@@ -5295,10 +5295,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── Cost Sheets ────────────────────────────────────────
-  async getCostSheetsByOrg(orgId: string): Promise<any[]> {
+  async getCostSheetsByOrg(orgId: string, filters?: { funeralCaseId?: string }): Promise<any[]> {
     const tdb = await getDbForOrg(orgId);
+    const conditions = [eq(costSheets.organizationId, orgId)];
+    if (filters?.funeralCaseId) conditions.push(eq(costSheets.funeralCaseId, filters.funeralCaseId));
     return tdb.select().from(costSheets)
-      .where(eq(costSheets.organizationId, orgId))
+      .where(and(...conditions))
       .orderBy(desc(costSheets.createdAt));
   }
   async getCostSheet(id: string, orgId: string): Promise<any> {
