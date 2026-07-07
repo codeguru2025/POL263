@@ -944,11 +944,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "paynowIntegrationId", "paynowIntegrationKey", "paynowAuthEmail",
       "paynowReturnUrl", "paynowResultUrl", "paynowMode",
     ]);
-    const PLATFORM_ONLY_ORG_FIELDS = new Set(["slug", "isActive", "licenseStatus", "isWhitelabeled", "databaseUrl"]);
+    // isWhitelabeled and databaseUrl are real columns on the shared organizations table.
+    // slug/isActive/licenseStatus are NOT — they only exist on control_plane.tenants. Writing
+    // them via storage.updateOrganization() was a silent no-op (or a runtime error, depending on
+    // the drizzle-orm version) since that table has no such columns.
+    const PLATFORM_ONLY_ORG_FIELDS = new Set(["isWhitelabeled", "databaseUrl"]);
+    const PLATFORM_ONLY_TENANT_FIELDS = new Set(["slug", "isActive", "licenseStatus"]);
     const sanitizedOrg: Record<string, any> = {};
+    const sanitizedTenant: Record<string, any> = {};
     for (const [key, value] of Object.entries(req.body)) {
       if (TENANT_WRITE_FIELDS.has(key)) sanitizedOrg[key] = value;
-      else if (PLATFORM_ONLY_ORG_FIELDS.has(key) && isPlatformOwner) sanitizedOrg[key] = value;
+      else if (isPlatformOwner && PLATFORM_ONLY_ORG_FIELDS.has(key)) sanitizedOrg[key] = value;
+      else if (isPlatformOwner && PLATFORM_ONLY_TENANT_FIELDS.has(key)) sanitizedTenant[key] = value;
     }
     // Narrow paynowMode to the literal union the schema expects
     if (sanitizedOrg.paynowMode !== undefined && sanitizedOrg.paynowMode !== "test" && sanitizedOrg.paynowMode !== "live") {
@@ -956,12 +963,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
-    if (Object.keys(sanitizedOrg).length === 0) return res.json(before);
-    const updated = await storage.updateOrganization(id, sanitizedOrg as any);
-    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, updated, id);
+    if (Object.keys(sanitizedOrg).length === 0 && Object.keys(sanitizedTenant).length === 0) return res.json(before);
+    const updated = Object.keys(sanitizedOrg).length > 0 ? await storage.updateOrganization(id, sanitizedOrg as any) : before;
+    if (Object.keys(sanitizedTenant).length > 0) {
+      await cpDb.update(cpTenants).set(sanitizedTenant as any).where(eq(cpTenants.id, id));
+    }
+    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, { ...updated, ...sanitizedTenant }, id);
     const { paynowIntegrationKey: _upik, databaseUrl: _udu, paynowAuthEmail: _upae, ...safeUpdatedOrg } = (updated || {}) as any;
-    return res.json(isPlatformOwner ? updated : safeUpdatedOrg);
+    return res.json(isPlatformOwner ? { ...updated, ...sanitizedTenant } : safeUpdatedOrg);
   });
+
+  /** URL-safe slug for subdomain routing (tenant-resolver.ts), unique in the control plane. */
+  async function generateUniqueTenantSlug(orgName: string): Promise<string> {
+    const base = orgName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "tenant";
+    let candidate = base;
+    let suffix = 1;
+    while (true) {
+      const [existing] = await cpDb.select({ id: cpTenants.id }).from(cpTenants).where(eq(cpTenants.slug, candidate)).limit(1);
+      if (!existing) return candidate;
+      suffix += 1;
+      candidate = `${base}-${suffix}`;
+    }
+  }
 
   app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
     const user = req.user as any;
@@ -985,6 +1012,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = insertOrganizationSchema.parse(orgData);
     const org = await storage.createOrganization(parsed);
     try {
+      // Register in the control plane too — tenant_databases (needed to later commission a
+      // dedicated database) and tenant_branding both have a foreign key to control_plane.tenants,
+      // so a tenant that only exists in the shared registry DB can never get either. New orgs
+      // start on the shared platform DB in "trial" status; commissioning a dedicated database
+      // (see POST /api/platform/tenants/:id/commission-database) flips this to "active" once
+      // a real database has been provisioned and their data migrated onto it.
+      const slug = await generateUniqueTenantSlug(org.name);
+      await cpDb.insert(cpTenants).values({
+        id: org.id,
+        name: org.name,
+        slug,
+        isActive: true,
+        licenseStatus: "trial",
+        provisioningState: "ready",
+      });
+
       const defaultBranch = await storage.createBranch({
         organizationId: org.id,
         name: "Head Office",
@@ -1047,6 +1090,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.updateOrganization(org.id, { name: parsed.name + " (deleted)" });
       } catch (rollbackErr) {
         structuredLog("error", "Failed to soft-delete orphaned org after create failure", {
+          orgId: org.id,
+          error: (rollbackErr as Error).message,
+        });
+      }
+      try {
+        await cpDb.update(cpTenants).set({ isActive: false, name: parsed.name + " (deleted)" }).where(eq(cpTenants.id, org.id));
+      } catch (rollbackErr) {
+        structuredLog("error", "Failed to deactivate orphaned control-plane tenant after create failure", {
           orgId: org.id,
           error: (rollbackErr as Error).message,
         });
