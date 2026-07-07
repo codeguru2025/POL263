@@ -5108,6 +5108,74 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // ─── Vehicle Trip Logs (mileage capture) — one trip log per vehicle per case ──
+
+  app.get("/api/funeral-cases/:id/vehicle-trips", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const trips = await storage.getVehicleTripLogs(user.organizationId, { funeralCaseId: req.params.id as string });
+    return res.json(trips);
+  });
+
+  app.post("/api/funeral-cases/:id/vehicle-trips", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const caseId = req.params.id as string;
+    const fc = await storage.getFuneralCase(caseId, user.organizationId);
+    if (!fc) return res.status(404).json({ message: "Funeral case not found" });
+    const vehicleId = typeof req.body.vehicleId === "string" ? req.body.vehicleId : "";
+    if (!vehicleId) return res.status(400).json({ message: "vehicleId is required" });
+    const vehicle = await storage.getFleetVehicleById(vehicleId, user.organizationId);
+    if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
+    const startOdometer = Number(req.body.startOdometer);
+    if (!Number.isFinite(startOdometer) || startOdometer < 0) {
+      return res.status(400).json({ message: "startOdometer must be a non-negative number" });
+    }
+    // One trip log per vehicle per case — refuse to start a second one while one is still open.
+    const existingTrips = await storage.getVehicleTripLogs(user.organizationId, { funeralCaseId: caseId, vehicleId });
+    const openTrip = existingTrips.find((t) => t.endOdometer == null);
+    if (openTrip) {
+      return res.status(409).json({ message: "This vehicle already has an open trip for this case — close it before starting a new one.", trip: openTrip });
+    }
+    const created = await storage.createVehicleTripLog({
+      organizationId: user.organizationId,
+      vehicleId,
+      driverId: typeof req.body.driverId === "string" && req.body.driverId ? req.body.driverId : null,
+      funeralCaseId: caseId,
+      tripDate: req.body.tripDate || new Date().toISOString().slice(0, 10),
+      purpose: typeof req.body.purpose === "string" ? req.body.purpose : null,
+      startLocation: typeof req.body.startLocation === "string" ? req.body.startLocation : null,
+      destination: typeof req.body.destination === "string" ? req.body.destination : null,
+      startOdometer: Math.round(startOdometer),
+      timeDeparted: typeof req.body.timeDeparted === "string" ? req.body.timeDeparted : null,
+    });
+    await auditLog(req, "START_VEHICLE_TRIP", "VehicleTripLog", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  app.patch("/api/vehicle-trips/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getVehicleTripLog(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Trip log not found" });
+    const patch: Record<string, any> = {};
+    if (req.body.endOdometer !== undefined) {
+      const endOdometer = Number(req.body.endOdometer);
+      if (!Number.isFinite(endOdometer) || endOdometer < 0) {
+        return res.status(400).json({ message: "endOdometer must be a non-negative number" });
+      }
+      if (existing.startOdometer != null && endOdometer < existing.startOdometer) {
+        return res.status(400).json({ message: `endOdometer (${endOdometer}) cannot be less than startOdometer (${existing.startOdometer})` });
+      }
+      patch.endOdometer = Math.round(endOdometer);
+      patch.distanceKm = existing.startOdometer != null ? Math.round(endOdometer - existing.startOdometer) : null;
+    }
+    if (typeof req.body.timeReturned === "string") patch.timeReturned = req.body.timeReturned;
+    if (req.body.fuelUsedLitres !== undefined) patch.fuelUsedLitres = req.body.fuelUsedLitres === "" ? null : String(req.body.fuelUsedLitres);
+    if (typeof req.body.driverNotes === "string") patch.driverNotes = req.body.driverNotes;
+    if (typeof req.body.destination === "string") patch.destination = req.body.destination;
+    const updated = await storage.updateVehicleTripLog(existing.id, user.organizationId, patch);
+    await auditLog(req, "UPDATE_VEHICLE_TRIP", "VehicleTripLog", existing.id, existing, updated);
+    return res.json(updated);
+  });
+
   // ─── Daily Schedule of Service PDF ─────────────────────────
 
   app.get("/api/schedule/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
@@ -5644,6 +5712,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       structuredLog("error", "PUT /api/fleet/:id failed", { error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
+  });
+
+  app.get("/api/fleet/:id/trip-log-pdf", requireAuth, requireTenantScope, requirePermission("read:fleet"), async (req, res) => {
+    const user = req.user as any;
+    const { streamVehicleTripLogPDF } = await import("./hr-fleet-document");
+    await streamVehicleTripLogPDF(req.params.id as string, user.organizationId, res, {
+      attachment: req.query.download === "1",
+    });
   });
 
   // ─── Commissions ────────────────────────────────────────────

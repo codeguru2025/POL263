@@ -181,6 +181,10 @@ export default function StaffFunerals() {
     queryKey: [`/api/funeral-cases/${selectedCaseId}/receipts`],
     enabled: !!selectedCaseId,
   });
+  const { data: caseVehicleTrips = [] } = useQuery<any[]>({
+    queryKey: [`/api/funeral-cases/${selectedCaseId}/vehicle-trips`],
+    enabled: !!selectedCaseId,
+  });
   // ── Parlours ──────────────────────────────────────────────
   const [selectedParlourId, setSelectedParlourId] = useState<string | null>(null);
   const [showParlourDialog, setShowParlourDialog] = useState(false);
@@ -312,6 +316,30 @@ export default function StaffFunerals() {
         old.map((c) => (c.id === updated.id ? updated : c))
       );
       toast({ title: "Case updated" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const startTripMutation = useMutation({
+    mutationFn: async ({ caseId, data }: { caseId: string; data: Record<string, any> }) => {
+      const res = await apiRequest("POST", `/api/funeral-cases/${caseId}/vehicle-trips`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/vehicle-trips`] });
+      toast({ title: "Trip started — start mileage recorded" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const endTripMutation = useMutation({
+    mutationFn: async ({ tripId, data }: { tripId: string; data: Record<string, any> }) => {
+      const res = await apiRequest("PATCH", `/api/vehicle-trips/${tripId}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/vehicle-trips`] });
+      toast({ title: "Trip closed — closing mileage recorded" });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -481,6 +509,9 @@ export default function StaffFunerals() {
                 receipts={caseReceipts}
                 onRecordPayment={() => setShowPaymentDialog(true)}
                 onEditQuotation={() => setShowQuotationDialog(true)}
+                vehicleTrips={caseVehicleTrips}
+                onStartTrip={(data) => startTripMutation.mutate({ caseId: selectedCase.id, data })}
+                onEndTrip={(tripId, data) => endTripMutation.mutate({ tripId, data })}
               />
             ) : (
               <CardSection title="Logistics Board" icon={Box} flush
@@ -936,6 +967,7 @@ function CaseDetailView({
   onBack, onEdit, onAddTask, onToggleTask, onUpdateStatus, onExport,
   driverChecklist, linkedMortuaryIntake, onOpenDriverChecklist,
   quotation, receipts, onRecordPayment, onEditQuotation,
+  vehicleTrips, onStartTrip, onEndTrip,
 }: {
   funeralCase: FuneralCase;
   tasks: FuneralTask[];
@@ -955,8 +987,15 @@ function CaseDetailView({
   receipts?: any[];
   onRecordPayment?: () => void;
   onEditQuotation?: () => void;
+  vehicleTrips?: any[];
+  onStartTrip?: (data: Record<string, any>) => void;
+  onEndTrip?: (tripId: string, data: Record<string, any>) => void;
 }) {
   const completed = tasks.filter((t) => t.status === "completed").length;
+  const [startTripFor, setStartTripFor] = useState<{ role: string; vehicleId: string; driverId?: string | null } | null>(null);
+  const [endTripFor, setEndTripFor] = useState<any>(null);
+  const [tripOdometer, setTripOdometer] = useState("");
+  const openTripsForCase = (vehicleTrips || []).filter((t: any) => t.endOdometer == null);
 
   const vehicleLabel = (id: string | null | undefined) => {
     if (!id) return "—";
@@ -1088,10 +1127,130 @@ function CaseDetailView({
           </div>
         </CardSection>
 
+        {/* Vehicle trips & mileage — one trip log per vehicle (removal + burial) */}
+        {(fc.removalVehicleId || fc.burialVehicleId) && (
+          <CardSection title="Vehicle Trips & Mileage" icon={Car}>
+            <div className="space-y-3">
+              {[
+                { role: "Removal", vehicleId: fc.removalVehicleId, driverId: fc.removalDriverId },
+                { role: "Burial", vehicleId: fc.burialVehicleId, driverId: fc.burialDriverId },
+              ].filter((v) => v.vehicleId).map((v) => {
+                const trip = (vehicleTrips || []).find((t: any) => t.vehicleId === v.vehicleId);
+                return (
+                  <div key={v.role} className="border rounded-lg p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{v.role} Vehicle</p>
+                        <p className="text-sm font-medium">{vehicleLabel(v.vehicleId)}</p>
+                      </div>
+                      {!trip && (
+                        <Button size="sm" variant="outline" onClick={() => { setStartTripFor({ role: v.role, vehicleId: v.vehicleId as string, driverId: v.driverId }); setTripOdometer(""); }} data-testid={`button-start-trip-${v.role.toLowerCase()}`}>
+                          Start Trip
+                        </Button>
+                      )}
+                      {trip && trip.endOdometer == null && (
+                        <Button size="sm" onClick={() => { setEndTripFor(trip); setTripOdometer(""); }} data-testid={`button-end-trip-${v.role.toLowerCase()}`}>
+                          End Trip
+                        </Button>
+                      )}
+                    </div>
+                    {trip && (
+                      <div className="mt-2 text-xs text-muted-foreground space-y-0.5">
+                        <div>Start odometer: {trip.startOdometer} km</div>
+                        {trip.endOdometer != null ? (
+                          <>
+                            <div>End odometer: {trip.endOdometer} km</div>
+                            <div className="font-medium text-foreground">Distance: {trip.distanceKm} km</div>
+                          </>
+                        ) : (
+                          <div className="text-amber-600 font-medium">Trip open — closing mileage not yet recorded</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </CardSection>
+        )}
+
         {/* Status management */}
         <CardSection title="Case Status" icon={CheckCircle2}>
-          <StatusChanger current={fc.status} onUpdateStatus={onUpdateStatus} />
+          <StatusChanger
+            current={fc.status}
+            onUpdateStatus={onUpdateStatus}
+            blockCompletionReason={openTripsForCase.length > 0
+              ? `Close all open vehicle trips before completing this case (${openTripsForCase.length} still open — see Vehicle Trips & Mileage above).`
+              : null}
+          />
         </CardSection>
+
+        {/* Start trip dialog */}
+        <Dialog open={!!startTripFor} onOpenChange={(open) => !open && setStartTripFor(null)}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Start {startTripFor?.role} Trip</DialogTitle>
+              <DialogDescription>Record the odometer reading before this vehicle departs.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Start Odometer (km) *</Label>
+              <Input type="number" min="0" value={tripOdometer} onChange={(e) => setTripOdometer(e.target.value)} placeholder="e.g. 45210" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setStartTripFor(null)}>Cancel</Button>
+              <Button
+                disabled={!tripOdometer || Number(tripOdometer) < 0}
+                onClick={() => {
+                  if (!startTripFor) return;
+                  onStartTrip?.({
+                    vehicleId: startTripFor.vehicleId,
+                    driverId: startTripFor.driverId || null,
+                    purpose: startTripFor.role,
+                    startOdometer: Number(tripOdometer),
+                    timeDeparted: new Date().toISOString(),
+                  });
+                  setStartTripFor(null);
+                }}
+                data-testid="button-confirm-start-trip"
+              >
+                Start Trip
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* End trip dialog */}
+        <Dialog open={!!endTripFor} onOpenChange={(open) => !open && setEndTripFor(null)}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>End Trip</DialogTitle>
+              <DialogDescription>
+                Record the closing odometer reading. Start was {endTripFor?.startOdometer} km.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-1.5">
+              <Label className="text-xs">End Odometer (km) *</Label>
+              <Input type="number" min={endTripFor?.startOdometer ?? 0} value={tripOdometer} onChange={(e) => setTripOdometer(e.target.value)} placeholder="e.g. 45260" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEndTripFor(null)}>Cancel</Button>
+              <Button
+                disabled={!tripOdometer || Number(tripOdometer) < (endTripFor?.startOdometer ?? 0)}
+                onClick={() => {
+                  if (!endTripFor) return;
+                  onEndTrip?.(endTripFor.id, {
+                    endOdometer: Number(tripOdometer),
+                    timeReturned: new Date().toISOString(),
+                  });
+                  setEndTripFor(null);
+                }}
+                data-testid="button-confirm-end-trip"
+              >
+                End Trip
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Linked mortuary intake */}
         {linkedMortuaryIntake && (
@@ -1225,8 +1384,9 @@ function CaseDetailView({
 
 // ─── Status changer ───────────────────────────────────────────────────────────
 
-function StatusChanger({ current, onUpdateStatus }: { current: string; onUpdateStatus: (s: string) => void }) {
+function StatusChanger({ current, onUpdateStatus, blockCompletionReason }: { current: string; onUpdateStatus: (s: string) => void; blockCompletionReason?: string | null }) {
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
+  const blocked = pendingStatus === "completed" && !!blockCompletionReason;
   return (
     <>
       <AlertDialog open={!!pendingStatus} onOpenChange={(open) => { if (!open) setPendingStatus(null); }}>
@@ -1234,14 +1394,16 @@ function StatusChanger({ current, onUpdateStatus }: { current: string; onUpdateS
           <AlertDialogHeader>
             <AlertDialogTitle>Confirm status change</AlertDialogTitle>
             <AlertDialogDescription>
-              {pendingStatus === "cancelled"
+              {blocked
+                ? blockCompletionReason
+                : pendingStatus === "cancelled"
                 ? "Cancelling this case cannot be easily undone. Are you sure?"
                 : `Mark this case as "${pendingStatus?.replace("_", " ")}"?`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { if (pendingStatus) { onUpdateStatus(pendingStatus); setPendingStatus(null); } }}>Confirm</AlertDialogAction>
+            <AlertDialogAction disabled={blocked} onClick={() => { if (pendingStatus && !blocked) { onUpdateStatus(pendingStatus); setPendingStatus(null); } }}>Confirm</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

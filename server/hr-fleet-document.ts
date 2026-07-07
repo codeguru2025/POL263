@@ -869,7 +869,7 @@ export async function streamVehicleTripLogPDF(
   if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
   const vehicle = await storage.getFleetVehicleById(vehicleId, orgId) as any;
   if (!vehicle) { res.status(404).json({ message: "Vehicle not found" }); return; }
-  const trips = await storage.getVehicleTripLogs(orgId, vehicleId);
+  const trips = await storage.getVehicleTripLogs(orgId, { vehicleId });
 
   const doc = new PDFDocument({ size: "A4", margin: 0, autoFirstPage: true, layout: "landscape" });
   const filename = `trip-log-${vehicle.registration || vehicleId}.pdf`;
