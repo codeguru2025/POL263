@@ -6887,6 +6887,79 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  /**
+   * Per-case profit/loss: revenue actually collected (service receipts) vs. costs actually
+   * incurred (cost-sheet line items + any requisition raised directly against this case).
+   * A requisition counted via a cost-sheet line is excluded from the direct-requisition total
+   * to avoid double-counting it in both places. Broken out by currency — deliberately not
+   * FX-converted to a single number, since that would introduce a conversion-rate judgment
+   * call this report shouldn't be making silently.
+   */
+  app.get("/api/funeral-cases/:id/profit-loss", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const caseId = req.params.id as string;
+    const fc = await storage.getFuneralCase(caseId, user.organizationId);
+    if (!fc) return res.status(404).json({ message: "Funeral case not found" });
+
+    const addToCurrencyMap = (map: Record<string, number>, currency: string, amount: number) => {
+      map[currency] = (map[currency] || 0) + amount;
+    };
+
+    // Revenue: cash actually collected (issued, non-voided service receipts).
+    const receipts = await storage.getServiceReceipts(user.organizationId, { funeralCaseId: caseId });
+    const revenueByCurrency: Record<string, number> = {};
+    for (const r of receipts) {
+      if (r.status === "voided") continue;
+      addToCurrencyMap(revenueByCurrency, r.currency, Number(r.amount));
+    }
+    const quote = await storage.getFuneralQuotation(caseId, user.organizationId);
+    const quotedByCurrency: Record<string, number> = {};
+    if (quote) addToCurrencyMap(quotedByCurrency, quote.currency, Number(quote.grandTotal || quote.total || 0));
+
+    // Costs: cost-sheet line items for any cost sheet linked to this case.
+    const allCostSheets = await storage.getCostSheetsByOrg(user.organizationId);
+    const caseCostSheets = allCostSheets.filter((cs: any) => cs.funeralCaseId === caseId);
+    const costSheetByCurrency: Record<string, number> = {};
+    const requisitionIdsInCostSheets = new Set<string>();
+    for (const cs of caseCostSheets) {
+      const lineItems = await storage.getCostLineItems(cs.id, user.organizationId);
+      for (const li of lineItems) {
+        addToCurrencyMap(costSheetByCurrency, cs.currency, Number(li.totalPrice));
+        if (li.requisitionId) requisitionIdsInCostSheets.add(li.requisitionId);
+      }
+    }
+
+    // Costs: requisitions raised directly against this case, excluding ones already
+    // represented by a cost-sheet line item (avoids double-counting the same spend).
+    const caseRequisitions = await storage.getRequisitions(user.organizationId, {});
+    const directRequisitions = caseRequisitions.filter((r) => r.funeralCaseId === caseId && r.status === "paid" && !requisitionIdsInCostSheets.has(r.id));
+    const requisitionsByCurrency: Record<string, number> = {};
+    for (const r of directRequisitions) {
+      addToCurrencyMap(requisitionsByCurrency, r.currency, Number(r.amountPaid || r.amount));
+    }
+
+    const costByCurrency: Record<string, number> = {};
+    for (const [cur, amt] of Object.entries(costSheetByCurrency)) addToCurrencyMap(costByCurrency, cur, amt);
+    for (const [cur, amt] of Object.entries(requisitionsByCurrency)) addToCurrencyMap(costByCurrency, cur, amt);
+
+    const profitByCurrency: Record<string, number> = {};
+    const allCurrencies = Array.from(new Set([...Object.keys(revenueByCurrency), ...Object.keys(costByCurrency)]));
+    for (const cur of allCurrencies) {
+      profitByCurrency[cur] = (revenueByCurrency[cur] || 0) - (costByCurrency[cur] || 0);
+    }
+
+    return res.json({
+      revenueByCurrency,
+      quotedByCurrency,
+      costSheetByCurrency,
+      requisitionsByCurrency,
+      costByCurrency,
+      profitByCurrency,
+      directRequisitionCount: directRequisitions.length,
+      costSheetCount: caseCostSheets.length,
+    });
+  });
+
   // ─── Standalone Quotations ──────────────────────────────────
 
   app.get("/api/quotations", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {

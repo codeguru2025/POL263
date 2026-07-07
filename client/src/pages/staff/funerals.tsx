@@ -19,7 +19,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User, ChevronDown, Trash2, Building2, Users } from "lucide-react";
+import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User, ChevronDown, Trash2, Building2, Users, DollarSign } from "lucide-react";
 import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 import { QuoteDialog } from "./quotations";
 import { useAuth } from "@/hooks/use-auth";
@@ -183,6 +183,10 @@ export default function StaffFunerals() {
   });
   const { data: caseVehicleTrips = [] } = useQuery<any[]>({
     queryKey: [`/api/funeral-cases/${selectedCaseId}/vehicle-trips`],
+    enabled: !!selectedCaseId,
+  });
+  const { data: caseProfitLoss } = useQuery<any>({
+    queryKey: [`/api/funeral-cases/${selectedCaseId}/profit-loss`],
     enabled: !!selectedCaseId,
   });
   // ── Parlours ──────────────────────────────────────────────
@@ -512,6 +516,7 @@ export default function StaffFunerals() {
                 vehicleTrips={caseVehicleTrips}
                 onStartTrip={(data) => startTripMutation.mutate({ caseId: selectedCase.id, data })}
                 onEndTrip={(tripId, data) => endTripMutation.mutate({ tripId, data })}
+                profitLoss={caseProfitLoss}
               />
             ) : (
               <CardSection title="Logistics Board" icon={Box} flush
@@ -967,7 +972,7 @@ function CaseDetailView({
   onBack, onEdit, onAddTask, onToggleTask, onUpdateStatus, onExport,
   driverChecklist, linkedMortuaryIntake, onOpenDriverChecklist,
   quotation, receipts, onRecordPayment, onEditQuotation,
-  vehicleTrips, onStartTrip, onEndTrip,
+  vehicleTrips, onStartTrip, onEndTrip, profitLoss,
 }: {
   funeralCase: FuneralCase;
   tasks: FuneralTask[];
@@ -990,6 +995,7 @@ function CaseDetailView({
   vehicleTrips?: any[];
   onStartTrip?: (data: Record<string, any>) => void;
   onEndTrip?: (tripId: string, data: Record<string, any>) => void;
+  profitLoss?: any;
 }) {
   const completed = tasks.filter((t) => t.status === "completed").length;
   const [startTripFor, setStartTripFor] = useState<{ role: string; vehicleId: string; driverId?: string | null } | null>(null);
@@ -1348,6 +1354,49 @@ function CaseDetailView({
           );
         })()}
       </CardSection>
+
+      {/* Profit & loss — revenue actually collected vs. costs actually incurred */}
+      {profitLoss && (
+        <CardSection title="Profit & Loss" description="Cash collected vs. costs incurred, broken out by currency (not FX-converted)" icon={DollarSign}>
+          {(() => {
+            const currencies = Array.from(new Set([
+              ...Object.keys(profitLoss.revenueByCurrency || {}),
+              ...Object.keys(profitLoss.costByCurrency || {}),
+            ]));
+            if (currencies.length === 0) {
+              return <p className="text-sm text-muted-foreground">No revenue or costs recorded against this case yet.</p>;
+            }
+            return (
+              <div className="space-y-3">
+                {currencies.map((cur) => {
+                  const revenue = profitLoss.revenueByCurrency?.[cur] || 0;
+                  const cost = profitLoss.costByCurrency?.[cur] || 0;
+                  const profit = profitLoss.profitByCurrency?.[cur] ?? (revenue - cost);
+                  return (
+                    <div key={cur} className="grid grid-cols-3 gap-3 border-b border-border/40 pb-3 last:border-0 last:pb-0">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Revenue ({cur})</p>
+                        <p className="text-lg font-bold tabular-nums text-emerald-600">{cur} {revenue.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Costs ({cur})</p>
+                        <p className="text-lg font-bold tabular-nums text-amber-600">{cur} {cost.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">{profit >= 0 ? "Profit" : "Loss"} ({cur})</p>
+                        <p className={`text-lg font-bold tabular-nums ${profit >= 0 ? "text-emerald-600" : "text-destructive"}`}>{cur} {profit.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="text-[10px] text-muted-foreground pt-1">
+                  Costs include {profitLoss.costSheetCount || 0} cost sheet(s) and {profitLoss.directRequisitionCount || 0} requisition(s) raised directly against this case.
+                </p>
+              </div>
+            );
+          })()}
+        </CardSection>
+      )}
 
       {/* Task checklist */}
       <CardSection title="Task Checklist" description={`${completed}/${tasks.length} completed`} icon={CheckCircle2}
