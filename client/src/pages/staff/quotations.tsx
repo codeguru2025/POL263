@@ -475,9 +475,11 @@ function LinkCaseDialog({ open, onClose, quoteId }: { open: boolean; onClose: ()
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/quotations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/quotations", quoteId] });
+      // The case itself may have just been auto-filled from this quote's fields.
+      queryClient.invalidateQueries({ queryKey: ["/api/funeral-cases"] });
       setFuneralCaseId("");
       onClose();
-      toast({ title: "Quotation linked to funeral case" });
+      toast({ title: "Quotation linked to funeral case", description: "Blank case fields were filled in from the quote." });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });

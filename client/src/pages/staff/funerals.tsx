@@ -1174,6 +1174,11 @@ function CaseDetailView({
                       <span className="capitalize text-xs">{String(r.paymentChannel || "").replace(/_/g, " ")}</span>
                       <span className="text-xs text-muted-foreground">{r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : ""}</span>
                       <span className="font-semibold tabular-nums">{r.currency} {Number(r.amount).toFixed(2)}</span>
+                      <a href={`/api/service-receipts/${r.id}/pdf?download=1`} target="_blank" rel="noopener noreferrer" title="Print / download receipt">
+                        <Button size="icon" variant="ghost" className="h-6 w-6" data-testid={`button-receipt-pdf-${r.id}`}>
+                          <FileDown className="h-3.5 w-3.5" />
+                        </Button>
+                      </a>
                     </div>
                   ))}
                 </div>

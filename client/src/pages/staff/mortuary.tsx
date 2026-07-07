@@ -128,6 +128,9 @@ export default function StaffMortuary() {
   const { data: partnerParlours = [] } = useQuery<any[]>({
     queryKey: ["/api/partner-parlours"],
   });
+  const { data: funeralCases = [] } = useQuery<any[]>({
+    queryKey: ["/api/funeral-cases"],
+  });
 
   const selectedIntake = intakes.find((i) => i.id === selectedIntakeId) ?? null;
 
@@ -284,6 +287,8 @@ export default function StaffMortuary() {
   const userOptions: SearchableOption[] = (users as any[])
     .filter((u) => u.isActive !== false)
     .map((u) => ({ value: u.id, label: u.displayName || u.email, hint: u.phone || undefined }));
+  const funeralCaseOptions: SearchableOption[] = (funeralCases as any[])
+    .map((c) => ({ value: c.id, label: `${c.caseNumber} — ${c.deceasedName}`, hint: c.status || undefined }));
 
   const vehicleLabel = (id: string | null | undefined) => {
     if (!id) return "—";
@@ -665,6 +670,8 @@ export default function StaffMortuary() {
         vehicleOptions={vehicleOptions}
         userOptions={userOptions}
         partnerParlours={partnerParlours}
+        funeralCases={funeralCases}
+        funeralCaseOptions={funeralCaseOptions}
         onSubmit={(data) => createIntakeMutation.mutate(data)}
         isPending={createIntakeMutation.isPending}
         onParlourCreated={() => queryClient.invalidateQueries({ queryKey: ["/api/partner-parlours"] })}
@@ -1041,23 +1048,55 @@ function FeePaymentDialog({ open, onOpenChange, feeAmount, feeCurrency, onSubmit
 
 // ─── New Intake Dialog ────────────────────────────────────────────────────────
 
-function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, onSubmit, isPending, onParlourCreated }: {
+function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, funeralCases, funeralCaseOptions, onSubmit, isPending, onParlourCreated }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   vehicleOptions: SearchableOption[];
   userOptions: SearchableOption[];
   partnerParlours: any[];
+  funeralCases: any[];
+  funeralCaseOptions: SearchableOption[];
   onSubmit: (data: Record<string, any>) => void;
   isPending: boolean;
   onParlourCreated: () => void;
 }) {
   const [form, setForm] = useState<IntakeForm>({ ...BLANK_INTAKE });
   const [showCreateParlour, setShowCreateParlour] = useState(false);
+  const [autoFilledFromCase, setAutoFilledFromCase] = useState(false);
 
   const set = (k: keyof IntakeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const setSel = (k: keyof IntakeForm) => (v: string) =>
     setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
+
+  // Blanks-only auto-populate from a linked funeral case — never overwrites something the
+  // user already typed (same rule the backend enforces again on submit as the source of truth).
+  const handleFuneralCaseSelect = (caseId: string) => {
+    const id = caseId === "__none__" ? "" : caseId;
+    const linkedCase = id ? funeralCases.find((c) => c.id === id) : null;
+    if (!linkedCase) {
+      setForm((f) => ({ ...f, funeralCaseId: id }));
+      setAutoFilledFromCase(false);
+      return;
+    }
+    setForm((f) => ({
+      ...f,
+      funeralCaseId: id,
+      deceasedName: f.deceasedName || linkedCase.deceasedName || "",
+      deceasedGender: f.deceasedGender || linkedCase.deceasedGender || "",
+      deceasedNationalId: f.deceasedNationalId || linkedCase.deceasedNationalId || "",
+      dateOfDeath: f.dateOfDeath || linkedCase.dateOfDeath || "",
+      causeOfDeath: f.causeOfDeath || linkedCase.causeOfDeath || "",
+      placeOfDeath: f.placeOfDeath || linkedCase.placeOfDeath || "",
+      informantName: f.informantName || linkedCase.informantName || "",
+      informantPhone: f.informantPhone || linkedCase.informantPhone || "",
+      informantRelationship: f.informantRelationship || linkedCase.informantRelationship || "",
+      removalLocation: f.removalLocation || linkedCase.removalLocation || "",
+      removalVehicleId: f.removalVehicleId || linkedCase.removalVehicleId || "",
+      removalDriverId: f.removalDriverId || linkedCase.removalDriverId || "",
+    }));
+    setAutoFilledFromCase(true);
+  };
 
   const isPartnerScope = form.serviceScope === "storage_only" || form.serviceScope === "removal_only";
 
@@ -1262,8 +1301,17 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
 
             {form.serviceScope === "full_service" && (
               <div className="space-y-1.5">
-                <Label className="text-xs">Funeral Case ID (optional — link to existing case)</Label>
-                <Input value={form.funeralCaseId} onChange={set("funeralCaseId")} placeholder="Paste funeral case UUID to link" />
+                <Label className="text-xs">Funeral Case (optional — link to existing case)</Label>
+                <SearchableSelect
+                  options={funeralCaseOptions}
+                  value={form.funeralCaseId}
+                  onChange={handleFuneralCaseSelect}
+                  placeholder="Search by case number or deceased name…"
+                  searchPlaceholder="Search…"
+                />
+                {autoFilledFromCase && (
+                  <p className="text-xs text-emerald-600">Deceased, informant &amp; removal details filled from this case where blank.</p>
+                )}
               </div>
             )}
 

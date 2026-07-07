@@ -4829,6 +4829,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Funeral Cases ──────────────────────────────────────────
 
+  /**
+   * Fields a funeral case can auto-fill from a linked quotation — only fills fields that are
+   * currently blank on `target`, so linking a quote never silently overwrites something a case
+   * handler already typed in (deliberate: same "blanks-only" rule used for tenant branding sync).
+   */
+  function quoteToCaseBlankFillPatch(quote: any, target: Record<string, any>): Record<string, any> {
+    const isBlank = (v: any) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+    const patch: Record<string, any> = {};
+    if (isBlank(target.deceasedName) && !isBlank(quote.deceasedName)) patch.deceasedName = quote.deceasedName;
+    if (isBlank(target.deceasedGender) && !isBlank(quote.deceasedSex)) patch.deceasedGender = quote.deceasedSex;
+    if (isBlank(target.informantName) && !isBlank(quote.informantFullNames)) patch.informantName = quote.informantFullNames;
+    if (isBlank(target.informantPhone) && !isBlank(quote.informantPhone)) patch.informantPhone = quote.informantPhone;
+    if (isBlank(target.serviceType)) patch.serviceType = "cash";
+    return patch;
+  }
+
+  /**
+   * Fields a mortuary intake can auto-fill from its linked funeral case — same blanks-only rule.
+   * Since quote fields already flow into the case (quoteToCaseBlankFillPatch), linking an intake
+   * to a case transitively carries over anything the case itself pulled from a quote.
+   */
+  function caseToIntakeBlankFillPatch(fc: any, target: Record<string, any>): Record<string, any> {
+    const isBlank = (v: any) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+    const patch: Record<string, any> = {};
+    if (isBlank(target.deceasedName) && !isBlank(fc.deceasedName)) patch.deceasedName = fc.deceasedName;
+    if (isBlank(target.deceasedGender) && !isBlank(fc.deceasedGender)) patch.deceasedGender = fc.deceasedGender;
+    if (isBlank(target.deceasedNationalId) && !isBlank(fc.deceasedNationalId)) patch.deceasedNationalId = fc.deceasedNationalId;
+    if (isBlank(target.dateOfDeath) && !isBlank(fc.dateOfDeath)) patch.dateOfDeath = fc.dateOfDeath;
+    if (isBlank(target.causeOfDeath) && !isBlank(fc.causeOfDeath)) patch.causeOfDeath = fc.causeOfDeath;
+    if (isBlank(target.placeOfDeath) && !isBlank(fc.placeOfDeath)) patch.placeOfDeath = fc.placeOfDeath;
+    if (isBlank(target.informantName) && !isBlank(fc.informantName)) patch.informantName = fc.informantName;
+    if (isBlank(target.informantPhone) && !isBlank(fc.informantPhone)) patch.informantPhone = fc.informantPhone;
+    if (isBlank(target.informantRelationship) && !isBlank(fc.informantRelationship)) patch.informantRelationship = fc.informantRelationship;
+    if (isBlank(target.removalLocation) && !isBlank(fc.removalLocation)) patch.removalLocation = fc.removalLocation;
+    if (isBlank(target.removalVehicleId) && !isBlank(fc.removalVehicleId)) patch.removalVehicleId = fc.removalVehicleId;
+    if (isBlank(target.removalDriverId) && !isBlank(fc.removalDriverId)) patch.removalDriverId = fc.removalDriverId;
+    // Age isn't stored on the case directly, but can be derived if both dates are present.
+    if (isBlank(target.deceasedAge) && fc.deceasedDob && (target.dateOfDeath || fc.dateOfDeath)) {
+      const dob = new Date(fc.deceasedDob);
+      const dod = new Date(target.dateOfDeath || fc.dateOfDeath);
+      if (!isNaN(dob.getTime()) && !isNaN(dod.getTime())) {
+        let age = dod.getFullYear() - dob.getFullYear();
+        const monthDiff = dod.getMonth() - dob.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && dod.getDate() < dob.getDate())) age -= 1;
+        if (age >= 0 && age < 130) patch.deceasedAge = age;
+      }
+    }
+    return patch;
+  }
+
   app.get("/api/funeral-cases", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
@@ -4850,16 +4900,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/funeral-cases", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const quotationId = typeof req.body.quotationId === "string" && req.body.quotationId ? req.body.quotationId : null;
-    if (req.body.serviceType === "cash") {
-      if (!quotationId) {
-        return res.status(422).json({ message: "A quotation must be linked before creating a cash service case." });
-      }
-      const quote = await storage.getQuotationById(quotationId, user.organizationId);
-      if (!quote) return res.status(422).json({ message: "Quotation not found." });
-      if (quote.funeralCaseId) return res.status(422).json({ message: "This quotation is already linked to another funeral case." });
+    let linkedQuote: Awaited<ReturnType<typeof storage.getQuotationById>> | null = null;
+    if (quotationId) {
+      linkedQuote = await storage.getQuotationById(quotationId, user.organizationId) ?? null;
+      if (!linkedQuote) return res.status(422).json({ message: "Quotation not found." });
+      if (linkedQuote.funeralCaseId) return res.status(422).json({ message: "This quotation is already linked to another funeral case." });
+    }
+    if (req.body.serviceType === "cash" && !quotationId) {
+      return res.status(422).json({ message: "A quotation must be linked before creating a cash service case." });
     }
     const caseNumber = await storage.generateCaseNumber(user.organizationId);
-    const caseBody = { ...req.body };
+    let caseBody = { ...req.body };
+    if (linkedQuote) {
+      caseBody = { ...caseBody, ...quoteToCaseBlankFillPatch(linkedQuote, caseBody) };
+    }
     for (const f of ["bodyWashTime", "burialDepartureTime", "memorialServiceStart", "memorialServiceEnd", "slaDeadline", "completedAt"]) {
       if (caseBody[f] && typeof caseBody[f] === "string") { const d = new Date(caseBody[f]); caseBody[f] = isNaN(d.getTime()) ? undefined : d; }
       else if (!caseBody[f]) caseBody[f] = undefined;
@@ -4876,7 +4930,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       status: "open",
     });
     const fc = await storage.createFuneralCase(parsed);
-    if (req.body.serviceType === "cash" && quotationId) {
+    if (quotationId) {
       await storage.linkQuotationToCase(quotationId, fc.id, user.organizationId);
     }
     await auditLog(req, "CREATE_FUNERAL_CASE", "FuneralCase", fc.id, null, fc);
@@ -5217,7 +5271,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
       const intakeNumber = await storage.generateIntakeNumber(user.organizationId);
-      const body = { ...req.body };
+      let body = { ...req.body };
+      if (typeof body.funeralCaseId === "string" && body.funeralCaseId) {
+        const linkedCase = await storage.getFuneralCase(body.funeralCaseId, user.organizationId);
+        if (linkedCase) {
+          body = { ...body, ...caseToIntakeBlankFillPatch(linkedCase, body) };
+        }
+      }
       for (const f of ["removalDateTime", "receivedAt"]) {
         if (body[f] && typeof body[f] === "string") { const d = new Date(body[f]); body[f] = isNaN(d.getTime()) ? undefined : d; }
         else if (!body[f]) body[f] = undefined;
@@ -5258,7 +5318,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const before = await storage.getMortuaryIntake(req.params.id as string, user.organizationId);
     if (!before) return res.status(404).json({ message: "Mortuary intake not found" });
-    const patchBody = { ...req.body };
+    let patchBody = { ...req.body };
+    if (typeof patchBody.funeralCaseId === "string" && patchBody.funeralCaseId && patchBody.funeralCaseId !== before.funeralCaseId) {
+      const linkedCase = await storage.getFuneralCase(patchBody.funeralCaseId, user.organizationId);
+      if (linkedCase) {
+        const target = { ...before, ...patchBody };
+        patchBody = { ...patchBody, ...caseToIntakeBlankFillPatch(linkedCase, target) };
+      }
+    }
     for (const f of ["removalDateTime", "receivedAt"]) {
       if (patchBody[f] && typeof patchBody[f] === "string") { const d = new Date(patchBody[f]); patchBody[f] = isNaN(d.getTime()) ? null : d; }
       else if (patchBody[f] === "" ) patchBody[f] = null;
@@ -6689,6 +6756,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(created);
   });
 
+  app.get("/api/service-receipts/:id/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const { streamServiceReceiptPDF } = await import("./mortuary-document");
+    await streamServiceReceiptPDF(req.params.id as string, user.organizationId, res, {
+      attachment: req.query.download === "1",
+    });
+  });
+
   // ─── Standalone Quotations ──────────────────────────────────
 
   app.get("/api/quotations", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
@@ -6795,10 +6870,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const { funeralCaseId } = req.body;
     if (!funeralCaseId) return res.status(400).json({ message: "funeralCaseId required" });
+    const existingCase = await storage.getFuneralCase(funeralCaseId, user.organizationId);
+    if (!existingCase) return res.status(404).json({ message: "Funeral case not found" });
     const updated = await storage.linkQuotationToCase(req.params.id as string, funeralCaseId, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Quotation not found" });
+    const fillPatch = quoteToCaseBlankFillPatch(updated, existingCase);
+    const updatedCase = Object.keys(fillPatch).length > 0
+      ? await storage.updateFuneralCase(funeralCaseId, fillPatch, user.organizationId)
+      : existingCase;
     await auditLog(req, "LINK_QUOTATION_TO_CASE", "FuneralQuotation", req.params.id as string, null, updated);
-    return res.json(updated);
+    return res.json({ ...updated, funeralCase: updatedCase });
   });
 
   app.post("/api/quotations/:id/guarantor", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {

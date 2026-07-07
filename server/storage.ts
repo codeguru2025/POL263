@@ -4914,6 +4914,12 @@ export class DatabaseStorage implements IStorage {
     // caller can retry and will then read back the committed receipt.
     throw new Error("Service receipt idempotency conflict: a concurrent receipt with the same key is being created");
   }
+  async getServiceReceiptById(id: string, orgId: string): Promise<ServiceReceipt | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(serviceReceipts)
+      .where(and(eq(serviceReceipts.id, id), eq(serviceReceipts.organizationId, orgId)));
+    return row;
+  }
   async getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]> {
     const tdb = await getDbForOrg(orgId);
     const rows = await tdb.select({ id: clientDeviceTokens.id, token: clientDeviceTokens.token, platform: clientDeviceTokens.platform })

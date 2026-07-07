@@ -1079,3 +1079,89 @@ export async function streamFuneralQuotationBlankPDF(orgId: string, res: Respons
   sigBlock(doc, "Guarantor", MARGIN + (third + 8) * 2, third, y);
   doc.end();
 }
+
+// ── FORM 10: CASH-SERVICE RECEIPT (funeral case / quotation payments) ──
+
+export async function streamServiceReceiptPDF(
+  receiptId: string,
+  orgId: string,
+  res: Response,
+  opts?: { attachment?: boolean },
+): Promise<void> {
+  const receipt = await storage.getServiceReceiptById(receiptId, orgId);
+  if (!receipt) { res.status(404).json({ message: "Receipt not found" }); return; }
+  const org = await storage.getOrganization(orgId);
+  if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
+
+  const [fc, quote, issuedByUser] = await Promise.all([
+    receipt.funeralCaseId ? storage.getFuneralCase(receipt.funeralCaseId, orgId) : Promise.resolve(undefined),
+    receipt.quotationId ? storage.getQuotationById(receipt.quotationId, orgId) : Promise.resolve(undefined),
+    receipt.issuedByUserId ? storage.getUser(receipt.issuedByUserId) : Promise.resolve(undefined),
+  ]);
+
+  const deceasedName = fc?.deceasedName || quote?.deceasedName || "—";
+  const informantName = fc?.informantName || quote?.informantFullNames || "—";
+  const informantPhone = fc?.informantPhone || quote?.informantPhone || "—";
+
+  const displayReceiptNum = /^\d+$/.test(String(receipt.receiptNumber).trim())
+    ? `RCP-${String(receipt.receiptNumber).padStart(5, "0")}`
+    : receipt.receiptNumber;
+
+  const filename = `Service-Receipt-${displayReceiptNum}.pdf`;
+  res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="${filename}"`);
+  res.setHeader("Content-Type", "application/pdf");
+
+  const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
+  doc.pipe(res);
+
+  let y = await buildHeader(
+    doc,
+    { name: org.name, phone: org.phone, email: org.email, address: org.address, logoUrl: org.logoUrl },
+    "CASH SERVICE RECEIPT",
+    `Receipt No: ${displayReceiptNum}  ·  Date: ${fmtDateTime(receipt.issuedAt ?? new Date())}`,
+  );
+
+  y = sectionHeader(doc, "Received From", y);
+  y = infoRow(doc, "Deceased / Client Name:", fmt(deceasedName), y);
+  y = infoRow(doc, "Informant Name:", fmt(informantName), y);
+  y = infoRow(doc, "Informant Phone:", fmt(informantPhone), y);
+  if (fc?.caseNumber) y = infoRow(doc, "Funeral Case No:", fmt(fc.caseNumber), y);
+  if (quote?.quotationNumber) y = infoRow(doc, "Quotation No:", fmt(quote.quotationNumber), y);
+  y += 8;
+
+  y = sectionHeader(doc, "Payment Details", y);
+  y += 6;
+  const amtStr = `${receipt.currency} ${parseFloat(String(receipt.amount)).toFixed(2)}`;
+  doc.rect(MARGIN, y, COL, 36).fill(C_LIGHT_BG);
+  doc.font("Helvetica-Bold").fontSize(20).fillColor(receipt.status === "voided" ? C_MUTED : C_PRIMARY)
+    .text(receipt.status === "voided" ? `${amtStr}  (VOIDED)` : amtStr, MARGIN, y + 8, { width: COL, align: "center" });
+  doc.fillColor(C_TEXT);
+  y += 44;
+
+  y = infoRow(doc, "Payment Channel:", fmt(receipt.paymentChannel?.replace(/_/g, " ")), y);
+  y = infoRow(doc, "Status:", receipt.status === "voided" ? "VOIDED" : "ISSUED", y);
+  y = infoRow(doc, "Issued By:", issuedByUser ? fmt(issuedByUser.displayName || issuedByUser.email) : "—", y);
+  if (quote?.grandTotal) {
+    y = infoRow(doc, "Quotation Total:", `${quote.currency} ${parseFloat(String(quote.grandTotal)).toFixed(2)}`, y);
+  }
+  if (receipt.notes) y = infoRow(doc, "Notes:", fmt(receipt.notes), y);
+  y += 16;
+
+  y = sectionHeader(doc, "Sign-Off", y); y += 8;
+  const half = COL / 2 - 8;
+  sigBlock(doc, "Cashier Signature", MARGIN, half, y);
+  sigBlock(doc, "Payer Signature", MARGIN + half + 16, half, y);
+  y += 100;
+
+  if (receipt.status !== "voided") {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(C_PRIMARY)
+      .text("RECEIVED WITH THANKS", MARGIN, y, { width: COL, align: "center" });
+  }
+
+  const [sigBufSvc, qrBufSvc] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("form", receipt.id); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Cash Service Receipt", displayReceiptNum, sigBufSvc, qrBufSvc);
+  doc.end();
+}
