@@ -109,6 +109,7 @@ export default function StaffPolicies() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [countryFilter, setCountryFilter] = useState<string>("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showTransitionDialog, setShowTransitionDialog] = useState(false);
   const [docLang, setDocLang] = useState("en");
@@ -176,6 +177,7 @@ export default function StaffPolicies() {
     premiumEffectiveDate: "",
     premiumChangeReason: "",
     isLegacy: false,
+    isSouthAfrica: false,
   });
 
   const [editMemberOpen, setEditMemberOpen] = useState(false);
@@ -204,6 +206,7 @@ export default function StaffPolicies() {
     memberAddOns: {} as Record<string, string[]>,
     newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", physicalAddress: "", postalAddress: "" },
     isLegacy: false,
+    isSouthAfrica: false,
   });
   const [createStep, setCreateStep] = useState(1);
   const [clientMode, setClientMode] = useState<"search" | "new">("search");
@@ -831,6 +834,7 @@ export default function StaffPolicies() {
           memberAddOns,
           beneficiary,
           isLegacy: data.isLegacy || undefined,
+          isSouthAfrica: (data as any).isSouthAfrica || undefined,
         });
         return res.json();
       } catch (err) {
@@ -868,6 +872,7 @@ export default function StaffPolicies() {
         memberAddOns: {},
         newClient: { firstName: "", lastName: "", phone: "", email: "", nationalId: "", dateOfBirth: "", gender: "", physicalAddress: "", postalAddress: "" },
         isLegacy: false,
+        isSouthAfrica: false,
       });
       toast({ title: "Policy created", description: policy.isLegacy ? `Policy ${policy.policyNumber} has been created and auto-activated as a legacy policy.` : `Policy ${policy.policyNumber} has been created in inactive status.` });
     },
@@ -1056,6 +1061,7 @@ export default function StaffPolicies() {
       premiumEffectiveDate: todayISO,
       premiumChangeReason: "",
       isLegacy: !!policy.isLegacy,
+      isSouthAfrica: !!policy.isSouthAfrica,
     });
     setShowEditDialog(true);
   };
@@ -1086,6 +1092,7 @@ export default function StaffPolicies() {
       }
     }
     if (canEditPremium && editForm.isLegacy !== !!displayPolicy.isLegacy) data.isLegacy = editForm.isLegacy;
+    if (editForm.isSouthAfrica !== !!displayPolicy.isSouthAfrica) data.isSouthAfrica = editForm.isSouthAfrica;
     if (Object.keys(data).length === 0) {
       setShowEditDialog(false);
       return;
@@ -1325,9 +1332,12 @@ export default function StaffPolicies() {
     const list = Array.isArray(policies) ? policies : [];
     return list.filter((p: any) => {
       const matchesStatus = statusFilter === "all" || p.status === statusFilter;
-      return matchesStatus;
+      const matchesCountry = countryFilter === "all"
+        || (countryFilter === "south_africa" && p.isSouthAfrica)
+        || (countryFilter === "zimbabwe" && !p.isSouthAfrica);
+      return matchesStatus && matchesCountry;
     });
-  }, [policies, statusFilter]);
+  }, [policies, statusFilter, countryFilter]);
 
   const clientMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -1417,6 +1427,9 @@ export default function StaffPolicies() {
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0" data-testid="badge-policy-status">
                 <StatusBadge status={displayPolicy.status} />
+                {displayPolicy.isSouthAfrica && (
+                  <Badge variant="outline" className="font-medium bg-blue-500/10 text-blue-700 border-blue-200" data-testid="badge-detail-south-africa">South Africa</Badge>
+                )}
               </div>
             </div>
             <div className="flex flex-col gap-3">
@@ -2810,6 +2823,20 @@ export default function StaffPolicies() {
                 </div>
               )}
 
+              <div className="flex items-start gap-3 rounded-md border p-3">
+                <Checkbox
+                  id="edit-is-south-africa"
+                  checked={editForm.isSouthAfrica}
+                  onCheckedChange={(v) => setEditForm({ ...editForm, isSouthAfrica: !!v })}
+                  className="mt-0.5"
+                  data-testid="checkbox-edit-is-south-africa"
+                />
+                <div className="space-y-0.5">
+                  <label htmlFor="edit-is-south-africa" className="text-sm font-medium cursor-pointer">South Africa-based policy</label>
+                  <p className="text-xs text-muted-foreground">Client is based in South Africa. Leave unchecked for Zimbabwe-based policies.</p>
+                </div>
+              </div>
+
               <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
                 <strong>Note:</strong> {canEditPremium
                   ? "Policy number and client cannot be changed. Premium can be overridden above; it otherwise auto-calculates from the product, add-ons, and members. Agent can be reassigned."
@@ -3555,6 +3582,9 @@ export default function StaffPolicies() {
                       <div className="flex items-center gap-2 font-medium">
                         <FileText className="h-4 w-4 text-primary/70 shrink-0" />
                         {p.policyNumber}
+                        {p.isSouthAfrica && (
+                          <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 border-blue-200" data-testid={`badge-south-africa-${p.id}`}>SA</Badge>
+                        )}
                       </div>
                     ),
                   },
@@ -3675,6 +3705,16 @@ export default function StaffPolicies() {
                         <SelectItem value="grace">Grace</SelectItem>
                         <SelectItem value="lapsed">Lapsed</SelectItem>
                         <SelectItem value="cancelled">Cancelled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select value={countryFilter} onValueChange={setCountryFilter}>
+                      <SelectTrigger className="w-full sm:w-40 shrink-0 h-9" data-testid="select-country-filter">
+                        <SelectValue placeholder="All Countries" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Countries</SelectItem>
+                        <SelectItem value="zimbabwe">Zimbabwe</SelectItem>
+                        <SelectItem value="south_africa">South Africa</SelectItem>
                       </SelectContent>
                     </Select>
                   </>
@@ -4291,6 +4331,18 @@ export default function StaffPolicies() {
                     </div>
                   </div>
                 )}
+                <div className="flex items-start gap-3 border rounded-md p-3">
+                  <Checkbox
+                    id="create-south-africa-flag"
+                    checked={createForm.isSouthAfrica}
+                    onCheckedChange={(v) => setCreateForm({ ...createForm, isSouthAfrica: !!v })}
+                    data-testid="checkbox-is-south-africa"
+                  />
+                  <div className="space-y-1 leading-none">
+                    <label htmlFor="create-south-africa-flag" className="text-sm font-medium cursor-pointer">South Africa-based policy</label>
+                    <p className="text-xs text-muted-foreground">Client is based in South Africa (currency alone doesn't always indicate this — some SA clients pay in USD). Leave unchecked for Zimbabwe-based policies.</p>
+                  </div>
+                </div>
                 <div className="space-y-3 border rounded-md p-3">
                   <p className="text-sm font-medium">Saved mobile wallet (automation)</p>
                   <p className="text-xs text-muted-foreground">When automation runs for overdue balances, we use this number so the client can approve on their phone. Stored cards are not used for recurring collection.</p>
