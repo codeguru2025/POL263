@@ -24,6 +24,7 @@ import { formatReceiptNumber } from "@/lib/assetUrl";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { useAuth } from "@/hooks/use-auth";
 import { CurrencySelect } from "@/components/currency-select";
+import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { formatAmount } from "@shared/validation";
 import { isAgentScoped } from "@shared/roles";
 
@@ -1319,7 +1320,7 @@ export default function StaffFinance() {
   type ReqItem = { description: string; category: string; qty: string; unitPrice: string };
   const blankItem = (): ReqItem => ({ description: "", category: "", qty: "1", unitPrice: "" });
   const [showRequisitionDialog, setShowRequisitionDialog] = useState(false);
-  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10) });
+  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10), requestedByUserId: authUser?.id || "" });
   const [reqItems, setReqItems] = useState<ReqItem[]>([blankItem()]);
   // Approve/reject dialog
   const [approveTarget, setApproveTarget] = useState<any>(null);
@@ -1332,7 +1333,7 @@ export default function StaffFinance() {
     setReqItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
   const addReqItem = () => setReqItems(prev => [...prev, blankItem()]);
   const removeReqItem = (idx: number) => setReqItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
-  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10) }); setReqItems([blankItem()]); };
+  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10), requestedByUserId: authUser?.id || "" }); setReqItems([blankItem()]); };
   const openApproveDialog = (r: any, action: "approve" | "reject") => {
     setApproveTarget(r);
     setApproveAction(action);
@@ -3220,8 +3221,20 @@ export default function StaffFinance() {
           {/* Header fields */}
           <div className="grid grid-cols-2 gap-3">
             <div>
+              <Label className="text-xs">Requested By</Label>
+              <Select value={reqHeader.requestedByUserId || (authUser?.id ?? "")}
+                onValueChange={(v) => setReqHeader({ ...reqHeader, requestedByUserId: v })}>
+                <SelectTrigger className="text-sm"><SelectValue placeholder="Who is requesting?" /></SelectTrigger>
+                <SelectContent>
+                  {(staffUsers as any[]).map((u: any) => (
+                    <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}{u.id === authUser?.id ? " (you)" : ""}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs">Payee</Label>
-              <Input value={reqHeader.payee} onChange={(e) => setReqHeader({ ...reqHeader, payee: e.target.value })} placeholder="Who will be paid?" />
+              <Input value={reqHeader.payee} onChange={(e) => setReqHeader({ ...reqHeader, payee: e.target.value })} placeholder="Who will be paid? (if not a system user, type their name)" />
             </div>
             <div>
               <Label className="text-xs">Currency</Label>

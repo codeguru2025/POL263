@@ -5231,7 +5231,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req2) return res.status(404).json({ message: "Requisition not found" });
     const [allItems, requesterList] = await Promise.all([
       storage.getRequisitionItemsByIds([req2.id], user.organizationId),
-      storage.getUsersByIds([req2.requestedBy]),
+      storage.getUsersByIds([req2.requestedBy], user.organizationId),
     ]);
     const requester = (requesterList as any[])[0];
     const reqData = { ...req2, items: allItems, requesterName: requester?.displayName || requester?.email || "Unknown" };
@@ -5249,7 +5249,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (disb.entityType === "requisition") {
       linkedReq = await storage.getRequisition(disb.entityId, user.organizationId);
     }
-    const paidByUser = disb.paidByUserId ? (await storage.getUsersByIds([disb.paidByUserId]))[0] as any : null;
+    const paidByUser = disb.paidByUserId ? (await storage.getUsersByIds([disb.paidByUserId], user.organizationId))[0] as any : null;
     const voucherData = { ...disb, paidByName: paidByUser?.displayName || paidByUser?.email || "—" };
     const org = await storage.getOrganization(user.organizationId);
     const buf = await generatePaymentVoucherPdf(voucherData, linkedReq, org);
@@ -6029,7 +6029,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (const r of reqs) { if (r.requestedBy && !seen.has(r.requestedBy)) { seen.add(r.requestedBy); requesterIds.push(r.requestedBy); } }
     const [allItems, requesterList] = await Promise.all([
       ids.length > 0 ? storage.getRequisitionItemsByIds(ids, user.organizationId) : Promise.resolve([]),
-      requesterIds.length > 0 ? storage.getUsersByIds(requesterIds) : Promise.resolve([]),
+      requesterIds.length > 0 ? storage.getUsersByIds(requesterIds, user.organizationId) : Promise.resolve([]),
     ]);
     const itemMap = new Map<string, any[]>();
     for (const item of allItems) {
@@ -6064,7 +6064,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // requestedBy is NOT NULL — a plain mirror-and-use-registry-id won't work if this staff
       // member's email already exists in the tenant DB under a different id (see
       // resolveOrSyncTenantUserId for why that can legitimately happen).
-      const requestedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      // The creator may raise a requisition on behalf of another staff member (requestedByUserId
+      // override) — validated against this org before use; otherwise it defaults to the creator.
+      let requestedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      if (
+        typeof req.body.requestedByUserId === "string" &&
+        req.body.requestedByUserId &&
+        req.body.requestedByUserId !== user.id
+      ) {
+        const onBehalfOf = await storage.getUser(req.body.requestedByUserId, user.organizationId);
+        if (onBehalfOf && onBehalfOf.organizationId === user.organizationId) {
+          requestedBy = await resolveOrSyncTenantUserId(user.organizationId, req.body.requestedByUserId);
+        }
+      }
       const parsed = insertRequisitionSchema.parse({
         ...req.body,
         amount,
@@ -6119,6 +6131,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // requestedBy does above, in case this account's mirror was skipped (see
     // resolveOrSyncTenantUserId).
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+
+    // Segregation of duties: whoever raised a requisition cannot also be the one who approves,
+    // rejects, or pays it — the platform owner is the sole exception (needed for correcting/
+    // reconciling historical entries end-to-end).
+    if (
+      (action === "approve" || action === "reject" || action === "pay") &&
+      existing.requestedBy === effectiveUserId &&
+      !user.isPlatformOwner
+    ) {
+      return res.status(403).json({ message: "You cannot approve, reject, or pay a requisition you raised yourself." });
+    }
 
     if (action === "submit") {
       if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be submitted" });
@@ -6181,8 +6204,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return row;
       });
     } else {
-      // Plain edit (only while draft)
-      if (existing.status !== "draft") return res.status(400).json({ message: "Only draft requisitions can be edited" });
+      // Plain edit: any staff member can edit while still in draft. Once submitted, only the
+      // platform owner can edit directly (needed to correct/reconcile entries after the fact) —
+      // everyone else must use reject-and-resubmit to change something post-submission.
+      if (existing.status !== "draft" && !user.isPlatformOwner) {
+        return res.status(400).json({ message: "Only draft requisitions can be edited" });
+      }
       for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes", "neededByDate"]) {
         if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
       }
@@ -6281,7 +6308,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const disbursements = await storage.getPaymentDisbursements(user.organizationId, filters);
     const enriched = await Promise.all(disbursements.map(async (d) => {
       const userIds = [d.paidByUserId, d.receivedByUserId].filter(Boolean) as string[];
-      const usersMap = userIds.length > 0 ? await storage.getUsersByIds(userIds) : [];
+      const usersMap = userIds.length > 0 ? await storage.getUsersByIds(userIds, user.organizationId) : [];
       const findUser = (id: string | null | undefined) => usersMap.find((u: any) => u.id === id) || null;
       const paidByUser = d.paidByUserId ? findUser(d.paidByUserId) : null;
       const receivedByUser = d.receivedByUserId ? findUser(d.receivedByUserId) : null;
@@ -6302,6 +6329,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!["approved", "partial"].includes(existing.status)) {
       return res.status(400).json({ message: "Requisition must be approved before payments can be recorded" });
     }
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    // Segregation of duties: whoever raised a requisition cannot also be the one who pays it —
+    // platform owner is the sole exception. Same rule enforced in PATCH /api/requisitions/:id.
+    if (existing.requestedBy === effectiveUserId && !user.isPlatformOwner) {
+      return res.status(403).json({ message: "You cannot pay a requisition you raised yourself." });
+    }
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
     const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : new Date().toISOString().split("T")[0];
@@ -6317,7 +6350,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // a crash between the two calls leaves either an orphaned disbursement (money recorded as
       // spent with no matching requisition status) or a "paid" requisition with no disbursement
       // backing it (exactly the drift a historical backfill script had to patch for Falakhe).
-      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       const { disbursement, updated } = await withOrgTransaction(user.organizationId, async (txDb) => {
         const voucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
@@ -6487,7 +6519,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const deposits = await storage.getBankDeposits(user.organizationId, filters);
     const allUserIds = deposits.flatMap(d => [d.depositedByUserId, d.verifiedByUserId].filter(Boolean) as string[]);
     const userIds = allUserIds.filter((id, i) => allUserIds.indexOf(id) === i);
-    const depositUsers = userIds.length > 0 ? await storage.getUsersByIds(userIds) : [];
+    const depositUsers = userIds.length > 0 ? await storage.getUsersByIds(userIds, user.organizationId) : [];
     const findU = (id: string | null | undefined) => depositUsers.find((u: any) => u.id === id);
     const accounts = await storage.getBankAccounts(user.organizationId);
     const findA = (id: string | null | undefined) => accounts.find(a => a.id === id);
@@ -6547,7 +6579,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const positions = await storage.getAdminCashPosition(user.organizationId);
     const userIds = positions.map(p => p.userId);
-    const positionUsers = userIds.length > 0 ? await storage.getUsersByIds(userIds) : [];
+    const positionUsers = userIds.length > 0 ? await storage.getUsersByIds(userIds, user.organizationId) : [];
     const findU = (id: string) => positionUsers.find((u: any) => u.id === id);
     return res.json(positions.map(p => ({
       ...p,
@@ -8186,7 +8218,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // 2. Admin cash positions
     const positions = await storage.getAdminCashPosition(orgId);
     const posUserIds = positions.map(p => p.userId);
-    const posUsers   = posUserIds.length ? await storage.getUsersByIds(posUserIds) : [];
+    const posUsers   = posUserIds.length ? await storage.getUsersByIds(posUserIds, orgId) : [];
     const findU = (id: string) => posUsers.find((u: any) => u.id === id);
     const totalOnHand   = positions.reduce((s, p) => s + Math.max(0, p.onHand), 0);
     const totalDeposited = positions.reduce((s, p) => s + p.totalDeposited, 0);

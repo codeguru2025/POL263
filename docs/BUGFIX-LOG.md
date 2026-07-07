@@ -10,6 +10,33 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-07 — requisitions showing "Unknown" requester for the platform owner on a dedicated-DB tenant
+
+- **Symptom:** user reported requisitions paid "yesterday" by Augustus (the platform owner)
+  showed no name for who requested/paid them, on Falakhe (an isolated-DB tenant).
+- **Root cause:** `storage.getUsersByIds(ids)` always queried the shared registry DB (`db`),
+  never the tenant's own DB. For a dedicated-DB tenant, the platform owner's `requisitions.requested_by`
+  / `paid_by` value is his **tenant-local mirrored id** (created by `resolveOrSyncTenantUserId` —
+  see earlier entries in this log on the same registry/tenant id-mismatch bug class), which only
+  exists in Falakhe's own database, not the shared registry. `getUsersByIds` found zero rows for
+  that id and every caller fell back to `"Unknown"`.
+- **Fix:** `getUsersByIds(ids, organizationId?)` now looks in the tenant DB first (via
+  `getDbForOrg`) when an orgId is passed, then fills in any still-missing ids from the registry.
+  For shared-DB orgs this is a no-op (their tenant DB *is* the registry DB). Updated all 7 call
+  sites in `server/routes.ts` (requisition PDF, payment voucher PDF, requisition list, payment
+  disbursements list, bank deposits list, cash position, admin cash position) to pass `organizationId`.
+- **Files:** `server/storage.ts`, `server/routes.ts`.
+- **Verification:** direct before/after check against Falakhe's real data — without orgId, 0
+  users found for Augustus's tenant-mirrored id; with orgId, resolves to "Augustus Siziba".
+  Typecheck + full test suite (179/179) green.
+- **Lesson for next time:** any `getUsersByIds`-style helper that's org-agnostic will silently
+  break the moment it's called with an id from a dedicated-DB tenant's local mirror — this is the
+  same root cause class as the earlier registry/tenant user-id mismatch bugs in this log, just
+  surfacing through a *display* path (name lookup) instead of a *write* path (FK violation). When
+  auditing for this bug class, check read paths too, not just inserts/updates.
+
+---
+
 ## 2026-07-07 — codebase-wide audit (architecture, ACID, edge cases, PayNow)
 
 ### Edge case: "yearly"-scheduled policies computed a $0 base premium and a 12x-undercharged surcharge
