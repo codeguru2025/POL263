@@ -165,6 +165,35 @@ convention" note in `CLAUDE.md`.
   a read/write path pair that looks symmetric (both reference "branding") can silently diverge if
   one was added later and nobody wired the write side for it.
 
+### Feature: trial-mode orgs on the shared DB, admin-driven dedicated-DB commissioning
+
+- **Confirmed (not a bug, but worth recording):** `getPoolForOrg()` (`server/tenant-db.ts`)
+  already defaults any org with no `control_plane.tenant_databases` row — or a null
+  `databaseUrl` there — to the shared `DATABASE_URL` pool. Since new orgs get a
+  `control_plane.tenants` row (task #20) but never a `tenant_databases` row, "trial-mode orgs
+  use the shared platform DB" was already true by construction; nothing needed changing there.
+- **Built:** `script/commission-tenant-db.ts` (new, `tsx`, wired as `npm run db:commission-tenant`)
+  — the generalized, any-org version of the one-off Falakhe migration
+  (`script/migrate-supabase-to-do.ts` + `script/cp-set-tenant-db.ts`). Takes `TENANT_ID` +
+  `TENANT_DB_URL` (an admin manually provisions the destination Postgres DB first — this is a
+  supervised workflow, not automated provisioning), builds the destination schema by calling the
+  app's own migration runner (`applyPendingMigrations`), copies the org's rows table-by-table in
+  FK-dependency order, verifies row counts, then flips `control_plane.tenant_databases` routing.
+  Refuses to run if the tenant already has a dedicated DB registered (checked up front). Supports
+  `--dry-run` (counts only, writes nothing) and `--activate` (bumps `licenseStatus` to `"active"`
+  after a verified cutover).
+- **Files:** `script/commission-tenant-db.ts` (new), `package.json` (new npm script).
+- **Verification:** `--dry-run` against Falakhe's real org id correctly refused (already has a
+  dedicated DB). `--dry-run` against a real trial-mode org (Shego Funeral Group, using the shared
+  DB as a stand-in destination) ran every table query across all 9 dependency layers with no SQL
+  errors and matching row counts — validates the full table list and FK-ordering against the real
+  schema, without copying or mutating anything. Typecheck + full test suite (179/179) green.
+- **Lesson for next time:** the copy-table list in `migrate-supabase-to-do.ts` was already stale
+  against `shared/schema.ts` (missing ~30 tables added since, e.g. mortuary intake/dispatch,
+  requisitions, bank reconciliation, funeral quotations) — when generalizing a one-off migration
+  script, diff its hardcoded table list against `information_schema.columns` for
+  `organization_id` first, don't assume the original list is still complete.
+
 ### ACID: 6 routes updated an entity's status and wrote its status-history row as two separate, non-atomic writes (one case: mixed-connection transaction that wasn't really atomic at all)
 
 - **Symptom:** not yet reported, found during audit. A crash/DB blip between the two writes
