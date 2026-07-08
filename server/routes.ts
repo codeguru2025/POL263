@@ -6663,11 +6663,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  app.get("/api/safes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getSafes(user.organizationId));
+  });
+
+  app.post("/api/safes", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const { name, currency, branchId, notes } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: "name is required" });
+      const safe = await storage.createSafe({
+        organizationId: user.organizationId,
+        branchId: branchId || undefined,
+        name: String(name).trim(),
+        currency: normalizeCurrency(currency) || "USD",
+        notes: notes ? String(notes).trim() : undefined,
+      });
+      await auditLog(req, "CREATE_SAFE", "Safe", safe.id, null, safe);
+      return res.status(201).json(safe);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/safes/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = await storage.getSafe(id, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Safe not found" });
+    const patch: Record<string, any> = {};
+    for (const k of ["name", "currency", "notes", "isActive"]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k];
+    }
+    const updated = await storage.updateSafe(id, user.organizationId, patch);
+    await auditLog(req, "UPDATE_SAFE", "Safe", id, existing, updated);
+    return res.json(updated);
+  });
+
   app.get("/api/bank-deposits", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = {
       userId: typeof req.query.userId === "string" ? req.query.userId : undefined,
       bankAccountId: typeof req.query.bankAccountId === "string" ? req.query.bankAccountId : undefined,
+      safeId: typeof req.query.safeId === "string" ? req.query.safeId : undefined,
       fromDate: typeof req.query.fromDate === "string" ? req.query.fromDate : undefined,
       toDate: typeof req.query.toDate === "string" ? req.query.toDate : undefined,
     };
@@ -6678,30 +6717,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const findU = (id: string | null | undefined) => depositUsers.find((u: any) => u.id === id);
     const accounts = await storage.getBankAccounts(user.organizationId);
     const findA = (id: string | null | undefined) => accounts.find(a => a.id === id);
+    const orgSafes = await storage.getSafes(user.organizationId);
+    const findS = (id: string | null | undefined) => orgSafes.find(s => s.id === id);
     return res.json(deposits.map(d => ({
       ...d,
       depositedByName: findU(d.depositedByUserId)?.displayName || findU(d.depositedByUserId)?.email || null,
       verifiedByName: findU(d.verifiedByUserId)?.displayName || findU(d.verifiedByUserId)?.email || null,
       bankAccountName: findA(d.bankAccountId)?.accountName || null,
+      safeName: findS((d as any).safeId)?.name || null,
     })));
   });
 
   app.post("/api/bank-deposits", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const { bankAccountId, amount, currency, depositDate, reference, notes, depositedByUserId } = req.body;
+    const { bankAccountId, safeId, amount, currency, depositDate, reference, notes, depositedByUserId } = req.body;
     const amt = parsePositiveAmount(amount);
     if (!amt) return res.status(400).json({ message: "A valid positive amount is required" });
     if (!depositDate) return res.status(400).json({ message: "depositDate is required" });
-    // Validate bank account belongs to this org
+    if (bankAccountId && safeId) return res.status(400).json({ message: "Choose either a bank account or a safe, not both" });
+    // Validate destination belongs to this org
     if (bankAccountId) {
       const acct = await storage.getBankAccount(String(bankAccountId), user.organizationId);
       if (!acct) return res.status(400).json({ message: "Bank account not found" });
+    }
+    if (safeId) {
+      const safe = await storage.getSafe(String(safeId), user.organizationId);
+      if (!safe) return res.status(400).json({ message: "Safe not found" });
     }
     const byUserId = depositedByUserId || user.id;
     try {
       const deposit = await storage.createBankDeposit({
         organizationId: user.organizationId,
         bankAccountId: bankAccountId || undefined,
+        safeId: safeId || undefined,
         depositedByUserId: byUserId,
         amount: String(amt.toFixed(2)),
         currency: normalizeCurrency(currency) || "USD",

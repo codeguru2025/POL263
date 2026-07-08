@@ -684,6 +684,13 @@ function BankingPanel() {
       return res.ok ? res.json() : [];
     },
   });
+  const { data: safes = [] } = useQuery<any[]>({
+    queryKey: ["/api/safes"],
+    queryFn: async () => {
+      const res = await fetch("/api/safes", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
   const { data: bankDeposits = [], isLoading: loadingDeposits } = useQuery<any[]>({
     queryKey: ["/api/bank-deposits"],
     queryFn: async () => {
@@ -742,16 +749,44 @@ function BankingPanel() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Safe form
+  const [showSafeDialog, setShowSafeDialog] = useState(false);
+  const [safeForm, setSafeForm] = useState({ name: "", currency: "USD", notes: "" });
+  const createSafeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/safes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": await getCsrfToken() ?? "" },
+        credentials: "include",
+        body: JSON.stringify(safeForm),
+      });
+      if (!res.ok) throw new Error((await res.json()).message);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/safes"] });
+      setShowSafeDialog(false);
+      setSafeForm({ name: "", currency: "USD", notes: "" });
+      toast({ title: "Safe added" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   // Deposit form
   const [showDepositDialog, setShowDepositDialog] = useState(false);
-  const [depositForm, setDepositForm] = useState({ bankAccountId: "", amount: "", currency: "USD", depositDate: new Date().toISOString().slice(0, 10), reference: "", notes: "" });
+  const [depositForm, setDepositForm] = useState({ destinationType: "bank" as "bank" | "safe", bankAccountId: "", safeId: "", amount: "", currency: "USD", depositDate: new Date().toISOString().slice(0, 10), reference: "", notes: "" });
+  const resetDepositForm = () => setDepositForm({ destinationType: "bank", bankAccountId: "", safeId: "", amount: "", currency: "USD", depositDate: new Date().toISOString().slice(0, 10), reference: "", notes: "" });
   const createDepositMutation = useMutation({
     mutationFn: async () => {
+      const { destinationType, ...body } = depositForm;
       const res = await fetch("/api/bank-deposits", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": await getCsrfToken() ?? "" },
         credentials: "include",
-        body: JSON.stringify(depositForm),
+        body: JSON.stringify({
+          ...body,
+          bankAccountId: destinationType === "bank" ? body.bankAccountId || undefined : undefined,
+          safeId: destinationType === "safe" ? body.safeId || undefined : undefined,
+        }),
       });
       if (!res.ok) throw new Error((await res.json()).message);
     },
@@ -759,7 +794,7 @@ function BankingPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/bank-deposits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cash-position"] });
       setShowDepositDialog(false);
-      setDepositForm({ bankAccountId: "", amount: "", currency: "USD", depositDate: new Date().toISOString().slice(0, 10), reference: "", notes: "" });
+      resetDepositForm();
       toast({ title: "Deposit recorded" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -949,6 +984,58 @@ function BankingPanel() {
         )}
       </CardSection>
 
+      {/* ── Safes (cash not always banked — sometimes secured on-site instead) ── */}
+      <CardSection
+        title="Safes"
+        description="Physical safes cash gets moved into instead of a bank — still counts as accounted-for cash on hand."
+        icon={ShieldCheck}
+        headerRight={
+          <Button size="sm" variant="outline" onClick={() => setShowSafeDialog(true)}>
+            <Plus className="h-4 w-4 mr-1.5" />
+            Add Safe
+          </Button>
+        }
+      >
+        {safes.length === 0 ? (
+          <EmptyState icon={ShieldCheck} title="No safes" description="Add a safe to record cash moved there instead of a bank." />
+        ) : (
+          <DataTable>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Safe</TableHead>
+                <TableHead>Currency</TableHead>
+                <TableHead className="text-right">Total moved in</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {safes.map((s: any) => {
+                const total = bankDeposits
+                  .filter((d: any) => d.safeId === s.id)
+                  .reduce((sum: number, d: any) => sum + parseFloat(d.amount), 0);
+                return (
+                  <TableRow key={s.id} className={s.isActive === false ? "opacity-60" : ""}>
+                    <TableCell className="font-medium">
+                      {s.name}
+                      {s.isActive === false && <Badge variant="secondary" className="ml-2 text-[10px]">Inactive</Badge>}
+                    </TableCell>
+                    <TableCell>{s.currency}</TableCell>
+                    <TableCell className="text-right tabular-nums font-semibold">{s.currency} {total.toFixed(2)}</TableCell>
+                    <TableCell>
+                      {s.isActive === false ? (
+                        <Badge variant="secondary">Inactive</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Active</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </DataTable>
+        )}
+      </CardSection>
+
       {/* ── Deposit History ─────────────────────────────────── */}
       <CardSection
         title="Deposit history"
@@ -971,7 +1058,7 @@ function BankingPanel() {
               <TableRow>
                 <TableHead>Date</TableHead>
                 <TableHead>Admin (deposited by)</TableHead>
-                <TableHead>Bank account</TableHead>
+                <TableHead>Destination</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
                 <TableHead>Reference</TableHead>
                 <TableHead>Verified</TableHead>
@@ -983,7 +1070,13 @@ function BankingPanel() {
                 <TableRow key={d.id}>
                   <TableCell className="tabular-nums text-sm">{new Date(d.depositDate).toLocaleDateString()}</TableCell>
                   <TableCell className="text-sm">{d.depositedByName || d.depositedByUserId}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{d.bankAccountName || "—"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {d.safeId ? (
+                      <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> {d.safeName || "Safe"}</span>
+                    ) : (
+                      d.bankAccountName || "—"
+                    )}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums font-semibold">{d.currency} {parseFloat(d.amount).toFixed(2)}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{d.reference || "—"}</TableCell>
                   <TableCell>
@@ -1099,20 +1192,81 @@ function BankingPanel() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Record Deposit Dialog ───────────────────────────── */}
-      <Dialog open={showDepositDialog} onOpenChange={setShowDepositDialog}>
+      {/* ── Add Safe Dialog ──────────────────────────────────── */}
+      <Dialog open={showSafeDialog} onOpenChange={setShowSafeDialog}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Record bank deposit</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Add safe</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label>Bank account</Label>
-              <Select value={depositForm.bankAccountId} onValueChange={v => setDepositForm(f => ({ ...f, bankAccountId: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
+              <Label>Safe name</Label>
+              <Input placeholder="e.g. Head Office Safe" value={safeForm.name} onChange={e => setSafeForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Currency</Label>
+              <Select value={safeForm.currency} onValueChange={v => setSafeForm(f => ({ ...f, currency: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {bankAccounts.filter((a: any) => a.isActive !== false).map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="ZAR">ZAR</SelectItem>
+                  <SelectItem value="ZIG">ZIG</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1.5">
+              <Label>Notes (optional)</Label>
+              <Textarea rows={2} value={safeForm.notes} onChange={e => setSafeForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowSafeDialog(false)}>Cancel</Button>
+            <Button disabled={!safeForm.name || createSafeMutation.isPending} onClick={() => createSafeMutation.mutate()}>
+              {createSafeMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Record Deposit Dialog ───────────────────────────── */}
+      <Dialog open={showDepositDialog} onOpenChange={setShowDepositDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Record cash movement</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Destination</Label>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant={depositForm.destinationType === "bank" ? "default" : "outline"}
+                  onClick={() => setDepositForm(f => ({ ...f, destinationType: "bank" }))} className="flex-1">
+                  <Building2 className="h-3.5 w-3.5 mr-1.5" /> Bank
+                </Button>
+                <Button type="button" size="sm" variant={depositForm.destinationType === "safe" ? "default" : "outline"}
+                  onClick={() => setDepositForm(f => ({ ...f, destinationType: "safe" }))} className="flex-1">
+                  <ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Safe
+                </Button>
+              </div>
+            </div>
+            {depositForm.destinationType === "bank" ? (
+              <div className="space-y-1.5">
+                <Label>Bank account</Label>
+                <Select value={depositForm.bankAccountId} onValueChange={v => setDepositForm(f => ({ ...f, bankAccountId: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
+                  <SelectContent>
+                    {bankAccounts.filter((a: any) => a.isActive !== false).map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label>Safe</Label>
+                <Select value={depositForm.safeId} onValueChange={v => setDepositForm(f => ({ ...f, safeId: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select safe…" /></SelectTrigger>
+                  <SelectContent>
+                    {safes.filter((s: any) => s.isActive !== false).map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.currency})</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {safes.length === 0 && <p className="text-xs text-muted-foreground">No safes yet — add one below first.</p>}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Amount</Label>
@@ -1145,9 +1299,15 @@ function BankingPanel() {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowDepositDialog(false)}>Cancel</Button>
-            <Button disabled={!depositForm.amount || parseFloat(depositForm.amount) <= 0 || !depositForm.depositDate || createDepositMutation.isPending} onClick={() => createDepositMutation.mutate()}>
+            <Button
+              disabled={
+                !depositForm.amount || parseFloat(depositForm.amount) <= 0 || !depositForm.depositDate || createDepositMutation.isPending ||
+                (depositForm.destinationType === "bank" ? !depositForm.bankAccountId : !depositForm.safeId)
+              }
+              onClick={() => createDepositMutation.mutate()}
+            >
               {createDepositMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Record Deposit
+              Record {depositForm.destinationType === "safe" ? "Safe Deposit" : "Bank Deposit"}
             </Button>
           </DialogFooter>
         </DialogContent>

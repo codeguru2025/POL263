@@ -2413,8 +2413,33 @@ export const insertBankAccountSchema = createInsertSchema(bankAccounts).omit({ i
 export type BankAccount = typeof bankAccounts.$inferSelect;
 export type InsertBankAccount = z.infer<typeof insertBankAccountSchema>;
 
+// ─── SAFES ─────────────────────────────────────────────────
+// Physical cash safes — an alternative destination to a bank account. Collected cash doesn't
+// always make it to the bank; sometimes it's secured in a safe instead, which should still count
+// as "accounted for" (reduces admin cash-on-hand) even though it never left the premises.
+export const safes = pgTable(
+  "safes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    name: text("name").notNull(),          // e.g. "Head Office Safe"
+    currency: text("currency").default("USD").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("safe_org_idx").on(t.organizationId)]
+);
+
+export const insertSafeSchema = createInsertSchema(safes).omit({ id: true, createdAt: true });
+export type Safe = typeof safes.$inferSelect;
+export type InsertSafe = z.infer<typeof insertSafeSchema>;
+
 // ─── BANK DEPOSITS ────────────────────────────────────────
-// Records when an admin physically banks collected cash.
+// Records when an admin physically banks collected cash — or, since cash doesn't always make
+// it to the bank, moves it into a safe instead (`safeId`, mutually exclusive with `bankAccountId`).
+// Either destination equally reduces the admin's cash-on-hand in getAdminCashPosition().
 export const bankDeposits = pgTable(
   "bank_deposits",
   {
@@ -2422,6 +2447,7 @@ export const bankDeposits = pgTable(
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     branchId: uuid("branch_id").references(() => branches.id),
     bankAccountId: uuid("bank_account_id").references(() => bankAccounts.id),
+    safeId: uuid("safe_id").references(() => safes.id),
     depositedByUserId: uuid("deposited_by_user_id").notNull().references(() => users.id),  // admin who banked
     verifiedByUserId: uuid("verified_by_user_id").references(() => users.id),              // manager who confirmed slip
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),

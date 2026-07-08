@@ -27,7 +27,7 @@ import {
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
-  bankAccounts, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
   quotationGuarantors, quotationCollateral, receiptAdverts, reminders,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
@@ -38,6 +38,7 @@ import {
   type RequisitionItem, type InsertRequisitionItem,
   type PaymentDisbursement, type InsertPaymentDisbursement,
   type BankAccount, type InsertBankAccount,
+  type Safe, type InsertSafe,
   type BankDeposit, type InsertBankDeposit,
   type BankStatementBalance, type InsertBankStatementBalance,
   type ParlourPersonnel, type InsertParlourPersonnel,
@@ -571,7 +572,11 @@ export interface IStorage {
   getBankAccount(id: string, orgId: string): Promise<BankAccount | undefined>;
   createBankAccount(data: InsertBankAccount): Promise<BankAccount>;
   updateBankAccount(id: string, orgId: string, data: Partial<BankAccount>): Promise<BankAccount | undefined>;
-  getBankDeposits(orgId: string, filters?: { userId?: string; bankAccountId?: string; fromDate?: string; toDate?: string }): Promise<BankDeposit[]>;
+  getSafes(orgId: string): Promise<Safe[]>;
+  getSafe(id: string, orgId: string): Promise<Safe | undefined>;
+  createSafe(data: InsertSafe): Promise<Safe>;
+  updateSafe(id: string, orgId: string, data: Partial<Safe>): Promise<Safe | undefined>;
+  getBankDeposits(orgId: string, filters?: { userId?: string; bankAccountId?: string; safeId?: string; fromDate?: string; toDate?: string }): Promise<BankDeposit[]>;
   getBankDepositById(id: string, orgId: string): Promise<BankDeposit | undefined>;
   createBankDeposit(data: InsertBankDeposit): Promise<BankDeposit>;
   updateBankDeposit(id: string, orgId: string, data: Partial<BankDeposit>): Promise<BankDeposit | undefined>;
@@ -4484,12 +4489,34 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
+  // ── Safes (alternative cash destination to a bank account) ──
+  async getSafes(orgId: string): Promise<Safe[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(safes).where(eq(safes.organizationId, orgId)).orderBy(safes.name);
+  }
+  async getSafe(id: string, orgId: string): Promise<Safe | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(safes).where(and(eq(safes.id, id), eq(safes.organizationId, orgId)));
+    return row;
+  }
+  async createSafe(data: InsertSafe): Promise<Safe> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(safes).values(data).returning();
+    return row;
+  }
+  async updateSafe(id: string, orgId: string, data: Partial<Safe>): Promise<Safe | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(safes).set(data).where(and(eq(safes.id, id), eq(safes.organizationId, orgId))).returning();
+    return row;
+  }
+
   // ── Bank deposits ──────────────────────────────────────────
-  async getBankDeposits(orgId: string, filters?: { userId?: string; bankAccountId?: string; fromDate?: string; toDate?: string }): Promise<BankDeposit[]> {
+  async getBankDeposits(orgId: string, filters?: { userId?: string; bankAccountId?: string; safeId?: string; fromDate?: string; toDate?: string }): Promise<BankDeposit[]> {
     const tdb = await getDbForOrg(orgId);
     const conds: any[] = [eq(bankDeposits.organizationId, orgId)];
     if (filters?.userId) conds.push(eq(bankDeposits.depositedByUserId, filters.userId));
     if (filters?.bankAccountId) conds.push(eq(bankDeposits.bankAccountId, filters.bankAccountId));
+    if (filters?.safeId) conds.push(eq(bankDeposits.safeId, filters.safeId));
     if (filters?.fromDate) conds.push(sql`${bankDeposits.depositDate} >= ${filters.fromDate}`);
     if (filters?.toDate) conds.push(sql`${bankDeposits.depositDate} <= ${filters.toDate}`);
     return tdb.select().from(bankDeposits).where(and(...conds)).orderBy(desc(bankDeposits.depositDate));
