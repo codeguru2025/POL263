@@ -232,9 +232,13 @@ export default function StaffPolicies() {
     }
   }, [isAgent, user?.id]);
 
+  // limit=500 (the server's hard ceiling — see GET /api/policies) since this page has no
+  // pagination UI of its own and expects the full list in one fetch. Without an explicit limit
+  // the server silently defaults to 100, which for an org with >100 policies (like Falakhe)
+  // meant the tail of the list just never loaded.
   const policiesQueryUrl = debouncedSearch
-    ? `/api/policies?q=${encodeURIComponent(debouncedSearch)}`
-    : "/api/policies";
+    ? `/api/policies?limit=500&q=${encodeURIComponent(debouncedSearch)}`
+    : "/api/policies?limit=500";
 
   const { data: policies, isLoading: policiesLoading } = useQuery<any[]>({
     queryKey: ["/api/policies", { q: debouncedSearch }],
@@ -287,8 +291,11 @@ export default function StaffPolicies() {
     };
   }, [searchString, policies, policiesLoading, setLocation]);
 
+  // limit=500 for the same reason as policiesQueryUrl above — clients feed getClientName()'s
+  // lookup map, and a truncated fetch here is exactly what made policies whose client fell
+  // outside the default 100-row page render the client's raw id instead of their name.
   const { data: rawClients } = useQuery<any[]>({
-    queryKey: ["/api/clients"],
+    queryKey: ["/api/clients?limit=500"],
   });
   const clients = rawClients ?? [];
   const { data: rawAgents } = useQuery<any[]>({
@@ -1391,7 +1398,7 @@ export default function StaffPolicies() {
 
   const getClientName = (clientId: string) => {
     const c = clientMap[clientId];
-    return c ? `${c.firstName} ${c.lastName}` : clientId?.slice(0, 8) + "...";
+    return c ? `${c.firstName} ${c.lastName}` : "Unknown client";
   };
 
   const openTransition = (policy: any) => {

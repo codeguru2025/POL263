@@ -10,6 +10,72 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-08 — policyNumberPrefix silently flipped to null (produced 15 policies with no "FLK" prefix)
+
+- **Symptom:** 15 Falakhe policies had bare numeric policy numbers ("00331", "00217", …) instead
+  of the expected "FLK00331" format. `organizations` audit history showed `policy_number_prefix`
+  repeatedly cycling `'FLK' → null → 'FLK'` over several unrelated settings saves across June/July.
+- **Root cause:** `GET /api/organizations` (the list endpoint, used for `currentOrg` in
+  `client/src/pages/staff/settings.tsx`) sources branding fields — including
+  `policyNumberPrefix` — from `cp_tenant_branding`, a control-plane **mirror** table
+  (`server/routes.ts:873-914`), not from the real `organizations` row. The Settings page seeded
+  its local form state from this list value (not from `fullOrg`, the single-org endpoint that
+  reads `storage.getOrganization()` directly — already used for PayNow fields specifically,
+  per an existing comment flagging this same class of staleness). Because
+  `handleSaveBranding()` unconditionally resends every one of these fields on *every* save
+  (regardless of which field the user actually meant to change), any time the mirror lagged
+  behind the real value, the next unrelated branding save (e.g. changing the phone number) wrote
+  the stale/blank mirrored value straight back into the real `organizations` table — overwriting
+  a correct 'FLK' with null. `generatePolicyNumber()` (`server/storage.ts:4126`) reads this
+  column live on every policy creation, so policies created during a null window got no prefix.
+- **Fix:** merged the two `useEffect`s that seed Settings' form state
+  (`client/src/pages/staff/settings.tsx`) into one, sourcing every field — branding, policy
+  numbering, `databaseUrl`/`isWhitelabeled`, and PayNow — from `fullOrg ?? currentOrg`
+  consistently, the same pattern already used for PayNow fields alone. `fullOrg` always reads
+  the real table, so it can't go stale the way the mirror can.
+- **Data correction:** renamed the 15 affected policies to add the missing "FLK" prefix
+  (`FLK00217`, `FLK00331`–`FLK00344`), each logged as an `UPDATE_POLICY` audit entry.
+- **Files:** `client/src/pages/staff/settings.tsx`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+  Traced the exact audit-log cycle (`'FLK' → null → 'FLK'`) against policy creation timestamps to
+  confirm every un-prefixed policy fell inside a null window before writing the fix.
+- **Lesson for next time:** a control-plane mirror table that exists only for a dashboard list
+  view becomes a live data-corruption vector the moment a form seeds its *editable* state from it
+  instead of from the authoritative single-record endpoint — especially when the save handler
+  resends the whole form on every submit rather than only the fields that actually changed. When
+  auditing a "this field mysteriously reset" report, check whether the value display and the value
+  being edited come from two different queries.
+
+---
+
+## 2026-07-08 — Policies list showed client IDs instead of names for most policies
+
+- **Symptom:** many rows on the Policies list displayed a raw client id fragment instead of the
+  client's name.
+- **Root cause:** both `GET /api/clients` and `GET /api/policies` default to `limit=100` when no
+  `limit` query param is sent (`server/routes.ts:1549`, `:2233`), and
+  `client/src/pages/staff/policies.tsx` never passed one for either. Falakhe has 261 clients and
+  300+ policies with no pagination UI on this page — so only the first 100 of each ever loaded.
+  `getClientName()` looks up the policy's `clientId` in a map built from the (truncated) client
+  fetch; any client past row 100 wasn't in the map, so the lookup fell through to displaying
+  `clientId.slice(0, 8) + "..."` — and, separately, any policy past row 100 in its own list
+  silently never rendered at all, a strictly worse version of the same root defect.
+- **Fix:** added `limit=500` (the server's hard ceiling) to both the `/api/clients` and
+  `/api/policies` fetch URLs in `policies.tsx`. Also changed `getClientName()`'s fallback from a
+  truncated id to "Unknown client" for the genuine edge case (client actually missing/deleted),
+  so a lookup miss is never confused with a real identifier again.
+- **Files:** `client/src/pages/staff/policies.tsx`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+  Confirmed via direct count (261 clients, ~345 policies vs. the 100-row default) before writing
+  the fix, rather than assuming from the symptom alone.
+- **Lesson for next time:** `limit=500` is a stopgap, not a scalable fix — if either table grows
+  past 500 rows for any org, this same symptom returns. The real fix is proper pagination (or
+  having the policies endpoint return the client name embedded per row, removing the need for a
+  separate full client fetch entirely) — flagged here, not built, since it's a bigger change than
+  this bug report asked for.
+
+---
+
 ## 2026-07-08 — no way to edit a policy holder's address from the Policy page
 
 - **Context:** user reported "can't edit the address" while working on a policy. Traced this to a

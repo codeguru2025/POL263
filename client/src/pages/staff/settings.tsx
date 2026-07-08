@@ -288,29 +288,32 @@ export default function StaffSettings() {
     databaseUrl: "",
   });
 
-  useEffect(() => {
-    if (currentOrg) {
-      setOrgName(currentOrg.name || "");
-      setPrimaryColor(currentOrg.primaryColor || "");
-      setFooterText(currentOrg.footerText || "");
-      setAddress(currentOrg.address || "");
-      setPhone(currentOrg.phone || "");
-      setEmail(currentOrg.email || "");
-      setWebsite(currentOrg.website || "");
-      setLogoUrl(currentOrg.logoUrl || "");
-      setSignatureUrl(currentOrg.signatureUrl || "");
-      setPolicyNumberPrefix(currentOrg.policyNumberPrefix ?? "");
-      setPolicyNumberPadding(typeof currentOrg.policyNumberPadding === "number" ? currentOrg.policyNumberPadding : 5);
-      setDatabaseUrl(currentOrg.databaseUrl ?? "");
-      setIsWhitelabeled(currentOrg.isWhitelabeled ?? false);
-    }
-  }, [currentOrg]);
-
-  // Paynow fields come from fullOrg (single-org endpoint always returns all columns).
-  // The /api/organizations list uses a control-plane query for admins that omits paynow fields.
+  // All branding/policy-numbering/tenant fields come from fullOrg (single-org endpoint, reads
+  // storage.getOrganization() directly) in preference to currentOrg (the /api/organizations LIST
+  // endpoint, which for platform-owner/admin users sources these same fields from
+  // cp_tenant_branding — a control-plane MIRROR that can drift stale). Previously this effect
+  // used currentOrg alone; if the mirror ever lagged, the form would load the stale/blank value,
+  // and because handleSaveBranding unconditionally resends every one of these fields on every
+  // save (regardless of which one the user actually meant to change), the next save silently
+  // overwrote the real organizations row with the stale mirrored value — this is exactly how
+  // Falakhe's policyNumberPrefix repeatedly flipped to null, producing policies with no "FLK"
+  // prefix. fullOrg has no such staleness risk (falls straight through to the real table).
   useEffect(() => {
     const src = fullOrg ?? currentOrg;
     if (src) {
+      setOrgName(src.name || "");
+      setPrimaryColor(src.primaryColor || "");
+      setFooterText(src.footerText || "");
+      setAddress(src.address || "");
+      setPhone(src.phone || "");
+      setEmail(src.email || "");
+      setWebsite(src.website || "");
+      setLogoUrl(src.logoUrl || "");
+      setSignatureUrl(src.signatureUrl || "");
+      setPolicyNumberPrefix(src.policyNumberPrefix ?? "");
+      setPolicyNumberPadding(typeof src.policyNumberPadding === "number" ? src.policyNumberPadding : 5);
+      setDatabaseUrl(src.databaseUrl ?? "");
+      setIsWhitelabeled(src.isWhitelabeled ?? false);
       setPnIntegrationId(src.paynowIntegrationId ?? "");
       setPnIntegrationKey(src.paynowIntegrationKey ?? "");
       setPnAuthEmail(src.paynowAuthEmail ?? "");
