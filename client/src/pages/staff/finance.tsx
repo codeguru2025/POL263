@@ -1413,6 +1413,7 @@ export default function StaffFinance() {
   const [payForm, setPayForm] = useState({
     amount: "", paidDate: new Date().toISOString().slice(0, 10),
     paymentMethod: "cash", reference: "", receivedBy: "", receivedByUserId: "", notes: "",
+    paidInDifferentCurrency: false, paidCurrency: "", fxRateApplied: "",
   });
   const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
   const [expandedExpId, setExpandedExpId] = useState<string | null>(null);
@@ -1428,6 +1429,7 @@ export default function StaffFinance() {
       amount: outstanding.toFixed(2),
       paidDate: new Date().toISOString().slice(0, 10),
       paymentMethod: "cash", reference: "", receivedBy: "", receivedByUserId: "", notes: "",
+      paidInDifferentCurrency: false, paidCurrency: "", fxRateApplied: "",
     });
   };
 
@@ -1445,6 +1447,8 @@ export default function StaffFinance() {
         receivedBy: payForm.receivedBy || undefined,
         receivedByUserId: payForm.receivedByUserId || undefined,
         notes: payForm.notes || undefined,
+        paidCurrency: payForm.paidInDifferentCurrency ? payForm.paidCurrency || undefined : undefined,
+        fxRateApplied: payForm.paidInDifferentCurrency ? payForm.fxRateApplied || undefined : undefined,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Payment failed");
@@ -3549,6 +3553,37 @@ export default function StaffFinance() {
                   <Label>Notes</Label>
                   <Textarea value={payForm.notes} onChange={(e) => setPayForm({ ...payForm, notes: e.target.value })} rows={2} placeholder="Optional notes about this payment…" className="text-sm" />
                 </div>
+
+                <div className="rounded-md border p-3 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Checkbox checked={payForm.paidInDifferentCurrency}
+                      onCheckedChange={(v) => setPayForm({ ...payForm, paidInDifferentCurrency: !!v })}
+                      data-testid="checkbox-paid-different-currency" />
+                    <Label className="font-normal cursor-pointer" onClick={() => setPayForm({ ...payForm, paidInDifferentCurrency: !payForm.paidInDifferentCurrency })}>
+                      Actually paid out in a different currency than {payTarget.item.currency}
+                    </Label>
+                  </div>
+                  {payForm.paidInDifferentCurrency && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <Label>Currency actually paid</Label>
+                        <CurrencySelect value={payForm.paidCurrency} onValueChange={(v) => setPayForm({ ...payForm, paidCurrency: v })} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Rate ({payForm.paidCurrency || "?"} per 1 {payTarget.item.currency}) *</Label>
+                        <Input type="number" step="0.0001" min="0.0001" value={payForm.fxRateApplied}
+                          onChange={(e) => setPayForm({ ...payForm, fxRateApplied: e.target.value })}
+                          placeholder="e.g. 20" data-testid="input-fx-rate-applied" />
+                      </div>
+                      {payForm.paidCurrency && payForm.fxRateApplied && parseFloat(payForm.fxRateApplied) > 0 && payForm.amount && (
+                        <p className="col-span-2 text-xs text-muted-foreground">
+                          Cash handed over: {payForm.paidCurrency} {(parseFloat(payForm.amount) * parseFloat(payForm.fxRateApplied)).toFixed(2)}
+                          {" "}— settles {payTarget.item.currency} {parseFloat(payForm.amount || "0").toFixed(2)} of this {payTarget.type}.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {payMutation.isError && <p className="text-sm text-destructive">{(payMutation.error as Error).message}</p>}
               </div>
             );
@@ -3557,7 +3592,11 @@ export default function StaffFinance() {
             <Button variant="outline" onClick={() => setPayTarget(null)}>Cancel</Button>
             <Button
               onClick={() => payMutation.mutate()}
-              disabled={payMutation.isPending || !payForm.amount || parseFloat(payForm.amount) <= 0 || (!payForm.receivedBy.trim() && !payForm.receivedByUserId)}
+              disabled={
+                payMutation.isPending || !payForm.amount || parseFloat(payForm.amount) <= 0 ||
+                (!payForm.receivedBy.trim() && !payForm.receivedByUserId) ||
+                (payForm.paidInDifferentCurrency && (!payForm.paidCurrency || !payForm.fxRateApplied || parseFloat(payForm.fxRateApplied) <= 0))
+              }
               data-testid="btn-confirm-disbursement"
             >
               {payMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}

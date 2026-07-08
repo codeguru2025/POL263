@@ -2370,6 +2370,14 @@ export const paymentDisbursements = pgTable(
     paymentMethod: text("payment_method").default("cash").notNull(),  // cash|bank_transfer|cheque|mobile_money
     reference: text("reference"),
     notes: text("notes"),
+    // Cross-currency payout support: `currency`/`amount` above are always the cash that actually
+    // left the till (what P&L should count). When that differs from the requisition/expenditure's
+    // own currency (e.g. a USD requisition settled with Rand cash on hand), `entityAmount` holds
+    // the amount in the entity's own currency this payment settles (drives amountPaid tracking)
+    // and `fxRateApplied` records the rate used (units of `currency` per 1 unit of entity currency),
+    // for audit/voucher display. Both null when paid in the entity's own currency (the common case).
+    entityAmount: numeric("entity_amount", { precision: 12, scale: 2 }),
+    fxRateApplied: numeric("fx_rate_applied", { precision: 18, scale: 8 }),
     voucherNumber: text("voucher_number"),            // PV-00001 — set on creation
     createdByUserId: uuid("created_by_user_id").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),

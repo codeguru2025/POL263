@@ -6437,6 +6437,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(enriched);
   });
 
+  // Cash on hand doesn't always match the requisition/expenditure's own currency (e.g. a USD
+  // requisition settled with Rand notes). `amount`/`entityCurrency` are what the requisition
+  // owes; if `paidCurrency` differs, this resolves what actually left the till (for the
+  // disbursement ledger, which is what P&L reads) while keeping `entityAmount` in the
+  // requisition's own currency so amountPaid/fully-paid tracking is unaffected.
+  function resolveCrossCurrencyPayout(body: any, entityCurrency: string, entityAmount: number):
+    { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string } {
+    const paidCurrencyRaw = typeof body.paidCurrency === "string" ? body.paidCurrency.trim() : "";
+    if (!paidCurrencyRaw) return { currency: entityCurrency, amount: entityAmount };
+    const paidCurrency = normalizeCurrency(paidCurrencyRaw);
+    if (paidCurrency === entityCurrency) return { currency: entityCurrency, amount: entityAmount };
+    const fxRateApplied = parsePositiveAmount(body.fxRateApplied);
+    if (!fxRateApplied) {
+      throw new Error(`fxRateApplied (units of ${paidCurrency} per 1 unit of ${entityCurrency}) is required when paidCurrency differs from the requisition/expenditure currency`);
+    }
+    return {
+      currency: paidCurrency,
+      amount: entityAmount * fxRateApplied,
+      entityAmount: entityAmount.toFixed(2),
+      fxRateApplied: fxRateApplied.toFixed(8),
+    };
+  }
+
   app.post("/api/requisitions/:id/payments", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     const reqId = String(req.params.id);
@@ -6461,6 +6484,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= Number(existing.amount) - 0.001;
+    let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
+    try {
+      payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
+    } catch (err: any) {
+      return res.status(400).json({ message: err.message });
+    }
     try {
       // Disbursement + requisition status/amountPaid update happen in one transaction — otherwise
       // a crash between the two calls leaves either an orphaned disbursement (money recorded as
@@ -6473,8 +6502,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           branchId: existing.branchId ?? undefined,
           entityType: "requisition",
           entityId: existing.id,
-          amount: String(amount.toFixed(2)),
-          currency: existing.currency,
+          amount: String(payout.amount.toFixed(2)),
+          currency: payout.currency,
+          entityAmount: payout.entityAmount,
+          fxRateApplied: payout.fxRateApplied,
           paidByUserId: effectiveUserId,
           receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
           receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,
@@ -6534,6 +6565,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= totalAmt - 0.001;
+    let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
+    try {
+      payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
+    } catch (err: any) {
+      return res.status(400).json({ message: err.message });
+    }
     try {
       // Same atomicity concern as the requisitions payment endpoint above — disbursement and
       // expenditure status/amountPaid must commit or roll back together.
@@ -6545,8 +6582,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           branchId: existing.branchId ?? undefined,
           entityType: "expenditure",
           entityId: existing.id,
-          amount: String(amount.toFixed(2)),
-          currency: existing.currency,
+          amount: String(payout.amount.toFixed(2)),
+          currency: payout.currency,
+          entityAmount: payout.entityAmount,
+          fxRateApplied: payout.fxRateApplied,
           paidByUserId: effectiveUserId,
           receivedBy: typeof req.body.receivedBy === "string" && req.body.receivedBy.trim() ? req.body.receivedBy.trim() : undefined,
           receivedByUserId: typeof req.body.receivedByUserId === "string" && req.body.receivedByUserId ? req.body.receivedByUserId : undefined,

@@ -10,6 +10,92 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-08 — no way to record a requisition/expenditure paid in a different currency than raised
+
+Follow-on from the same-day backfill below. After backfilling June's 253 missing disbursements,
+user clarified that Falakhe's Rand till ended June at zero — the R7,460.00 gap between ZAR income
+(R34,430.00) and ZAR-tagged expenses (R26,970.00) wasn't a surplus; it was Rand cash used to pay
+$373.00 worth of requisitions that were raised/tagged in USD. At the org's configured FX rate
+(`fx_rates`: ZAR rateToUsd = 0.05, i.e. 20 ZAR/USD), R7,460 ÷ 20 = $373.00 exactly, confirming the
+math. True June position: ZAR net = R0.00 (all Rand received was spent), USD net improves from
+-$6,214.50 to **-$5,841.50** (less USD cash actually left the till than the USD-tagged total
+implied).
+
+Root cause: `payment_disbursements.currency` was always hard-set to the requisition/expenditure's
+own currency (`server/routes.ts`, both `POST /api/requisitions/:id/payments` and
+`POST /api/expenditures/:id/payments`) with no way for staff to record that the cash handed over
+was actually a different currency. This is exactly the kind of real-world mixed-currency-till
+behavior a funeral-services cash business has day to day, and there was no field to capture it —
+so it could only be reverse-engineered after the fact from aggregate currency gaps, and only at
+the total level (checked description/notes text and `payment_method` for a per-transaction signal
+first — found none; `payment_method` was uniformly `'cash'` and only one requisition's free-text
+description mentioned a Rand figure, and even that didn't reconcile against its recorded amount).
+**The 268 individual June USD-tagged requisitions were not and could not be corrected
+individually** — this stays a top-level reconciling note for June, not a per-record rewrite.
+
+Fix: added `entity_amount` and `fx_rate_applied` (nullable) to `payment_disbursements`
+(`shared/schema.ts`, `migrations/0064_disbursement_cross_currency.sql`, applied to both the main
+DB and Falakhe's isolated DB via `scripts/sync-falakhe-schema.mts` — note that script infers
+`numeric` columns as TEXT due to a `dataType` mismatch in its type-inference table, so the two
+columns needed a manual `ALTER COLUMN TYPE NUMERIC` after running it). Added
+`resolveCrossCurrencyPayout()` in `server/routes.ts`: when a payment's optional `paidCurrency`
+differs from the requisition/expenditure's own currency, `payment_disbursements.currency`/`amount`
+now hold what actually left the till (converted at the caller-supplied `fxRateApplied`), while the
+new `entityAmount` holds the amount in the requisition's own currency (unchanged math for
+amountPaid/fully-paid tracking). Because `buildIncomeStatement()` already groups expenses by
+`payment_disbursements.currency`, this was the only change needed for future cross-currency
+payments to report correctly — no changes to `financial-statements.ts`. Added the toggle + fields
+to the "Record Payment" dialog in `client/src/pages/staff/finance.tsx` (checkbox reveals a
+currency picker + rate input, with a live "cash handed over" preview).
+
+**Lesson for next time:** a cash-basis multi-currency system needs to distinguish "the currency
+this line item is denominated in" from "the currency that physically changed hands" — collapsing
+them (as the original disbursement insert did) is invisible until someone reconciles actual till
+balances against reported P&L by currency, potentially months later. When Falakhe (or any
+multi-currency tenant) reports a currency-net that looks too clean/too surplus, check whether it's
+actually cross-currency substitution before treating it as real balance.
+
+---
+
+## 2026-07-08 — 253 "paid" requisitions invisible to the income statement (bulk data-entry gap)
+
+Symptom: user asked for a June 2026 income statement summary and whether expenses entered the
+previous day (2026-07-07) were accounted for. June's expenses looked implausibly low ($4,193 +
+R5,640) against the volume of paper requisitions Falakhe staff had been transcribing.
+
+Root cause: `buildIncomeStatement()` (`server/financial-statements.ts`) sums expenses strictly
+from the `payment_disbursements` ledger by `paid_date` — it never reads `requisitions.status`.
+On 2026-07-07 at 11:59:11 a single bulk transaction inserted 245 historical requisitions
+(REQ-00102–REQ-00354, paper records from June being caught up in the system) directly with
+`status = 'paid'` and `paid_date` set, but without going through `POST /api/requisitions/:id/payments`
+— the only path that writes a matching `payment_disbursements` row. So the requisitions looked
+"paid" everywhere in the UI (list, vouchers, PDFs) while being completely invisible to every
+cash-basis financial statement. This is the exact drift already anticipated in a code comment at
+`server/routes.ts:6467` ("exactly the drift a historical backfill script had to patch for
+Falakhe") — `scripts/backfill-requisition-disbursements.mjs` already existed from an earlier,
+smaller occurrence of this same gap (committed in 7bd1a7b) and is idempotent (targets any
+currently-missing disbursement, no date filter), so it needed no changes — just a re-run.
+
+Fix: ran `node scripts/backfill-requisition-disbursements.mjs` — created 253 disbursement rows
+(210 USD requisitions totaling $10,837.50 + 43 ZAR totaling R21,330.00, plus a few outside June).
+Verified 0 remaining `status='paid'` requisitions without a matching disbursement afterward.
+
+Effect on reported numbers: June's real position was a **$6,214.50 USD net loss**, not the
+originally-displayed **+$4,623.00 USD profit** — a ~$10.8k swing hidden by the gap. ZAR stayed
+net positive (+R7,460 corrected vs. +R28,790 displayed).
+
+**Lesson for next time:** any *new* raw-SQL or bulk-insert path that sets `requisitions.status`
+or `expenditures.status` to `'paid'` directly must also create the matching `payment_disbursements`
+row (mirror the field mapping in `POST /api/requisitions/:id/payments` /
+`POST /api/expenditures/:id/payments`) or it silently vanishes from every income statement, cash
+flow statement, and executive summary — the same class of bug as the legacy-receipt platform-fee
+gap logged 2026-07-01 (`[[project_financial_suite]]`), just on the expense side instead of income.
+When a bulk historical-data catch-up is about to happen again, run
+`scripts/backfill-requisition-disbursements.mjs` (and add an equivalent for `expenditures` if that
+table starts seeing the same treatment) right after, before anyone reads a financial report.
+
+---
+
 ## 2026-07-07 — legacy policy premiums silently reset to $0.00 after ad-hoc creation
 
 Symptom: 7 Legacy Individual policies created for real Falakhe clients (FLK00363–FLK00369) via
