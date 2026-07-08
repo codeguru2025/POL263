@@ -10,6 +10,37 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-08 — linking a quotation to a case threw a bare "Internal server error"
+
+- **Symptom:** user reported linking a quote to a case fails with a generic internal server error,
+  no useful detail.
+- **Root cause:** `POST /api/quotations/:id/link-case` (`server/routes.ts:7194`) had **no
+  try/catch at all**. A case can only have one quotation linked — enforced by a partial unique
+  index, `fq_org_case_partial_idx` (`migrations/0036_quotation_enhancements.sql`, on
+  `(organization_id, funeral_case_id) WHERE funeral_case_id IS NOT NULL`) — but the route never
+  checked for this before attempting the update. Trying to link a second quotation to a case that
+  already has one throws a Postgres unique-violation, which had nothing to catch it and fell
+  through to the global error handler (`server/routes.ts:10057`), which returns the exact generic
+  `{"message": "Internal server error"}` the user saw. Checked Falakhe's live data for the specific
+  quote/case combination but found no currently-conflicting pair — the fix covers the mechanism
+  regardless of the exact case, and now surfaces the real reason on the next attempt if it
+  recurs (or logs it server-side via `structuredLog` for any other failure mode).
+- **Fix:** wrapped the handler in try/catch; proactively checks (via `getFuneralQuotation`,
+  which returns the quote already linked to a case if any) whether the target case already has a
+  *different* quotation linked, returning a clear 409 naming the conflicting quotation number
+  instead of attempting the update at all. Kept a `23505` catch as a safety net for the race
+  between the check and the write, plus a generic catch-all that logs full error detail
+  server-side instead of losing it to the global handler.
+- **Files:** `server/routes.ts`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+- **Lesson for next time:** when a DB-level constraint enforces a business rule (a partial unique
+  index, a check constraint, etc.), the route hitting it needs to either check for the conflict
+  proactively or catch the specific Postgres error code (`23505` for unique violations) — never
+  rely on the global error handler as the only backstop, since it can only ever return a generic
+  message with no actionable detail for the user.
+
+---
+
 ## 2026-07-08 — policyNumberPrefix silently flipped to null (produced 15 policies with no "FLK" prefix)
 
 - **Symptom:** 15 Falakhe policies had bare numeric policy numbers ("00331", "00217", …) instead

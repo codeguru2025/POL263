@@ -7195,16 +7195,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const { funeralCaseId } = req.body;
     if (!funeralCaseId) return res.status(400).json({ message: "funeralCaseId required" });
-    const existingCase = await storage.getFuneralCase(funeralCaseId, user.organizationId);
-    if (!existingCase) return res.status(404).json({ message: "Funeral case not found" });
-    const updated = await storage.linkQuotationToCase(req.params.id as string, funeralCaseId, user.organizationId);
-    if (!updated) return res.status(404).json({ message: "Quotation not found" });
-    const fillPatch = quoteToCaseBlankFillPatch(updated, existingCase);
-    const updatedCase = Object.keys(fillPatch).length > 0
-      ? await storage.updateFuneralCase(funeralCaseId, fillPatch, user.organizationId)
-      : existingCase;
-    await auditLog(req, "LINK_QUOTATION_TO_CASE", "FuneralQuotation", req.params.id as string, null, updated);
-    return res.json({ ...updated, funeralCase: updatedCase });
+    try {
+      const existingCase = await storage.getFuneralCase(funeralCaseId, user.organizationId);
+      if (!existingCase) return res.status(404).json({ message: "Funeral case not found" });
+      // A case can only have one quotation linked (fq_org_case_partial_idx, migrations/0036) —
+      // surface that as a clear 409 instead of letting the unique-violation bubble up as a bare
+      // 500 (this route previously had no try/catch at all).
+      const existingQuoteForCase = await storage.getFuneralQuotation(funeralCaseId, user.organizationId);
+      if (existingQuoteForCase && existingQuoteForCase.id !== req.params.id) {
+        return res.status(409).json({ message: `This case already has a quotation linked (${existingQuoteForCase.quotationNumber}). Unlink it first, or link a different case.` });
+      }
+      const updated = await storage.linkQuotationToCase(req.params.id as string, funeralCaseId, user.organizationId);
+      if (!updated) return res.status(404).json({ message: "Quotation not found" });
+      const fillPatch = quoteToCaseBlankFillPatch(updated, existingCase);
+      const updatedCase = Object.keys(fillPatch).length > 0
+        ? await storage.updateFuneralCase(funeralCaseId, fillPatch, user.organizationId)
+        : existingCase;
+      await auditLog(req, "LINK_QUOTATION_TO_CASE", "FuneralQuotation", req.params.id as string, null, updated);
+      return res.json({ ...updated, funeralCase: updatedCase });
+    } catch (err: any) {
+      if (err?.code === "23505") {
+        return res.status(409).json({ message: "This case already has a quotation linked." });
+      }
+      structuredLog("error", "POST /api/quotations/:id/link-case failed", { error: err?.message, stack: err?.stack });
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   app.post("/api/quotations/:id/guarantor", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
