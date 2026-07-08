@@ -1071,6 +1071,36 @@ export default function StaffPolicies() {
     setShowEditDialog(true);
   };
 
+  // Policy holder contact/address details live on the client record, not the policy — there was
+  // previously no way to correct them without leaving the policy page for the Clients page.
+  const [showEditClientDialog, setShowEditClientDialog] = useState(false);
+  const [editClientForm, setEditClientForm] = useState({ phone: "", email: "", physicalAddress: "", postalAddress: "" });
+  const openEditClientDialog = () => {
+    if (!policyHolderClient) return;
+    setEditClientForm({
+      phone: policyHolderClient.phone || "",
+      email: policyHolderClient.email || "",
+      physicalAddress: policyHolderClient.physicalAddress || "",
+      postalAddress: policyHolderClient.postalAddress || "",
+    });
+    setShowEditClientDialog(true);
+  };
+  const updateClientDetailsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/clients/${policyHolderClient.id}`, editClientForm);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Could not update client details.");
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", displayPolicy?.clientId, "policy-detail-holder"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setShowEditClientDialog(false);
+      toast({ title: "Client details updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const handleEditSubmit = () => {
     if (!selectedPolicy) return;
     const data: Record<string, any> = {};
@@ -1550,6 +1580,14 @@ export default function StaffPolicies() {
             title="Policy holder (principal)"
             description="Contact and identity for the main insured person linked to this policy."
             icon={User}
+            headerRight={
+              policyHolderClient ? (
+                <Button size="sm" variant="outline" onClick={openEditClientDialog} data-testid="btn-edit-policy-holder">
+                  <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                  Edit contact details
+                </Button>
+              ) : undefined
+            }
           >
               {!displayPolicy.clientId ? (
                 <p className="text-sm text-muted-foreground">No client is linked to this policy.</p>
@@ -2872,6 +2910,53 @@ export default function StaffPolicies() {
                 data-testid="btn-save-policy-edit"
               >
                 {editPolicyMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save Changes
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={showEditClientDialog} onOpenChange={setShowEditClientDialog}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Edit Contact Details</DialogTitle>
+              <DialogDescription>
+                Update contact/address for <strong>{[policyHolderClient?.firstName, policyHolderClient?.lastName].filter(Boolean).join(" ")}</strong>. National ID, date of birth, and gender are edited from the Clients page.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Phone</Label>
+                  <Input value={editClientForm.phone} onChange={(e) => setEditClientForm({ ...editClientForm, phone: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Email</Label>
+                  <Input type="email" value={editClientForm.email} onChange={(e) => setEditClientForm({ ...editClientForm, email: e.target.value })} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Physical Address</Label>
+                <Textarea rows={2} value={editClientForm.physicalAddress} onChange={(e) => setEditClientForm({ ...editClientForm, physicalAddress: e.target.value })} placeholder="Street address, suburb, city" />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label>Postal Address</Label>
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                    <Checkbox
+                      checked={editClientForm.postalAddress === editClientForm.physicalAddress && !!editClientForm.physicalAddress}
+                      onCheckedChange={(checked) => setEditClientForm({ ...editClientForm, postalAddress: checked ? editClientForm.physicalAddress : "" })}
+                    />
+                    Same as physical
+                  </label>
+                </div>
+                <Textarea rows={2} value={editClientForm.postalAddress} onChange={(e) => setEditClientForm({ ...editClientForm, postalAddress: e.target.value })} placeholder="P.O. Box or postal address" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowEditClientDialog(false)}>Cancel</Button>
+              <Button onClick={() => updateClientDetailsMutation.mutate()} disabled={updateClientDetailsMutation.isPending} data-testid="btn-save-policy-holder-contact">
+                {updateClientDetailsMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Save Changes
               </Button>
             </DialogFooter>
@@ -4426,12 +4511,21 @@ export default function StaffPolicies() {
               if (clientMode === "new") {
                 if (!createForm.newClient.firstName?.trim()) missing.push("first name");
                 if (!createForm.newClient.lastName?.trim()) missing.push("last name");
-                if (!isLegacyIssuance) {
-                  if (!createForm.newClient.nationalId?.trim()) missing.push("national ID");
-                  if (!createForm.newClient.phone?.trim()) missing.push("phone");
-                  if (!createForm.newClient.dateOfBirth) missing.push("date of birth");
-                  if (!createForm.newClient.gender) missing.push("gender");
-                }
+                // National ID/phone/DOB/gender aren't required to advance past this step — whether
+                // they're needed at all depends on the product picked next (Step 2), so full
+                // validation is deferred to Save (Step 4) where isLegacyIssuance is resolvable.
+              }
+            } else if (createStep === 2) {
+              if (!createForm.selectedProductId) missing.push("a product");
+              else if (!createForm.productVersionId) missing.push("a product version");
+            } else if (createStep === 4) {
+              if (!createForm.productVersionId) missing.push("a product version");
+              if (!calculatedPremium?.total) missing.push("a calculated premium (check product & add-ons)");
+              if (clientMode === "new" && !isLegacyIssuance) {
+                if (!createForm.newClient.nationalId?.trim()) missing.push("national ID");
+                if (!createForm.newClient.phone?.trim()) missing.push("phone");
+                if (!createForm.newClient.dateOfBirth) missing.push("date of birth");
+                if (!createForm.newClient.gender) missing.push("gender");
               }
               if (!createForm.beneficiaryId && !isLegacyIssuance) {
                 if (!createForm.beneficiaryManual.firstName?.trim()) missing.push("beneficiary first name");
@@ -4441,12 +4535,6 @@ export default function StaffPolicies() {
                 else if (!isValidNationalId(createForm.beneficiaryManual.nationalId)) missing.push("a valid beneficiary national ID (e.g. 08833089H38)");
                 if (!createForm.beneficiaryManual.phone?.trim()) missing.push("beneficiary phone");
               }
-            } else if (createStep === 2) {
-              if (!createForm.selectedProductId) missing.push("a product");
-              else if (!createForm.productVersionId) missing.push("a product version");
-            } else if (createStep === 4) {
-              if (!createForm.productVersionId) missing.push("a product version");
-              if (!calculatedPremium?.total) missing.push("a calculated premium (check product & add-ons)");
             }
             if (missing.length === 0) return null;
             return (
@@ -4469,21 +4557,12 @@ export default function StaffPolicies() {
                     (clientMode === "search" && !createForm.clientId) ||
                     (clientMode === "new" && (
                       !createForm.newClient.firstName?.trim() ||
-                      !createForm.newClient.lastName?.trim() ||
-                      (!isLegacyIssuance && (
-                        !createForm.newClient.nationalId?.trim() ||
-                        !createForm.newClient.phone?.trim() ||
-                        !createForm.newClient.dateOfBirth ||
-                        !createForm.newClient.gender
-                      ))
-                    )) ||
-                    (!createForm.beneficiaryId && !isLegacyIssuance && (
-                      !createForm.beneficiaryManual.firstName?.trim() ||
-                      !createForm.beneficiaryManual.lastName?.trim() ||
-                      !createForm.beneficiaryManual.relationship?.trim() ||
-                      !createForm.beneficiaryManual.nationalId?.trim() ||
-                      !isValidNationalId(createForm.beneficiaryManual.nationalId) ||
-                      !createForm.beneficiaryManual.phone?.trim()
+                      !createForm.newClient.lastName?.trim()
+                      // National ID/phone/DOB/gender and beneficiary details are NOT required to
+                      // advance past this step: whether they're required at all depends on the
+                      // product chosen in Step 2 (Legacy Individual/Group relax them), which
+                      // hasn't been picked yet here. Final validation happens on Save (Step 4),
+                      // once isLegacyIssuance can actually be resolved correctly.
                     ))
                   )) ||
                   (createStep === 2 && (!createForm.selectedProductId || !createForm.productVersionId))

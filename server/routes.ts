@@ -2828,6 +2828,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    // Legacy Individual/Legacy Group policies always need premiumOverride set alongside any
+    // manual premiumAmount edit — otherwise recalculatePolicyPremiumIfNeeded silently resets it
+    // back to the product's catalog price on the very next policy-list view (the same class of
+    // bug already fixed for policy *creation* — POST /api/policies auto-sets premiumOverride for
+    // these two product codes; this mirrors that for edits, since the edit form has no separate
+    // premiumOverride field of its own). Only auto-sets when the caller didn't already send an
+    // explicit premiumOverride (including an explicit clear).
+    if (manualPremium != null && premiumOverrideUpdate == null) {
+      const editedPv = await storage.getProductVersion(before.productVersionId, user.organizationId);
+      const editedProduct = editedPv ? await storage.getProduct(editedPv.productId, user.organizationId) : null;
+      if (editedProduct?.code === "LEGIND" || editedProduct?.code === "LEGGRP") {
+        premiumOverrideUpdate = {
+          premiumOverride: manualPremium.toFixed(2),
+          premiumOverrideNote: "Legacy custom premium set on edit",
+        };
+      }
+    }
+
     if (Object.keys(sanitized).length === 0 && manualPremium == null && premiumOverrideUpdate == null) {
       return res.json(before);
     }

@@ -10,6 +10,116 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-08 — no way to edit a policy holder's address from the Policy page
+
+- **Context:** user reported "can't edit the address" while working on a policy. Traced this to a
+  genuine gap, not a backend bug — `PATCH /api/clients/:id` has no field restriction and updates
+  `physicalAddress`/`postalAddress` fine; the **Edit Client** dialog on the Clients page
+  (`client/src/pages/staff/clients.tsx`) already works. But the Policy detail page's "Policy
+  holder" section (`client/src/pages/staff/policies.tsx`) only ever displayed the client's contact
+  info read-only, and the "Edit Policy Details" dialog only covers policy-level fields (currency,
+  schedule, beneficiary, premium, etc.) — there was no route to edit the client's own details
+  without leaving the policy entirely for the separate Clients page.
+- **Fix (feature work, not a bug fix):** added an "Edit contact details" button to the Policy
+  holder card that opens a lightweight dialog (phone, email, physical/postal address) PATCHing
+  `/api/clients/:id` directly, invalidating the policy-detail client query on success. National
+  ID/DOB/gender remain Clients-page-only for now (out of scope for what was reported).
+- **Files:** `client/src/pages/staff/policies.tsx`.
+
+---
+
+## 2026-07-08 — editing premium on an already-saved policy silently reverted (PATCH missing the premiumOverride pairing that POST already had)
+
+- **Symptom:** user reported FLK00360's premium was "$24" the day before, then after upgrading it
+  to Legacy Individual and editing the premium to a custom $10.00 (twice), it kept reverting to
+  $20.00 (LEGIND's flat catalog price). Editing premium while *first creating* a policy worked;
+  editing it on an *already-saved* policy did not.
+- **Root cause:** `recalculatePolicyPremiumIfNeeded()` (`server/routes.ts`, fires on every
+  policy-list/detail view) skips recomputation only when `policy.premiumOverride` is non-null —
+  this is the exact mechanism the 2026-07-07 entry above ("legacy policy premiums silently reset
+  to $0.00") introduced to protect a manually-agreed Legacy Individual/Group premium. `POST
+  /api/policies` (creation) correctly auto-sets `premiumOverride` alongside `premiumAmount`
+  whenever the issued product is LEGIND/LEGGRP (`server/routes.ts:2496-2510`) — but `PATCH
+  /api/policies/:id` (editing an existing policy) had no equivalent: it only ever sets
+  `premiumOverride` if the **caller** sends that field explicitly as a separate value, which the
+  Edit Policy dialog (`client/src/pages/staff/policies.tsx`) never does — it only sends
+  `premiumAmount`. So every edit silently left `premiumOverride` null, and the very next list/
+  detail view recalculated `premiumAmount` back to the product's catalog price, discarding the
+  edit with no error and no audit trail for the revert itself (the only visible audit entries were
+  the user's own edits, each showing `before: 20.00 (or whatever catalog price) -> after: 10.00`,
+  looking successful right up until the next page load).
+- **FLK00360 specifics traced from its full audit history:** created 2026-07-07 under UMTHUNZI
+  (catalog $12) at $12.00, `premiumOverride` null throughout. By the next day it had silently
+  drifted to $24.00 via this exact recalculation mechanism — for this client's age, UMTHUNZI's
+  age-banded price is $24, not the flat $12 shown at creation (a legitimate recompute, not a
+  second bug, since UMTHUNZI was never a custom-premium product and had no override protecting a
+  deliberately-different number). It was then upgraded to LEGIND (catalog $20, note the 2026-07-01
+  comment describing LEGIND as "always prices at 0" is stale — its `product_versions` row has
+  since been set to a real $20 monthly base), and the user's two attempts to set it to $10.00 both
+  reverted to $20.00 before being viewed again.
+- **Fix:** `PATCH /api/policies/:id` now mirrors the creation route — when a manual premium change
+  is being applied (`manualPremium != null`) and the caller didn't already send an explicit
+  `premiumOverride` (including an explicit clear), it looks up the policy's product by
+  `productVersionId` and, if it's LEGIND/LEGGRP, auto-sets `premiumOverride`/`premiumOverrideNote`
+  to match the new `premiumAmount`. Reuses the existing `premiumOverrideUpdate` code path
+  (storage update + audit log) rather than adding a new one.
+- **Data correction:** FLK00360 directly corrected to `premiumAmount = premiumOverride = 10.00`
+  (the value the user tried to set twice), recorded as an `UPDATE_POLICY` audit entry with the
+  true before/after state, once the user confirmed $10.00 was still the intended value.
+- **Files:** `server/routes.ts`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+  Traced the exact field-by-field audit history for FLK00360 to confirm the revert pattern before
+  writing the fix, rather than guessing from the symptom alone.
+- **Lesson for next time:** whenever a "protect this value from an automatic recompute" flag
+  (like `premiumOverride`) is set automatically on **one** write path (creation) but that same
+  entity can also be modified via a **second** write path (edit), audit whether the second path
+  sets the same protective flag — it's easy to fix the first reported case (creation, per the
+  2026-07-07 entry) and miss that the identical bug is still reachable via edit. Same root lesson
+  as the wizard step-order entry directly above: a relaxation/protection mechanism is only as good
+  as *every* path that can produce the state it's supposed to protect.
+
+---
+
+## 2026-07-08 — Legacy Individual/Group policy creation still demanded DOB/national ID
+
+- **Symptom:** user reported trying to create a policy twice under a Legacy product without a
+  date of birth, and being refused both times, even though Legacy Individual/Legacy Group
+  policies are supposed to relax full-detail capture (see log entry below, 2026-07-07, "Legacy-
+  issuance relaxation only covered legacy *groups*, not legacy *individuals*").
+- **Root cause:** the relaxation *was* implemented for both, but only reachable through a legacy
+  **group** — `client/src/pages/staff/policies.tsx` computes `isLegacyProductIssuance` from
+  `createForm.selectedProductId` (line ~326), which is only set in **Step 2** of the 4-step
+  "Add Policy" wizard (product selection). But client details — including DOB, national ID,
+  phone, gender — are captured in **Step 1**, and Step 1's "Continue" button was disabled unless
+  those fields were filled in *unless* `isLegacyIssuance` was already true. Since the product
+  (and therefore whether this is a Legacy Individual/Group issuance) isn't chosen until Step 2,
+  `isLegacyProductIssuance` is structurally always `false` while still on Step 1 — the relaxation
+  could never activate for a client captured this way. The legacy-*group* path worked because
+  `groupId` (and therefore `isLegacyGroupIssuance`) is already known before Step 1 renders (set
+  when opening the wizard from a specific group), so it didn't hit this ordering problem.
+- **Fix:** removed the national ID/phone/DOB/gender/beneficiary requirement from the Step 1
+  "Continue" button's disabled condition entirely (`client/src/pages/staff/policies.tsx`) —
+  confirmed via `calculatedPremium`'s useMemo that none of these fields are actually used to
+  compute premium for a brand-new client, so gating an intermediate step on them served no
+  purpose beyond blocking exactly this flow. Final validation (whether these fields are required)
+  is deferred to the Save button (Step 4) and the `createMutation` function itself, both of which
+  correctly resolve `isLegacyIssuance` against whichever product/group was actually selected by
+  then. Also moved the "missing fields" hint text for these fields from the Step 1 block to Step
+  4, so the amber hint under the button stays accurate to what's actually blocking submission.
+- **Files:** `client/src/pages/staff/policies.tsx`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+  Full interactive click-through wasn't done (staff auth is Google OAuth-only, no dev bypass in
+  this codebase — see prior entry) but traced the exact state dependency chain confirming
+  `isLegacyProductIssuance` cannot be true during Step 1 under the old code, and that nothing
+  downstream (premium calculation) depends on the new client's own DOB.
+- **Lesson for next time:** a multi-step wizard that gates an early step on "is this a special
+  case" cannot use a flag that's only derived from a *later* step's input — check what step sets
+  the state a conditional depends on before adding relaxed-validation logic to an earlier step.
+  This is the same "reachable only through one of two paths" mistake as the entry below, just
+  found via wizard step order instead of a covering-a-code-path gap.
+
+---
+
 ## 2026-07-08 — no way to record a requisition/expenditure paid in a different currency than raised
 
 Follow-on from the same-day backfill below. After backfilling June's 253 missing disbursements,
