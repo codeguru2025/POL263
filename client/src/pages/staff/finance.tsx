@@ -4039,9 +4039,11 @@ export default function StaffFinance() {
           <DialogHeader>
             <DialogTitle>Correct Paid Currency</DialogTitle>
             <DialogDescription>
-              Requests a correction to the currency recorded for requisition{" "}
-              <strong>{correctPaidCurrencyTarget?.requisitionNumber}</strong> — use this when it was actually paid in
-              a different currency than entered. A manager must approve this before it applies.
+              Flags that requisition <strong>{correctPaidCurrencyTarget?.requisitionNumber}</strong> was actually paid
+              in a different currency than entered — e.g. requisitioned in USD but settled with Rand cash on hand.
+              The requisition itself stays in its original currency; only what actually left the till changes. The
+              equivalent amount is calculated automatically from the currently configured exchange rate. A manager
+              must approve this before it applies.
             </DialogDescription>
           </DialogHeader>
           <div>

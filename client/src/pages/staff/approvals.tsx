@@ -102,7 +102,12 @@ export default function StaffApprovals() {
               <><br /><span className="text-xs">Paid date: {d?.oldPaidDate ? String(d.oldPaidDate).slice(0, 10) : "—"} → <strong>{d?.newPaidDate}</strong></span></>
             )}
             {a.requestType === "correct_paid_currency" && (
-              <><br /><span className="text-xs">Currency: {d?.oldCurrency ?? "—"} → <strong>{d?.newCurrency}</strong></span></>
+              <>
+                <br /><span className="text-xs">
+                  {d?.oldCurrency ?? "—"} {d?.oldAmount ?? ""} → <strong>{d?.newCurrency} {d?.newAmount}</strong>
+                </span>
+                <br /><span className="text-xs text-muted-foreground">(requisitioned as {d?.entityCurrency} {d?.entityAmount})</span>
+              </>
             )}
             {d?.reason && <><br /><span className="text-xs text-muted-foreground italic">{d.reason}</span></>}
           </div>

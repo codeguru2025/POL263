@@ -45,7 +45,7 @@ function add(map: AmountMap, currency: string, amount: number) {
 function fromTs(date: string) { return new Date(date + "T00:00:00.000Z"); }
 function toTs(date: string) { return new Date(date + "T23:59:59.999Z"); }
 
-async function fxMapFor(orgId: string): Promise<Record<string, number>> {
+export async function fxMapFor(orgId: string): Promise<Record<string, number>> {
   const rates = await storage.getFxRates(orgId);
   const map: Record<string, number> = { USD: 1 };
   for (const r of rates) map[r.currency.toUpperCase()] = parseFloat(String(r.rateToUsd));

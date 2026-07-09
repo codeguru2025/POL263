@@ -16,7 +16,7 @@ import { requireAuth, requirePermission, requireAnyPermission, requireTenantScop
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
-import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, fxMapFor } from "./financial-statements";
 import { buildDailyReport } from "./daily-report";
 import { enhanceNote, generateInsights } from "./ai-service";
 import { buildAiInsightContext, buildNoteEnhanceContext, AI_SURFACE_PERMISSION, type AiSurface } from "./ai-context";
@@ -41,7 +41,7 @@ import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
-import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount } from "../shared/validation";
+import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount } from "../shared/validation";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -6405,11 +6405,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } else if (action === "correct-paid-date" || action === "correct-paid-currency") {
       // Corrects the value date or currency used for cash-basis financial statements on an
       // already-paid requisition — e.g. cash actually left on an earlier day than the system
-      // recorded, or was paid in a different currency than entered. Both go through the same
-      // maker-checker approval flow as delete_receipt/delete_policy — the actual DB write only
-      // happens once approved, in POST /api/approvals/:id/resolve's correct_paid_date /
-      // correct_paid_currency branches, not here. paidAt (the audit timestamp of the system
-      // action) is never touched by either correction.
+      // recorded, or was paid in a different currency than what was requisitioned (fuel raised
+      // as $20 but paid in Rand on hand — the requisition itself stays $20, only what actually
+      // left the till changes, using the same entityAmount/fxRateApplied cross-currency support
+      // already used when recording the original payment). Both go through the same maker-checker
+      // approval flow as delete_receipt/delete_policy — the actual DB write only happens once
+      // approved, in POST /api/approvals/:id/resolve's correct_paid_date / correct_paid_currency
+      // branches, not here. paidAt (the audit timestamp of the system action) is never touched.
       const requiredPerm = action === "correct-paid-date" ? "backdate:payment" : "edit:payment";
       if (!effPerms.includes(requiredPerm) && !user.isPlatformOwner) {
         return res.status(403).json({ message: `Requires ${requiredPerm}` });
@@ -6417,19 +6419,92 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!["paid", "partial"].includes(existing.status)) {
         return res.status(400).json({ message: "Only paid or partially-paid requisitions can be corrected" });
       }
+
+      // Both corrections target one specific payment_disbursements row, not "however many
+      // disbursements this requisition has" — a partial requisition can have several real
+      // payments on different dates/currencies, and blindly correcting all of them would
+      // silently rewrite payments the request never meant to touch.
+      const linkedDisbursements = await storage.getPaymentDisbursementsByEntity("requisition", existing.id, user.organizationId);
+      if (linkedDisbursements.length === 0) {
+        return res.status(400).json({ message: "No payment found for this requisition to correct." });
+      }
+      if (linkedDisbursements.length > 1) {
+        return res.status(400).json({ message: "This requisition has more than one payment recorded — correct the specific payment directly, not through this action." });
+      }
+      const disbursement = linkedDisbursements[0];
+
+      const requestType = action === "correct-paid-date" ? "correct_paid_date" : "correct_paid_currency";
+      const pendingApprovals = await storage.getApprovalRequests(user.organizationId, "pending");
+      if (pendingApprovals.some((a) => a.requestType === requestType && a.entityId === existing.id)) {
+        return res.status(400).json({ message: "A correction request is already pending for this requisition." });
+      }
+
       let requestData: Record<string, any>;
       if (action === "correct-paid-date") {
-        const newPaidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : null;
-        if (!newPaidDate) return res.status(400).json({ message: "paidDate is required" });
-        requestData = { requisitionNumber: existing.requisitionNumber, oldPaidDate: existing.paidDate, newPaidDate, reason: req.body.reason || null };
+        const newPaidDate = typeof req.body.paidDate === "string" ? req.body.paidDate.trim() : "";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(newPaidDate) || Number.isNaN(new Date(newPaidDate + "T00:00:00").getTime())) {
+          return res.status(400).json({ message: "paidDate must be a valid date (YYYY-MM-DD)." });
+        }
+        if (newPaidDate > today) {
+          return res.status(400).json({ message: "Paid date cannot be in the future." });
+        }
+        if (newPaidDate === String(disbursement.paidDate).slice(0, 10)) {
+          return res.status(400).json({ message: "That's already the recorded paid date." });
+        }
+        requestData = {
+          requisitionNumber: existing.requisitionNumber,
+          disbursementId: disbursement.id,
+          oldPaidDate: disbursement.paidDate,
+          newPaidDate,
+          reason: req.body.reason || null,
+        };
       } else {
-        const newCurrency = normalizeCurrency(String(req.body.currency || ""));
-        if (!newCurrency) return res.status(400).json({ message: "currency is required" });
-        requestData = { requisitionNumber: existing.requisitionNumber, oldCurrency: existing.currency, newCurrency, reason: req.body.reason || null };
+        const newCurrencyRaw = typeof req.body.currency === "string" ? req.body.currency.trim().toUpperCase() : "";
+        if (!isSupportedCurrency(newCurrencyRaw)) {
+          return res.status(400).json({ message: `currency must be one of ${SUPPORTED_CURRENCIES.join(", ")}.` });
+        }
+        if (newCurrencyRaw === disbursement.currency) {
+          return res.status(400).json({ message: "That's already the recorded currency." });
+        }
+        // The requisition's own currency/amount (what was requisitioned) never changes here —
+        // only what actually left the till. entityAmount is the amount owed in the requisition's
+        // own currency: reuse it if this payment was already cross-currency, otherwise the
+        // disbursement's own amount was (until now) recorded in the requisition's currency.
+        const entityCurrency = existing.currency;
+        const entityAmount = disbursement.entityAmount != null ? parseFloat(String(disbursement.entityAmount)) : parseFloat(String(disbursement.amount));
+        let newAmount: number;
+        let fxRateApplied: number | null;
+        if (newCurrencyRaw === entityCurrency) {
+          newAmount = entityAmount;
+          fxRateApplied = null;
+        } else {
+          const fx = await fxMapFor(user.organizationId);
+          if (!(fx[entityCurrency] > 0) || !(fx[newCurrencyRaw] > 0)) {
+            const badCurrency = !(fx[entityCurrency] > 0) ? entityCurrency : newCurrencyRaw;
+            return res.status(400).json({ message: `No valid FX rate configured for ${badCurrency} — set one in Settings before correcting to this currency.` });
+          }
+          // rateToUsd is "USD per 1 unit of currency"; fxRateApplied is "units of the paid
+          // currency per 1 unit of the entity's own currency" (see payment_disbursements schema
+          // comment) — cross through USD since fx rates are only ever stored against USD.
+          fxRateApplied = fx[entityCurrency] / fx[newCurrencyRaw];
+          newAmount = entityAmount * fxRateApplied;
+        }
+        requestData = {
+          requisitionNumber: existing.requisitionNumber,
+          disbursementId: disbursement.id,
+          oldCurrency: disbursement.currency,
+          oldAmount: disbursement.amount,
+          newCurrency: newCurrencyRaw,
+          newAmount: newAmount.toFixed(2),
+          entityCurrency,
+          entityAmount: entityAmount.toFixed(2),
+          fxRateApplied: fxRateApplied != null ? fxRateApplied.toFixed(8) : null,
+          reason: req.body.reason || null,
+        };
       }
       const correctionApproval = await storage.createApprovalRequest({
         organizationId: user.organizationId,
-        requestType: action === "correct-paid-date" ? "correct_paid_date" : "correct_paid_currency",
+        requestType,
         entityType: "Requisition",
         entityId: existing.id,
         requestData,
@@ -7634,42 +7709,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await auditLog(req, "DELETE_QUOTE", "FuneralQuotation", approval.entityId, { id: approval.entityId }, null);
           structuredLog("warn", "Quotation deleted via approval", { userId: user.id, quotationId: approval.entityId, approvalId: approval.id });
         } else if (approval.requestType === "correct_paid_date") {
+          const rd = approval.requestData as any;
           const reqBefore = await storage.getRequisition(approval.entityId, user.organizationId);
-          const newPaidDate = (approval.requestData as any)?.newPaidDate;
-          if (reqBefore && newPaidDate) {
+          if (reqBefore && rd?.newPaidDate && rd?.disbursementId) {
+            // Targets the exact disbursement captured when the correction was requested — not
+            // "every disbursement on this requisition" — so a new payment recorded on this
+            // requisition after the request but before approval is never accidentally touched.
             const reqAfter = await withOrgTransaction(user.organizationId, async (txDb) => {
-              await txDb.update(paymentDisbursements).set({ paidDate: newPaidDate } as any)
+              const disbResult = await txDb.update(paymentDisbursements).set({ paidDate: rd.newPaidDate } as any)
                 .where(and(
+                  eq(paymentDisbursements.id, rd.disbursementId),
                   eq(paymentDisbursements.entityType, "requisition"),
                   eq(paymentDisbursements.entityId, reqBefore.id),
                   eq(paymentDisbursements.organizationId, user.organizationId),
-                ));
-              const [row] = await txDb.update(requisitions).set({ paidDate: newPaidDate } as any)
+                ))
+                .returning();
+              if (disbResult.length === 0) return null;
+              const [row] = await txDb.update(requisitions).set({ paidDate: rd.newPaidDate } as any)
                 .where(and(eq(requisitions.id, reqBefore.id), eq(requisitions.organizationId, user.organizationId)))
                 .returning();
               return row;
             });
-            await auditLog(req, "CORRECT_REQUISITION_PAID_DATE", "Requisition", approval.entityId, reqBefore, reqAfter);
-            structuredLog("warn", "Requisition paid date corrected via approval", { userId: user.id, requisitionId: approval.entityId, approvalId: approval.id, newPaidDate });
+            if (reqAfter) {
+              await auditLog(req, "CORRECT_REQUISITION_PAID_DATE", "Requisition", approval.entityId, reqBefore, reqAfter);
+              structuredLog("warn", "Requisition paid date corrected via approval", { userId: user.id, requisitionId: approval.entityId, approvalId: approval.id, newPaidDate: rd.newPaidDate });
+            } else {
+              structuredLog("error", "correct_paid_date approval's target disbursement no longer exists", { approvalId: approval.id, requisitionId: approval.entityId, disbursementId: rd.disbursementId });
+            }
           }
         } else if (approval.requestType === "correct_paid_currency") {
+          const rd = approval.requestData as any;
           const reqBefore = await storage.getRequisition(approval.entityId, user.organizationId);
-          const newCurrency = (approval.requestData as any)?.newCurrency;
-          if (reqBefore && newCurrency) {
-            const reqAfter = await withOrgTransaction(user.organizationId, async (txDb) => {
-              await txDb.update(paymentDisbursements).set({ currency: newCurrency } as any)
+          if (reqBefore && rd?.newCurrency && rd?.newAmount && rd?.disbursementId) {
+            // Only the disbursement — the actual cash that left the till — changes currency here.
+            // The requisition's own currency/amount (what was requisitioned) is deliberately left
+            // untouched: it can legitimately differ from what was actually paid (see the
+            // cross-currency payout support already built into payment_disbursements), and
+            // amountPaid tracking is pegged to entityAmount, not the disbursement's own amount.
+            const disbResult = await withOrgTransaction(user.organizationId, async (txDb) => {
+              return txDb.update(paymentDisbursements).set({
+                currency: rd.newCurrency,
+                amount: rd.newAmount,
+                entityAmount: rd.fxRateApplied != null ? rd.entityAmount : null,
+                fxRateApplied: rd.fxRateApplied,
+              } as any)
                 .where(and(
+                  eq(paymentDisbursements.id, rd.disbursementId),
                   eq(paymentDisbursements.entityType, "requisition"),
                   eq(paymentDisbursements.entityId, reqBefore.id),
                   eq(paymentDisbursements.organizationId, user.organizationId),
-                ));
-              const [row] = await txDb.update(requisitions).set({ currency: newCurrency } as any)
-                .where(and(eq(requisitions.id, reqBefore.id), eq(requisitions.organizationId, user.organizationId)))
+                ))
                 .returning();
-              return row;
             });
-            await auditLog(req, "CORRECT_REQUISITION_PAID_CURRENCY", "Requisition", approval.entityId, reqBefore, reqAfter);
-            structuredLog("warn", "Requisition paid currency corrected via approval", { userId: user.id, requisitionId: approval.entityId, approvalId: approval.id, newCurrency });
+            if (disbResult.length > 0) {
+              await auditLog(req, "CORRECT_REQUISITION_PAID_CURRENCY", "PaymentDisbursement", rd.disbursementId,
+                { currency: rd.oldCurrency, amount: rd.oldAmount },
+                { currency: rd.newCurrency, amount: rd.newAmount, entityAmount: rd.entityAmount, fxRateApplied: rd.fxRateApplied });
+              structuredLog("warn", "Requisition paid currency corrected via approval", { userId: user.id, requisitionId: approval.entityId, approvalId: approval.id, newCurrency: rd.newCurrency, newAmount: rd.newAmount });
+            } else {
+              structuredLog("error", "correct_paid_currency approval's target disbursement no longer exists", { approvalId: approval.id, requisitionId: approval.entityId, disbursementId: rd.disbursementId });
+            }
           }
         }
       } catch (sideEffectErr: any) {
