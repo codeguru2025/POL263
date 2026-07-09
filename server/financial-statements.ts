@@ -790,3 +790,110 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
     },
   };
 }
+
+export interface ExecutiveSummaryParams {
+  from: string; // YYYY-MM-DD
+  to: string;   // YYYY-MM-DD
+  branchId?: string;
+}
+
+/** Default range for callers that don't have their own — month-to-date. */
+export function defaultExecutiveSummaryRange(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date(to.getFullYear(), to.getMonth(), 1);
+  return { from: from.toISOString().split("T")[0], to: to.toISOString().split("T")[0] };
+}
+
+/** Extracted from GET /api/dashboard/executive-summary so it can also be called
+ *  directly (e.g. from server/ai-service.ts) without an internal HTTP round-trip. */
+export async function buildExecutiveSummary(orgId: string, params: ExecutiveSummaryParams) {
+  const { from, to, branchId } = params;
+  const tdb = await getDbForOrg(orgId);
+
+  const is = await buildIncomeStatement(orgId, { from, to, branchId });
+
+  const positions = await storage.getAdminCashPosition(orgId);
+  const posUserIds = positions.map((p) => p.userId);
+  const posUsers = posUserIds.length ? await storage.getUsersByIds(posUserIds, orgId) : [];
+  const findU = (id: string) => posUsers.find((u: any) => u.id === id);
+  const totalOnHand = positions.reduce((s, p) => s + Math.max(0, p.onHand), 0);
+  const totalDeposited = positions.reduce((s, p) => s + p.totalDeposited, 0);
+
+  const branchRows = await tdb.execute(sql`
+    SELECT
+      pr.branch_id,
+      b.name AS branch_name,
+      pr.currency,
+      COALESCE(SUM(pr.amount::numeric), 0) AS income,
+      COUNT(DISTINCT pr.policy_id)          AS policy_count
+    FROM payment_receipts pr
+    LEFT JOIN branches b ON b.id = pr.branch_id
+    WHERE pr.organization_id = ${orgId}
+      AND pr.status = 'issued'
+      AND pr.issued_at >= ${from + "T00:00:00.000Z"}
+      AND pr.issued_at <= ${to + "T23:59:59.999Z"}
+      ${branchId ? sql`AND pr.branch_id = ${branchId}` : sql``}
+    GROUP BY pr.branch_id, b.name, pr.currency
+    ORDER BY income DESC
+  `);
+
+  const claimStats = await tdb.execute(sql`
+    SELECT
+      status,
+      COUNT(*)                                       AS count,
+      COALESCE(SUM(cash_in_lieu_amount::numeric), 0) AS total_value,
+      COALESCE(currency, 'USD')                      AS currency
+    FROM claims
+    WHERE organization_id = ${orgId}
+      AND created_at >= ${from + "T00:00:00.000Z"}
+      AND created_at <= ${to + "T23:59:59.999Z"}
+      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+    GROUP BY status, COALESCE(currency, 'USD')
+  `);
+
+  const newPolicies = await tdb.execute(sql`
+    SELECT COUNT(*) AS count
+    FROM policies
+    WHERE organization_id = ${orgId}
+      AND created_at >= ${from + "T00:00:00.000Z"}
+      AND created_at <= ${to + "T23:59:59.999Z"}
+      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+  `);
+
+  return {
+    period: { from, to },
+    income: {
+      total: is.income.total,
+      premiumIndividual: is.income.premiumIndividual,
+      premiumGroup: is.income.premiumGroup,
+      cashServices: is.income.cashServices,
+    },
+    expenses: { total: is.expenses.total },
+    net: is.net,
+    consolidatedUsd: is.consolidatedUsd,
+    cashPosition: {
+      totalOnHand: parseFloat(totalOnHand.toFixed(2)),
+      totalDeposited: parseFloat(totalDeposited.toFixed(2)),
+      admins: positions.map((p) => ({
+        ...p,
+        displayName: findU(p.userId)?.displayName || findU(p.userId)?.email || p.userId,
+      })),
+    },
+    branchBreakdown: ((branchRows as any).rows ?? (branchRows as unknown as any[])).map((r: any) => ({
+      branchId: r.branch_id,
+      branchName: r.branch_name || "No branch",
+      currency: r.currency,
+      income: parseFloat(r.income),
+      policyCount: parseInt(r.policy_count),
+    })),
+    claimStats: ((claimStats as any).rows ?? (claimStats as unknown as any[])).map((r: any) => ({
+      status: r.status,
+      count: parseInt(r.count),
+      totalValue: parseFloat(r.total_value),
+      currency: r.currency,
+    })),
+    newPoliciesCount: parseInt(
+      (((newPolicies as any).rows ?? (newPolicies as unknown as any[]))[0] as any)?.count ?? 0,
+    ),
+  };
+}

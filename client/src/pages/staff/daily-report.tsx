@@ -11,7 +11,8 @@ import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useBranding } from "@/hooks/use-branding";
 import { useAuth } from "@/hooks/use-auth";
-import { Loader2, FileDown, Download } from "lucide-react";
+import { AiInsightsPanel } from "@/components/ai-insights-panel";
+import { Loader2, FileDown, Download, Sparkles } from "lucide-react";
 
 function money(n: any) {
   return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -24,7 +25,7 @@ function currencyLines(m: Record<string, number> | undefined) {
 
 export default function DailyReport() {
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, permissions } = useAuth();
   const { branding, displayName, displayLogo } = useBranding(user?.organizationId ?? null);
   const [, setLocation] = useLocation();
   const search = useSearch();
@@ -53,6 +54,16 @@ export default function DailyReport() {
       toast({ title: "Note added" });
     },
     onError: (err: any) => toast({ title: "Couldn't add note", description: err?.message, variant: "destructive" }),
+  });
+
+  const enhanceNoteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/ai/enhance-note", { date, draftText: noteText });
+      const data = await res.json();
+      return data.text as string;
+    },
+    onSuccess: (text) => setNoteText(text),
+    onError: (err: any) => toast({ title: "Couldn't enhance note", description: err?.message, variant: "destructive" }),
   });
 
   const changeDate = (d: string) => setLocation(`/staff/daily-report?date=${d}`);
@@ -92,6 +103,13 @@ export default function DailyReport() {
                 <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Daily report</p>
               </div>
             </div>
+
+            <AiInsightsPanel
+              surface="daily_report"
+              date={date}
+              title="AI Summary"
+              description="Ask AI to summarize today's financials and operations, and flag anything unusual."
+            />
 
             {/* Income statement */}
             <CardSection title="Income Statement" description="Cash-basis income and expenses for the day.">
@@ -230,9 +248,24 @@ export default function DailyReport() {
                 )}
                 <div className="flex gap-2 items-start pt-2">
                   <Textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} placeholder="Add a note for today's report…" rows={3} className="flex-1" />
-                  <Button onClick={() => addNoteMutation.mutate()} disabled={!noteText.trim() || addNoteMutation.isPending}>
-                    {addNoteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add note"}
-                  </Button>
+                  <div className="flex flex-col gap-2">
+                    {permissions.includes("use:ai") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => enhanceNoteMutation.mutate()}
+                        disabled={!noteText.trim() || enhanceNoteMutation.isPending}
+                        data-testid="button-enhance-note-ai"
+                      >
+                        {enhanceNoteMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                        Enhance with AI
+                      </Button>
+                    )}
+                    <Button onClick={() => addNoteMutation.mutate()} disabled={!noteText.trim() || addNoteMutation.isPending}>
+                      {addNoteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add note"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </CardSection>

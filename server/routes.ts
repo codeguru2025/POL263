@@ -16,8 +16,10 @@ import { requireAuth, requirePermission, requireAnyPermission, requireTenantScop
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
-import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary } from "./financial-statements";
 import { buildDailyReport } from "./daily-report";
+import { enhanceNote, generateInsights } from "./ai-service";
+import { buildAiInsightContext, buildNoteEnhanceContext, AI_SURFACE_PERMISSION, type AiSurface } from "./ai-context";
 import { generateRequisitionPdf } from "./requisition-pdf";
 import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
 import { z } from "zod";
@@ -80,6 +82,8 @@ import {
   OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP,
 } from "./outbox";
 import { isAgentScoped } from "@shared/roles";
+import rateLimit from "express-rate-limit";
+import { createRedisStore } from "./rate-limit-redis-store";
 
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -89,6 +93,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const REPORT_EXPORT_MAX_ROWS =
     (process.env.REPORT_EXPORT_MAX_ROWS && parseInt(process.env.REPORT_EXPORT_MAX_ROWS, 10)) || 15000;
   const premiumBackfillRunning = new Set<string>();
+
+  // Keyed by user id (not IP, unlike the app-wide limiters in server/index.ts) — those run
+  // before setupAuth() populates req.user, so an IP-keyed limiter is all they can do. This one
+  // is applied as route middleware after requireAuth, specifically so it can bound Opus API
+  // cost per user rather than per shared office IP.
+  const getAiRedisStore = await createRedisStore({ prefix: "rl:pol263" });
+  const aiLimiter = rateLimit({
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: getAiRedisStore?.("ai"),
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    keyGenerator: (req: any) => req.user?.id ?? req.ip,
+    message: { message: "Too many AI requests, please try again in a few minutes." },
+  });
 
   async function getActivePolicyDependentDobList(policy: any, orgId: string): Promise<(string | null | undefined)[]> {
     if (!policy?.id || !policy?.clientId) return [];
@@ -8591,104 +8610,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Executive summary (finance-gated) ───────────────────
   app.get("/api/dashboard/executive-summary", requireAuth, requireTenantScope, requireAnyPermission("approve:finance", "read:finance"), async (req, res) => {
     const user = req.user as any;
-    const orgId = user.organizationId;
-
     const def = defaultStatementRange();
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to   = typeof req.query.toDate   === "string" && req.query.toDate   ? req.query.toDate   : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
-
-    const tdb = await getDbForOrg(orgId);
-
-    // 1. Income statement for the period (reuse existing builder)
-    const is = await buildIncomeStatement(orgId, { from, to, branchId });
-
-    // 2. Admin cash positions
-    const positions = await storage.getAdminCashPosition(orgId);
-    const posUserIds = positions.map(p => p.userId);
-    const posUsers   = posUserIds.length ? await storage.getUsersByIds(posUserIds, orgId) : [];
-    const findU = (id: string) => posUsers.find((u: any) => u.id === id);
-    const totalOnHand   = positions.reduce((s, p) => s + Math.max(0, p.onHand), 0);
-    const totalDeposited = positions.reduce((s, p) => s + p.totalDeposited, 0);
-
-    // 3. Per-branch income breakdown (premium receipts in period, grouped by branch)
-    const branchRows = await tdb.execute(sql`
-      SELECT
-        pr.branch_id,
-        b.name AS branch_name,
-        pr.currency,
-        COALESCE(SUM(pr.amount::numeric), 0) AS income,
-        COUNT(DISTINCT pr.policy_id)          AS policy_count
-      FROM payment_receipts pr
-      LEFT JOIN branches b ON b.id = pr.branch_id
-      WHERE pr.organization_id = ${orgId}
-        AND pr.status = 'issued'
-        AND pr.issued_at >= ${from + 'T00:00:00.000Z'}
-        AND pr.issued_at <= ${to   + 'T23:59:59.999Z'}
-        ${branchId ? sql`AND pr.branch_id = ${branchId}` : sql``}
-      GROUP BY pr.branch_id, b.name, pr.currency
-      ORDER BY income DESC
-    `);
-
-    // 4. Claims stats — COALESCE currency to 'USD' to avoid NULL grouping
-    const claimStats = await tdb.execute(sql`
-      SELECT
-        status,
-        COUNT(*)                                       AS count,
-        COALESCE(SUM(cash_in_lieu_amount::numeric), 0) AS total_value,
-        COALESCE(currency, 'USD')                      AS currency
-      FROM claims
-      WHERE organization_id = ${orgId}
-        AND created_at >= ${from + 'T00:00:00.000Z'}
-        AND created_at <= ${to   + 'T23:59:59.999Z'}
-        ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
-      GROUP BY status, COALESCE(currency, 'USD')
-    `);
-
-    // 5. New policies in period
-    const newPolicies = await tdb.execute(sql`
-      SELECT COUNT(*) AS count
-      FROM policies
-      WHERE organization_id = ${orgId}
-        AND created_at >= ${from + 'T00:00:00.000Z'}
-        AND created_at <= ${to   + 'T23:59:59.999Z'}
-        ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
-    `);
-
-    return res.json({
-      period: { from, to },
-      income: {
-        total:              is.income.total,
-        premiumIndividual:  is.income.premiumIndividual,
-        premiumGroup:       is.income.premiumGroup,
-        cashServices:       is.income.cashServices,
-      },
-      expenses: { total: is.expenses.total },
-      net: is.net,
-      consolidatedUsd: is.consolidatedUsd,
-      cashPosition: {
-        totalOnHand:   parseFloat(totalOnHand.toFixed(2)),
-        totalDeposited: parseFloat(totalDeposited.toFixed(2)),
-        admins: positions.map(p => ({
-          ...p,
-          displayName: findU(p.userId)?.displayName || findU(p.userId)?.email || p.userId,
-        })),
-      },
-      branchBreakdown: ((branchRows as any).rows ?? branchRows as unknown as any[]).map((r: any) => ({
-        branchId:    r.branch_id,
-        branchName:  r.branch_name || "No branch",
-        currency:    r.currency,
-        income:      parseFloat(r.income),
-        policyCount: parseInt(r.policy_count),
-      })),
-      claimStats: ((claimStats as any).rows ?? claimStats as unknown as any[]).map((r: any) => ({
-        status:     r.status,
-        count:      parseInt(r.count),
-        totalValue: parseFloat(r.total_value),
-        currency:   r.currency,
-      })),
-      newPoliciesCount: parseInt((((newPolicies as any).rows ?? newPolicies as unknown as any[])[0] as any)?.count ?? 0),
-    });
+    return res.json(await buildExecutiveSummary(user.organizationId, { from, to, branchId }));
   });
 
   // ─── Terms & Conditions ──────────────────────────────────
@@ -8966,6 +8892,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     await auditLog(req, "CREATE_DAILY_REPORT_NOTE", "DailyReportNote", created.id, null, created);
     return res.status(201).json(created);
+  });
+
+  // ─── AI Insights & Note Enhancement ──────────────────────
+  // Neither route trusts a client-supplied dataset — see server/ai-context.ts for why.
+  app.post("/api/ai/enhance-note", requireAuth, requireTenantScope, aiLimiter, requirePermission("use:ai"), async (req, res) => {
+    const user = req.user as any;
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    if (!effPerms.includes("read:finance")) {
+      return res.status(403).json({ message: "Missing permission: read:finance" });
+    }
+    const draftText = typeof req.body.draftText === "string" ? req.body.draftText : "";
+    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : new Date().toISOString().slice(0, 10);
+    const contextSummary = await buildNoteEnhanceContext(user.organizationId, date);
+    const result = await enhanceNote({ draftText, contextSummary });
+    if (!result.ok) return res.status(422).json({ message: result.error });
+    return res.json({ text: result.text });
+  });
+
+  app.post("/api/ai/insights", requireAuth, requireTenantScope, aiLimiter, requirePermission("use:ai"), async (req, res) => {
+    const user = req.user as any;
+    const surface = req.body.surface as AiSurface;
+    if (!Object.prototype.hasOwnProperty.call(AI_SURFACE_PERMISSION, surface)) {
+      return res.status(400).json({ message: "Unknown surface." });
+    }
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const requiredPerm = AI_SURFACE_PERMISSION[surface];
+    if (!effPerms.includes(requiredPerm)) {
+      return res.status(403).json({ message: `Missing permission: ${requiredPerm}` });
+    }
+    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : undefined;
+    const question = typeof req.body.question === "string" ? req.body.question : undefined;
+    try {
+      const { datasetLabel, dataJson } = await buildAiInsightContext(surface, user.organizationId, date);
+      const result = await generateInsights({ datasetLabel, dataJson, question });
+      if (!result.ok) return res.status(422).json({ message: result.error });
+      return res.json({ text: result.text });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/ai/insights failed", { error: err?.message, surface });
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   app.get("/api/reports/balance-sheet", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {

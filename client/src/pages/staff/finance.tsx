@@ -23,6 +23,7 @@ import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { useAuth } from "@/hooks/use-auth";
+import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { CurrencySelect } from "@/components/currency-select";
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { formatAmount } from "@shared/validation";
@@ -2142,6 +2143,10 @@ export default function StaffFinance() {
           <KpiStatCard label="Commission Configs" value={commissionConfigs.length} icon={TrendingUp} />
           {!isAgent && <KpiStatCard label="Expenditures" value={expenditures.length} icon={Wallet} />}
         </div>
+        )}
+
+        {!isAgent && !commissionOnly && (
+          <AiInsightsPanel surface="finance" title="AI Insights" description="Ask AI to summarize the financial position and flag anything unusual." />
         )}
 
         <Tabs value={activeTab} onValueChange={handleTabChange}>

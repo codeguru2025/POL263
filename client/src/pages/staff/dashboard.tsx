@@ -1,6 +1,7 @@
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, KpiStatCard, EmptyState } from "@/components/ds";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
@@ -702,6 +703,8 @@ export default function StaffDashboard() {
           description={`Welcome back, ${user?.displayName || user?.email}. Here is your overview.`}
           titleDataTestId="text-dashboard-title"
         />
+
+        {!isAgent && <AiInsightsPanel surface="dashboard" title="AI Insights" description="Ask AI to summarize the business at a glance and flag anything worth attention." />}
 
         {commandCenters && <CommandCenter />}
 

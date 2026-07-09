@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge, EnhancedDataTable, type EdtColumn } from "@/components/ds";
+import { AiInsightsPanel } from "@/components/ai-insights-panel";
 
 function readEstatementDateRange() {
   const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement | null)?.value;
@@ -3652,6 +3653,8 @@ export default function StaffPolicies() {
             </div>
           }
         />
+
+        <AiInsightsPanel surface="policies" title="AI Insights" description="Ask AI to summarize the policy portfolio and flag retention/lapse trends worth attention." />
 
         <CardSection
           flush

@@ -81,6 +81,7 @@ export const SYSTEM_PERMISSIONS = [
   { name: "manage:approvals", description: "Handle maker-checker approvals", category: "approvals" },
   { name: "create:tenant", description: "Add new tenants (organizations)", category: "platform" },
   { name: "delete:tenant", description: "Remove tenants (organizations)", category: "platform" },
+  { name: "use:ai", description: "Use AI-powered insights and note assistance", category: "ai" },
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -89,7 +90,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:organization", "read:branch", "read:user", "read:role", "read:audit_log",
     "read:policy", "read:claim", "read:client", "read:product", "read:funeral_ops",
     "read:finance", "read:fleet", "read:commission", "read:payroll", "read:report",
-    "read:lead", "read:notification",
+    "read:lead", "read:notification", "use:ai",
   ],
   manager: [
     "read:organization", "read:branch", "write:branch", "read:user", "write:user",
@@ -100,7 +101,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:commission", "read:report", "write:report", "read:lead", "write:lead",
     "read:notification", "manage:approvals",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
-    "view:all_clients",
+    "view:all_clients", "use:ai",
   ],
   administrator: [
     "read:organization", "write:organization", "read:branch", "write:branch",
@@ -116,7 +117,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:own_clients", "view:all_clients",
     "delete:policy", "delete:payment", "delete:receipt", "edit:payment", "edit:receipt",
-    "delete:requisition", "delete:expenditure",
+    "delete:requisition", "delete:expenditure", "use:ai",
   ],
   cashier: [
     "read:policy", "read:client", "read:finance", "write:finance", "read:report",
@@ -134,7 +135,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   ],
   claims_officer: [
     "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
-    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report",
+    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report", "use:ai",
   ],
   fleet_ops: [
     "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",

@@ -5,6 +5,7 @@ import { apiRequest, getApiBase } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
 import { PageHeader, PageShell, CardSection, FilterBar, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
+import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { Input } from "@/components/ui/input";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -219,6 +220,8 @@ export default function StaffClaims() {
             </div>
           )}
         />
+
+        <AiInsightsPanel surface="claims" title="AI Insights" description="Ask AI to summarize claims activity and flag anything unusual." />
 
         <CardSection title="Claims register" description="Search and filter the live claims ledger." flush>
             <FilterBar className="border-b border-border/60 bg-muted/10 px-4 py-3 sm:px-6">

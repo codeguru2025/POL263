@@ -122,6 +122,7 @@ GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   # Staff login
 PAYNOW_INTEGRATION_ID / PAYNOW_INTEGRATION_KEY  # Payments (server-side only)
 REDIS_URL                    # Distributed rate limiting (falls back to in-memory)
 AWS_S3_BUCKET / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY  # Document storage
+ANTHROPIC_API_KEY            # AI insights & note enhancement (server/ai-service.ts) — degrades gracefully if unset
 ```
 
 ## Database
