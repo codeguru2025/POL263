@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -1376,6 +1376,7 @@ export default function StaffFinance() {
   const canWriteFinance = permissions.includes("write:finance");
   const canApproveFinance = permissions.includes("approve:finance") || (authUser as any)?.isPlatformOwner;
   const canDeleteRequisition = permissions.includes("delete:requisition") || (authUser as any)?.isPlatformOwner;
+  const canBackdatePayment = permissions.includes("backdate:payment") || (authUser as any)?.isPlatformOwner;
   const canDeleteExpenditure = permissions.includes("delete:expenditure") || (authUser as any)?.isPlatformOwner;
   const canReadCommission = permissions.includes("read:commission");
   const commissionOnly = canReadCommission && !canReadFinance;
@@ -1539,6 +1540,20 @@ export default function StaffFinance() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
       toast({ title: "Requisition updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const [correctPaidDateTarget, setCorrectPaidDateTarget] = useState<any | null>(null);
+  const [correctPaidDateValue, setCorrectPaidDateValue] = useState("");
+  const correctPaidDateMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/requisitions/${correctPaidDateTarget.id}`, { action: "correct-paid-date", paidDate: correctPaidDateValue });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payment-disbursements"] });
+      setCorrectPaidDateTarget(null);
+      toast({ title: "Paid date corrected" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -2841,6 +2856,18 @@ export default function StaffFinance() {
                               </Button>
                             )}
                             {r.status === "paid" && <span className="text-xs text-muted-foreground">Paid ✓</span>}
+                            {(r.status === "paid" || r.status === "partial") && canBackdatePayment && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs"
+                                title="Correct the paid date used for financial statements (e.g. it was actually paid on an earlier day)"
+                                onClick={() => { setCorrectPaidDateTarget(r); setCorrectPaidDateValue(r.paidDate ? String(r.paidDate).slice(0, 10) : ""); }}
+                                data-testid={`btn-correct-paid-date-${r.id}`}
+                              >
+                                Correct date
+                              </Button>
+                            )}
                             {r.status === "rejected" && <span className="text-xs text-muted-foreground">Rejected</span>}
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print requisition" onClick={(e) => { e.stopPropagation(); window.open(`/api/requisitions/${r.id}/pdf`, "_blank"); }}>
                               <Printer className="h-3.5 w-3.5" />
@@ -3942,6 +3969,35 @@ export default function StaffFinance() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!correctPaidDateTarget} onOpenChange={(v) => !v && setCorrectPaidDateTarget(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Correct Paid Date</DialogTitle>
+            <DialogDescription>
+              Sets the value date used for financial statements for requisition{" "}
+              <strong>{correctPaidDateTarget?.requisitionNumber}</strong> — use this when the cash actually left on a
+              different day than the system recorded it (e.g. paid yesterday, only entered/approved today). This does
+              not change who paid it or when the approval happened.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label className="text-xs">Actual paid date</Label>
+            <Input type="date" value={correctPaidDateValue} onChange={(e) => setCorrectPaidDateValue(e.target.value)} data-testid="input-correct-paid-date" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCorrectPaidDateTarget(null)}>Cancel</Button>
+            <Button
+              onClick={() => correctPaidDateMutation.mutate()}
+              disabled={!correctPaidDateValue || correctPaidDateMutation.isPending}
+              data-testid="button-confirm-correct-paid-date"
+            >
+              {correctPaidDateMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={!!confirmDeleteExpenditure} onOpenChange={(v) => !v && setConfirmDeleteExpenditure(null)}>
         <AlertDialogContent>

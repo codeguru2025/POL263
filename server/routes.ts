@@ -6402,6 +6402,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           .returning();
         return row;
       });
+    } else if (action === "correct-paid-date") {
+      // Corrects the value date used for cash-basis financial statements — e.g. a requisition
+      // raised and formally approved/paid in the system today, but where the cash actually left
+      // yesterday (informal payment ahead of the system catching up), so today's figures don't
+      // get inflated by a payment that really belongs to an earlier day. Does not touch paidAt
+      // (the audit timestamp of when the system action happened, which is real and unchanged).
+      if (!effPerms.includes("backdate:payment") && !user.isPlatformOwner) {
+        return res.status(403).json({ message: "Requires backdate:payment" });
+      }
+      if (!["paid", "partial"].includes(existing.status)) {
+        return res.status(400).json({ message: "Only paid or partially-paid requisitions have a paid date to correct" });
+      }
+      const newPaidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : null;
+      if (!newPaidDate) return res.status(400).json({ message: "paidDate is required" });
+      updated = await withOrgTransaction(user.organizationId, async (txDb) => {
+        await txDb.update(paymentDisbursements).set({ paidDate: newPaidDate } as any)
+          .where(and(
+            eq(paymentDisbursements.entityType, "requisition"),
+            eq(paymentDisbursements.entityId, existing.id),
+            eq(paymentDisbursements.organizationId, user.organizationId),
+          ));
+        const [row] = await txDb.update(requisitions).set({ paidDate: newPaidDate } as any)
+          .where(and(eq(requisitions.id, existing.id), eq(requisitions.organizationId, user.organizationId)))
+          .returning();
+        return row;
+      });
     } else {
       // Plain edit: any staff member can edit while still in draft. Once submitted, only the
       // platform owner can edit directly (needed to correct/reconcile entries after the fact) —
@@ -6430,7 +6456,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
-    if (action !== "pay") {
+    if (action !== "pay" && action !== "correct-paid-date") {
       updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
     }
     await auditLog(req, "UPDATE_REQUISITION", "Requisition", existing.id, existing, updated);
