@@ -753,6 +753,15 @@ export async function applyPaymentToPolicy(
           if (snap) currentPolicySnap = snap as any;
         }
       }
+      // Anything paid beyond the monthCount periods just advanced didn't buy another whole
+      // period — credit it to the policy's balance instead of dropping it. See the matching
+      // comment in POST /api/payments (server/routes.ts) for how this gets auto-spent later.
+      if (premiumAmt > 0) {
+        const excess = paidAmt - monthCount * premiumAmt;
+        if (excess > 0.01) {
+          await storage.addPolicyCreditBalanceInTx(txDb, orgId, intent.policyId, excess.toFixed(2), intent.currency);
+        }
+      }
 
       const [tx] = await txDb.insert(paymentTransactions).values({
         organizationId: intent.organizationId,

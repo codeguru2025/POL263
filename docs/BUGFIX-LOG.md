@@ -10,6 +10,44 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-09 — overpayment above whole-month multiples silently vanished instead of crediting the policy
+
+- **Symptom:** not reported by name, found while implementing overpayment-credit auto-apply — a
+  client paying more than an exact multiple of their premium (e.g. premium $10/mo, pays $25) had
+  the policy advanced by `floor(25/10) = 2` months, and the leftover $5 was recorded as part of
+  the $25 transaction but never tracked anywhere as credit. It wasn't owed back, wasn't applied
+  to a future month, and didn't show up on `policy_credit_balances` — it just disappeared from
+  the policy's accounting even though the full $25 was banked.
+- **Root cause:** `POST /api/payments` (`server/routes.ts`) and `applyPaymentToPolicy`
+  (`server/payment-service.ts`, the PayNow completion path) both derive `monthCount` from
+  `amount / premium` and advance the policy cycle that many whole periods, but neither ever did
+  anything with the remainder. The exact same "amount over premium" case was already handled
+  correctly one place over — the month-end bulk-run route (`POST /api/month-end-run`) already
+  calls `storage.addPolicyCreditBalance` for its excess — it just was never applied to the two
+  much more commonly used single-payment paths.
+- **Fix:** added `storage.addPolicyCreditBalanceInTx` (`server/storage.ts`) — a transaction-safe
+  variant of the existing `addPolicyCreditBalance` so the credit commits atomically with the
+  payment that produced it, instead of the month-end route's pattern of crediting after the
+  transaction closes. Both `POST /api/payments` and `applyPaymentToPolicy` now credit
+  `amount - monthCount × premium` to `policy_credit_balances` whenever it's positive. Also wired
+  `runApplyCreditBalances` (`server/credit-apply.ts`) — previously only reachable via a manual
+  "Apply Credit Balances" button in Finance — into the existing payment-automation `setInterval`
+  tick (`server/routes.ts`, next to `runPaymentAutomationForOrg`) so credit balances get spent
+  against the next due premium automatically, not just when someone remembers to click the button.
+- **Files:** `server/routes.ts`, `server/payment-service.ts`, `server/storage.ts`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+  Confirmed via Falakhe's live DB that `policy_credit_balances` and the wallet-balance display
+  (`walletBalance` in `GET /api/policies/:id`, rendered in `client/src/pages/staff/policies.tsx`)
+  were already fully wired end-to-end — the only missing piece was actually crediting the excess
+  at the two write sites that needed it.
+- **Lesson for next time:** when the same "excess/remainder" concept is handled correctly in one
+  code path (month-end bulk run) but not in the more commonly used ones (single cash receipt,
+  PayNow), that's the same "reachable only through one of several paths" bug class logged
+  repeatedly in this file — grep for every place that derives `monthCount`/`periods` from
+  `amount / premium` division, not just the one you're currently touching.
+
+---
+
 ## 2026-07-09 — Legacy Individual/Group policies still refused to add dependants without DOB
 
 - **Symptom:** user reported that LEGIND (Legacy Individual) policies still refuse to add

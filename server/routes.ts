@@ -384,6 +384,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const orgs = await storage.getOrganizations();
         for (const org of orgs) {
           await runPaymentAutomationForOrg(org.id);
+          // Spend any policy credit balance built up from overpayments (see excess-crediting
+          // in POST /api/payments and applyPaymentToPolicy) the moment it covers the next premium
+          // — same logic as the manual "Apply Credit Balances" button, just on a timer.
+          try {
+            const { applied, errors } = await runApplyCreditBalances(org.id);
+            if (errors.length) structuredLog("error", "Credit balance auto-apply had errors", { orgId: org.id, applied, errors });
+          } catch (err: any) {
+            structuredLog("error", "Credit balance auto-apply failed", { orgId: org.id, error: err?.message });
+          }
         }
       });
     } catch (err: any) {
@@ -3697,6 +3706,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (m < monthCount - 1) {
             const [refreshed] = await txDb.select().from(policies).where(eq(policies.id, parsed.policyId)).limit(1);
             if (refreshed) currentPolicy = refreshed;
+          }
+        }
+        // Whatever's left over after covering monthCount full periods didn't buy another whole
+        // period, so it doesn't belong in periodTo/periodFrom — credit it to the policy's balance
+        // instead of silently dropping it. credit-apply.ts auto-spends this the next time a full
+        // premium is due (manually via POST /api/apply-credit-balances, or on the automation tick).
+        if (policy?.premiumAmount) {
+          const premiumForExcess = parseFloat(String(policy.premiumAmount));
+          const paidForExcess = parseFloat(String(parsed.amount ?? 0));
+          const excess = premiumForExcess > 0 ? paidForExcess - monthCount * premiumForExcess : 0;
+          if (excess > 0.01) {
+            await storage.addPolicyCreditBalanceInTx(txDb, user.organizationId, parsed.policyId, excess.toFixed(2), parsed.currency || policy.currency || "USD");
           }
         }
       }

@@ -549,6 +549,8 @@ export interface IStorage {
   createGroupPaymentAllocations(orgId: string, allocations: InsertGroupPaymentAllocation[]): Promise<void>;
   getOrCreatePolicyCreditBalance(orgId: string, policyId: string, currency: string): Promise<PolicyCreditBalance>;
   addPolicyCreditBalance(orgId: string, policyId: string, amount: string, currency: string): Promise<PolicyCreditBalance | undefined>;
+  /** Same as `addPolicyCreditBalance` but runs on a transaction client already inside `withOrgTransaction`, so the credit and the payment that produced it commit atomically. */
+  addPolicyCreditBalanceInTx(tx: OrgDrizzleDb, orgId: string, policyId: string, amount: string, currency: string): Promise<void>;
   getPolicyCreditBalance(orgId: string, policyId: string): Promise<PolicyCreditBalance | undefined>;
   getPolicyCreditBalancesWithPositiveBalance(orgId: string): Promise<PolicyCreditBalance[]>;
   deductPolicyCreditBalance(orgId: string, policyId: string, amount: string): Promise<PolicyCreditBalance | undefined>;
@@ -4310,6 +4312,15 @@ export class DatabaseStorage implements IStorage {
     `);
     const rows = (result as unknown as { rows?: PolicyCreditBalance[] }).rows;
     return rows?.[0];
+  }
+  async addPolicyCreditBalanceInTx(tx: OrgDrizzleDb, orgId: string, policyId: string, amount: string, currency: string): Promise<void> {
+    await tx.execute(sql`
+      INSERT INTO policy_credit_balances (organization_id, policy_id, balance, currency, updated_at)
+      VALUES (${orgId}, ${policyId}, ${amount}::numeric, ${currency}, now())
+      ON CONFLICT (policy_id, organization_id) DO UPDATE
+        SET balance = policy_credit_balances.balance + ${amount}::numeric,
+            updated_at = now()
+    `);
   }
   async getPolicyCreditBalance(orgId: string, policyId: string): Promise<PolicyCreditBalance | undefined> {
     const tdb = await getDbForOrg(orgId);
