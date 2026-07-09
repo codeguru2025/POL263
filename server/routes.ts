@@ -6270,15 +6270,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // resolveOrSyncTenantUserId).
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
 
-    // Segregation of duties: whoever raised a requisition cannot also be the one who approves,
-    // rejects, or pays it — the platform owner is the sole exception (needed for correcting/
-    // reconciling historical entries end-to-end).
-    if (
-      (action === "approve" || action === "reject" || action === "pay") &&
-      existing.requestedBy === effectiveUserId &&
-      !user.isPlatformOwner
-    ) {
-      return res.status(403).json({ message: "You cannot approve, reject, or pay a requisition you raised yourself." });
+    // Segregation of duties: whoever raised a requisition cannot approve or reject it themselves
+    // — platform owner is the sole exception. Paying it themselves is also blocked UNLESS they
+    // hold approve:finance (i.e. they're an administrator) and someone else already approved it —
+    // see the matching comment in POST /api/requisitions/:id/payments for why that's the line
+    // that matters, not "did they raise it."
+    const isSelfRequisition = existing.requestedBy === effectiveUserId && !user.isPlatformOwner;
+    if ((action === "approve" || action === "reject") && isSelfRequisition) {
+      return res.status(403).json({ message: "You cannot approve or reject a requisition you raised yourself." });
+    }
+    if (action === "pay" && isSelfRequisition && !canApprove) {
+      return res.status(403).json({ message: "You cannot pay a requisition you raised yourself." });
     }
 
     if (action === "submit") {
@@ -6513,10 +6515,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "Requisition must be approved before payments can be recorded" });
     }
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-    // Segregation of duties: whoever raised a requisition cannot also be the one who pays it —
-    // platform owner is the sole exception. Same rule enforced in PATCH /api/requisitions/:id.
+    // Segregation of duties: whoever raised a requisition cannot also be the one who pays it,
+    // UNLESS they hold approve:finance (i.e. they're an administrator) and someone else already
+    // approved it — the maker-checker gap that matters is a single person raising, approving,
+    // AND paying with no other eyes on it, and approval already required a different person (see
+    // the approve/reject check in PATCH /api/requisitions/:id). Platform owner is always exempt.
+    // Same rule enforced there.
     if (existing.requestedBy === effectiveUserId && !user.isPlatformOwner) {
-      return res.status(403).json({ message: "You cannot pay a requisition you raised yourself." });
+      const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+      if (!effPerms.includes("approve:finance")) {
+        return res.status(403).json({ message: "You cannot pay a requisition you raised yourself." });
+      }
     }
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
