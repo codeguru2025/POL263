@@ -6402,32 +6402,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           .returning();
         return row;
       });
-    } else if (action === "correct-paid-date") {
-      // Corrects the value date used for cash-basis financial statements — e.g. a requisition
-      // raised and formally approved/paid in the system today, but where the cash actually left
-      // yesterday (informal payment ahead of the system catching up), so today's figures don't
-      // get inflated by a payment that really belongs to an earlier day. Does not touch paidAt
-      // (the audit timestamp of when the system action happened, which is real and unchanged).
-      if (!effPerms.includes("backdate:payment") && !user.isPlatformOwner) {
-        return res.status(403).json({ message: "Requires backdate:payment" });
+    } else if (action === "correct-paid-date" || action === "correct-paid-currency") {
+      // Corrects the value date or currency used for cash-basis financial statements on an
+      // already-paid requisition — e.g. cash actually left on an earlier day than the system
+      // recorded, or was paid in a different currency than entered. Both go through the same
+      // maker-checker approval flow as delete_receipt/delete_policy — the actual DB write only
+      // happens once approved, in POST /api/approvals/:id/resolve's correct_paid_date /
+      // correct_paid_currency branches, not here. paidAt (the audit timestamp of the system
+      // action) is never touched by either correction.
+      const requiredPerm = action === "correct-paid-date" ? "backdate:payment" : "edit:payment";
+      if (!effPerms.includes(requiredPerm) && !user.isPlatformOwner) {
+        return res.status(403).json({ message: `Requires ${requiredPerm}` });
       }
       if (!["paid", "partial"].includes(existing.status)) {
-        return res.status(400).json({ message: "Only paid or partially-paid requisitions have a paid date to correct" });
+        return res.status(400).json({ message: "Only paid or partially-paid requisitions can be corrected" });
       }
-      const newPaidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : null;
-      if (!newPaidDate) return res.status(400).json({ message: "paidDate is required" });
-      updated = await withOrgTransaction(user.organizationId, async (txDb) => {
-        await txDb.update(paymentDisbursements).set({ paidDate: newPaidDate } as any)
-          .where(and(
-            eq(paymentDisbursements.entityType, "requisition"),
-            eq(paymentDisbursements.entityId, existing.id),
-            eq(paymentDisbursements.organizationId, user.organizationId),
-          ));
-        const [row] = await txDb.update(requisitions).set({ paidDate: newPaidDate } as any)
-          .where(and(eq(requisitions.id, existing.id), eq(requisitions.organizationId, user.organizationId)))
-          .returning();
-        return row;
+      let requestData: Record<string, any>;
+      if (action === "correct-paid-date") {
+        const newPaidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : null;
+        if (!newPaidDate) return res.status(400).json({ message: "paidDate is required" });
+        requestData = { requisitionNumber: existing.requisitionNumber, oldPaidDate: existing.paidDate, newPaidDate, reason: req.body.reason || null };
+      } else {
+        const newCurrency = normalizeCurrency(String(req.body.currency || ""));
+        if (!newCurrency) return res.status(400).json({ message: "currency is required" });
+        requestData = { requisitionNumber: existing.requisitionNumber, oldCurrency: existing.currency, newCurrency, reason: req.body.reason || null };
+      }
+      const correctionApproval = await storage.createApprovalRequest({
+        organizationId: user.organizationId,
+        requestType: action === "correct-paid-date" ? "correct_paid_date" : "correct_paid_currency",
+        entityType: "Requisition",
+        entityId: existing.id,
+        requestData,
+        status: "pending",
+        initiatedBy: user.id,
       });
+      await auditLog(
+        req,
+        action === "correct-paid-date" ? "REQUEST_CORRECT_PAID_DATE" : "REQUEST_CORRECT_PAID_CURRENCY",
+        "Requisition",
+        existing.id,
+        existing,
+        { pendingCorrection: true, approvalId: correctionApproval.id },
+      );
+      notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+        type: "APPROVAL_NEEDED",
+        title: action === "correct-paid-date" ? "Paid Date Correction Approval Required" : "Paid Currency Correction Approval Required",
+        body: `Requisition ${existing.requisitionNumber} has a ${action === "correct-paid-date" ? "paid-date" : "paid-currency"} correction pending your approval.`,
+        metadata: { approvalId: correctionApproval.id, requisitionId: existing.id },
+      });
+      return res.status(202).json({ message: "Correction request submitted for approval", approvalId: correctionApproval.id });
     } else {
       // Plain edit: any staff member can edit while still in draft. Once submitted, only the
       // platform owner can edit directly (needed to correct/reconcile entries after the fact) —
@@ -6436,6 +6459,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ message: "Only draft requisitions can be edited" });
       }
       for (const k of ["category", "description", "payee", "amount", "currency", "branchId", "notes", "neededByDate"]) {
+        // Currency on a non-draft requisition must go through correct-paid-currency (maker-checker)
+        // above, not this direct path — otherwise requisitions.currency and the linked
+        // payment_disbursements.currency silently desync.
+        if (k === "currency" && existing.status !== "draft") continue;
         if (req.body[k] !== undefined) patch[k] = req.body[k] === "" ? null : req.body[k];
       }
       // Editing the amount on an already fully-paid requisition (platform owner correcting a
@@ -6456,7 +6483,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
-    if (action !== "pay" && action !== "correct-paid-date") {
+    if (action !== "pay") {
       updated = await storage.updateRequisition(req.params.id as string, user.organizationId, patch);
     }
     await auditLog(req, "UPDATE_REQUISITION", "Requisition", existing.id, existing, updated);
@@ -7606,6 +7633,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await storage.deleteFuneralQuotation(approval.entityId, user.organizationId);
           await auditLog(req, "DELETE_QUOTE", "FuneralQuotation", approval.entityId, { id: approval.entityId }, null);
           structuredLog("warn", "Quotation deleted via approval", { userId: user.id, quotationId: approval.entityId, approvalId: approval.id });
+        } else if (approval.requestType === "correct_paid_date") {
+          const reqBefore = await storage.getRequisition(approval.entityId, user.organizationId);
+          const newPaidDate = (approval.requestData as any)?.newPaidDate;
+          if (reqBefore && newPaidDate) {
+            const reqAfter = await withOrgTransaction(user.organizationId, async (txDb) => {
+              await txDb.update(paymentDisbursements).set({ paidDate: newPaidDate } as any)
+                .where(and(
+                  eq(paymentDisbursements.entityType, "requisition"),
+                  eq(paymentDisbursements.entityId, reqBefore.id),
+                  eq(paymentDisbursements.organizationId, user.organizationId),
+                ));
+              const [row] = await txDb.update(requisitions).set({ paidDate: newPaidDate } as any)
+                .where(and(eq(requisitions.id, reqBefore.id), eq(requisitions.organizationId, user.organizationId)))
+                .returning();
+              return row;
+            });
+            await auditLog(req, "CORRECT_REQUISITION_PAID_DATE", "Requisition", approval.entityId, reqBefore, reqAfter);
+            structuredLog("warn", "Requisition paid date corrected via approval", { userId: user.id, requisitionId: approval.entityId, approvalId: approval.id, newPaidDate });
+          }
+        } else if (approval.requestType === "correct_paid_currency") {
+          const reqBefore = await storage.getRequisition(approval.entityId, user.organizationId);
+          const newCurrency = (approval.requestData as any)?.newCurrency;
+          if (reqBefore && newCurrency) {
+            const reqAfter = await withOrgTransaction(user.organizationId, async (txDb) => {
+              await txDb.update(paymentDisbursements).set({ currency: newCurrency } as any)
+                .where(and(
+                  eq(paymentDisbursements.entityType, "requisition"),
+                  eq(paymentDisbursements.entityId, reqBefore.id),
+                  eq(paymentDisbursements.organizationId, user.organizationId),
+                ));
+              const [row] = await txDb.update(requisitions).set({ currency: newCurrency } as any)
+                .where(and(eq(requisitions.id, reqBefore.id), eq(requisitions.organizationId, user.organizationId)))
+                .returning();
+              return row;
+            });
+            await auditLog(req, "CORRECT_REQUISITION_PAID_CURRENCY", "Requisition", approval.entityId, reqBefore, reqAfter);
+            structuredLog("warn", "Requisition paid currency corrected via approval", { userId: user.id, requisitionId: approval.entityId, approvalId: approval.id, newCurrency });
+          }
         }
       } catch (sideEffectErr: any) {
         structuredLog("error", "Approval side-effect failed", { approvalId: approval.id, requestType: approval.requestType, error: sideEffectErr?.message });

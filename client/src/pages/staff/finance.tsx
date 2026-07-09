@@ -1377,6 +1377,7 @@ export default function StaffFinance() {
   const canApproveFinance = permissions.includes("approve:finance") || (authUser as any)?.isPlatformOwner;
   const canDeleteRequisition = permissions.includes("delete:requisition") || (authUser as any)?.isPlatformOwner;
   const canBackdatePayment = permissions.includes("backdate:payment") || (authUser as any)?.isPlatformOwner;
+  const canEditPayment = permissions.includes("edit:payment") || (authUser as any)?.isPlatformOwner;
   const canDeleteExpenditure = permissions.includes("delete:expenditure") || (authUser as any)?.isPlatformOwner;
   const canReadCommission = permissions.includes("read:commission");
   const commissionOnly = canReadCommission && !canReadFinance;
@@ -1545,15 +1546,33 @@ export default function StaffFinance() {
   });
   const [correctPaidDateTarget, setCorrectPaidDateTarget] = useState<any | null>(null);
   const [correctPaidDateValue, setCorrectPaidDateValue] = useState("");
+  const [correctPaidDateReason, setCorrectPaidDateReason] = useState("");
   const correctPaidDateMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("PATCH", `/api/requisitions/${correctPaidDateTarget.id}`, { action: "correct-paid-date", paidDate: correctPaidDateValue });
+      await apiRequest("PATCH", `/api/requisitions/${correctPaidDateTarget.id}`, { action: "correct-paid-date", paidDate: correctPaidDateValue, reason: correctPaidDateReason.trim() || undefined });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/payment-disbursements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/approvals"] });
       setCorrectPaidDateTarget(null);
-      toast({ title: "Paid date corrected" });
+      setCorrectPaidDateReason("");
+      toast({ title: "Submitted for approval", description: "A manager needs to approve this before it applies." });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const [correctPaidCurrencyTarget, setCorrectPaidCurrencyTarget] = useState<any | null>(null);
+  const [correctPaidCurrencyValue, setCorrectPaidCurrencyValue] = useState("USD");
+  const [correctPaidCurrencyReason, setCorrectPaidCurrencyReason] = useState("");
+  const correctPaidCurrencyMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/requisitions/${correctPaidCurrencyTarget.id}`, { action: "correct-paid-currency", currency: correctPaidCurrencyValue, reason: correctPaidCurrencyReason.trim() || undefined });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/approvals"] });
+      setCorrectPaidCurrencyTarget(null);
+      setCorrectPaidCurrencyReason("");
+      toast({ title: "Submitted for approval", description: "A manager needs to approve this before it applies." });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -2868,6 +2887,18 @@ export default function StaffFinance() {
                                 Correct date
                               </Button>
                             )}
+                            {(r.status === "paid" || r.status === "partial") && canEditPayment && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs"
+                                title="Correct the currency it was actually paid in"
+                                onClick={() => { setCorrectPaidCurrencyTarget(r); setCorrectPaidCurrencyValue(r.currency || "USD"); }}
+                                data-testid={`btn-correct-paid-currency-${r.id}`}
+                              >
+                                Correct currency
+                              </Button>
+                            )}
                             {r.status === "rejected" && <span className="text-xs text-muted-foreground">Rejected</span>}
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print requisition" onClick={(e) => { e.stopPropagation(); window.open(`/api/requisitions/${r.id}/pdf`, "_blank"); }}>
                               <Printer className="h-3.5 w-3.5" />
@@ -3975,15 +4006,19 @@ export default function StaffFinance() {
           <DialogHeader>
             <DialogTitle>Correct Paid Date</DialogTitle>
             <DialogDescription>
-              Sets the value date used for financial statements for requisition{" "}
+              Requests a correction to the value date used for financial statements for requisition{" "}
               <strong>{correctPaidDateTarget?.requisitionNumber}</strong> — use this when the cash actually left on a
               different day than the system recorded it (e.g. paid yesterday, only entered/approved today). This does
-              not change who paid it or when the approval happened.
+              not change who paid it or when the approval happened. A manager must approve this before it applies.
             </DialogDescription>
           </DialogHeader>
           <div>
             <Label className="text-xs">Actual paid date</Label>
             <Input type="date" value={correctPaidDateValue} onChange={(e) => setCorrectPaidDateValue(e.target.value)} data-testid="input-correct-paid-date" />
+          </div>
+          <div>
+            <Label className="text-xs">Reason (optional)</Label>
+            <Textarea value={correctPaidDateReason} onChange={(e) => setCorrectPaidDateReason(e.target.value)} rows={2} placeholder="Why this needs correcting…" data-testid="input-correct-paid-date-reason" />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCorrectPaidDateTarget(null)}>Cancel</Button>
@@ -3993,7 +4028,39 @@ export default function StaffFinance() {
               data-testid="button-confirm-correct-paid-date"
             >
               {correctPaidDateMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-              Save
+              Submit for approval
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!correctPaidCurrencyTarget} onOpenChange={(v) => !v && setCorrectPaidCurrencyTarget(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Correct Paid Currency</DialogTitle>
+            <DialogDescription>
+              Requests a correction to the currency recorded for requisition{" "}
+              <strong>{correctPaidCurrencyTarget?.requisitionNumber}</strong> — use this when it was actually paid in
+              a different currency than entered. A manager must approve this before it applies.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label className="text-xs">Actual currency paid</Label>
+            <CurrencySelect value={correctPaidCurrencyValue} onValueChange={setCorrectPaidCurrencyValue} />
+          </div>
+          <div>
+            <Label className="text-xs">Reason (optional)</Label>
+            <Textarea value={correctPaidCurrencyReason} onChange={(e) => setCorrectPaidCurrencyReason(e.target.value)} rows={2} placeholder="Why this needs correcting…" data-testid="input-correct-paid-currency-reason" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCorrectPaidCurrencyTarget(null)}>Cancel</Button>
+            <Button
+              onClick={() => correctPaidCurrencyMutation.mutate()}
+              disabled={!correctPaidCurrencyValue || correctPaidCurrencyMutation.isPending}
+              data-testid="button-confirm-correct-paid-currency"
+            >
+              {correctPaidCurrencyMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Submit for approval
             </Button>
           </DialogFooter>
         </DialogContent>

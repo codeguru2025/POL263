@@ -76,6 +76,8 @@ export default function StaffApprovals() {
     delete_receipt: "Delete Receipt",
     delete_quote: "Delete Quotation",
     legacy_policy: "Legacy Policy Activation",
+    correct_paid_date: "Correct Paid Date",
+    correct_paid_currency: "Correct Paid Currency",
   };
 
   const approvalColumns: EdtColumn<any>[] = [
@@ -88,14 +90,20 @@ export default function StaffApprovals() {
     {
       id: "entity",
       header: "Details",
-      accessor: (a) => `${a.entityType ?? ""} ${(a.requestData as any)?.policyNumber ?? (a.requestData as any)?.receiptNumber ?? (a.requestData as any)?.quotationNumber ?? a.entityId ?? ""}`,
+      accessor: (a) => `${a.entityType ?? ""} ${(a.requestData as any)?.policyNumber ?? (a.requestData as any)?.receiptNumber ?? (a.requestData as any)?.quotationNumber ?? (a.requestData as any)?.requisitionNumber ?? a.entityId ?? ""}`,
       cell: (a) => {
         const d = a.requestData as any;
-        const label = d?.policyNumber ?? d?.receiptNumber ?? d?.quotationNumber ?? null;
+        const label = d?.policyNumber ?? d?.receiptNumber ?? d?.quotationNumber ?? d?.requisitionNumber ?? null;
         return (
           <div>
             <span className="text-xs text-muted-foreground">{a.entityType}</span>
             {label && <><br /><span className="text-xs font-medium">{label}</span></>}
+            {a.requestType === "correct_paid_date" && (
+              <><br /><span className="text-xs">Paid date: {d?.oldPaidDate ? String(d.oldPaidDate).slice(0, 10) : "—"} → <strong>{d?.newPaidDate}</strong></span></>
+            )}
+            {a.requestType === "correct_paid_currency" && (
+              <><br /><span className="text-xs">Currency: {d?.oldCurrency ?? "—"} → <strong>{d?.newCurrency}</strong></span></>
+            )}
             {d?.reason && <><br /><span className="text-xs text-muted-foreground italic">{d.reason}</span></>}
           </div>
         );
