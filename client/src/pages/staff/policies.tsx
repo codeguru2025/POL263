@@ -365,7 +365,7 @@ export default function StaffPolicies() {
   const detailAddDepMutation = useMutation({
     mutationFn: async (data: typeof detailDepForm) => {
       if (!selectedPolicy) throw new Error("No policy selected");
-      const res = await apiRequest("POST", `/api/clients/${selectedPolicy.clientId}/dependents`, data);
+      const res = await apiRequest("POST", `/api/clients/${selectedPolicy.clientId}/dependents`, { ...data, policyId: selectedPolicy.id });
       const dep = await res.json();
       await apiRequest("POST", `/api/policies/${selectedPolicy.id}/members`, { dependentId: dep.id, role: "dependent" });
       return dep;
@@ -395,7 +395,11 @@ export default function StaffPolicies() {
   });
   const addDepMutation = useMutation({
     mutationFn: async (data: typeof newDep) => {
-      const res = await apiRequest("POST", `/api/clients/${createForm.clientId}/dependents`, data);
+      const res = await apiRequest("POST", `/api/clients/${createForm.clientId}/dependents`, {
+        ...data,
+        legacyGroupId: isLegacyGroupIssuance ? (createForm as any).groupId : undefined,
+        legacyProductVersionId: isLegacyProductIssuance ? createForm.productVersionId : undefined,
+      });
       return res.json();
     },
     onSuccess: () => {
@@ -4112,7 +4116,11 @@ export default function StaffPolicies() {
                     )}
                     {showAddDep && (
                       <div className="border rounded-md p-3 mt-2 space-y-3 bg-muted/20">
-                        <p className="text-xs text-muted-foreground">All fields required except National ID. Text stored in uppercase.</p>
+                        <p className="text-xs text-muted-foreground">
+                          {isLegacyIssuance
+                            ? "Name and relationship required. National ID, date of birth and gender are optional for Legacy Individual/Group policies."
+                            : "All fields required except National ID."} Text stored in uppercase.
+                        </p>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <Label className="text-xs">First Name *</Label>
@@ -4138,11 +4146,11 @@ export default function StaffPolicies() {
                             <Input value={newDep.nationalId} onChange={(e) => setNewDep({ ...newDep, nationalId: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, nationalId: toUpper(e.target.value) })} placeholder="e.g. 08833089H38" />
                           </div>
                           <div>
-                            <Label className="text-xs">Date of Birth *</Label>
+                            <Label className="text-xs">Date of Birth {isLegacyIssuance ? "" : "*"}</Label>
                             <Input type="date" value={newDep.dateOfBirth} onChange={(e) => setNewDep({ ...newDep, dateOfBirth: e.target.value })} />
                           </div>
                           <div>
-                            <Label className="text-xs">Gender *</Label>
+                            <Label className="text-xs">Gender {isLegacyIssuance ? "" : "*"}</Label>
                             <Select value={newDep.gender} onValueChange={(v) => setNewDep({ ...newDep, gender: v })}>
                               <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
                               <SelectContent>
@@ -4157,7 +4165,7 @@ export default function StaffPolicies() {
                           <Button
                             size="sm"
                             onClick={() => addDepMutation.mutate(newDep)}
-                            disabled={!newDep.firstName?.trim() || !newDep.lastName?.trim() || !newDep.relationship || !newDep.dateOfBirth || !newDep.gender || addDepMutation.isPending}
+                            disabled={!newDep.firstName?.trim() || !newDep.lastName?.trim() || !newDep.relationship || (!isLegacyIssuance && (!newDep.dateOfBirth || !newDep.gender)) || addDepMutation.isPending}
                           >
                             {addDepMutation.isPending && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
                             Save Dependent

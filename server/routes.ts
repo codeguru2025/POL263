@@ -1740,6 +1740,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const client = await storage.getClient(req.params.clientId as string, user.organizationId);
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
     const body = req.body as any;
+
+    // Dependants of a Legacy Individual/Group policy don't need DOB/gender — premium isn't
+    // computed from age for those products. Same relaxation as client creation (POST
+    // /api/clients above); resolved server-side from real records so a caller can't just claim
+    // "legacy" to skip validation.
+    let isLegacyDependentCapture = false;
+    if (body.policyId) {
+      const policy = await storage.getPolicy(String(body.policyId), user.organizationId);
+      if (!policy || policy.organizationId !== user.organizationId) return res.status(400).json({ message: "Policy not found." });
+      if (policy.isLegacy) isLegacyDependentCapture = true;
+    }
+    if (!isLegacyDependentCapture && body.legacyGroupId) {
+      const legacyGroup = await storage.getGroup(String(body.legacyGroupId), user.organizationId);
+      if (legacyGroup && legacyGroup.organizationId === user.organizationId && legacyGroup.isLegacy) {
+        isLegacyDependentCapture = true;
+      }
+    }
+    if (!isLegacyDependentCapture && body.legacyProductVersionId) {
+      const pv = await storage.getProductVersion(String(body.legacyProductVersionId), user.organizationId);
+      const product = pv ? await storage.getProduct(pv.productId, user.organizationId) : null;
+      if (product && (product.code === "LEGIND" || product.code === "LEGGRP")) {
+        isLegacyDependentCapture = true;
+      }
+    }
+
     const depFirstName = toUpperTrim(body.firstName, false);
     const depLastName = toUpperTrim(body.lastName, false);
     const relationship = toUpperTrim(body.relationship, false);
@@ -1748,11 +1773,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const nationalIdDep = body.nationalId ? normalizeNationalId(body.nationalId) : null;
     if (!depFirstName || !depLastName) return res.status(400).json({ message: "First name and last name are required for dependants." });
     if (!relationship) return res.status(400).json({ message: "Relationship is required for dependants." });
-    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required for dependants." });
-    if (!gender) return res.status(400).json({ message: "Gender is required for dependants." });
+    if (!isLegacyDependentCapture && !dateOfBirth) return res.status(400).json({ message: "Date of birth is required for dependants." });
+    if (!isLegacyDependentCapture && !gender) return res.status(400).json({ message: "Gender is required for dependants." });
     if (nationalIdDep && !isValidNationalId(nationalIdDep)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+    const { policyId: _pid, legacyGroupId: _lgid, legacyProductVersionId: _lpvid, ...bodyWithoutLegacyFlags } = body;
     const parsed = insertDependentSchema.parse({
-      ...body,
+      ...bodyWithoutLegacyFlags,
       firstName: depFirstName,
       lastName: depLastName,
       relationship,

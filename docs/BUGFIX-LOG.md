@@ -10,6 +10,47 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-09 — Legacy Individual/Group policies still refused to add dependants without DOB
+
+- **Symptom:** user reported that LEGIND (Legacy Individual) policies still refuse to add
+  dependants unless date of birth is filled in, even though Legacy Individual/Group issuance is
+  supposed to relax full-detail capture (see 2026-07-08 entries below — the *client's own* DOB
+  requirement was already relaxed for legacy issuance, but this is about *dependants*, a
+  different form and a different endpoint).
+- **Root cause:** the DOB/gender relaxation for legacy issuance was applied to the client record
+  (`POST /api/clients`) and the beneficiary sub-form, but never to `POST
+  /api/clients/:clientId/dependents` — that route unconditionally required `dateOfBirth` and
+  `gender` with no legacy exception at all (`server/routes.ts`). Two client-side call sites hit
+  this: the "Save Dependent" sub-form inside the policy-creation wizard
+  (`client/src/pages/staff/policies.tsx`, `newDep`/`addDepMutation`) additionally *disabled its
+  own submit button* whenever DOB or gender was blank, regardless of `isLegacyIssuance` — so for
+  LEGIND/LEGGRP the user could not even submit the form, matching the reported symptom exactly.
+  The "Add Dependent to Policy" dialog on an existing policy (`detailAddDepMutation`) didn't gate
+  the button, but would still get a 400 back from the server since the server had no way to know
+  the add was for a legacy policy.
+- **Fix:** `POST /api/clients/:clientId/dependents` now accepts optional `policyId`,
+  `legacyGroupId`, or `legacyProductVersionId` in the body and resolves legacy status
+  server-side (looking up the real policy/group/product, never trusting a client-claimed
+  boolean) — same pattern already used by `POST /api/clients`. DOB/gender are only required when
+  none of those resolve to a legacy capture. Client-side: the wizard's "Save Dependent" button no
+  longer requires DOB/gender when `isLegacyIssuance` is true, and both dependant-adding call
+  sites now send the relevant flag (`legacyGroupId`/`legacyProductVersionId` from the wizard,
+  `policyId` from the existing-policy dialog) so the server can verify it.
+- **Files:** `server/routes.ts`, `client/src/pages/staff/policies.tsx`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+  Traced both call sites' request bodies and the server's new resolution branches by hand;
+  no interactive click-through (staff auth is Google OAuth-only, no dev bypass — see prior
+  entries).
+- **Lesson for next time:** when relaxing a validation rule for a "legacy issuance" special case,
+  grep for *every* endpoint that captures the same kind of data (client details, beneficiary,
+  dependants, ...) rather than assuming one shared flag/pattern covers all of them — each had its
+  own separate hardcoded requirement here, so fixing the client record alone (2026-07-08 entry)
+  left dependants completely unfixed. This is the same "reachable only through one of several
+  paths" bug class as the 2026-07-08 wizard-step-order entry, just surfacing on a different
+  submission form instead of a different wizard step.
+
+---
+
 ## 2026-07-08 — linking a quotation to a case threw a bare "Internal server error"
 
 - **Symptom:** user reported linking a quote to a case fails with a generic internal server error,
