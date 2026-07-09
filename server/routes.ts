@@ -67,7 +67,7 @@ import {
   groupPaymentIntents, groupPaymentAllocations,
   paymentDisbursements, requisitions, expenditures,
 } from "@shared/schema";
-import { sql, eq, count, and, max } from "drizzle-orm";
+import { sql, eq, count, and, max, asc } from "drizzle-orm";
 import { pool, db } from "./db";
 import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
@@ -4448,6 +4448,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
         const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
         const recordedBy = actorRow?.id ?? null;
+        await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
+
+        // Advance the cover period the number of months this receipt was for — previously this
+        // route recorded the payment but never called advancePolicyCycle, so an approved
+        // override never actually extended the policy's paid-through date (see BUGFIX-LOG.md).
+        const monthCount = Math.min(12, Math.max(1, parseInt(String((receipt.metadataJson as any)?.months ?? 1), 10) || 1));
+        let currentPolicy = policy;
+        let paymentPeriod: { periodFrom: string; periodTo: string } = { periodFrom: effectiveDate, periodTo: effectiveDate };
+        for (let m = 0; m < monthCount; m++) {
+          const period = await advancePolicyCycle(txDb, policy.id, currentPolicy, effectiveDate);
+          if (m === 0) paymentPeriod = { periodFrom: period.periodFrom, periodTo: period.periodTo };
+          else paymentPeriod.periodTo = period.periodTo;
+          if (m < monthCount - 1) {
+            const [refreshed] = await txDb.select().from(policies).where(eq(policies.id, policy.id)).limit(1);
+            if (refreshed) currentPolicy = refreshed as any;
+          }
+        }
+
         const [tx] = await txDb.insert(paymentTransactions).values({
           organizationId: user.organizationId,
           policyId: policy.id,
@@ -4460,6 +4478,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           receivedAt: new Date(),
           postedDate: effectiveDate,
           valueDate: effectiveDate,
+          periodFrom: paymentPeriod.periodFrom,
+          periodTo: paymentPeriod.periodTo,
           notes: approvedNoteText,
           recordedBy: recordedBy ?? undefined,
         }).returning();
@@ -4472,7 +4492,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             metadataJson: { ...(receipt.metadataJson as any || {}), approvedTransactionId: tx.id },
           } as any)
           .where(eq(paymentReceipts.id, receiptId));
-        await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
         await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, effectiveDate, isPremiumOverride ? " (premium override, approved)" : " (backdated group receipt, approved)", recordedBy ?? undefined);
         if (policy.status === "lapsed") {
           await rollbackClawbacksInTx(txDb, user.organizationId, policy);
@@ -7481,9 +7500,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         } else if (approval.requestType === "delete_receipt") {
           const receipt = await storage.getPaymentReceiptById(approval.entityId, user.organizationId);
           if (receipt) {
-            await storage.deletePaymentReceipt(approval.entityId, user.organizationId);
+            // Deleting a receipt must also undo whatever it actually did to the policy — not
+            // just remove the receipt row. The receipt's matching payment_transaction (if the
+            // receipt was ever applied) gets deleted too, and if that transaction had advanced
+            // the policy's cover period, the cover period is recomputed from whatever
+            // period-carrying cleared transactions remain, in the order they were posted —
+            // rather than leaving the policy over-advanced relative to real payments received.
+            const linkedTxId = (receipt.metadataJson as any)?.approvedTransactionId || (receipt.metadataJson as any)?.transactionId;
+            await withOrgTransaction(user.organizationId, async (txDb) => {
+              if (receipt.policyId) {
+                await txDb.execute(sql`SELECT id FROM policies WHERE id = ${receipt.policyId} FOR UPDATE`);
+              }
+              await txDb.delete(paymentReceipts).where(eq(paymentReceipts.id, receipt.id));
+
+              let deletedTx: typeof paymentTransactions.$inferSelect | undefined;
+              if (linkedTxId) {
+                const [t] = await txDb.select().from(paymentTransactions)
+                  .where(and(eq(paymentTransactions.id, linkedTxId), eq(paymentTransactions.organizationId, user.organizationId)))
+                  .limit(1);
+                if (t) {
+                  deletedTx = t;
+                  await txDb.delete(paymentTransactions).where(eq(paymentTransactions.id, linkedTxId));
+                }
+              }
+
+              if (deletedTx?.status === "cleared" && receipt.policyId) {
+                const remainingTx = await txDb.select().from(paymentTransactions)
+                  .where(and(
+                    eq(paymentTransactions.policyId, receipt.policyId),
+                    eq(paymentTransactions.organizationId, user.organizationId),
+                    eq(paymentTransactions.status, "cleared"),
+                  ))
+                  .orderBy(asc(paymentTransactions.postedDate), asc(paymentTransactions.receivedAt));
+
+                // Transactions that already carry period info always represent exactly one
+                // cycle advance — advancePolicyCycle is deterministic, so replaying it from a
+                // reset state reproduces the same result. Transactions from before the approval
+                // route was fixed to call advancePolicyCycle (approved premium overrides with no
+                // period info) never advanced the cycle at all; derive the month count from
+                // their linked receipt instead of dropping them from the replay, which would
+                // wrongly erase cover a real, approved payment already paid for.
+                const replaySteps: { postedDate: string; months: number }[] = [];
+                for (const t of remainingTx) {
+                  if (t.periodFrom) {
+                    replaySteps.push({ postedDate: String(t.postedDate), months: 1 });
+                    continue;
+                  }
+                  const [linkedReceipt] = await txDb.select().from(paymentReceipts)
+                    .where(and(
+                      eq(paymentReceipts.policyId, receipt.policyId),
+                      eq(paymentReceipts.organizationId, user.organizationId),
+                      sql`${paymentReceipts.metadataJson}->>'approvedTransactionId' = ${t.id}`,
+                    ))
+                    .limit(1);
+                  const months = Math.min(12, Math.max(1, parseInt(String((linkedReceipt?.metadataJson as any)?.months ?? 1), 10) || 1));
+                  replaySteps.push({ postedDate: String(t.postedDate), months });
+                }
+
+                await txDb.update(policies).set({
+                  currentCycleStart: null,
+                  currentCycleEnd: null,
+                  graceEndDate: null,
+                  graceUsedDays: 0,
+                } as any).where(eq(policies.id, receipt.policyId));
+
+                let currentPolicy = (await txDb.select().from(policies).where(eq(policies.id, receipt.policyId)).limit(1))[0] as any;
+                for (const step of replaySteps) {
+                  for (let m = 0; m < step.months; m++) {
+                    await advancePolicyCycle(txDb, receipt.policyId, currentPolicy, step.postedDate);
+                    currentPolicy = (await txDb.select().from(policies).where(eq(policies.id, receipt.policyId)).limit(1))[0] as any;
+                  }
+                }
+              }
+            });
             await auditLog(req, "DELETE_RECEIPT", "PaymentReceipt", approval.entityId, receipt, null);
-            structuredLog("warn", "Receipt deleted via approval", { userId: user.id, receiptId: approval.entityId, approvalId: approval.id });
+            structuredLog("warn", "Receipt deleted via approval", { userId: user.id, receiptId: approval.entityId, approvalId: approval.id, linkedTxId });
           }
         } else if (approval.requestType === "delete_quote") {
           await storage.deleteFuneralQuotation(approval.entityId, user.organizationId);

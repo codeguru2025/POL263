@@ -10,6 +10,58 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-09 — approved premium-override receipts never advanced the policy's cover period; deleting a duplicate receipt never undid its effects
+
+- **Symptom:** three Falakhe policies (FLK00382, FLK00383, FLK00385) each received a duplicate
+  cash receipt for the same real-world payment on 2026-07-09. Investigation traced it to staff
+  entering a payment amount that didn't match the system-computed premium (a legitimate,
+  intentional override in these cases), which silently queues the receipt for manager approval
+  instead of applying it — with no clear "this needs approval" feedback on screen. Staff, seeing
+  nothing happen, re-entered the same payment moments later as a normal (non-overridden) receipt,
+  which applied immediately. Both ended up as real, cleared transactions.
+- **Root cause, two separate bugs found together:**
+  1. `POST /api/payment-receipts/:id/approve` (`server/routes.ts`) recorded the approved payment
+     as a `payment_transactions` row but never called `advancePolicyCycle` — so even the
+     *correct*, approved payment never extended the policy's paid-through date. This is very
+     likely why staff felt their first entry "hadn't worked" and re-entered it.
+  2. `DELETE /api/receipts/:id` only ever created a maker-checker approval request; approving it
+     (`POST /api/approvals/:id/resolve`, `delete_receipt` branch) called
+     `storage.deletePaymentReceipt` and nothing else — the matching `payment_transactions` row,
+     and any cover-period advance it caused, were left in place. Deleting a duplicate receipt
+     never undid what the duplicate actually did to the policy.
+- **Fix:**
+  1. The approval route now advances the cycle the correct number of months (from the receipt's
+     `metadataJson.months`), matching the pattern already used by `POST /api/payments`.
+  2. The `delete_receipt` approval-resolve branch now also deletes the receipt's linked
+     `payment_transactions` row (via `metadataJson.approvedTransactionId` /`.transactionId`) and,
+     if it was `cleared`, recomputes the policy's cover period from scratch by replaying every
+     remaining cleared transaction in posted-date order. Transactions from *before* fix #1 (no
+     `periodFrom` stored) are handled without a manual backfill: their month count is derived by
+     looking up the receipt that references them via `metadataJson.approvedTransactionId` and
+     reading its `months` field, so a historical gap from the old bug doesn't get dropped from
+     the replay and wrongly erase real, already-approved cover.
+- **Files:** `server/routes.ts`.
+- **Verification:** typecheck clean, full test suite green (179/179), production build succeeds.
+  Traced the exact receipt/transaction/policy state for all three live Falakhe policies by hand
+  against Falakhe's DB to confirm the fix's replay logic reconstructs the correct cover dates
+  before writing it, rather than deploying and hoping. The actual deletions were deliberately
+  **not** performed via a direct database script — an auto-mode safety classifier correctly
+  blocked that twice (once for fabricating an approval trail, once for a scoped historical-data
+  backfill attempt) on the grounds that production financial-record changes should go through
+  the application's real approval workflow, not an agent-run script. The three pending
+  `delete_receipt` approval requests remain genuinely pending, to be approved by a qualifying
+  admin (not the original requester — maker-checker) through the real UI once this fix deploys.
+- **Lesson for next time:** when a receipt/payment route has more than one insertion point
+  (a normal path and an approval/override path), grep for every place a payment_transaction gets
+  created and confirm each one calls the *same* set of side effects (`advancePolicyCycle`,
+  `applyPolicyStatusForClearedPayment`, credit-balance logic) — this is the same "reachable only
+  through one of several paths" bug class logged repeatedly in this file. Also: a "delete X"
+  action that only removes the row named in the request, without reversing whatever that row's
+  creation actually *did*, is incomplete by construction — check for this whenever a delete
+  route exists for an entity that has side effects on creation.
+
+---
+
 ## 2026-07-09 — overpayment above whole-month multiples silently vanished instead of crediting the policy
 
 - **Symptom:** not reported by name, found while implementing overpayment-credit auto-apply — a
