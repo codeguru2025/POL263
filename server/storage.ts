@@ -5,6 +5,7 @@ import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureReg
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
 import { normalizeNationalId } from "../shared/validation";
+import { todayInHarare } from "./date-utils";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
@@ -21,7 +22,8 @@ import {
   mortuaryPostMortemMovements, partnerParlourVehicleUsage, dailyReportNotes,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
-  payrollEmployees, payrollRuns, payslips, attendanceLogs,
+  payrollEmployees, payrollRuns, payslips, attendanceLogs, attendanceQrCodes, attendanceScans,
+  vehicleLocationPings, vehicleAlerts,
   notificationTemplates, notificationLogs, leads, expenditures,
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
@@ -107,6 +109,11 @@ import {
   type PayrollRun, type InsertPayrollRun,
   type Payslip, type InsertPayslip,
   type AttendanceLog, type InsertAttendanceLog,
+  type AttendanceQrCode, type InsertAttendanceQrCode,
+  type AttendanceScan, type InsertAttendanceScan,
+  type DriverAssignment, type InsertDriverAssignment,
+  type VehicleLocationPing, type InsertVehicleLocationPing,
+  type VehicleAlert, type InsertVehicleAlert,
   type Cashup, type InsertCashup,
   vehicleTripLogs,
   type VehicleTripLog, type InsertVehicleTripLog,
@@ -508,7 +515,26 @@ export interface IStorage {
   getMyAttendanceLogs(employeeId: string, orgId: string): Promise<AttendanceLog[]>;
   createAttendanceLog(data: InsertAttendanceLog): Promise<AttendanceLog>;
   updateAttendanceLog(id: string, data: Partial<Pick<AttendanceLog, "status" | "approvedBy" | "approvedAt" | "approvalNotes">>, orgId: string): Promise<AttendanceLog | undefined>;
+  getAttendanceLogForDate(employeeId: string, orgId: string, date: string): Promise<AttendanceLog | undefined>;
+  correctAttendanceLog(id: string, orgId: string, data: Partial<Pick<AttendanceLog, "notes" | "clockInAt" | "clockOutAt" | "hoursWorked" | "status" | "approvedBy" | "approvedAt" | "approvalNotes">>): Promise<AttendanceLog | undefined>;
   getPayrollEmployeeByUserId(userId: string, orgId: string): Promise<PayrollEmployee | undefined>;
+  listAttendanceQrCodes(orgId: string): Promise<AttendanceQrCode[]>;
+  getAttendanceQrCodeByToken(token: string, orgId: string): Promise<AttendanceQrCode | undefined>;
+  getAttendanceQrCodeById(id: string, orgId: string): Promise<AttendanceQrCode | undefined>;
+  createAttendanceQrCode(data: InsertAttendanceQrCode): Promise<AttendanceQrCode>;
+  createAttendanceScan(data: InsertAttendanceScan): Promise<AttendanceScan>;
+  recordAttendanceScan(employeeId: string, orgId: string, qrCodeId: string, lat?: number, lng?: number): Promise<{ log: AttendanceLog; eventType: "clock_in" | "clock_out" }>;
+  getActiveDriverAssignment(vehicleId: string, orgId: string): Promise<DriverAssignment | undefined>;
+  getDriverAssignmentById(id: string, orgId: string): Promise<DriverAssignment | undefined>;
+  getActiveDriverAssignments(orgId: string): Promise<(DriverAssignment & { vehicle: FleetVehicle })[]>;
+  createDriverAssignmentRecord(data: InsertDriverAssignment): Promise<DriverAssignment>;
+  endDriverAssignment(id: string, orgId: string): Promise<DriverAssignment | undefined>;
+  createVehicleLocationPings(pings: InsertVehicleLocationPing[]): Promise<VehicleLocationPing[]>;
+  getRecentVehiclePings(assignmentId: string, orgId: string, sinceMinutes: number): Promise<VehicleLocationPing[]>;
+  getLatestVehiclePing(assignmentId: string, orgId: string): Promise<VehicleLocationPing | undefined>;
+  createVehicleAlert(data: InsertVehicleAlert): Promise<VehicleAlert>;
+  getOpenVehicleAlert(assignmentId: string, orgId: string, type: string): Promise<VehicleAlert | undefined>;
+  resolveVehicleAlert(id: string, orgId: string): Promise<VehicleAlert | undefined>;
   getPayrollEmployees(orgId: string): Promise<PayrollEmployee[]>;
   createPayrollEmployee(emp: InsertPayrollEmployee): Promise<PayrollEmployee>;
   updatePayrollEmployee(id: string, data: Partial<InsertPayrollEmployee>, orgId: string): Promise<PayrollEmployee | undefined>;
@@ -3857,12 +3883,199 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return updated;
   }
+  async getAttendanceLogForDate(employeeId: string, orgId: string, date: string): Promise<AttendanceLog | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(attendanceLogs)
+      .where(and(eq(attendanceLogs.employeeId, employeeId), eq(attendanceLogs.organizationId, orgId), eq(attendanceLogs.date, date)));
+    return row;
+  }
+  async correctAttendanceLog(id: string, orgId: string, data: Partial<Pick<AttendanceLog, "notes" | "clockInAt" | "clockOutAt" | "hoursWorked" | "status" | "approvedBy" | "approvedAt" | "approvalNotes">>): Promise<AttendanceLog | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(attendanceLogs).set(data)
+      .where(and(eq(attendanceLogs.id, id), eq(attendanceLogs.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
 
   async getPayrollEmployeeByUserId(userId: string, orgId: string): Promise<PayrollEmployee | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [row] = await tdb.select().from(payrollEmployees)
       .where(and(eq(payrollEmployees.userId, userId), eq(payrollEmployees.organizationId, orgId)));
     return row;
+  }
+
+  // ─── QR Attendance ─────────────────────────────────────────
+  async listAttendanceQrCodes(orgId: string): Promise<AttendanceQrCode[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(attendanceQrCodes)
+      .where(eq(attendanceQrCodes.organizationId, orgId))
+      .orderBy(desc(attendanceQrCodes.createdAt));
+  }
+  async getAttendanceQrCodeByToken(token: string, orgId: string): Promise<AttendanceQrCode | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(attendanceQrCodes)
+      .where(and(eq(attendanceQrCodes.token, token), eq(attendanceQrCodes.organizationId, orgId)));
+    return row;
+  }
+  async getAttendanceQrCodeById(id: string, orgId: string): Promise<AttendanceQrCode | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(attendanceQrCodes)
+      .where(and(eq(attendanceQrCodes.id, id), eq(attendanceQrCodes.organizationId, orgId)));
+    return row;
+  }
+  async createAttendanceQrCode(data: InsertAttendanceQrCode): Promise<AttendanceQrCode> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(attendanceQrCodes).values(data).returning();
+    return created;
+  }
+  async createAttendanceScan(data: InsertAttendanceScan): Promise<AttendanceScan> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(attendanceScans).values(data).returning();
+    return created;
+  }
+  /**
+   * MVP: one attendance_logs row per employee per day. The first scan of the day is
+   * clock-in, the next is clock-out (no multi-session/lunch-break splitting yet).
+   */
+  async recordAttendanceScan(employeeId: string, orgId: string, qrCodeId: string, lat?: number, lng?: number): Promise<{ log: AttendanceLog; eventType: "clock_in" | "clock_out" }> {
+    const tdb = await getDbForOrg(orgId);
+    const today = todayInHarare();
+    const now = new Date();
+    const [existing] = await tdb.select().from(attendanceLogs)
+      .where(and(eq(attendanceLogs.employeeId, employeeId), eq(attendanceLogs.organizationId, orgId), eq(attendanceLogs.date, today)));
+
+    let log: AttendanceLog;
+    let eventType: "clock_in" | "clock_out";
+    try {
+      if (!existing) {
+        eventType = "clock_in";
+        [log] = await tdb.insert(attendanceLogs).values({
+          organizationId: orgId,
+          employeeId,
+          date: today,
+          source: "qr",
+          clockInAt: now,
+          clockInLat: lat != null ? String(lat) : null,
+          clockInLng: lng != null ? String(lng) : null,
+        }).returning();
+      } else if (!existing.clockInAt) {
+        // A manual (note-only) row already exists for today with no clock-in time
+        // recorded (e.g. created via the manual-correction form) — treat this scan as
+        // the real clock-in rather than computing a bogus 0-hour clock-out against it.
+        eventType = "clock_in";
+        [log] = await tdb.update(attendanceLogs).set({
+          source: "qr",
+          clockInAt: now,
+          clockInLat: lat != null ? String(lat) : null,
+          clockInLng: lng != null ? String(lng) : null,
+        }).where(eq(attendanceLogs.id, existing.id)).returning();
+      } else if (!existing.clockOutAt) {
+        eventType = "clock_out";
+        const hoursWorked = Math.max(0, (now.getTime() - new Date(existing.clockInAt).getTime()) / 3_600_000);
+        [log] = await tdb.update(attendanceLogs).set({
+          clockOutAt: now,
+          clockOutLat: lat != null ? String(lat) : null,
+          clockOutLng: lng != null ? String(lng) : null,
+          hoursWorked: hoursWorked.toFixed(2),
+        }).where(eq(attendanceLogs.id, existing.id)).returning();
+      } else {
+        throw Object.assign(new Error("Already clocked in and out for today"), { statusCode: 409 });
+      }
+    } catch (err: any) {
+      if (err?.code === "23505" && !existing) {
+        // Two near-simultaneous clock-in scans (double-tap, or a client retry after a
+        // dropped response) both saw "no row yet" and raced on the insert. This is the
+        // same clock-in event twice, not a second real scan — echo back the row the
+        // winner created instead of misreading it as a clock-out.
+        const [winner] = await tdb.select().from(attendanceLogs)
+          .where(and(eq(attendanceLogs.employeeId, employeeId), eq(attendanceLogs.organizationId, orgId), eq(attendanceLogs.date, today)));
+        if (winner) return { log: winner, eventType: "clock_in" };
+      }
+      throw err;
+    }
+
+    await this.createAttendanceScan({
+      organizationId: orgId,
+      employeeId,
+      qrCodeId,
+      eventType,
+      scannedAt: now,
+      latitude: lat != null ? String(lat) : null,
+      longitude: lng != null ? String(lng) : null,
+    } as InsertAttendanceScan);
+
+    return { log, eventType };
+  }
+
+  // ─── Vehicle Checkout / GPS Tracking ────────────────────────
+  async getActiveDriverAssignment(vehicleId: string, orgId: string): Promise<DriverAssignment | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(driverAssignments)
+      .where(and(eq(driverAssignments.vehicleId, vehicleId), eq(driverAssignments.organizationId, orgId), isNull(driverAssignments.endDate)));
+    return row;
+  }
+  async getDriverAssignmentById(id: string, orgId: string): Promise<DriverAssignment | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(driverAssignments)
+      .where(and(eq(driverAssignments.id, id), eq(driverAssignments.organizationId, orgId)));
+    return row;
+  }
+  async getActiveDriverAssignments(orgId: string): Promise<(DriverAssignment & { vehicle: FleetVehicle })[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(driverAssignments)
+      .innerJoin(fleetVehicles, eq(driverAssignments.vehicleId, fleetVehicles.id))
+      .where(and(eq(driverAssignments.organizationId, orgId), isNull(driverAssignments.endDate)));
+    return rows.map((r) => ({ ...r.driver_assignments, vehicle: r.fleet_vehicles }));
+  }
+  async createDriverAssignmentRecord(data: InsertDriverAssignment): Promise<DriverAssignment> {
+    const tdb = await getDbForOrg(data.organizationId!);
+    const [created] = await tdb.insert(driverAssignments).values(data).returning();
+    return created;
+  }
+  async endDriverAssignment(id: string, orgId: string): Promise<DriverAssignment | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(driverAssignments).set({ endDate: new Date() })
+      .where(and(eq(driverAssignments.id, id), eq(driverAssignments.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  async createVehicleLocationPings(pings: InsertVehicleLocationPing[]): Promise<VehicleLocationPing[]> {
+    if (pings.length === 0) return [];
+    const tdb = await getDbForOrg(pings[0].organizationId);
+    return tdb.insert(vehicleLocationPings).values(pings).returning();
+  }
+  async getRecentVehiclePings(assignmentId: string, orgId: string, sinceMinutes: number): Promise<VehicleLocationPing[]> {
+    const tdb = await getDbForOrg(orgId);
+    const since = new Date(Date.now() - sinceMinutes * 60_000);
+    return tdb.select().from(vehicleLocationPings)
+      .where(and(eq(vehicleLocationPings.assignmentId, assignmentId), eq(vehicleLocationPings.organizationId, orgId), gte(vehicleLocationPings.recordedAt, since)))
+      .orderBy(vehicleLocationPings.recordedAt);
+  }
+  async getLatestVehiclePing(assignmentId: string, orgId: string): Promise<VehicleLocationPing | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(vehicleLocationPings)
+      .where(and(eq(vehicleLocationPings.assignmentId, assignmentId), eq(vehicleLocationPings.organizationId, orgId)))
+      .orderBy(desc(vehicleLocationPings.recordedAt))
+      .limit(1);
+    return row;
+  }
+  async createVehicleAlert(data: InsertVehicleAlert): Promise<VehicleAlert> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(vehicleAlerts).values(data).returning();
+    return created;
+  }
+  async getOpenVehicleAlert(assignmentId: string, orgId: string, type: string): Promise<VehicleAlert | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(vehicleAlerts)
+      .where(and(eq(vehicleAlerts.assignmentId, assignmentId), eq(vehicleAlerts.organizationId, orgId), eq(vehicleAlerts.type, type), isNull(vehicleAlerts.resolvedAt)));
+    return row;
+  }
+  async resolveVehicleAlert(id: string, orgId: string): Promise<VehicleAlert | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(vehicleAlerts).set({ resolvedAt: new Date() })
+      .where(and(eq(vehicleAlerts.id, id), eq(vehicleAlerts.organizationId, orgId)))
+      .returning();
+    return updated;
   }
 
   // ─── Payroll ───────────────────────────────────────────────

@@ -16,6 +16,7 @@ import { requireAuth, requirePermission, requireAnyPermission, requireTenantScop
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
+import { todayInHarare, harareLocalToUtcDate } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, fxMapFor } from "./financial-statements";
 import { buildDailyReport } from "./daily-report";
 import { enhanceNote, generateInsights } from "./ai-service";
@@ -420,6 +421,104 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       paymentAutomationTickRunning = false;
     }
   }, automationTickMs);
+
+  const PARKED_ALERT_MINUTES = 5;
+  const PARKED_STILL_RADIUS_METERS = 50;
+  const NO_SIGNAL_ALERT_MINUTES = 10;
+
+  function haversineMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
+    const R = 6_371_000;
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(bLat - aLat);
+    const dLng = toRad(bLng - aLng);
+    const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  let parkedVehicleTickRunning = false;
+  const PARKED_VEHICLE_LOCK_KEY = 9_002_630_002; // stable pg advisory lock key for this scheduler
+  const parkedVehicleTickMs = Math.max(60_000, parseInt(process.env.PARKED_VEHICLE_TICK_MS || "", 10) || (2 * 60 * 1000));
+  setInterval(async () => {
+    if (parkedVehicleTickRunning) return;
+    parkedVehicleTickRunning = true;
+    try {
+      await withAdvisoryLock(PARKED_VEHICLE_LOCK_KEY, async () => {
+        const orgs = await storage.getOrganizations();
+        for (const org of orgs) {
+          const active = await storage.getActiveDriverAssignments(org.id);
+          for (const assignment of active) {
+            const pings = await storage.getRecentVehiclePings(assignment.id, org.id, 15);
+
+            if (pings.length === 0) {
+              // No GPS data at all in the last 15 minutes — either the phone died, the app
+              // was killed, or the driver is deliberately evading tracking. Don't flag this
+              // in the first few minutes after checkout (the app may not have sent its
+              // first ping yet).
+              const assignmentAgeMinutes = (Date.now() - new Date(assignment.startDate).getTime()) / 60_000;
+              const openNoSignalAlert = await storage.getOpenVehicleAlert(assignment.id, org.id, "no_signal");
+              if (assignmentAgeMinutes >= NO_SIGNAL_ALERT_MINUTES && !openNoSignalAlert) {
+                const alert = await storage.createVehicleAlert({
+                  organizationId: org.id,
+                  assignmentId: assignment.id,
+                  vehicleId: assignment.vehicleId,
+                  type: "no_signal",
+                  details: { minutes: NO_SIGNAL_ALERT_MINUTES },
+                } as any);
+                await notifyUsersWithPermission(org.id, "write:fleet", {
+                  type: "GENERAL",
+                  title: "Vehicle location lost",
+                  body: `${assignment.vehicle?.registration || "A vehicle"} has sent no GPS data for over ${NO_SIGNAL_ALERT_MINUTES} minutes.`,
+                  metadata: { alertId: alert.id, vehicleId: assignment.vehicleId, assignmentId: assignment.id },
+                });
+              }
+              continue;
+            }
+            const openNoSignalAlert = await storage.getOpenVehicleAlert(assignment.id, org.id, "no_signal");
+            if (openNoSignalAlert) await storage.resolveVehicleAlert(openNoSignalAlert.id, org.id);
+
+            // Longest contiguous run of near-identical points ending at the latest ping.
+            let stillSinceIdx = pings.length - 1;
+            for (let i = pings.length - 1; i > 0; i--) {
+              const d = haversineMeters(
+                Number(pings[i].latitude), Number(pings[i].longitude),
+                Number(pings[i - 1].latitude), Number(pings[i - 1].longitude),
+              );
+              if (d > PARKED_STILL_RADIUS_METERS) break;
+              stillSinceIdx = i - 1;
+            }
+            const stillSince = new Date(pings[stillSinceIdx].recordedAt);
+            const latest = new Date(pings[pings.length - 1].recordedAt);
+            const stillMinutes = (latest.getTime() - stillSince.getTime()) / 60_000;
+
+            const openParkedAlert = await storage.getOpenVehicleAlert(assignment.id, org.id, "parked_too_long");
+            if (stillMinutes >= PARKED_ALERT_MINUTES) {
+              if (!openParkedAlert) {
+                const alert = await storage.createVehicleAlert({
+                  organizationId: org.id,
+                  assignmentId: assignment.id,
+                  vehicleId: assignment.vehicleId,
+                  type: "parked_too_long",
+                  details: { minutes: Math.round(stillMinutes) },
+                } as any);
+                await notifyUsersWithPermission(org.id, "write:fleet", {
+                  type: "GENERAL",
+                  title: "Vehicle parked too long",
+                  body: `${assignment.vehicle?.registration || "A vehicle"} has been stationary for ${Math.round(stillMinutes)} minutes.`,
+                  metadata: { alertId: alert.id, vehicleId: assignment.vehicleId, assignmentId: assignment.id },
+                });
+              }
+            } else if (openParkedAlert) {
+              await storage.resolveVehicleAlert(openParkedAlert.id, org.id);
+            }
+          }
+        }
+      });
+    } catch (err: any) {
+      structuredLog("error", "Parked-vehicle scheduler failed", { error: err?.message, stack: err?.stack });
+    } finally {
+      parkedVehicleTickRunning = false;
+    }
+  }, parkedVehicleTickMs);
 
   const uploadsDir = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -5812,7 +5911,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const vehicleId = req.params.id as string;
     const existing = await storage.getFleetVehicleById(vehicleId, user.organizationId);
     if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ message: "Vehicle not found" });
-    const ALLOWED = new Set(["registration", "make", "model", "year", "vehicleType", "currentMileage", "status"]);
+    const ALLOWED = new Set(["registration", "make", "model", "year", "vehicleType", "currentMileage", "status", "speedLimitKmh"]);
     const body: Record<string, any> = {};
     for (const [k, v] of Object.entries(req.body)) {
       if (ALLOWED.has(k)) body[k] = v;
@@ -5834,6 +5933,149 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await streamVehicleTripLogPDF(req.params.id as string, user.organizationId, res, {
       attachment: req.query.download === "1",
     });
+  });
+
+  // ─── Vehicle Checkout / GPS Tracking ────────────────────────
+
+  // Vehicles available for self-service checkout (driver-facing picker)
+  app.get("/api/fleet/available", requireAuth, requireTenantScope, requirePermission("use:fleet"), async (req, res) => {
+    const user = req.user as any;
+    const rows = await storage.getFleetVehicles(user.organizationId);
+    return res.json(rows.filter((v) => v.status === "available"));
+  });
+
+  // Driver: my currently checked-out vehicle, if any (used to resume tracking after app restart)
+  app.get("/api/fleet/checkouts/mine", requireAuth, requireTenantScope, requirePermission("use:fleet"), async (req, res) => {
+    const user = req.user as any;
+    const myDriverId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const active = await storage.getActiveDriverAssignments(user.organizationId);
+    const mine = active.find((a) => a.driverId === myDriverId);
+    return res.json(mine || null);
+  });
+
+  // Admin/manager: all currently checked-out vehicles + latest position, for the fleet-tracking dashboard
+  app.get("/api/fleet/checkouts/active", requireAuth, requireTenantScope, requirePermission("read:fleet"), async (req, res) => {
+    const user = req.user as any;
+    const active = await storage.getActiveDriverAssignments(user.organizationId);
+    const withPings = await Promise.all(active.map(async (a) => ({
+      ...a,
+      latestPing: await storage.getLatestVehiclePing(a.id, user.organizationId),
+    })));
+    return res.json(withPings);
+  });
+
+  // Driver: check out a vehicle
+  app.post("/api/fleet/:vehicleId/checkout", requireAuth, requireTenantScope, requirePermission("use:fleet"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
+      const todayLog = emp ? await storage.getAttendanceLogForDate(emp.id, user.organizationId, todayInHarare()) : undefined;
+      const isClockedIn = !!todayLog?.clockInAt && !todayLog?.clockOutAt;
+      if (!isClockedIn) {
+        return res.status(400).json({ message: "You must clock in (Attendance → Scan) before checking out a company vehicle." });
+      }
+
+      const vehicle = await storage.getFleetVehicleById(req.params.vehicleId as string, user.organizationId);
+      if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
+      const existingActive = await storage.getActiveDriverAssignment(vehicle.id, user.organizationId);
+      if (existingActive) return res.status(409).json({ message: "This vehicle is already checked out." });
+
+      const driverId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const myOtherActive = await storage.getActiveDriverAssignments(user.organizationId);
+      if (myOtherActive.some((a) => a.driverId === driverId)) {
+        return res.status(409).json({ message: "You already have a vehicle checked out. Return it before checking out another." });
+      }
+      const created = await storage.createDriverAssignmentRecord({
+        organizationId: user.organizationId,
+        vehicleId: vehicle.id,
+        driverId,
+        notes: typeof req.body.notes === "string" ? req.body.notes.trim() || null : null,
+      } as any);
+      await storage.updateFleetVehicle(vehicle.id, { status: "checked_out" } as any, user.organizationId);
+      await auditLog(req, "CHECKOUT_VEHICLE", "DriverAssignment", created.id, null, created);
+      return res.status(201).json(created);
+    } catch (err: any) {
+      if (err?.code === "23505") return res.status(409).json({ message: "This vehicle is already checked out." });
+      structuredLog("error", "POST /api/fleet/:vehicleId/checkout failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  // Driver (or admin override): return a checked-out vehicle
+  app.patch("/api/fleet/checkouts/:id/return", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const assignment = await storage.getDriverAssignmentById(req.params.id as string, user.organizationId);
+    if (!assignment) return res.status(404).json({ message: "Checkout not found" });
+    if (assignment.endDate) return res.status(409).json({ message: "This vehicle has already been returned." });
+    const myDriverId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const isOwner = assignment.driverId === myDriverId;
+    if (!isOwner) {
+      const perms = user.isPlatformOwner ? ["write:fleet"] : await storage.getUserEffectivePermissions(user.id, user.organizationId);
+      if (!perms.includes("write:fleet")) return res.status(403).json({ message: "Not authorized to return this vehicle." });
+    }
+    const updated = await storage.endDriverAssignment(assignment.id, user.organizationId);
+    await storage.updateFleetVehicle(assignment.vehicleId, { status: "available" } as any, user.organizationId);
+    await auditLog(req, "RETURN_VEHICLE", "DriverAssignment", assignment.id, assignment, updated);
+    return res.json(updated);
+  });
+
+  // Driver: submit batched GPS pings for an active checkout
+  app.post("/api/fleet/checkouts/:id/pings", requireAuth, requireTenantScope, requirePermission("use:fleet"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const assignment = await storage.getDriverAssignmentById(req.params.id as string, user.organizationId);
+      if (!assignment) return res.status(404).json({ message: "Checkout not found" });
+      const myDriverId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      if (assignment.driverId !== myDriverId) return res.status(403).json({ message: "Not your checkout." });
+      if (assignment.endDate) return res.status(409).json({ message: "This checkout has already ended." });
+
+      const rawPings = Array.isArray(req.body.pings) ? req.body.pings : [];
+      const pings = rawPings
+        .filter((p: any) => Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude)))
+        .map((p: any) => ({
+          organizationId: user.organizationId,
+          assignmentId: assignment.id,
+          vehicleId: assignment.vehicleId,
+          driverId: myDriverId,
+          latitude: String(p.latitude),
+          longitude: String(p.longitude),
+          speedKmh: Number.isFinite(Number(p.speedKmh)) ? String(p.speedKmh) : null,
+          recordedAt: p.recordedAt ? new Date(p.recordedAt) : new Date(),
+        }));
+      if (pings.length === 0) return res.status(400).json({ message: "No valid pings provided." });
+
+      const created = await storage.createVehicleLocationPings(pings);
+
+      const vehicle = await storage.getFleetVehicleById(assignment.vehicleId, user.organizationId);
+      const speedLimit = vehicle?.speedLimitKmh ?? 120;
+      const speeding = created.some((p) => p.speedKmh != null && Number(p.speedKmh) > speedLimit);
+      if (speeding) {
+        const openSpeedAlert = await storage.getOpenVehicleAlert(assignment.id, user.organizationId, "speeding");
+        if (!openSpeedAlert) {
+          const alert = await storage.createVehicleAlert({
+            organizationId: user.organizationId,
+            assignmentId: assignment.id,
+            vehicleId: assignment.vehicleId,
+            type: "speeding",
+            details: { speedLimitKmh: speedLimit },
+          } as any);
+          await notifyUsersWithPermission(user.organizationId, "write:fleet", {
+            type: "GENERAL",
+            title: "Vehicle speeding",
+            body: `${vehicle?.registration || "A vehicle"} exceeded ${speedLimit} km/h.`,
+            metadata: { alertId: alert.id, vehicleId: assignment.vehicleId, assignmentId: assignment.id },
+          });
+        }
+      } else {
+        const openSpeedAlert = await storage.getOpenVehicleAlert(assignment.id, user.organizationId, "speeding");
+        if (openSpeedAlert) await storage.resolveVehicleAlert(openSpeedAlert.id, user.organizationId);
+      }
+
+      return res.status(201).json({ count: created.length });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/fleet/checkouts/:id/pings failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   // ─── Commissions ────────────────────────────────────────────
@@ -7860,6 +8102,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Employee: log attendance for a date
+  // Employee: log/correct attendance for a date. Upserts — if a row already exists for
+  // that date (e.g. created by a QR scan), this fills in/corrects it rather than 409ing.
   app.post("/api/attendance", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try {
@@ -7877,19 +8121,82 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (diffDays < 0) return res.status(400).json({ message: "Cannot log attendance for a future date." });
       if (diffDays > 7) return res.status(400).json({ message: "Cannot log attendance more than 7 days in the past." });
 
-      const log = await storage.createAttendanceLog({
-        organizationId: user.organizationId,
-        employeeId: emp.id,
-        date: rawDate,
-        notes: typeof req.body.notes === "string" ? req.body.notes.trim() || null : null,
-        status: "pending",
-      });
-      await auditLog(req, "LOG_ATTENDANCE", "AttendanceLog", log.id, null, log);
-      return res.status(201).json(log);
+      const timeRe = /^\d{2}:\d{2}$/;
+      const rawClockIn = typeof req.body.clockInTime === "string" ? req.body.clockInTime.trim() : "";
+      const rawClockOut = typeof req.body.clockOutTime === "string" ? req.body.clockOutTime.trim() : "";
+      if (rawClockIn && !timeRe.test(rawClockIn)) return res.status(400).json({ message: "Invalid clock-in time." });
+      if (rawClockOut && !timeRe.test(rawClockOut)) return res.status(400).json({ message: "Invalid clock-out time." });
+
+      const existing = await storage.getAttendanceLogForDate(emp.id, user.organizationId, rawDate);
+      const clockInAt = rawClockIn ? harareLocalToUtcDate(rawDate, rawClockIn) : (existing?.clockInAt ?? null);
+      const clockOutAt = rawClockOut ? harareLocalToUtcDate(rawDate, rawClockOut) : (existing?.clockOutAt ?? null);
+      if (clockInAt && clockOutAt && clockOutAt.getTime() <= clockInAt.getTime()) {
+        return res.status(400).json({ message: "Clock-out time must be after clock-in time." });
+      }
+      const hoursWorked = clockInAt && clockOutAt
+        ? Math.max(0, (clockOutAt.getTime() - clockInAt.getTime()) / 3_600_000).toFixed(2)
+        : (existing?.hoursWorked ?? null);
+      const notes = typeof req.body.notes === "string" ? req.body.notes.trim() || null : (existing?.notes ?? null);
+
+      if (!existing) {
+        const log = await storage.createAttendanceLog({
+          organizationId: user.organizationId,
+          employeeId: emp.id,
+          date: rawDate,
+          notes,
+          status: "pending",
+          source: "manual",
+          clockInAt,
+          clockOutAt,
+          hoursWorked,
+        });
+        await auditLog(req, "LOG_ATTENDANCE", "AttendanceLog", log.id, null, log);
+        return res.status(201).json(log);
+      } else {
+        const updated = await storage.correctAttendanceLog(existing.id, user.organizationId, {
+          notes,
+          clockInAt,
+          clockOutAt,
+          hoursWorked,
+          status: "pending",
+          approvedBy: null,
+          approvedAt: null,
+          approvalNotes: null,
+        });
+        await auditLog(req, "CORRECT_ATTENDANCE", "AttendanceLog", existing.id, existing, updated);
+        return res.status(200).json(updated);
+      }
     } catch (err: any) {
-      if (err?.code === "23505") return res.status(409).json({ message: "Attendance already logged for this date." });
+      if (err?.code === "23505") return res.status(409).json({ message: "Attendance already logged for this date. Please retry." });
       return res.status(500).json({ message: err?.message || "Failed to log attendance" });
     }
+  });
+
+  // Admin/manager: correct clock-in/out times on an existing log (e.g. employee forgot to
+  // scan). Does not touch approval status — the manager applies approve/reject separately.
+  app.patch("/api/attendance/:id/correct", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getAttendanceLogById(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Log not found" });
+
+    const timeRe = /^\d{2}:\d{2}$/;
+    const rawClockIn = typeof req.body.clockInTime === "string" ? req.body.clockInTime.trim() : "";
+    const rawClockOut = typeof req.body.clockOutTime === "string" ? req.body.clockOutTime.trim() : "";
+    if (rawClockIn && !timeRe.test(rawClockIn)) return res.status(400).json({ message: "Invalid clock-in time." });
+    if (rawClockOut && !timeRe.test(rawClockOut)) return res.status(400).json({ message: "Invalid clock-out time." });
+
+    const clockInAt = rawClockIn ? harareLocalToUtcDate(existing.date, rawClockIn) : existing.clockInAt;
+    const clockOutAt = rawClockOut ? harareLocalToUtcDate(existing.date, rawClockOut) : existing.clockOutAt;
+    if (clockInAt && clockOutAt && new Date(clockOutAt).getTime() <= new Date(clockInAt).getTime()) {
+      return res.status(400).json({ message: "Clock-out time must be after clock-in time." });
+    }
+    const hoursWorked = clockInAt && clockOutAt
+      ? Math.max(0, (new Date(clockOutAt).getTime() - new Date(clockInAt).getTime()) / 3_600_000).toFixed(2)
+      : existing.hoursWorked;
+
+    const updated = await storage.correctAttendanceLog(existing.id, user.organizationId, { clockInAt, clockOutAt, hoursWorked });
+    await auditLog(req, "CORRECT_ATTENDANCE", "AttendanceLog", existing.id, existing, updated);
+    return res.json(updated);
   });
 
   // Admin/manager: approve a log (only if still pending)
@@ -7926,6 +8233,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }, user.organizationId);
     await auditLog(req, "REJECT_ATTENDANCE", "AttendanceLog", existing.id, existing, updated);
     return res.json(updated);
+  });
+
+  // ─── QR Attendance Kiosks ───────────────────────────────────
+
+  // Admin/manager: list QR kiosks
+  app.get("/api/attendance/qr-codes", requireAuth, requireTenantScope, requirePermission("manage:attendance"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.listAttendanceQrCodes(user.organizationId));
+  });
+
+  // Admin/manager: create a QR kiosk for a branch/location
+  app.post("/api/attendance/qr-codes", requireAuth, requireTenantScope, requirePermission("manage:attendance"), async (req, res) => {
+    const user = req.user as any;
+    const label = typeof req.body.label === "string" ? req.body.label.trim() : "";
+    if (!label) return res.status(400).json({ message: "Label is required." });
+    const created = await storage.createAttendanceQrCode({
+      organizationId: user.organizationId,
+      branchId: typeof req.body.branchId === "string" && req.body.branchId ? req.body.branchId : null,
+      label,
+      token: crypto.randomBytes(16).toString("hex"),
+      isActive: true,
+    });
+    await auditLog(req, "CREATE_ATTENDANCE_QR_CODE", "AttendanceQrCode", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  // Admin/manager: printable PNG for a kiosk QR code
+  app.get("/api/attendance/qr-codes/:id/image", requireAuth, requireTenantScope, requirePermission("manage:attendance"), async (req, res) => {
+    const user = req.user as any;
+    const qr = await storage.getAttendanceQrCodeById(req.params.id as string, user.organizationId);
+    if (!qr) return res.status(404).json({ message: "QR code not found" });
+    const QRCode = (await import("qrcode")).default;
+    const payload = JSON.stringify({ orgId: qr.organizationId, qrCodeId: qr.id, token: qr.token });
+    const buffer = await QRCode.toBuffer(payload, { type: "png", width: 400, margin: 2, errorCorrectionLevel: "M" });
+    res.setHeader("Content-Type", "image/png");
+    return res.send(buffer);
+  });
+
+  // Employee: scan a kiosk QR code to clock in/out
+  app.post("/api/attendance/scan", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    try {
+      const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
+      if (!emp) return res.status(422).json({ message: "No payroll employee record linked to your account. Ask your administrator to link your user account." });
+
+      const token = typeof req.body.qrToken === "string" ? req.body.qrToken : "";
+      if (!token) return res.status(400).json({ message: "Missing QR code." });
+      const qr = await storage.getAttendanceQrCodeByToken(token, user.organizationId);
+      if (!qr || !qr.isActive) return res.status(400).json({ message: "This QR code is not recognized or is no longer active." });
+
+      const lat = Number.isFinite(Number(req.body.latitude)) ? Number(req.body.latitude) : undefined;
+      const lng = Number.isFinite(Number(req.body.longitude)) ? Number(req.body.longitude) : undefined;
+
+      const { log, eventType } = await storage.recordAttendanceScan(emp.id, user.organizationId, qr.id, lat, lng);
+      await auditLog(req, "QR_ATTENDANCE_SCAN", "AttendanceLog", log.id, null, { eventType, log });
+      return res.status(201).json({ eventType, log });
+    } catch (err: any) {
+      if (err?.statusCode === 409) return res.status(409).json({ message: err.message });
+      return res.status(500).json({ message: err?.message || "Failed to record scan" });
+    }
   });
 
   app.patch("/api/payroll/employees/:id", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {

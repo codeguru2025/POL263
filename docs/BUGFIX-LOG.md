@@ -10,6 +10,124 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-10 — QR attendance/fleet-tracking: manual-correction gap, silent tracking-loss gap, and clock-in/checkout relationship
+
+Follow-up to the self-review below, addressing the three gaps that review flagged as needing
+a product decision rather than a one-line fix.
+
+- **Manual correction was non-functional:** `POST /api/attendance` always did a blind
+  `INSERT`, so if a QR scan had already created today's row it 409'd, and even when it
+  succeeded it only ever saved a note — never `clockInAt`/`clockOutAt` — so it could not
+  actually fix a missed scan despite the UI copy telling employees to use it for that.
+  **Fix:** the route is now an upsert (`storage.getAttendanceLogForDate` +
+  `storage.correctAttendanceLog`/`createAttendanceLog`): if a row exists it fills in
+  whichever of `clockInTime`/`clockOutTime` the employee provides without disturbing a value
+  already set by a scan, recomputes `hoursWorked`, and resets the row to `pending` for
+  re-approval. Added a matching manager-side `PATCH /api/attendance/:id/correct`
+  (`write:payroll`) so a manager can fix a log directly instead of only approve/reject.
+  Local times are converted with the new `harareLocalToUtcDate()` helper
+  (`server/date-utils.ts`) to stay consistent with how QR scans store `clockInAt`/`clockOutAt`.
+- **Silent tracking-loss gap:** if a device stops sending pings entirely (dead battery, app
+  killed, or a driver deliberately evading tracking), the parked-vehicle tick job had nothing
+  to alert on — it just skipped assignments with zero recent pings. Given the feature's
+  explicit purpose is monitoring, "no data" is itself a signal worth raising. **Fix:** the
+  tick job now fires a `no_signal` vehicle alert if an active checkout has had zero pings for
+  10+ minutes (skipping the first 10 minutes after checkout so the app has time to send its
+  first ping), and resolves it automatically once pings resume.
+- **No relationship between clocking and vehicle checkout:** a driver could check out a
+  company vehicle without ever being clocked in for the day, or after clocking out — tracking
+  a vehicle in use by someone officially off duty. **Fix:** `POST /api/fleet/:vehicleId/checkout`
+  now requires the driver to currently be clocked in (today's `attendance_logs` row has
+  `clockInAt` set and no `clockOutAt`); the driver-facing "My Vehicle" panel shows this
+  precondition up front instead of only surfacing it as an error toast after a failed attempt.
+  Clock-out intentionally still does **not** force-return an active vehicle checkout (a trip
+  legitimately running past shift end shouldn't be interrupted) — flagged as a deliberate
+  half-measure, not a full solution, in case the business wants the opposite behavior later.
+- **Verified:** `npm run check`, `npm run test` (179/179), and `npm run build:client` all pass
+  after these changes.
+- **Lesson for next time:** "the button exists and doesn't error" is not the same as "the
+  button does what its label promises" — the manual-correction gap survived an initial
+  typecheck+test+build pass because none of those exercise the actual business outcome of a
+  route, only that it runs without throwing. Read the route's response and the schema it's
+  writing to when reviewing self-service correction/override flows, not just its status code.
+
+---
+
+## 2026-07-10 — QR attendance/fleet-tracking build: timezone, race, and cross-tenant-ID bugs caught in self-review
+
+Found while reviewing the QR attendance + vehicle GPS tracking feature added this session,
+before any real usage — no user-reported symptom, but each is a real bug matching a known
+recurring pattern in this codebase (see `feedback_debugging_patterns` memory).
+
+- **Bug 1 — Pattern 12 (UTC+2 timezone):** `recordAttendanceScan()` in `server/storage.ts`
+  computed "today" via `new Date().toISOString().slice(0, 10)`, which uses the server's UTC
+  date. Zimbabwe is UTC+2 with no DST, so any scan between 10pm–midnight CAT would be
+  attributed to the *next* day, and any scan 12am–2am CAT to the *previous* day's row (wrong
+  employee-day, wrong hours-worked pairing). **Fix:** compute the date via
+  `Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Harare", ... })` instead.
+- **Bug 2 — race on double-tap/retry:** two near-simultaneous clock-in scans for the same
+  employee+day (double-tap, or a client retry after a dropped response) both read "no row
+  yet" and raced on the insert; the loser hit the `attendance_logs` unique constraint
+  (`al_emp_date_unique`) and surfaced as an uncaught 500. **Fix:** catch the `23505` on the
+  insert path specifically and re-fetch/return the winner's row as the same clock-in event,
+  rather than either 500ing or (worse) misreading the race as a second real scan and
+  immediately clocking the person back out.
+- **Bug 3 — Pattern 3 (cross-tenant user-ID mismatch):** the vehicle-checkout `/return` and
+  `/pings` routes, and the `/checkouts/mine` lookup, compared `assignment.driverId` against
+  the raw session `user.id`. Checkout itself correctly wrote `driverId` via
+  `resolveOrSyncTenantUserId()` (since isolated-tenant orgs mirror users with a possibly
+  different UUID), but the later routes never re-resolved before comparing — so on an
+  isolated-tenant org where the mirrored ID differs, a driver could be locked out of
+  returning/updating their own checkout. **Fix:** resolve `user.id` the same way in all
+  three places before comparing.
+- **Bug 4 — missing invariant, not just a bug:** nothing stopped one driver from checking
+  out two vehicles at once (the checkout route only checked whether the *target vehicle*
+  was already out, not whether the *driver* already had one out). The "My Vehicle" UI only
+  ever shows/returns one assignment, so a second simultaneous checkout would become
+  invisible and untrackable through the UI even though its GPS pings kept accumulating in
+  the DB. **Fix:** checkout now also rejects if the resolved driver already has any other
+  open assignment.
+- **Verified:** `npm run check` and `npm run test` (179/179) pass after all four fixes.
+- **Lesson for next time:** any new route that (a) computes "today" server-side, or
+  (b) writes/compares a `users.id` FK, should be checked against Pattern 12 and Pattern 3
+  immediately — both bugs were introduced by copying a working pattern (raw `Date`
+  arithmetic; comparing `user.id` directly) from code elsewhere in the codebase that didn't
+  need the tenant-aware version because it ran in a different context.
+
+---
+
+## 2026-07-10 — "Attendance" nav link was invisible to everyone except managers/admins
+
+- **Symptom:** while building QR-based attendance clock-in/out (all staff should reach it),
+  found that `client/src/components/layout/staff-layout.tsx` gated the `/staff/attendance`
+  nav link (in both the desktop dropdown and the mobile/command-palette nav, two separate
+  array literals) behind `permission: "read:payroll"` — a permission only `manager` and
+  `administrator` roles hold. Every other role (agent, driver, cashier, claims_officer,
+  fleet_ops, mortuary_attendant, staff) could never see the link, even though the backend
+  route (`POST /api/attendance`) was always self-service with no permission check. Employees
+  could only reach the page by typing the URL directly.
+- **Root cause:** the nav entry's permission was copy-pasted from the "Payroll" line right
+  above it (`{ href: "/staff/payroll", ..., permission: "read:payroll" }`,
+  `{ href: "/staff/attendance", ..., permission: "read:payroll" }`) when attendance was
+  originally added, conflating "can view payroll" with "can log my own attendance" — two
+  unrelated permissions that happen to live on the same page.
+- **Fix:** dropped the `permission: "read:payroll"` key from both `/staff/attendance` nav
+  entries so the link is visible to all authenticated staff (`filterNav`'s `hasAny([])`
+  treats an item with no `permission`/`permissions` as visible to everyone); the page's own
+  internal tab gating (`read:payroll` for Team Attendance, the new `manage:attendance` for
+  QR Kiosks) still restricts the sensitive parts.
+- **Verified:** `npm run check` and `npm run test` (179/179) pass; confirmed via code read
+  that `filterNav`/`hasAny` in `staff-layout.tsx` treat an empty permission list as
+  unrestricted.
+- **Lesson for next time:** when a nav link and a backend route disagree on who can access a
+  feature — self-service backend route + narrowly-gated nav link — the nav gate is very
+  likely a copy-paste mistake, not intentional. Grep both the route's middleware and the nav
+  entry's `permission`/`permissions` field before assuming either is correct; also check for
+  *duplicate* nav arrays (this codebase keeps a desktop dropdown and a separate mobile/search
+  nav list in sync by hand — a fix applied to only one will silently miss the other).
+
+---
+
 ## 2026-07-09 — approved premium-override receipts never advanced the policy's cover period; deleting a duplicate receipt never undid its effects
 
 - **Symptom:** three Falakhe policies (FLK00382, FLK00383, FLK00385) each received a duplicate

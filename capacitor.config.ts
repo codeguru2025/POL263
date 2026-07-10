@@ -18,6 +18,11 @@ const config: CapacitorConfig = {
         // url: "http://192.168.x.x:5000",
         // cleartext: true,
       },
+  android: {
+    // Required by @capacitor-community/background-geolocation: prevents location
+    // updates from halting after 5 minutes in the background.
+    useLegacyBridge: true,
+  },
 };
 
 export default config;

@@ -68,6 +68,7 @@ export const SYSTEM_PERMISSIONS = [
   { name: "receipt:group", description: "Create group receipts", category: "finance" },
   { name: "read:fleet", description: "View fleet", category: "fleet" },
   { name: "write:fleet", description: "Manage fleet", category: "fleet" },
+  { name: "use:fleet", description: "Check out/return a company vehicle and report GPS location while driving it", category: "fleet" },
   { name: "read:commission", description: "View commissions", category: "commission" },
   { name: "write:commission", description: "Manage commissions", category: "commission" },
   { name: "read:payroll", description: "View payroll", category: "payroll" },
@@ -82,6 +83,7 @@ export const SYSTEM_PERMISSIONS = [
   { name: "create:tenant", description: "Add new tenants (organizations)", category: "platform" },
   { name: "delete:tenant", description: "Remove tenants (organizations)", category: "platform" },
   { name: "use:ai", description: "Use AI-powered insights and note assistance", category: "ai" },
+  { name: "manage:attendance", description: "Create/manage QR attendance kiosks", category: "attendance" },
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -97,11 +99,11 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:role", "read:audit_log", "read:policy", "write:policy", "edit:premium", "read:claim",
     "write:claim", "approve:claim", "read:client", "write:client", "read:product",
     "write:product", "manage:settings",
-    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet",
+    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet", "use:fleet",
     "read:commission", "read:report", "write:report", "read:lead", "write:lead",
     "read:notification", "manage:approvals",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
-    "view:all_clients", "use:ai",
+    "view:all_clients", "use:ai", "manage:attendance",
   ],
   administrator: [
     "read:organization", "write:organization", "read:branch", "write:branch",
@@ -110,14 +112,14 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
     "read:product", "write:product", "manage:settings", "read:funeral_ops",
     "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
-    "read:fleet", "write:fleet", "read:commission", "write:commission",
+    "read:fleet", "write:fleet", "use:fleet", "read:commission", "write:commission",
     "read:payroll", "write:payroll", "read:report", "write:report",
     "read:lead", "write:lead", "read:notification", "write:notification",
     "manage:approvals", "backdate:payment",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:own_clients", "view:all_clients",
     "delete:policy", "delete:payment", "delete:receipt", "edit:payment", "edit:receipt",
-    "delete:requisition", "delete:expenditure", "use:ai",
+    "delete:requisition", "delete:expenditure", "use:ai", "manage:attendance",
   ],
   cashier: [
     "read:policy", "read:client", "read:finance", "write:finance", "read:report",
@@ -132,23 +134,25 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:report",
     "read:finance",
     "receipt:mobile", "receipt:transfer",
+    "use:fleet",
   ],
   claims_officer: [
     "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
     "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report", "use:ai",
   ],
   fleet_ops: [
-    "read:fleet", "write:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
+    "read:fleet", "write:fleet", "use:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
   ],
   driver: [
     // Drivers are assigned to funeral removals/burials. They need to see the cases
-    // and the fleet they are dispatched with, but not edit them.
-    "read:funeral_ops", "read:fleet",
+    // and the fleet they are dispatched with, but not edit them. use:fleet lets them
+    // self-service check out/return a vehicle and report GPS while driving it.
+    "read:funeral_ops", "read:fleet", "use:fleet",
   ],
   mortuary_attendant: [
     // Mortuary attendants handle the physical care of the deceased: intake,
     // body washing, belongings, and dispatch. They do not access finance or policy.
-    "read:funeral_ops", "write:funeral_ops", "read:client", "read:fleet",
+    "read:funeral_ops", "write:funeral_ops", "read:client", "read:fleet", "use:fleet",
   ],
   staff: [
     "read:organization", "read:branch", "read:policy", "read:claim",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, EmptyState } from "@/components/ds";
@@ -12,7 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown, QrCode, ScanLine, Printer, Plus } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 
 function statusBadge(status: string) {
@@ -32,13 +33,232 @@ function fmtTime(d: string | null | undefined) {
   catch { return d; }
 }
 
+/** HH:MM in Africa/Harare, for pre-filling <input type="time"> against a stored UTC instant. */
+function toHarareHHMM(d: string | null | undefined): string {
+  if (!d) return "";
+  try {
+    return new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Harare", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(d));
+  } catch {
+    return "";
+  }
+}
+
+/** Best-effort GPS fix; scanning still proceeds without one if permission is denied. */
+async function getCoords(): Promise<{ latitude?: number; longitude?: number }> {
+  try {
+    const { Geolocation } = await import("@capacitor/geolocation");
+    const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10_000 });
+    return { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+  } catch {
+    return {};
+  }
+}
+
+function ScanAttendancePanel({ onScanned }: { onScanned: () => void }) {
+  const { toast } = useToast();
+  const scannerRef = useRef<any>(null);
+  const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ eventType: string; log: any } | null>(null);
+
+  const scanMutation = useMutation({
+    mutationFn: async (qrToken: string) => {
+      const { latitude, longitude } = await getCoords();
+      const res = await apiRequest("POST", "/api/attendance/scan", { qrToken, latitude, longitude });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setResult(data);
+      onScanned();
+      toast({ title: data.eventType === "clock_in" ? "Clocked in" : "Clocked out" });
+    },
+    onError: (err: any) => toast({ title: "Scan failed", description: err.message, variant: "destructive" }),
+  });
+
+  const stopScanner = async () => {
+    if (scannerRef.current) {
+      try { await scannerRef.current.clear(); } catch { /* already stopped */ }
+      scannerRef.current = null;
+    }
+    setScanning(false);
+  };
+
+  const startScanner = async () => {
+    setResult(null);
+    setScanning(true);
+    const { Html5QrcodeScanner } = await import("html5-qrcode");
+    const scanner = new Html5QrcodeScanner("qr-attendance-reader", { fps: 10, qrbox: 250 }, false);
+    scannerRef.current = scanner;
+    scanner.render(
+      async (decodedText: string) => {
+        if (busy) return;
+        setBusy(true);
+        await stopScanner();
+        try {
+          const parsed = JSON.parse(decodedText);
+          await scanMutation.mutateAsync(parsed.token);
+        } catch {
+          toast({ title: "Not a valid attendance QR code", variant: "destructive" });
+        } finally {
+          setBusy(false);
+        }
+      },
+      () => { /* ignore per-frame decode errors */ },
+    );
+  };
+
+  useEffect(() => () => { scannerRef.current?.clear().catch(() => {}); }, []);
+
+  return (
+    <CardSection title="Scan to Clock In / Out" icon={ScanLine}>
+      <div className="max-w-sm space-y-4">
+        {result && (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm">
+            <p className="font-medium text-emerald-800">
+              {result.eventType === "clock_in" ? `Clocked in at ${fmtTime(result.log.clockInAt)}` : `Clocked out at ${fmtTime(result.log.clockOutAt)}`}
+            </p>
+            {result.log.hoursWorked && (
+              <p className="text-emerald-700">{Number(result.log.hoursWorked).toFixed(1)} hrs worked today</p>
+            )}
+          </div>
+        )}
+        {!scanning ? (
+          <Button onClick={startScanner}>
+            <ScanLine className="h-4 w-4 mr-2" />{result ? "Scan Again" : "Start Scan"}
+          </Button>
+        ) : (
+          <>
+            <div id="qr-attendance-reader" className="w-full" />
+            <Button variant="outline" onClick={stopScanner}>Cancel</Button>
+          </>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Point your camera at the QR code posted at your premises. Your first scan of the
+          day clocks you in, your next scan clocks you out.
+        </p>
+      </div>
+    </CardSection>
+  );
+}
+
+function QrKiosksPanel() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [label, setLabel] = useState("");
+  const [branchId, setBranchId] = useState("");
+
+  const { data: kiosks = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/attendance/qr-codes"] });
+  const { data: branches = [] } = useQuery<any[]>({ queryKey: ["/api/branches"] });
+
+  const createMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/attendance/qr-codes", { label, branchId: branchId || undefined }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/qr-codes"] });
+      setShowCreate(false); setLabel(""); setBranchId("");
+      toast({ title: "QR kiosk created" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <CardSection
+      title="QR Attendance Kiosks"
+      icon={QrCode}
+      headerRight={<Button size="sm" onClick={() => setShowCreate(true)}><Plus className="h-4 w-4 mr-1.5" />New Kiosk</Button>}
+    >
+      {isLoading ? (
+        <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin" /></div>
+      ) : kiosks.length === 0 ? (
+        <EmptyState
+          title="No QR kiosks yet"
+          description="Create one per entrance/premises so staff can scan to clock in and out."
+          className="border-0 bg-transparent py-8"
+        />
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Label</TableHead>
+              <TableHead>Branch</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>QR Code</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {kiosks.map((k: any) => (
+              <TableRow key={k.id}>
+                <TableCell className="font-medium">{k.label}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {branches.find((b: any) => b.id === k.branchId)?.name || "—"}
+                </TableCell>
+                <TableCell>
+                  {k.isActive ? <Badge className="bg-emerald-600 text-white text-xs">Active</Badge> : <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <img
+                      src={`${getApiBase()}/api/attendance/qr-codes/${k.id}/image`}
+                      alt={`QR code for ${k.label}`}
+                      className="h-12 w-12 border rounded"
+                    />
+                    <Button size="sm" variant="outline" className="h-8 text-xs" asChild>
+                      <a href={`${getApiBase()}/api/attendance/qr-codes/${k.id}/image`} target="_blank" rel="noopener noreferrer">
+                        <Printer className="h-3.5 w-3.5 mr-1" />Print
+                      </a>
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New QR Kiosk</DialogTitle>
+            <DialogDescription>Create a QR code to post at an entrance/premises.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label>Label</Label>
+              <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Head Office Main Entrance" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Branch <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Select value={branchId} onValueChange={setBranchId}>
+                <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                <SelectContent>
+                  {branches.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button onClick={() => createMutation.mutate()} disabled={!label.trim() || createMutation.isPending}>
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </CardSection>
+  );
+}
+
 export default function StaffAttendance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { permissions } = useAuth();
+  const canManageAttendance = permissions.includes("manage:attendance");
 
   // My attendance state
   const [logDate, setLogDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [logNotes, setLogNotes] = useState("");
+  const [logClockIn, setLogClockIn] = useState("");
+  const [logClockOut, setLogClockOut] = useState("");
 
   // Admin state
   const [filterDate, setFilterDate] = useState("");
@@ -46,6 +266,9 @@ export default function StaffAttendance() {
   const [approveId, setApproveId] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [actionNotes, setActionNotes] = useState("");
+  const [correctLog, setCorrectLog] = useState<any | null>(null);
+  const [correctClockIn, setCorrectClockIn] = useState("");
+  const [correctClockOut, setCorrectClockOut] = useState("");
 
   // My own logs
   const { data: myLogs = [], isLoading: loadingMine, refetch: refetchMine } = useQuery<any[]>({
@@ -68,13 +291,31 @@ export default function StaffAttendance() {
   });
 
   const logMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/attendance", { date: logDate, notes: logNotes }),
+    mutationFn: () => apiRequest("POST", "/api/attendance", {
+      date: logDate,
+      notes: logNotes,
+      clockInTime: logClockIn || undefined,
+      clockOutTime: logClockOut || undefined,
+    }),
     onSuccess: () => {
       refetchMine();
-      setLogNotes("");
+      setLogNotes(""); setLogClockIn(""); setLogClockOut("");
       toast({ title: "Attendance logged", description: `Logged for ${fmtDate(logDate)}. Awaiting manager approval.` });
     },
     onError: (err: any) => toast({ title: "Could not log attendance", description: err.message, variant: "destructive" }),
+  });
+
+  const correctMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/attendance/${correctLog.id}/correct`, {
+      clockInTime: correctClockIn || undefined,
+      clockOutTime: correctClockOut || undefined,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance"] });
+      setCorrectLog(null);
+      toast({ title: "Attendance corrected" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
   const approveMutation = useMutation({
@@ -115,8 +356,9 @@ export default function StaffAttendance() {
           )}
         />
 
-        <Tabs defaultValue="my">
+        <Tabs defaultValue="scan">
           <TabsList>
+            <TabsTrigger value="scan"><ScanLine className="h-4 w-4 mr-2" />Scan</TabsTrigger>
             <TabsTrigger value="my"><CalendarDays className="h-4 w-4 mr-2" />My Attendance</TabsTrigger>
             <TabsTrigger value="team">
               <Users className="h-4 w-4 mr-2" />
@@ -125,15 +367,40 @@ export default function StaffAttendance() {
                 <Badge variant="destructive" className="ml-2 text-xs px-1.5 py-0">{pendingCount}</Badge>
               )}
             </TabsTrigger>
+            {canManageAttendance && (
+              <TabsTrigger value="kiosks"><QrCode className="h-4 w-4 mr-2" />QR Kiosks</TabsTrigger>
+            )}
           </TabsList>
+
+          {/* ── Scan (QR clock in/out) ── */}
+          <TabsContent value="scan" className="space-y-4">
+            <ScanAttendancePanel onScanned={refetchMine} />
+          </TabsContent>
+
+          {/* ── QR Kiosks (admin) ── */}
+          {canManageAttendance && (
+            <TabsContent value="kiosks" className="space-y-4">
+              <QrKiosksPanel />
+            </TabsContent>
+          )}
 
           {/* ── My Attendance ── */}
           <TabsContent value="my" className="space-y-4">
-            <CardSection title="Log Today's Attendance" icon={ClipboardCheck}>
+            <CardSection title="Manual Attendance Correction" description="Use the Scan tab to clock in/out normally. Use this to fix a missed scan — it fills in whichever time you enter without disturbing an existing scan." icon={ClipboardCheck}>
               <div className="space-y-4 max-w-sm">
                 <div className="space-y-1.5">
                   <Label>Date</Label>
                   <Input type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Clock In <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input type="time" value={logClockIn} onChange={(e) => setLogClockIn(e.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Clock Out <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input type="time" value={logClockOut} onChange={(e) => setLogClockOut(e.target.value)} />
+                  </div>
                 </div>
                 <div className="space-y-1.5">
                   <Label>Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
@@ -166,7 +433,9 @@ export default function StaffAttendance() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Date</TableHead>
-                      <TableHead>Logged At</TableHead>
+                      <TableHead>Clock In</TableHead>
+                      <TableHead>Clock Out</TableHead>
+                      <TableHead>Hours</TableHead>
                       <TableHead>Notes</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Approval Notes</TableHead>
@@ -176,7 +445,9 @@ export default function StaffAttendance() {
                     {myLogs.map((log: any) => (
                       <TableRow key={log.id}>
                         <TableCell className="font-medium">{fmtDate(log.date)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.loggedAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.clockInAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.clockOutAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{log.hoursWorked ? Number(log.hoursWorked).toFixed(1) : "—"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground max-w-xs truncate">{log.notes || "—"}</TableCell>
                         <TableCell>{statusBadge(log.status)}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{log.approvalNotes || "—"}</TableCell>
@@ -230,7 +501,9 @@ export default function StaffAttendance() {
                     <TableRow>
                       <TableHead>Employee</TableHead>
                       <TableHead>Date</TableHead>
-                      <TableHead>Logged At</TableHead>
+                      <TableHead>Clock In</TableHead>
+                      <TableHead>Clock Out</TableHead>
+                      <TableHead>Hours</TableHead>
                       <TableHead>Notes</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Approval Notes</TableHead>
@@ -245,34 +518,45 @@ export default function StaffAttendance() {
                           <div className="text-xs text-muted-foreground">{log.employee?.employeeNumber}</div>
                         </TableCell>
                         <TableCell>{fmtDate(log.date)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.loggedAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.clockInAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.clockOutAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{log.hoursWorked ? Number(log.hoursWorked).toFixed(1) : "—"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground max-w-xs truncate">{log.notes || "—"}</TableCell>
                         <TableCell>{statusBadge(log.status)}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{log.approvalNotes || "—"}</TableCell>
                         <TableCell>
-                          {log.status === "pending" && (
-                            <div className="flex gap-1">
-                              <Button
-                                size="sm" variant="outline"
-                                className="h-7 text-xs text-emerald-700 border-emerald-300 hover:bg-emerald-50"
-                                onClick={() => { setApproveId(log.id); setActionNotes(""); }}
-                              >
-                                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
-                              </Button>
-                              <Button
-                                size="sm" variant="outline"
-                                className="h-7 text-xs text-red-600 border-red-200 hover:bg-red-50"
-                                onClick={() => { setRejectId(log.id); setActionNotes(""); }}
-                              >
-                                <XCircle className="h-3.5 w-3.5 mr-1" />Reject
-                              </Button>
-                            </div>
-                          )}
-                          {log.status !== "pending" && (
-                            <span className="text-xs text-muted-foreground flex items-center gap-1">
-                              <Clock className="h-3 w-3" />{fmtTime(log.approvedAt)}
-                            </span>
-                          )}
+                          <div className="flex flex-wrap items-center gap-1">
+                            {log.status === "pending" && (
+                              <>
+                                <Button
+                                  size="sm" variant="outline"
+                                  className="h-7 text-xs text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+                                  onClick={() => { setApproveId(log.id); setActionNotes(""); }}
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
+                                </Button>
+                                <Button
+                                  size="sm" variant="outline"
+                                  className="h-7 text-xs text-red-600 border-red-200 hover:bg-red-50"
+                                  onClick={() => { setRejectId(log.id); setActionNotes(""); }}
+                                >
+                                  <XCircle className="h-3.5 w-3.5 mr-1" />Reject
+                                </Button>
+                              </>
+                            )}
+                            {log.status !== "pending" && (
+                              <span className="text-xs text-muted-foreground flex items-center gap-1 mr-1">
+                                <Clock className="h-3 w-3" />{fmtTime(log.approvedAt)}
+                              </span>
+                            )}
+                            <Button
+                              size="sm" variant="ghost"
+                              className="h-7 text-xs"
+                              onClick={() => { setCorrectLog(log); setCorrectClockIn(toHarareHHMM(log.clockInAt)); setCorrectClockOut(toHarareHHMM(log.clockOutAt)); }}
+                            >
+                              Correct
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -327,6 +611,34 @@ export default function StaffAttendance() {
               disabled={rejectMutation.isPending}
             >
               {rejectMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <><XCircle className="h-4 w-4 mr-2" />Reject</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Correct dialog */}
+      <Dialog open={!!correctLog} onOpenChange={(v) => { if (!v) setCorrectLog(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Correct Attendance</DialogTitle>
+            <DialogDescription>
+              Fix a missed or incorrect scan for {correctLog?.employee?.firstName} {correctLog?.employee?.lastName} on {correctLog ? fmtDate(correctLog.date) : ""}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 py-2">
+            <div className="space-y-1.5">
+              <Label>Clock In</Label>
+              <Input type="time" value={correctClockIn} onChange={(e) => setCorrectClockIn(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Clock Out</Label>
+              <Input type="time" value={correctClockOut} onChange={(e) => setCorrectClockOut(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCorrectLog(null)}>Cancel</Button>
+            <Button onClick={() => correctMutation.mutate()} disabled={correctMutation.isPending}>
+              {correctMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

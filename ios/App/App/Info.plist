@@ -45,6 +45,16 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Used to scan the QR code posted at your premises to clock in and out.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Used to stamp your attendance scans and to track company vehicles while checked out to you.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Used to track the company vehicle's location while it is checked out to you, including while your device is locked.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

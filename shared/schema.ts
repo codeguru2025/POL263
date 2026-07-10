@@ -1558,6 +1558,7 @@ export const fleetVehicles = pgTable(
     vehicleType: text("vehicle_type"),
     status: text("status").default("available").notNull(),
     currentMileage: integer("current_mileage"),
+    speedLimitKmh: integer("speed_limit_kmh").default(120).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("fv_org_idx").on(t.organizationId)]
@@ -1567,6 +1568,7 @@ export const driverAssignments = pgTable(
   "driver_assignments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").references(() => organizations.id),
     vehicleId: uuid("vehicle_id")
       .notNull()
       .references(() => fleetVehicles.id),
@@ -1578,7 +1580,50 @@ export const driverAssignments = pgTable(
     endDate: timestamp("end_date"),
     notes: text("notes"),
   },
-  (t) => [index("da_vehicle_idx").on(t.vehicleId)]
+  (t) => [
+    index("da_vehicle_idx").on(t.vehicleId),
+    uniqueIndex("da_one_open_per_vehicle_idx")
+      .on(t.vehicleId)
+      .where(sql`${t.endDate} is null`),
+  ]
+);
+
+export const vehicleLocationPings = pgTable(
+  "vehicle_location_pings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    assignmentId: uuid("assignment_id").notNull().references(() => driverAssignments.id),
+    vehicleId: uuid("vehicle_id").notNull().references(() => fleetVehicles.id),
+    driverId: uuid("driver_id").notNull().references(() => users.id),
+    latitude: numeric("latitude", { precision: 9, scale: 6 }).notNull(),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }).notNull(),
+    speedKmh: numeric("speed_kmh", { precision: 6, scale: 2 }),
+    recordedAt: timestamp("recorded_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("vlp_org_idx").on(t.organizationId),
+    index("vlp_assignment_recorded_idx").on(t.assignmentId, t.recordedAt),
+  ]
+);
+
+export const vehicleAlerts = pgTable(
+  "vehicle_alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    assignmentId: uuid("assignment_id").notNull().references(() => driverAssignments.id),
+    vehicleId: uuid("vehicle_id").notNull().references(() => fleetVehicles.id),
+    type: text("type").notNull(), // speeding | parked_too_long
+    triggeredAt: timestamp("triggered_at").defaultNow().notNull(),
+    details: jsonb("details"),
+    resolvedAt: timestamp("resolved_at"),
+  },
+  (t) => [
+    index("va_org_idx").on(t.organizationId),
+    index("va_assignment_idx").on(t.assignmentId),
+  ]
 );
 
 export const fleetFuelLogs = pgTable(
@@ -1862,12 +1907,57 @@ export const attendanceLogs = pgTable(
     approvedAt: timestamp("approved_at"),
     approvalNotes: text("approval_notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // QR clock-in/out (source: 'manual' | 'qr')
+    source: text("source").default("manual").notNull(),
+    clockInAt: timestamp("clock_in_at"),
+    clockOutAt: timestamp("clock_out_at"),
+    hoursWorked: numeric("hours_worked", { precision: 5, scale: 2 }),
+    clockInLat: numeric("clock_in_lat", { precision: 9, scale: 6 }),
+    clockInLng: numeric("clock_in_lng", { precision: 9, scale: 6 }),
+    clockOutLat: numeric("clock_out_lat", { precision: 9, scale: 6 }),
+    clockOutLng: numeric("clock_out_lng", { precision: 9, scale: 6 }),
   },
   (t) => [
     index("al_org_idx").on(t.organizationId),
     index("al_emp_date_idx").on(t.employeeId, t.date),
     index("al_status_idx").on(t.status),
     uniqueIndex("al_emp_date_unique").on(t.employeeId, t.date),
+  ]
+);
+
+export const attendanceQrCodes = pgTable(
+  "attendance_qr_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    label: text("label").notNull(),
+    token: text("token").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("aqc_org_idx").on(t.organizationId),
+    uniqueIndex("aqc_token_unique").on(t.token),
+  ]
+);
+
+export const attendanceScans = pgTable(
+  "attendance_scans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    employeeId: uuid("employee_id").notNull().references(() => payrollEmployees.id),
+    qrCodeId: uuid("qr_code_id").references(() => attendanceQrCodes.id),
+    eventType: text("event_type").notNull(), // clock_in | clock_out
+    scannedAt: timestamp("scanned_at").defaultNow().notNull(),
+    latitude: numeric("latitude", { precision: 9, scale: 6 }),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("as_org_idx").on(t.organizationId),
+    index("as_emp_scanned_idx").on(t.employeeId, t.scannedAt),
   ]
 );
 
@@ -2650,6 +2740,11 @@ export const insertExpenditureSchema = createInsertSchema(expenditures).omit({ i
 export const insertPriceBookItemSchema = createInsertSchema(priceBookItems).omit({ id: true, createdAt: true });
 export const insertApprovalRequestSchema = createInsertSchema(approvalRequests).omit({ id: true, createdAt: true });
 export const insertAttendanceLogSchema = createInsertSchema(attendanceLogs).omit({ id: true, createdAt: true, loggedAt: true });
+export const insertAttendanceQrCodeSchema = createInsertSchema(attendanceQrCodes).omit({ id: true, createdAt: true });
+export const insertAttendanceScanSchema = createInsertSchema(attendanceScans).omit({ id: true, createdAt: true });
+export const insertDriverAssignmentSchema = createInsertSchema(driverAssignments).omit({ id: true });
+export const insertVehicleLocationPingSchema = createInsertSchema(vehicleLocationPings).omit({ id: true, createdAt: true });
+export const insertVehicleAlertSchema = createInsertSchema(vehicleAlerts).omit({ id: true });
 export const insertPayrollEmployeeSchema = createInsertSchema(payrollEmployees).omit({ id: true, createdAt: true });
 export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({ id: true, createdAt: true });
 export const insertPayslipSchema = createInsertSchema(payslips).omit({ id: true, createdAt: true });
@@ -2791,6 +2886,16 @@ export type ApprovalRequest = typeof approvalRequests.$inferSelect;
 export type InsertApprovalRequest = z.infer<typeof insertApprovalRequestSchema>;
 export type AttendanceLog = typeof attendanceLogs.$inferSelect;
 export type InsertAttendanceLog = z.infer<typeof insertAttendanceLogSchema>;
+export type AttendanceQrCode = typeof attendanceQrCodes.$inferSelect;
+export type InsertAttendanceQrCode = z.infer<typeof insertAttendanceQrCodeSchema>;
+export type AttendanceScan = typeof attendanceScans.$inferSelect;
+export type InsertAttendanceScan = z.infer<typeof insertAttendanceScanSchema>;
+export type DriverAssignment = typeof driverAssignments.$inferSelect;
+export type InsertDriverAssignment = z.infer<typeof insertDriverAssignmentSchema>;
+export type VehicleLocationPing = typeof vehicleLocationPings.$inferSelect;
+export type InsertVehicleLocationPing = z.infer<typeof insertVehicleLocationPingSchema>;
+export type VehicleAlert = typeof vehicleAlerts.$inferSelect;
+export type InsertVehicleAlert = z.infer<typeof insertVehicleAlertSchema>;
 export type PayrollEmployee = typeof payrollEmployees.$inferSelect;
 export type InsertPayrollEmployee = z.infer<typeof insertPayrollEmployeeSchema>;
 export type PayrollRun = typeof payrollRuns.$inferSelect;
