@@ -4107,6 +4107,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return streamLegacyGroupReceiptToResponse(id, user.organizationId, res, { attachment: false });
   });
 
+  // One consolidated PDF for a batch-receipt session (POST /api/group-receipt) — every ticked
+  // policy still has its own individual receipt, but this lists them all on one document.
+  app.get("/api/group-receipts/:groupRef/download", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupRef = Array.isArray(req.params.groupRef) ? req.params.groupRef[0] : req.params.groupRef;
+    if (!user.organizationId) return res.status(400).json({ message: "Select a tenant before downloading receipts" });
+    const inline = req.query.inline === "1" || req.query.view === "1";
+    const { streamGroupBatchReceiptToResponse } = await import("./receipt-pdf");
+    return streamGroupBatchReceiptToResponse(groupRef, user.organizationId, res, { attachment: !inline });
+  });
+
+  app.get("/api/group-receipts/:groupRef/view", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupRef = Array.isArray(req.params.groupRef) ? req.params.groupRef[0] : req.params.groupRef;
+    if (!user.organizationId) return res.status(400).json({ message: "Select a tenant" });
+    const { streamGroupBatchReceiptToResponse } = await import("./receipt-pdf");
+    return streamGroupBatchReceiptToResponse(groupRef, user.organizationId, res, { attachment: false });
+  });
+
   app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     try {
@@ -4417,7 +4436,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
     const amountNum = parseFloat(String(totalAmount));
-    const results: { policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string; approvalStatus?: string }[] = [];
+    const results: { id: string; policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string; approvalStatus?: string }[] = [];
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
     // Stable lock order avoids deadlocks when multiple group receipts overlap.
     const sortedPolicies = [...valid].sort((a, b) => a.id.localeCompare(b.id));
@@ -4433,7 +4452,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const receiptNum = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
         if (isBackdated) {
           // Backdated receipts go to an approval queue — policy status is NOT updated until approved.
-          await txDb.insert(paymentReceipts).values({
+          const [backdatedReceipt] = await txDb.insert(paymentReceipts).values({
             organizationId: user.organizationId,
             branchId: policy.branchId ?? undefined,
             receiptNumber: receiptNum,
@@ -4448,8 +4467,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             submitterNote: String(submitterNote).trim(),
             backdatedDate: effectiveDate,
             metadataJson: { groupId, groupRef, backdated: true },
-          });
-          results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency, approvalStatus: "pending" });
+          }).returning();
+          results.push({ id: backdatedReceipt.id, policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency, approvalStatus: "pending" });
         } else {
           const [tx] = await txDb.insert(paymentTransactions).values({
             organizationId: user.organizationId,
@@ -4466,7 +4485,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             notes: "Group batch receipt",
             recordedBy: recordedByForLedger ?? undefined,
           }).returning();
-          await txDb.insert(paymentReceipts).values({
+          const [clearedReceipt] = await txDb.insert(paymentReceipts).values({
             organizationId: user.organizationId,
             branchId: policy.branchId ?? undefined,
             receiptNumber: receiptNum,
@@ -4479,12 +4498,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             status: "issued",
             submitterNote: notes ? String(notes).trim() : undefined,
             metadataJson: { groupId, groupRef, transactionId: tx.id },
-          });
+          }).returning();
           await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", recordedByForLedger ?? undefined);
           if (policy.status === "lapsed") {
             await rollbackClawbacksInTx(txDb, user.organizationId, policy);
           }
-          results.push({ policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency });
+          results.push({ id: clearedReceipt.id, policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency });
         }
       }
     });
@@ -4500,7 +4519,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }).catch((err: Error) => structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err.message }));
       }
     }
-    return res.status(201).json({ receipted: results.length, results, pendingApproval: isBackdated });
+    return res.status(201).json({ receipted: results.length, results, pendingApproval: isBackdated, groupRef });
     } catch (err: any) {
       structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
       return res.status(500).json({ message: safeError(err) });

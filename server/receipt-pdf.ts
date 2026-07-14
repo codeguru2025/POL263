@@ -788,6 +788,178 @@ export async function streamLegacyGroupReceiptToResponse(
 }
 
 /**
+ * One consolidated PDF for a group batch-receipt session (`POST /api/group-receipt`) — every
+ * ticked policy in that session gets its own individual `payment_receipts` row (so each member
+ * still has their own receipt to print/download), but this lists all of them on a single
+ * document, the way `streamLegacyGroupReceiptToResponse` does for a legacy lump-sum payment.
+ * Session membership is determined by `metadata_json->>'groupRef'`, set once per submission of
+ * the group receipt form.
+ */
+export async function streamGroupBatchReceiptToResponse(
+  groupRef: string,
+  orgId: string,
+  res: import("express").Response,
+  opts?: { attachment?: boolean }
+): Promise<void> {
+  const tdb = await getDbForOrg(orgId);
+  const rows = await tdb.execute(sql`
+    SELECT pr.id, pr.receipt_number, pr.amount, pr.currency, pr.issued_at, pr.submitter_note,
+           pr.metadata_json, p.policy_number, p.group_id,
+           c.first_name, c.last_name
+    FROM payment_receipts pr
+    JOIN policies p ON p.id = pr.policy_id
+    LEFT JOIN clients c ON c.id = pr.client_id
+    WHERE pr.organization_id = ${orgId} AND pr.metadata_json->>'groupRef' = ${groupRef}
+    ORDER BY pr.issued_at ASC
+  `);
+  const members = (rows.rows ?? rows) as any[];
+  if (members.length === 0) {
+    res.status(404).json({ message: "Group receipt session not found" });
+    return;
+  }
+  const groupId = members[0].group_id;
+  const [group, org, activeAdvert] = await Promise.all([
+    groupId ? storage.getGroup(groupId, orgId) : Promise.resolve(undefined),
+    storage.getOrganization(orgId),
+    storage.getActiveReceiptAdvert(orgId),
+  ]);
+  if (!org) {
+    res.status(404).json({ message: "Receipt data incomplete" });
+    return;
+  }
+  const advertImageData = activeAdvert?.imageUrl ? await resolveImage(activeAdvert.imageUrl) : null;
+  const currency = members[0].currency;
+  const total = members.reduce((s, m) => s + parseFloat(m.amount), 0);
+  const note = members.find((m) => m.submitter_note)?.submitter_note;
+
+  const filename = `Group-Receipt-${groupRef}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", opts?.attachment
+    ? `attachment; filename="${filename}"`
+    : `inline; filename="${filename}"`);
+
+  const logoData = await resolveImage(org.logoUrl);
+  const qrBuffer = await buildReceiptQr(orgId);
+  const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
+  doc.pipe(res);
+
+  try {
+    let y = MARGIN;
+    const drawLetterhead = () => {
+      if (logoData) {
+        try { doc.image(logoData, MARGIN, y, { height: 50, fit: [120, 50] }); } catch { /* skip */ }
+      }
+      doc.font("Helvetica-Bold").fontSize(13).fillColor(C_PRIMARY)
+        .text(org.name || "POL263", MARGIN + 130, y, { width: COL - 130, align: "right" });
+      y += 16;
+      doc.font("Helvetica").fontSize(8).fillColor(C_MUTED);
+      const contactParts: string[] = [];
+      if (org.phone) contactParts.push(org.phone);
+      if (org.email) contactParts.push(org.email);
+      if (org.address) contactParts.push(org.address);
+      if (org.website) contactParts.push(org.website);
+      contactParts.forEach((part) => { doc.text(part, MARGIN + 130, y, { width: COL - 130, align: "right" }); y += 11; });
+      y = Math.max(y, MARGIN + 56) + 12;
+      doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
+      y += 8;
+    };
+    const ensureSpace = (h: number) => {
+      if (y + h > A4_H - MARGIN - 70) {
+        doc.addPage();
+        y = MARGIN;
+        drawLetterhead();
+      }
+    };
+
+    drawLetterhead();
+    doc.font("Helvetica-Bold").fontSize(17).fillColor(C_TEXT)
+      .text("GROUP RECEIPT", MARGIN, y, { width: COL, align: "center" });
+    y += 22;
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(C_TEXT)
+      .text(group?.name || "Group", MARGIN, y, { width: COL, align: "center" });
+    y += 14;
+    doc.font("Helvetica").fontSize(9).fillColor(C_MUTED)
+      .text(`Session: ${groupRef} · ${fmtDateTime(new Date(members[0].issued_at))}`, MARGIN, y, { width: COL, align: "center" });
+    y += 20;
+
+    const sectionHeader = (title: string) => {
+      ensureSpace(22);
+      doc.rect(MARGIN, y, COL, 18).fill(C_PRIMARY);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff")
+        .text(title.toUpperCase(), MARGIN + 8, y + 4, { width: COL - 16 });
+      y += 22;
+    };
+
+    sectionHeader("Members Paid");
+    const cols = [
+      { header: "Member", width: 170 },
+      { header: "Policy #", width: 100 },
+      { header: "Receipt #", width: 110 },
+      { header: "Amount", width: COL - 170 - 100 - 110, align: "right" as const },
+    ];
+    ensureSpace(16);
+    doc.rect(MARGIN, y, COL, 15).fill("#e2e8f0");
+    let cx = MARGIN + 4;
+    for (const col of cols) {
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(C_PRIMARY)
+        .text(col.header, cx, y + 3, { width: col.width - 6, align: col.align ?? "left" });
+      cx += col.width;
+    }
+    y += 17;
+    members.forEach((m, i) => {
+      ensureSpace(15);
+      if (i % 2 === 1) doc.rect(MARGIN, y, COL, 13).fill("#f9fafb");
+      const displayNum = /^\d+$/.test(String(m.receipt_number).trim()) ? `RCP-${String(m.receipt_number).padStart(5, "0")}` : m.receipt_number;
+      const vals = [
+        `${m.first_name || ""} ${m.last_name || ""}`.trim() || "—",
+        m.policy_number || "—",
+        displayNum,
+        `${m.currency} ${parseFloat(m.amount).toFixed(2)}`,
+      ];
+      cx = MARGIN + 4;
+      for (let c = 0; c < cols.length; c++) {
+        doc.font("Helvetica").fontSize(8).fillColor(C_TEXT)
+          .text(vals[c], cx, y + 2, { width: cols[c].width - 6, align: cols[c].align ?? "left", lineBreak: false });
+        cx += cols[c].width;
+      }
+      y += 14;
+    });
+    y += 6;
+    ensureSpace(20);
+    doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(0.75).strokeColor(C_BORDER).stroke();
+    y += 6;
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(C_TEXT)
+      .text(`Total (${members.length} member${members.length !== 1 ? "s" : ""})`, MARGIN, y, { width: COL - 140 });
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(C_PRIMARY)
+      .text(`${currency} ${total.toFixed(2)}`, MARGIN + COL - 140, y, { width: 140, align: "right" });
+    y += 20;
+
+    if (note) {
+      sectionHeader("Notes");
+      ensureSpace(20);
+      doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(String(note), MARGIN, y, { width: COL });
+      y = doc.y + 10;
+    }
+
+    ensureSpace(60);
+    drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55, org.name || "POL263");
+
+    const footerY = A4_H - MARGIN - 28;
+    doc.moveTo(MARGIN, footerY).lineTo(A4_W - MARGIN, footerY).lineWidth(0.5).strokeColor(C_BORDER).stroke();
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(C_PRIMARY)
+      .text(org.footerText || "Thank you for your payment.", MARGIN, footerY + 6, { width: COL, align: "center", height: 11, lineBreak: false });
+    doc.font("Helvetica").fontSize(7).fillColor(C_MUTED)
+      .text(`Generated by ${org.name || "POL263"} · ${fmtDateTime(new Date())}`, MARGIN, footerY + 18, { width: COL, align: "center", height: 10, lineBreak: false });
+
+    doc.end();
+  } catch (err: any) {
+    structuredLog("error", "Group batch receipt PDF generation failed", { groupRef, error: err?.message });
+    try { doc.end(); } catch { /* already ended */ }
+    res.destroy();
+  }
+}
+
+/**
  * Resolve receipt PDF for download. Returns either a local file path (string)
  * or an object-storage Buffer, or null if not found.
  */

@@ -10,6 +10,29 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — Group receipt "print" button 404'd because the API never returned the receipt's real id
+
+- **Context:** while adding a consolidated "print group receipt" document (a feature add, see
+  below), found that the print button on the immediate post-submit summary in
+  `client/src/pages/staff/groups.tsx` (`POST /api/group-receipt` → "Receipts issued
+  successfully" panel) opened `/api/receipts/${r.receiptNumber}/view` — but that route looks the
+  receipt up by its UUID `id` (`storage.getPaymentReceiptById`), not its human-readable
+  sequential `receiptNumber`. Clicking print on any receipt from a freshly-issued group batch
+  would 404.
+- **Root cause:** `POST /api/group-receipt` in `server/routes.ts` never captured `.returning()`
+  on either of its two `payment_receipts` inserts (backdated and cleared paths), so the response
+  `results` array only ever had `receiptNumber`, never the row's real `id` — the frontend had no
+  correct value to link to even if it had used the right field name.
+- **Fix:** both inserts now `.returning()` and the id is included in each result row; the
+  frontend button was changed to use `r.id` instead of `r.receiptNumber`.
+- **Files:** `server/routes.ts`, `client/src/pages/staff/groups.tsx`.
+- **Lesson for next time:** any endpoint that inserts a row and later needs to reference it by
+  id in the same response should capture `.returning()` at the insert site — a silent
+  `receiptNumber`-instead-of-`id` mixup like this compiles fine and only surfaces as a runtime
+  404 on click, so it won't be caught by `npm run check` or a green test suite either.
+
+---
+
 ## 2026-07-14 — Notification bell, self-service attendance, and agent dashboards silently broken on isolated-tenant orgs
 
 Deeper follow-up to the same-day `resolveOrSyncTenantUserId` sweep — the first pass only

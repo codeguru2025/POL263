@@ -146,9 +146,31 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
                   </p>
                   <p className="text-xs text-muted-foreground font-mono">{ref}</p>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold">{rows[0]?.currency} {sessionTotal.toFixed(2)}</p>
-                  <p className="text-xs text-muted-foreground">{isLegacy ? "Group lump sum" : `${rows.length} member${rows.length !== 1 ? "s" : ""}`}</p>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <p className="text-sm font-bold">{rows[0]?.currency} {sessionTotal.toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground">{isLegacy ? "Group lump sum" : `${rows.length} member${rows.length !== 1 ? "s" : ""}`}</p>
+                  </div>
+                  {!isLegacy && rows.length > 1 && (
+                    <div className="flex items-center gap-0.5 print:hidden">
+                      {(() => {
+                        const base = getApiBase() + `/api/group-receipts/${ref}`;
+                        return (
+                          <>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="View group receipt" onClick={() => window.open(base + "/view", "_blank", "noopener")}>
+                              <Eye className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Download group receipt" onClick={() => window.open(base + "/download", "_blank", "noopener")}>
+                              <Download className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Print group receipt" onClick={() => printDocument(base + "/view")}>
+                              <Printer className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  )}
                 </div>
               </div>
               {note && (
@@ -225,7 +247,7 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
 
 // ─── Inline Group Receipt Form ──────────────────────────────
 
-function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess: (receipts: any[]) => void }) {
+function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess: (receipts: any[], groupRef?: string) => void }) {
   const { toast } = useToast();
   const [policyIds, setPolicyIds] = useState<Set<string>>(new Set());
   const [totalAmount, setTotalAmount] = useState("");
@@ -271,7 +293,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
         notes: notes.trim() || undefined,
         submitterNote: isBackdated ? submitterNote.trim() : undefined,
       });
-      return res.json() as Promise<{ receipted: number; results: any[]; pendingApproval?: boolean }>;
+      return res.json() as Promise<{ receipted: number; results: any[]; pendingApproval?: boolean; groupRef?: string }>;
     },
     onSuccess: (data) => {
       setPolicyIds(new Set());
@@ -283,7 +305,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
         toast({ title: "Submitted for approval", description: "Backdated receipt queued for manager review." });
       } else {
         toast({ title: `${data.receipted} policy receipts issued` });
-        onSuccess(data.results || []);
+        onSuccess(data.results || [], data.groupRef);
       }
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -439,6 +461,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
   const [showReceiptHistory, setShowReceiptHistory] = useState(false);
   const [showPrintView, setShowPrintView] = useState(false);
   const [lastSessionReceipts, setLastSessionReceipts] = useState<any[]>([]);
+  const [lastSessionGroupRef, setLastSessionGroupRef] = useState<string | null>(null);
   const [showCombinedReceipt, setShowCombinedReceipt] = useState(false);
   const [assignPolicyId, setAssignPolicyId] = useState("");
   const [showAssignDialog, setShowAssignDialog] = useState(false);
@@ -544,11 +567,12 @@ function GroupDetailPanel({ group }: { group: Group }) {
     }
   };
 
-  const handleReceiptSuccess = (results: any[]) => {
+  const handleReceiptSuccess = (results: any[], groupRef?: string) => {
     queryClient.invalidateQueries({ queryKey: ["/api/groups", group.id, "receipts"] });
     queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
     if (results.length > 0) {
       setLastSessionReceipts(results);
+      setLastSessionGroupRef(groupRef || null);
       setShowCombinedReceipt(true);
     }
   };
@@ -657,9 +681,16 @@ function GroupDetailPanel({ group }: { group: Group }) {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-green-700 dark:text-green-400">Receipts issued successfully.</p>
-                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => { setShowCombinedReceipt(false); setActiveSection("history"); }}>
-                  <Printer className="h-3.5 w-3.5" /> View & Print Combined Receipt
-                </Button>
+                {lastSessionGroupRef && lastSessionReceipts.length > 1 ? (
+                  <Button size="sm" variant="outline" className="gap-1.5"
+                    onClick={() => window.open(getApiBase() + `/api/group-receipts/${lastSessionGroupRef}/view`, "_blank", "noopener")}>
+                    <Printer className="h-3.5 w-3.5" /> View & Print Group Receipt
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" className="gap-1.5" onClick={() => { setShowCombinedReceipt(false); setActiveSection("history"); }}>
+                    <Printer className="h-3.5 w-3.5" /> View Receipt History
+                  </Button>
+                )}
               </div>
               <div className="border rounded-lg overflow-hidden">
                 <div className="bg-muted/30 px-4 py-2 text-sm font-medium">Receipt Summary</div>
@@ -684,7 +715,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
                             <div className="flex items-center gap-2">
                               <span className="font-mono text-sm">{r.receiptNumber}</span>
                               <Button size="sm" variant="ghost" className="h-6 w-6 p-0"
-                                onClick={() => window.open(getApiBase() + `/api/receipts/${r.receiptNumber}/view`, "_blank")}>
+                                onClick={() => window.open(getApiBase() + `/api/receipts/${r.id}/view`, "_blank")}>
                                 <Printer className="h-3 w-3" />
                               </Button>
                             </div>
