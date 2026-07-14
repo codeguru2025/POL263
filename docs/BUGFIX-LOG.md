@@ -10,6 +10,74 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — Supabase backup DB was missing 12 tables and 31 columns; schema_migrations bookkeeping there was unreliable
+
+Follow-up to the same-day entry below (deploy-time migration runner never reaching Falakhe) —
+this is the other half of that investigation: why the backup DB migration attempt failed with
+"relation payment_disbursements does not exist" in the first place.
+
+- **Root cause, part 1 — the real gap:** `payment_disbursements`, `bank_accounts`,
+  `bank_deposits`, `bank_statement_balances`, `balance_sheet_entries` (the whole 2026-06-30
+  financial suite), plus 7 more tables/columns from later sessions, were pushed to the main DB
+  via `npm run db:push` (drizzle-kit schema push, diffing directly against `shared/schema.ts`)
+  and never had a corresponding hand-written file added to `migrations/`. Confirmed by grepping
+  every migration file for `payment_disbursements`: only migration 0064 (an `ALTER TABLE`)
+  mentions it — no file anywhere `CREATE`s it. This means `migrations/*.sql` was never actually
+  a complete, replayable history of the schema; `run-migrations.ts` replaying it against a
+  database that only ever went through that path (the Supabase backup, unlike the main DB and
+  Falakhe, which both get `db:push`'d directly) can only ever reproduce a partial schema.
+- **Root cause, part 2 — the bookkeeping lied about it:** the backup DB's `schema_migrations`
+  table showed 70/74 files "applied" despite the structural gap going back to 0064-and-earlier
+  — some earlier attempt (a partial `run-migrations.ts` run, or manual seeding) had marked files
+  as applied without their `CREATE TABLE` objects actually existing, so `npm run
+  db:migrate:status` and `npm run db:migrate` both looked "mostly fine" right up until a later
+  migration's `ALTER TABLE payment_disbursements` hit the missing table and failed outright.
+- **Why `npm run db:push:backup` (the tool that already existed for exactly this) couldn't
+  fix it:** `drizzle-kit push` hit the same interactive rename-detection prompt already solved
+  for Falakhe in an earlier session (`Error: Interactive prompts require a TTY terminal` —
+  `tablesResolver` → `promptNamedWithSchemasConflict`), which can't be scripted around with
+  `--force` (that flag only auto-approves *data-loss* confirmations, not the rename-vs-new
+  ambiguity picker).
+- **Fix:** wrote `scripts/reconcile-supabase-backup-schema.mjs` — same idea as
+  `scripts/sync-falakhe-schema.mts` (add missing tables/columns without the interactive
+  resolver) but generates DDL from live `information_schema` introspection of the main DB (the
+  real, authoritative source) rather than mapping Drizzle's in-memory column metadata to SQL
+  types, which is more accurate and catches every column regardless of when/how it was added.
+  Skips foreign keys — the existing backup-sync jobs (`server/backup-sync.ts`,
+  `script/full-sync-to-supabase.ts`) already run with `SET session_replication_role = replica`
+  to bypass FK checking during upserts, so FK constraints aren't load-bearing on this DB — but
+  preserves primary keys, since those upserts rely on `ON CONFLICT (pk)`. Ran with `--dry-run`
+  first, caught and fixed a real bug in the script itself (see below), then ran for real:
+  12 tables created, 31 columns added, 0 errors. Verified with a fresh diff: zero gaps left.
+  Manually marked the 4 migration files whose *effects* are now present (`0064`–`0067`) as
+  applied in `schema_migrations`, so a future `db:migrate` run doesn't try to replay old
+  data-mutating migrations (backfills, status corrections) against a database that's now
+  structurally caught up — replaying those for real, a second time, could double-apply data
+  changes in a way plain `CREATE TABLE IF NOT EXISTS` never would.
+- **Bug caught in the reconciliation script's own `--dry-run` output before running for real:**
+  the `NOT NULL` clause was being incorrectly suppressed for any column that was NOT NULL but
+  had no default (e.g. `organization_id UUID` — no default, since it's always provided
+  explicitly — came out as nullable). Root cause: `col.is_nullable === "NO" &&
+  !def.includes("DEFAULT") ? "" : ...` — backwards conditional, written while conflating "safe
+  to add NOT NULL to an existing table with rows" (needs a default) with "safe to declare NOT
+  NULL on a brand var new table" (always safe, no rows exist yet). Fixed to always request NOT
+  NULL when the source says NOT NULL, and let the already-existing retry-on-23502 fallback
+  (drop NOT NULL, log a warning) handle the one real failure case: adding a NOT NULL column
+  with no default to an existing table that already has rows.
+- **Files:** `scripts/reconcile-supabase-backup-schema.mjs` (new, kept — reusable if this drifts
+  again or another external DR target needs the same treatment).
+- **Lesson for next time:** `npm run db:push` (schema push against `shared/schema.ts`) and the
+  hand-written `migrations/*.sql` sequence are two independent mechanisms in this repo that can
+  silently diverge — main and Falakhe both stay correct because they're always pushed directly,
+  but anything relying solely on replaying `migrations/*.sql` (the Supabase backup, and any
+  future DR/reporting replica set up the same way) can only ever be as complete as that file
+  sequence, which this incident proves is not guaranteed to be complete. When dry-running a
+  DDL-generation script against a real database for the first time, actually read a few lines
+  of its own output before trusting it and running for real — this is exactly how the NOT NULL
+  bug above was caught before it reached the database, not after.
+
+---
+
 ## 2026-07-14 — `npm run db:migrate` (the real deploy-time migration runner) never actually reached Falakhe
 
 - **Context:** while adding a new migration (0067, for Member Card Admin — see feature notes),
