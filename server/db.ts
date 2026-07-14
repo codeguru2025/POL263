@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
+import { structuredLog } from "./logger";
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL must be set. Ensure the database is provisioned.");
@@ -51,6 +52,16 @@ export const pool = new pg.Pool({
   idleTimeoutMillis,
   connectionTimeoutMillis,
   ...(sslConfig && { ssl: sslConfig }),
+});
+
+// pg.Pool emits 'error' when an already-idle client hits a backend/network error (connection
+// dropped while sitting idle, DB-side recycling, etc.). With no listener, Node treats that as
+// an uncaught exception and kills the *entire process* instantly — for this pool specifically,
+// that means the whole running app server, not just one request. This pool was missing the
+// handler every other pool in this codebase already has (control-plane-db.ts, tenant-db.ts,
+// backup-sync.ts) — see docs/BUGFIX-LOG.md, 2026-07-14.
+pool.on("error", (err) => {
+  structuredLog("error", "Main pool: idle client error (connection dropped, not fatal)", { error: err.message });
 });
 
 export const db = drizzle(pool, { schema });

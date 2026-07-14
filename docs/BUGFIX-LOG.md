@@ -10,6 +10,115 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — Live production bugs found while chasing "confirm data parity"; backup sync rewritten to prevent recurrence
+
+Follow-up to the two entries below (Supabase backup schema gap, deploy-time migration runner
+never reaching Falakhe). Asked to "fix it so we don't face the same issue going forward" and
+confirm data parity — doing the second thing surfaced three more, more serious problems than
+the original schema gap, one of which was a live bug affecting every org except Falakhe.
+
+- **Live bug: `groups.is_legacy` and three `payment_receipts` columns
+  (`approved_by_user_id`, `submitter_note`, `backdated_date`) existed on Falakhe's schema but
+  had never been pushed to the main/shared database at all.** `storage.getGroup`/
+  `getGroupsByOrg` and `storage.getPaymentReceiptById`/`getPaymentReceiptsByPolicy`/
+  `getPaymentReceiptsByClient` all use a blanket `tdb.select().from(table)`, which Drizzle
+  compiles into an explicit column list matching the TypeScript schema — confirmed by directly
+  running that exact query against the main DB: `column "is_legacy" does not exist` /
+  `column "approved_by_user_id" does not exist`. This means the Groups feature and core
+  receipt-lookup functions (viewing/downloading a receipt, payment history by policy/client)
+  were **actively broken for every org except Falakhe** — Valleyside, Shego, Sunrest, Test
+  Tenant — until fixed today. Root cause: same shape as the Supabase gap — these columns were
+  pushed to Falakhe's isolated DB via `drizzle-kit push` (during the legacy-groups and
+  receipt-approval-workflow feature work) but the equivalent push against main was never done.
+  Main also turned out to have its own vestigial columns Falakhe lacked (`payment_receipts.
+  approved_by`/`is_backdated` — an older, pre-rename shape no longer read by any code;
+  `payroll_employees.bank_details` — explicitly superseded by structured banking fields per an
+  earlier session; `org_policy_sequences.credit_note_next`/`month_end_run_next` — genuinely
+  needed by Falakhe's credit-note/month-end-run features and was the one direction that *was*
+  a live gap on Falakhe, not just main). Fixed with `scripts/reconcile-schema.mjs` (see below)
+  run in both directions between `DATABASE_URL` and `FALAKHE_DIRECT_URL`; both are now fully
+  column-for-column symmetric. Verified the exact previously-failing queries succeed on main now.
+- **The actual daily backup sync had been failing on every single table, every single run**
+  (`total_rows: 0`, `table_count: 0`, `error_count: 210`, every night for at least the prior
+  week per `backup_sync_runs` history) — not just the 12-table schema gap from the earlier
+  entry. Root cause: `getBackupPool()` sets `ssl: { rejectUnauthorized: false }` correctly, but
+  something about the deployed production environment's route to Supabase specifically still
+  produced `self-signed certificate in certificate chain` on every upsert — reproduced the
+  *code* locally (identical config) and it worked cleanly, so this is an environment-specific
+  TLS quirk in production, not a code defect; flagged for Augustus to check the deployed env's
+  actual `SUPABASE_BACKUP_URL` value and DigitalOcean's outbound TLS path to a third-party host,
+  since it couldn't be reproduced or fixed from here.
+- **That failure was invisible because the error filter meant to skip "table doesn't exist"
+  (an expected/tolerable case) was also silently swallowing "column doesn't exist"** — a much
+  worse case, since it meant an *existing* table's entire multi-row upsert failed atomically
+  and silently, forever, every run. `!msg.includes("does not exist")` matched both; replaced
+  with `isMissingRelationError()`, checking Postgres error code `42P01` (undefined_table)
+  specifically, so `42703` (undefined_column) now always surfaces as a real, visible error.
+- **The advisory lock guarding against concurrent sync runs could get permanently stuck**,
+  blocking every subsequent attempt forever with no data ever moving again. Root cause:
+  `pool.query("SELECT pg_try_advisory_lock(...)")` and the matching unlock call at the end were
+  two independent checkouts from a `pg.Pool` — nothing guarantees they land on the same
+  underlying connection/session, and Postgres advisory locks are session-scoped, so the unlock
+  can silently no-op on a different session while the original one keeps holding the lock.
+  Reproduced this exact stuck state twice while testing today (had to `pg_terminate_backend`
+  the orphaned session both times to unblock further testing). Fixed by checking out one
+  dedicated client via `pool.connect()` and holding it for the lock's entire lifetime,
+  acquire through release, instead of two separate `pool.query()` calls.
+- **A related crash risk, likely what caused at least one of the two stuck-lock incidents
+  above:** `pg.Pool` emits an `'error'` event when an already-idle pooled client hits a
+  connection/network error; with no listener, Node treats this as an uncaught exception and
+  kills the *entire process* instantly, bypassing every `try/catch/finally` in the call stack
+  — including the lock-release `finally`. `getBackupPool()`'s pool had no `.on("error", ...)`
+  handler (every other pool in this codebase — `control-plane-db.ts`, `tenant-db.ts` — already
+  has one). Added it. **Then found `server/db.ts`'s main pool — the one backing the entire
+  application, sessions, auth, everything — had the exact same gap.** This is a considerably
+  more serious finding than the backup job: it means the whole running app server has been one
+  dropped idle connection away from a full crash, this whole time, for reasons having nothing
+  to do with backups. Added the same handler there.
+- **Fix, structurally:** rewrote `server/backup-sync.ts` to discover tables, primary keys (and
+  now unique indexes too, for tables like `role_permissions`/`tenant_feature_flags` that only
+  have a `CREATE UNIQUE INDEX`, not a formal constraint — information_schema.table_constraints
+  doesn't surface those, so the first rewrite silently skipped them until this was caught and
+  fixed) directly from each source database's live schema every run, and to reconcile the
+  backup's structure (create missing tables, add missing columns) automatically before syncing
+  data — replacing the hardcoded `TENANT_FULL_SYNC_TABLES`/`CONTROL_PLANE_TABLES` arrays that
+  were the root of the original schema-gap entry. `scripts/reconcile-schema.mjs` (generalized
+  from the earlier Supabase-specific version) is kept as the manual/on-demand equivalent for
+  other database pairs (e.g. it's what fixed main↔Falakhe above).
+- **Verified for real, twice more:** ran the actual `runBackupSync()` end-to-end against
+  production data after every fix. Final run: 12,828 rows across 89 tables, only the same 2
+  pre-existing duplicate-key edge cases (unrelated, harmless), no crash, lock released cleanly.
+  Followed with a full row-count parity check across every major table (clients, policies,
+  payments, disbursements, requisitions, groups, leads, funeral cases, bank deposits, safes):
+  full parity everywhere except two rows on two tables, both exactly matching this file's own
+  documented "upsert-only, never deletes" limitation (a stale row from something later deleted
+  at the source) — not a bug.
+- **Files:** `server/backup-sync.ts`, `server/db.ts`, `scripts/reconcile-schema.mjs` (new,
+  replaces the deleted `scripts/reconcile-supabase-backup-schema.mjs`).
+- **Not fixed, flagged to Augustus:**
+  1. The production TLS error connecting to Supabase specifically — couldn't reproduce outside
+     production; check the deployed `SUPABASE_BACKUP_URL` value and DO's outbound TLS path.
+  2. Connection pressure on the main DO database was tight throughout this session — 17-18 of
+     25 max connections in use, and two separate `remaining connection slots are reserved for
+     roles with the SUPERUSER attribute` failures were hit just running read-only diagnostic
+     queries. Worth a look at whether the plan needs headroom, independent of anything above.
+  3. `organizations.database_url`-based tenant discovery may still exist in other scripts under
+     `script/`/`scripts/` beyond the three now fixed (migration-status.ts, run-migrations.ts,
+     this backup-sync rewrite) — not audited exhaustively.
+- **Lesson for next time:** three separate lessons stacked on top of each other here, worth
+  reading independently: (1) a hardcoded "list of every table" — in a migration sequence, in a
+  sync job, anywhere — will drift from `shared/schema.ts` the moment someone uses `drizzle-kit
+  push` instead of writing a migration file, which is the normal/documented dev workflow in
+  this repo, so treat any such list as guilty until proven current; (2) an error filter meant
+  to tolerate one specific, narrow failure mode should match on the *error code*, not a
+  substring of the message — "does not exist" is not one failure mode, it's several, with very
+  different severities; (3) any `pg.Pool` without an `.on("error", ...)` handler is a
+  process-crash waiting to happen, and any advisory lock acquired/released via a `pg.Pool`
+  instead of a single held `pg.Client` is a stuck-forever lock waiting to happen — grep for
+  both patterns if this class of "silent total failure" bug shows up again anywhere else.
+
+---
+
 ## 2026-07-14 — Supabase backup DB was missing 12 tables and 31 columns; schema_migrations bookkeeping there was unreliable
 
 Follow-up to the same-day entry below (deploy-time migration runner never reaching Falakhe) —

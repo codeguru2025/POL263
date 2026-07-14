@@ -1,29 +1,53 @@
 /**
- * Reconciles the Supabase backup DB's schema against the main DB (source of truth) —
- * creates any entirely-missing tables and adds any missing columns, using real column
- * metadata introspected from the main DB rather than guessing types. Skips foreign keys
- * (the backup-sync jobs already disable FK checking via session_replication_role=replica,
- * so referential integrity isn't load-bearing here) but preserves the primary key, since
- * ON CONFLICT upserts in backup-sync.ts / full-sync-to-supabase.ts depend on it.
+ * Generic schema reconciler: brings a TARGET Postgres database's tables/columns up to match
+ * a SOURCE database, using real information_schema introspection (not Drizzle's in-memory type
+ * mapping, and not a hand-maintained migration file list — both have proven incomplete in this
+ * repo). Only ever additive: CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS. Never drops
+ * or alters existing columns, so it's safe to run repeatedly and safe to run against a database
+ * with real rows in it.
  *
- * Written because `npm run db:push:backup` (drizzle-kit push) cannot run headless here —
- * it hits an interactive rename-detection prompt requiring a real TTY.
+ * Skips foreign keys on newly-created tables (this tool is also used for the Supabase backup,
+ * whose sync jobs already disable FK checking) but preserves primary keys, since upsert-style
+ * sync logic depends on ON CONFLICT (pk).
  *
- * Usage: node scripts/reconcile-supabase-backup-schema.mjs [--dry-run]
+ * Written because `drizzle-kit push` cannot run headless in this environment — it hits an
+ * interactive rename-detection prompt requiring a real TTY, both for Falakhe (2026-07) and the
+ * Supabase backup DB (2026-07-14).
+ *
+ * Usage:
+ *   node scripts/reconcile-schema.mjs --source=<ENV_VAR_NAME> --target=<ENV_VAR_NAME> [--dry-run]
+ *
+ * Example:
+ *   node scripts/reconcile-schema.mjs --source=FALAKHE_DIRECT_URL --target=DATABASE_URL --dry-run
  */
 import "dotenv/config";
 import pg from "pg";
 
-const DRY_RUN = process.argv.includes("--dry-run");
+const args = Object.fromEntries(
+  process.argv.slice(2).filter(a => a.startsWith("--")).map(a => {
+    const [k, v] = a.replace(/^--/, "").split("=");
+    return [k, v ?? true];
+  })
+);
+const DRY_RUN = !!args["dry-run"];
 
-const mainUrl = process.env.DATABASE_URL.replace(/[?&]sslmode=[^&]*/gi, "");
-// Session pooler (5432) for DDL — transaction pooler (6543) blocks it (see drizzle.backup.config.ts).
-const sbUrl = (process.env.SUPABASE_BACKUP_URL || process.env.SUPABASE_BACKUP_DIRECT_URL)
-  .replace(/[?&]sslmode=[^&]*/gi, "")
-  .replace(/:6543\//, ":5432/");
+if (!args.source || !args.target) {
+  console.error("Usage: node scripts/reconcile-schema.mjs --source=<ENV_VAR_NAME> --target=<ENV_VAR_NAME> [--dry-run]");
+  process.exit(1);
+}
 
-const mainPool = new pg.Pool({ connectionString: mainUrl, ssl: { rejectUnauthorized: false } });
-const sbPool = new pg.Pool({ connectionString: sbUrl, ssl: { rejectUnauthorized: false } });
+function resolveUrl(envVarName) {
+  const raw = process.env[envVarName];
+  if (!raw) throw new Error(`Env var ${envVarName} is not set`);
+  // Session pooler (5432), not transaction pooler (6543) — the latter blocks DDL on Supabase.
+  return raw.replace(/[?&]sslmode=[^&]*/gi, "").replace(/:6543\//, ":5432/");
+}
+
+const sourceUrl = resolveUrl(args.source);
+const targetUrl = resolveUrl(args.target);
+
+const sourcePool = new pg.Pool({ connectionString: sourceUrl, ssl: { rejectUnauthorized: false } });
+const targetPool = new pg.Pool({ connectionString: targetUrl, ssl: { rejectUnauthorized: false } });
 
 function colDefSql(col) {
   let type = col.data_type;
@@ -31,20 +55,14 @@ function colDefSql(col) {
   else if (type === "numeric") type = col.numeric_precision ? `NUMERIC(${col.numeric_precision}${col.numeric_scale != null ? `,${col.numeric_scale}` : ""})` : "NUMERIC";
   else if (type === "timestamp without time zone") type = "TIMESTAMP";
   else if (type === "timestamp with time zone") type = "TIMESTAMPTZ";
-  else if (type === "ARRAY") type = "TEXT[]"; // no array columns expected, but don't crash if one shows up
+  else if (type === "ARRAY") type = "TEXT[]";
   else type = type.toUpperCase();
 
   let def = "";
   if (col.column_default != null) {
-    // Only carry over safe, self-contained defaults — sequence-based defaults (nextval) would
-    // reference an object that doesn't exist on the backup DB.
     if (/^nextval\(/i.test(col.column_default)) def = "";
     else def = ` DEFAULT ${col.column_default}`;
   }
-  // Always request NOT NULL when the source column is NOT NULL — safe for CREATE TABLE (no
-  // existing rows to violate it) and for ALTER TABLE ADD COLUMN with a DEFAULT (Postgres
-  // backfills existing rows). The caller's retry-on-23502 fallback drops it only if adding to
-  // an existing table with rows and no default actually fails.
   const notNull = col.is_nullable === "NO" ? " NOT NULL" : "";
   return `"${col.column_name}" ${type}${def}${notNull}`;
 }
@@ -78,18 +96,18 @@ async function tableExists(pool, table) {
   return rows.length > 0;
 }
 
-const mainTables = (await mainPool.query(
+const sourceTables = (await sourcePool.query(
   `SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name`
 )).rows.map(r => r.table_name);
 
 let created = 0, columnsAdded = 0, errors = 0;
 
-for (const table of mainTables) {
-  const existsOnBackup = await tableExists(sbPool, table);
+for (const table of sourceTables) {
+  const existsOnTarget = await tableExists(targetPool, table);
 
-  if (!existsOnBackup) {
-    const cols = await getColumns(mainPool, table);
-    const pkCols = await getPrimaryKeyCols(mainPool, table);
+  if (!existsOnTarget) {
+    const cols = await getColumns(sourcePool, table);
+    const pkCols = await getPrimaryKeyCols(sourcePool, table);
     const colDefs = cols.map(colDefSql);
     const pkClause = pkCols.length ? `,\n  PRIMARY KEY (${pkCols.map(c => `"${c}"`).join(", ")})` : "";
     const ddl = `CREATE TABLE IF NOT EXISTS "${table}" (\n  ${colDefs.join(",\n  ")}${pkClause}\n)`;
@@ -98,7 +116,7 @@ for (const table of mainTables) {
       console.log(ddl);
     } else {
       try {
-        await sbPool.query(ddl);
+        await targetPool.query(ddl);
         created++;
         console.log(`  OK`);
       } catch (e) {
@@ -109,10 +127,9 @@ for (const table of mainTables) {
     continue;
   }
 
-  // Table exists on both — check for missing columns.
-  const mainCols = await getColumns(mainPool, table);
-  const sbColSet = new Set((await getColumns(sbPool, table)).map(c => c.column_name));
-  const missing = mainCols.filter(c => !sbColSet.has(c.column_name));
+  const sourceCols = await getColumns(sourcePool, table);
+  const targetColSet = new Set((await getColumns(targetPool, table)).map(c => c.column_name));
+  const missing = sourceCols.filter(c => !targetColSet.has(c.column_name));
   if (missing.length === 0) continue;
 
   console.log(`\n-- ALTER ${table}: add ${missing.map(c => c.column_name).join(", ")}`);
@@ -123,15 +140,14 @@ for (const table of mainTables) {
       continue;
     }
     try {
-      await sbPool.query(ddl);
+      await targetPool.query(ddl);
       columnsAdded++;
       console.log(`  OK ${col.column_name}`);
     } catch (e) {
-      // NOT NULL without a usable default fails against existing rows — retry nullable.
       if (e.code === "23502" || /null value|not-null/i.test(e.message)) {
         try {
           const nullableDdl = ddl.replace(/ NOT NULL$/, "");
-          await sbPool.query(nullableDdl);
+          await targetPool.query(nullableDdl);
           columnsAdded++;
           console.log(`  OK ${col.column_name} (added nullable — existing rows have no value)`);
         } catch (e2) {
@@ -148,5 +164,5 @@ for (const table of mainTables) {
 
 console.log(`\n${DRY_RUN ? "[DRY RUN] " : ""}Tables created: ${created}, columns added: ${columnsAdded}, errors: ${errors}`);
 
-await mainPool.end();
-await sbPool.end();
+await sourcePool.end();
+await targetPool.end();
