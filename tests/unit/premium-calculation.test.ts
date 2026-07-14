@@ -10,6 +10,7 @@ vi.mock("../../server/storage", () => ({
   },
 }));
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
+vi.mock("../../server/tenant-db", () => ({ resolveOrSyncTenantUserId: vi.fn((_orgId: string, userId: string) => Promise.resolve(userId)) }));
 
 import { computePolicyPremium } from "../../server/route-helpers";
 import { storage } from "../../server/storage";

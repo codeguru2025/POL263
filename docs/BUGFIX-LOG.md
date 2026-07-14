@@ -10,6 +10,67 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — Full `resolveOrSyncTenantUserId` sweep across routes.ts
+
+Follow-up to the open item logged 2026-07-06: the requisition/expenditure fix for the
+registry/tenant user-id mismatch bug had never been audited across the rest of `routes.ts`.
+Grepped every `<field>: user.id`, `<field> = user.id`, and `<field> !== user.id` / `isAgent ?
+user.id` pattern (~45 hits) and classified each by whether the target table is written via
+`getDbForOrg`/`tdb` with a `users.id`-referencing column, or lives on the shared registry DB
+(the latter needed no change — mostly `structuredLog(...)` calls). Two distinct symptoms of the
+same root cause turned up:
+
+- **Writes**: raw `user.id` into a tenant-DB `users.id` FK. On an isolated-tenant org (Falakhe)
+  where the mirrored tenant user id differs from the registry session id, a NOT NULL FK throws a
+  500 (e.g. `approval_requests.initiated_by`); a nullable FK either 500s the same way (Postgres
+  still enforces the FK when a non-null value is given) or silently drops the attribution.
+  Fixed at every site found: reminders (all 4 routes), client/policy document uploads,
+  `reconcilePremiumChange`'s `actorId` (fixed once, centrally, inside the helper — covers all 4
+  callers), bank deposit create/verify (previous entry), approval requests (delete-policy,
+  delete-receipt, delete-quote, claim-review, requisition-correction, generic `/api/approvals`),
+  settlements, bank statement balances, debit orders, driver checklists (`preparedByUserId` and
+  the `driverId` picked from `req.body`), mortuary dispatch, three PayNow-initiation call sites
+  (`initiatePaynowPayment`, `initiatePaynowForGroup`, receipt-reprint payment event), payroll run
+  `preparedBy`, and balance-sheet manual entries.
+- **Comparisons**: raw `user.id` compared against a column that *was* written with the resolved
+  tenant id (once a write path got fixed, or always had been) — same bug, opposite direction.
+  Instead of a 500, this silently produces a false negative: an agent locked out of their own
+  policy/lead (`agentId !== user.id` → 403), an approver able to approve their own
+  requisition/settlement (`initiatedBy === user.id` never true, so the self-approval guard never
+  fires), or an agent's own P&L/dashboard/payments/commission-ledger/payment-intents view coming
+  back empty (`isAgent ? user.id : ...` used as a query filter). Fixed every site found:
+  `GET/PATCH /api/policies/:id`, `POST /api/policies/:id/upgrade`, `PATCH /api/leads/:id`,
+  `GET /api/policies` (list filter), `GET /api/agent/pnl`, `GET /api/dashboard/stats`,
+  `GET /api/diagnostics`, `GET /api/payment-intents`, `GET /api/commission-ledger`,
+  `GET /api/payments`, and the `/api/approvals/:id/resolve` /
+  `/api/settlements/:id/approve` self-approval checks (also simplified — these had been calling
+  `resolveUserIdForOrgDatabase`/`ensureRegistryUserMirroredToOrgDataDb` separately from the
+  comparison, so the comparison used the *unresolved* id even though a resolved id was computed
+  two lines later for the write).
+- **Verified:** `npm run check` passes; `npm run test` initially broke 2 files
+  (`tests/unit/policy-billing.test.ts`, `tests/unit/premium-calculation.test.ts`) because they
+  stub `server/storage`/`server/logger` to import `route-helpers.ts` without pulling in a live
+  DB connection, and the new `resolveOrSyncTenantUserId` import in `reconcilePremiumChange`
+  transitively imports `server/db.ts`, which throws if `DATABASE_URL` isn't set. Fixed by adding
+  the same stub pattern for `server/tenant-db.ts` to both test files. Full suite: 179/179 passing.
+- **Files:** `server/routes.ts` (~25 call sites), `server/route-helpers.ts` (`reconcilePremiumChange`),
+  `tests/unit/policy-billing.test.ts`, `tests/unit/premium-calculation.test.ts`.
+- **Not found this pass, in scope for a future sweep:** `server/storage.ts` itself was not
+  grepped for internal `user.id`-shaped parameters passed through from callers already fixed
+  here — this pass only covered `routes.ts`. Also didn't check client-side code that might cache
+  `user.id` and send it back as a body field expected to already be tenant-resolved (e.g. a
+  `driverId` picker) — worth a spot-check if a similar 403/empty-view report comes in for a
+  route not listed above.
+- **Lesson for next time:** this bug class has two faces, not one — grepping only for
+  `: user.id,` (the write side) misses the *comparison* side, which fails silently instead of
+  500ing and is easy to mistake for "working as designed" (an agent just sees an empty list, no
+  error). When auditing for this pattern, grep for both `<field>: user.id` and `<field> !==
+  user.id` / `<field> === user.id` / `isAgent ? user.id`. Any storage method call that resolves a
+  user id for a *write* right before calling `storage.updateX(...)` should resolve the *same* id
+  before any comparison earlier in the same handler, not leave the comparison on the raw id.
+
+---
+
 ## 2026-07-14 — Financial suite edge-case sweep: clawback netting, historical balance sheet, bank-deposit cross-tenant IDs
 
 First real pass at the "edge case and bug testing" checklist left open since the financial

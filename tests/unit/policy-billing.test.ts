@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 
-// route-helpers imports `storage` (which pulls in DB/tenant modules that require env).
-// The helpers under test are pure and don't touch storage, so stub it for import.
+// route-helpers imports `storage` and `tenant-db` (which pull in DB modules that require
+// env). The helpers under test are pure and don't touch either, so stub them for import.
 vi.mock("../../server/storage", () => ({ storage: {} }));
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
+vi.mock("../../server/tenant-db", () => ({ resolveOrSyncTenantUserId: vi.fn((_orgId: string, userId: string) => Promise.resolve(userId)) }));
 
 import { periodsBetween, computePolicyOutstanding } from "../../server/route-helpers";
 

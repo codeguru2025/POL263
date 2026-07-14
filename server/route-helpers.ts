@@ -4,6 +4,7 @@ import { isAgentScoped } from "@shared/roles";
 import { eq, and } from "drizzle-orm";
 import { commissionLedgerEntries } from "@shared/schema";
 import { notifyUser } from "./user-notifications";
+import { resolveOrSyncTenantUserId } from "./tenant-db";
 
 export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string) {
   const user = req.user as any;
@@ -305,6 +306,11 @@ export async function reconcilePremiumChange(params: {
   }
 
   try {
+    // actorId is a users.id FK on the tenant DB — the caller passes the raw registry
+    // session id, which must be resolved for isolated-tenant orgs or the insert below
+    // (caught and silently logged, not surfaced to the caller) would quietly fail to
+    // record every premium-change audit row on those orgs.
+    const resolvedActorId = params.actorId ? await resolveOrSyncTenantUserId(orgId, params.actorId) : null;
     await storage.createPolicyPremiumChange({
       organizationId: orgId,
       policyId: policy.id,
@@ -316,7 +322,7 @@ export async function reconcilePremiumChange(params: {
       reconciliation: R.toFixed(2),
       changeType: params.changeType,
       reason: params.reason ?? null,
-      actorId: params.actorId ?? null,
+      actorId: resolvedActorId,
     });
   } catch (err) {
     structuredLog("error", "createPolicyPremiumChange failed", { policyId: policy.id, error: (err as Error).message });

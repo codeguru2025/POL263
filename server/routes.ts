@@ -1616,7 +1616,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.query.branchId) filters.branchId = String(req.query.branchId);
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
-    const agentId = isAgent ? user.id : undefined;
+    const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     return res.json(await storage.getDashboardStats(user.organizationId, filters, agentId));
   });
 
@@ -1625,7 +1625,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reminders", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try {
-      const list = await storage.getReminders(user.id, user.organizationId);
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const list = await storage.getReminders(effectiveUserId, user.organizationId);
       return res.json(list);
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
@@ -1636,9 +1637,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
       if (!req.body.title?.trim()) return res.status(400).json({ message: "Title is required" });
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       const reminder = await storage.createReminder({
         ...req.body,
-        userId: user.id,
+        userId: effectiveUserId,
         organizationId: user.organizationId,
       });
       return res.status(201).json(reminder);
@@ -1650,7 +1652,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/reminders/:id", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try {
-      const updated = await storage.updateReminder(req.params.id as string, req.body, user.id, user.organizationId);
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const updated = await storage.updateReminder(req.params.id as string, req.body, effectiveUserId, user.organizationId);
       if (!updated) return res.status(404).json({ message: "Not found" });
       return res.json(updated);
     } catch (err: any) {
@@ -1661,7 +1664,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/reminders/:id", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try {
-      await storage.deleteReminder(req.params.id as string, user.id, user.organizationId);
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      await storage.deleteReminder(req.params.id as string, effectiveUserId, user.organizationId);
       return res.json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
@@ -1985,7 +1989,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       fileUrl: url,
       storageKey: key,
       fileSize: req.file.size,
-      uploadedBy: user.id,
+      uploadedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
     });
 
     await auditLog(req, "UPLOAD_CLIENT_DOCUMENT", "ClientDocument", doc.id, null, { clientId: client.id, documentType, fileName: req.file.originalname });
@@ -2402,7 +2406,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (branchId) filters.branchId = branchId;
     if (productId) filters.productId = productId;
     if (search) filters.search = search;
-    if (isAgent) filters.agentId = user.id;
+    if (isAgent) filters.agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     else if (agentIdParam) filters.agentId = agentIdParam;
     const hasFilter = Object.keys(filters).length > 0;
     let list = await storage.getPoliciesByOrg(user.organizationId, limit, offset, hasFilter ? filters : undefined);
@@ -2418,7 +2422,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (policy.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
-    if (isAgent && (policy as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+    if (isAgent && (policy as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
     const today = new Date().toISOString().split("T")[0];
     const statusOk = policy.status === "active" || policy.status === "grace";
 
@@ -2807,7 +2811,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       fileUrl: url,
       storageKey: key,
       fileSize: req.file.size,
-      uploadedBy: user.id,
+      uploadedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
     });
     await auditLog(req, "UPLOAD_POLICY_DOCUMENT", "PolicyDocument", doc.id, null, { policyId: policy.id, documentType, fileName: req.file.originalname });
     return res.status(201).json(doc);
@@ -2909,7 +2913,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
-    if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+    if (isAgent && (before as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
     // Manual premium override is gated by the dedicated edit:premium permission.
     const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
@@ -3069,7 +3073,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
       const userRoles = await storage.getUserRoles(user.id, user.organizationId);
       const isAgent = isAgentScoped(userRoles);
-      if (isAgent && (policy as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+      if (isAgent && (policy as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
 
       const targetProductVersionId = typeof req.body.productVersionId === "string" ? req.body.productVersionId : "";
       if (!targetProductVersionId) return res.status(400).json({ message: "productVersionId is required" });
@@ -3230,7 +3234,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: policy.id,
         requestData: { policyNumber: policy.policyNumber, clientId: policy.clientId, status: policy.status, reason: req.body?.reason || null },
         status: "pending",
-        initiatedBy: user.id,
+        initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(req, "REQUEST_DELETE_POLICY", "Policy", policy.id, policy, { pendingDeletion: true, approvalId: approval.id });
       await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
@@ -3322,7 +3326,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: receipt.id,
         requestData: { receiptNumber: receipt.receiptNumber, amount: receipt.amount, currency: receipt.currency, status: receipt.status, reason: req.body?.reason || null },
         status: "pending",
-        initiatedBy: user.id,
+        initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(req, "REQUEST_DELETE_RECEIPT", "PaymentReceipt", receipt.id, receipt, { pendingDeletion: true, approvalId: approval.id });
       await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
@@ -3678,7 +3682,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
-    const agentId = isAgent ? user.id : undefined;
+    const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     return res.json(await storage.getPaymentsByOrg(user.organizationId, limit, offset, filters, agentId));
   });
 
@@ -3952,7 +3956,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
-    const agentId = isAgent ? user.id : undefined;
+    const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     return res.json(await storage.getPaymentIntentsByOrg(user.organizationId, limit, agentId));
   });
 
@@ -4019,7 +4023,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         payerPhone,
         payerEmail,
         actorType: "admin",
-        actorId: user.id,
+        actorId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       if (!result.ok) return res.status(400).json({ message: result.error });
       return res.json({
@@ -4210,7 +4214,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         type: "reprint",
         payloadJson: { receiptId },
         actorType: "admin",
-        actorId: user.id,
+        actorId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
     }
     await auditLog(req, "RECEIPT_REPRINT", "PaymentReceipt", receiptId, null, { receiptId });
@@ -4722,7 +4726,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       method: method || "visa_mastercard",
       payerPhone,
       actorType: "admin",
-      actorId: user.id,
+      actorId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
     });
     if (!result.ok) return res.status(400).json({ message: result.error });
     return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
@@ -4952,7 +4956,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           entityId: claim.id,
           requestData: { claimNumber: claim.claimNumber, claimType: claim.claimType, amount: claim.cashInLieuAmount },
           status: "pending",
-          initiatedBy: user.id,
+          initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
         });
         await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
           type: "APPROVAL_NEEDED",
@@ -5272,13 +5276,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const fc = await storage.getFuneralCase(req.params.id as string, user.organizationId);
       if (!fc) return res.status(404).json({ message: "Funeral case not found" });
-      // Mirror the authenticated user into the org DB so the preparedByUserId FK resolves
-      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
-      // Also mirror the selected driver — driverId comes from req.body and is a different user
-      if (req.body.driverId && typeof req.body.driverId === "string") {
-        await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, req.body.driverId);
-      }
       const clBody = { ...req.body };
+      // driverId comes from req.body and is a different user than the one submitting —
+      // both it and the submitter's own id need resolving for isolated-tenant orgs.
+      if (clBody.driverId && typeof clBody.driverId === "string") {
+        clBody.driverId = await resolveOrSyncTenantUserId(user.organizationId, clBody.driverId);
+      }
       // Coerce datetime-local string to Date
       if (clBody.completedAt && typeof clBody.completedAt === "string") { const d = new Date(clBody.completedAt); clBody.completedAt = isNaN(d.getTime()) ? undefined : d; }
       else if (!clBody.completedAt) clBody.completedAt = undefined;
@@ -5291,7 +5294,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ...clBody,
         funeralCaseId: req.params.id as string,
         organizationId: user.organizationId,
-        preparedByUserId: user.id,
+        preparedByUserId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       const cl = await storage.upsertDriverChecklist(req.params.id as string, user.organizationId, parsed);
       await auditLog(req, "UPSERT_DRIVER_CHECKLIST", "DriverChecklist", cl.id, null, cl);
@@ -5661,7 +5664,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (intake.status === "out_for_post_mortem") {
       return res.status(400).json({ message: "This body is currently out for post-mortem. Record its return before dispatch." });
     }
-    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+    const dispatchByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const dispatchBody = { ...req.body };
     if (dispatchBody.dispatchedAt && typeof dispatchBody.dispatchedAt === "string") { const d = new Date(dispatchBody.dispatchedAt); dispatchBody.dispatchedAt = isNaN(d.getTime()) ? undefined : d; }
     else if (!dispatchBody.dispatchedAt) dispatchBody.dispatchedAt = undefined;
@@ -5679,7 +5682,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ...dispatchBody,
       intakeId: req.params.id as string,
       organizationId: user.organizationId,
-      dispatchedByUserId: user.id,
+      dispatchedByUserId: dispatchByUserId,
     });
     // dispatchIntake atomically writes dispatch record + sets intake status in one transaction
     const dispatch = await storage.dispatchIntake(req.params.id as string, user.organizationId, parsed);
@@ -6104,7 +6107,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const agentId = req.query.agentId as string | undefined;
-    const filterAgent = isAgent ? user.id : agentId;
+    const filterAgent = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : agentId;
     const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const rows = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, filterAgent);
@@ -6117,8 +6120,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const orgId = user.organizationId;
     const userRoles = await storage.getUserRoles(user.id, orgId);
     const isAgent = isAgentScoped(userRoles);
-    // Agents see their own P&L; managers can view any agent's P&L via ?agentId=
-    const agentId = isAgent ? user.id : (typeof req.query.agentId === "string" ? req.query.agentId : user.id);
+    // Agents see their own P&L; managers can view any agent's P&L via ?agentId=. Policies/
+    // commission entries store the tenant-resolved agent id, so the own-portfolio fallback
+    // must resolve user.id the same way or an isolated-tenant agent's own P&L comes back empty.
+    const effectiveSelfId = await resolveOrSyncTenantUserId(orgId, user.id);
+    const agentId = isAgent ? effectiveSelfId : (typeof req.query.agentId === "string" ? req.query.agentId : effectiveSelfId);
 
     const def = defaultStatementRange();
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
@@ -6277,7 +6283,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
       const userRoles = await storage.getUserRoles(user.id, user.organizationId);
       const isAgent = isAgentScoped(userRoles);
-      if (isAgent && (before as any).agentId !== user.id) return res.status(403).json({ message: "Access denied" });
+      if (isAgent && (before as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
       const updated = await storage.updateLead(req.params.id as string, req.body, user.organizationId);
       await auditLog(req, "UPDATE_LEAD", "Lead", req.params.id as string, before, updated);
       return res.json(updated);
@@ -6757,7 +6763,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: existing.id,
         requestData,
         status: "pending",
-        initiatedBy: user.id,
+        initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(
         req,
@@ -7302,7 +7308,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         statementDate: String(statementDate),
         closingBalance: String(Number(closingBalance).toFixed(2)),
         currency: normalizeCurrency(currency) || "USD",
-        enteredByUserId: user.id,
+        enteredByUserId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
         notes: notes ? String(notes).trim() : undefined,
       });
       await auditLog(req, "CREATE_BANK_STATEMENT_BALANCE", "BankStatementBalance", bal.id, null, bal);
@@ -7330,7 +7336,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       organizationId: user.organizationId,
       mandateReference,
       status: "active",
-      createdBy: user.id,
+      createdBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
     });
     let created: any;
     try {
@@ -7733,7 +7739,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: quote.id,
         requestData: { quotationNumber: (quote as any).quotationNumber || null, funeralCaseId: (quote as any).funeralCaseId || null, reason: req.body?.reason || null },
         status: "pending",
-        initiatedBy: user.id,
+        initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(req, "REQUEST_DELETE_QUOTE", "FuneralQuotation", quote.id, quote, { pendingDeletion: true, approvalId: approval.id });
       await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
@@ -7773,7 +7779,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       entityId: quote.id,
       requestData: { quotationNumber: quote.quotationNumber, deceasedName: quote.deceasedName, guarantor, collateral },
       status: "pending",
-      initiatedBy: user.id,
+      initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       approvedBy: null,
       rejectionReason: null,
       resolvedAt: null,
@@ -7831,11 +7837,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/approvals", requireAuth, requireTenantScope, requireAnyPermission("write:policy", "write:claim", "write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const parsed = insertApprovalRequestSchema.parse({
       ...req.body,
       organizationId: user.organizationId,
-      initiatedBy: user.id,
+      initiatedBy: effectiveUserId,
       status: "pending",
     });
     const approval = await storage.createApprovalRequest(parsed);
@@ -7852,14 +7858,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getApprovalRequests(user.organizationId);
     const approval = before.find(a => a.id === req.params.id as string);
     if (!approval) return res.status(404).json({ message: "Not found" });
-    if (approval.initiatedBy === user.id) {
+    // Resolve before comparing — initiatedBy was stored via resolveOrSyncTenantUserId, so
+    // comparing against the raw registry user.id would false-mismatch (and let someone
+    // approve their own request) on an isolated-tenant org where the ids diverge.
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    if (approval.initiatedBy === effectiveUserId) {
       return res.status(400).json({ message: "Cannot approve own request (maker-checker)" });
     }
-    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
-    const resolvedApproverId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const updated = await storage.updateApprovalRequest(approval.id, {
       status: action === "approve" ? "approved" : "rejected",
-      approvedBy: resolvedApproverId ?? undefined,
+      approvedBy: effectiveUserId,
       rejectionReason: rejectionReason || null,
     }, user.organizationId);
     await auditLog(req, `RESOLVE_APPROVAL_${action.toUpperCase()}`, "ApprovalRequest", approval.id, approval, updated);
@@ -8076,7 +8084,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
-      const parsed = insertPayrollRunSchema.parse({ ...req.body, organizationId: user.organizationId, preparedBy: user.id, status: "draft" });
+      const parsed = insertPayrollRunSchema.parse({ ...req.body, organizationId: user.organizationId, preparedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id), status: "draft" });
       const run = await storage.createPayrollRun(parsed);
       await auditLog(req, "CREATE_PAYROLL_RUN", "PayrollRun", run.id, null, run);
       return res.status(201).json(run);
@@ -8986,7 +8994,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = insertSettlementSchema.parse({
       ...req.body,
       organizationId: user.organizationId,
-      initiatedBy: user.id,
+      initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       status: "pending",
     });
     const settlement = await storage.createSettlement(parsed);
@@ -9000,9 +9008,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const existing = await storage.getSettlements(user.organizationId);
     const settlement = existing.find(s => s.id === id);
     if (!settlement) return res.status(404).json({ message: "Settlement not found" });
-    if (settlement.initiatedBy === user.id) return res.status(400).json({ message: "Cannot approve own settlement" });
-    const resolvedSettlementApprover = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
-    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: resolvedSettlementApprover ?? undefined }, user.organizationId);
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    if (settlement.initiatedBy === effectiveUserId) return res.status(400).json({ message: "Cannot approve own settlement" });
+    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: effectiveUserId }, user.organizationId);
     await auditLog(req, "APPROVE_SETTLEMENT", "Settlement", id, settlement, updated);
     return res.json(updated);
   });
@@ -9088,7 +9096,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
-    const stats = await storage.getDashboardStats(user.organizationId, undefined, isAgent ? user.id : undefined);
+    const stats = await storage.getDashboardStats(user.organizationId, undefined, isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined);
     const unallocated = await storage.getPaymentsByOrg(user.organizationId, 100, 0);
     const unallocatedPayments = unallocated.filter((p: any) => !p.policyId);
     return res.json({
@@ -9624,7 +9632,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         currency: normalizeCurrency(currency) || "USD",
         asOfDate: String(asOfDate),
         notes: notes ? String(notes).trim() : undefined,
-        enteredByUserId: user.id,
+        enteredByUserId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(req, "CREATE_BALANCE_SHEET_ENTRY", "BalanceSheetEntry", entry.id, null, entry);
       return res.status(201).json(entry);
