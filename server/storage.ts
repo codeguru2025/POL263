@@ -5753,12 +5753,15 @@ export class DatabaseStorage implements IStorage {
       organizationId: orgId,
       cardTitle: "Membership Card",
       showLogo: true,
-      showPhotoBox: true,
       showPolicyNumber: true,
-      showMemberSince: true,
-      showValidUntil: true,
+      showSurname: true,
+      showIdNumber: true,
+      showDateOfBirth: true,
+      showPlan: true,
       showQrCode: true,
+      tagline: null,
       footerNote: null,
+      footerSlogan: null,
       updatedAt: new Date(),
     };
   }

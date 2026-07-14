@@ -758,16 +758,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/member-card-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     const before = await storage.getMemberCardSettings(user.organizationId);
-    const { cardTitle, showLogo, showPhotoBox, showPolicyNumber, showMemberSince, showValidUntil, showQrCode, footerNote } = req.body;
+    const { cardTitle, showLogo, showPolicyNumber, showSurname, showIdNumber, showDateOfBirth, showPlan, showQrCode, tagline, footerNote, footerSlogan } = req.body;
     const data: Record<string, any> = {};
     if (typeof cardTitle === "string" && cardTitle.trim()) data.cardTitle = cardTitle.trim();
     if (typeof showLogo === "boolean") data.showLogo = showLogo;
-    if (typeof showPhotoBox === "boolean") data.showPhotoBox = showPhotoBox;
     if (typeof showPolicyNumber === "boolean") data.showPolicyNumber = showPolicyNumber;
-    if (typeof showMemberSince === "boolean") data.showMemberSince = showMemberSince;
-    if (typeof showValidUntil === "boolean") data.showValidUntil = showValidUntil;
+    if (typeof showSurname === "boolean") data.showSurname = showSurname;
+    if (typeof showIdNumber === "boolean") data.showIdNumber = showIdNumber;
+    if (typeof showDateOfBirth === "boolean") data.showDateOfBirth = showDateOfBirth;
+    if (typeof showPlan === "boolean") data.showPlan = showPlan;
     if (typeof showQrCode === "boolean") data.showQrCode = showQrCode;
+    if (tagline === null || typeof tagline === "string") data.tagline = tagline ? String(tagline).trim() || null : null;
     if (footerNote === null || typeof footerNote === "string") data.footerNote = footerNote ? String(footerNote).trim() || null : null;
+    if (footerSlogan === null || typeof footerSlogan === "string") data.footerSlogan = footerSlogan ? String(footerSlogan).trim() || null : null;
     const updated = await storage.upsertMemberCardSettings(user.organizationId, data);
     await auditLog(req, "UPDATE_MEMBER_CARD_SETTINGS", "MemberCardSettings", user.organizationId, before, updated);
     return res.json(updated);

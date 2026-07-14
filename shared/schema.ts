@@ -67,12 +67,18 @@ export const memberCardSettings = pgTable("member_card_settings", {
   organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
   cardTitle: text("card_title").default("Membership Card").notNull(),
   showLogo: boolean("show_logo").default(true).notNull(),
-  showPhotoBox: boolean("show_photo_box").default(true).notNull(),
   showPolicyNumber: boolean("show_policy_number").default(true).notNull(),
-  showMemberSince: boolean("show_member_since").default(true).notNull(),
-  showValidUntil: boolean("show_valid_until").default(true).notNull(),
+  showSurname: boolean("show_surname").default(true).notNull(),
+  showIdNumber: boolean("show_id_number").default(true).notNull(),
+  showDateOfBirth: boolean("show_date_of_birth").default(true).notNull(),
+  showPlan: boolean("show_plan").default(true).notNull(),
   showQrCode: boolean("show_qr_code").default(true).notNull(),
+  /** Gold subtitle under the organization name, e.g. "For a Service Beyond Ubuntu". */
+  tagline: text("tagline"),
+  /** Bold statement in the footer bar, e.g. "You are not just a client, you are family." */
   footerNote: text("footer_note"),
+  /** Italic tagline on the right of the footer bar, e.g. "With Dignity. With Care. With Ubuntu." */
+  footerSlogan: text("footer_slogan"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export const insertMemberCardSettingsSchema = createInsertSchema(memberCardSettings).omit({ updatedAt: true });
