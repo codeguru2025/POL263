@@ -61,6 +61,24 @@ export const branches = pgTable(
   (t) => [index("branches_org_idx").on(t.organizationId)]
 );
 
+/** Org-wide membership-card template settings (one row per org) — used to render the
+ *  printable member card PDF for a policyholder. */
+export const memberCardSettings = pgTable("member_card_settings", {
+  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  cardTitle: text("card_title").default("Membership Card").notNull(),
+  showLogo: boolean("show_logo").default(true).notNull(),
+  showPhotoBox: boolean("show_photo_box").default(true).notNull(),
+  showPolicyNumber: boolean("show_policy_number").default(true).notNull(),
+  showMemberSince: boolean("show_member_since").default(true).notNull(),
+  showValidUntil: boolean("show_valid_until").default(true).notNull(),
+  showQrCode: boolean("show_qr_code").default(true).notNull(),
+  footerNote: text("footer_note"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertMemberCardSettingsSchema = createInsertSchema(memberCardSettings).omit({ updatedAt: true });
+export type MemberCardSettings = typeof memberCardSettings.$inferSelect;
+export type InsertMemberCardSettings = z.infer<typeof insertMemberCardSettingsSchema>;
+
 /** Per-org sequence for unique member numbers (MEM-000001, etc.). */
 export const orgMemberSequences = pgTable("org_member_sequences", {
   organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),

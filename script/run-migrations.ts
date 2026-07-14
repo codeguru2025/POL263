@@ -14,6 +14,9 @@ import "dotenv/config";
 import pg from "pg";
 import fs from "fs";
 import path from "path";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { eq } from "drizzle-orm";
+import * as cpSchema from "@shared/control-plane-schema";
 
 const migrationsDir = path.resolve(process.cwd(), "migrations");
 
@@ -130,6 +133,14 @@ async function migrateOneDatabase(label: string, pool: pg.Pool): Promise<number>
 
 /** Read all distinct dedicated databaseUrls stored in the organizations table. */
 async function loadTenantUrls(mainPool: pg.Pool): Promise<{ name: string; url: string }[]> {
+  // Registry `organizations.database_url` is a best-effort fallback only — the authoritative
+  // source is the control plane `tenant_databases` table (same resolution order as
+  // getPoolForOrg in server/tenant-db.ts). Relying on the registry column alone silently
+  // skips tenants whose URL only lives in the control plane (e.g. Falakhe): this script would
+  // never migrate them ahead of a deploy, leaving it to the runtime auto-migration fallback
+  // (applyPendingMigrations, triggered by the first real request to hit that tenant DB) to
+  // apply schema changes inline in a live request instead of safely offline pre-deploy.
+  const byName = new Map<string, string>();
   try {
     const { rows } = await mainPool.query<{ name: string; database_url: string }>(`
       SELECT name, database_url
@@ -137,11 +148,39 @@ async function loadTenantUrls(mainPool: pg.Pool): Promise<{ name: string; url: s
       WHERE database_url IS NOT NULL AND database_url <> ''
       ORDER BY name
     `);
-    return rows.map((r) => ({ name: r.name, url: r.database_url.trim() }));
+    for (const r of rows) byName.set(r.name, r.database_url.trim());
   } catch {
     // organizations table may not exist yet on a brand-new DB
-    return [];
   }
+
+  const cpUrl = (process.env.CONTROL_PLANE_DIRECT_URL || process.env.CONTROL_PLANE_DATABASE_URL || process.env.DATABASE_URL)?.trim();
+  if (cpUrl) {
+    let cpPool: pg.Pool | undefined;
+    try {
+      cpPool = await connectPool(cpUrl);
+      const cpDb = drizzle(cpPool, { schema: cpSchema });
+      const rows = await cpDb
+        .select({
+          name: cpSchema.tenants.name,
+          databaseUrl: cpSchema.tenantDatabases.databaseUrl,
+          databaseDirectUrl: cpSchema.tenantDatabases.databaseDirectUrl,
+        })
+        .from(cpSchema.tenantDatabases)
+        .innerJoin(cpSchema.tenants, eq(cpSchema.tenants.id, cpSchema.tenantDatabases.tenantId));
+      for (const r of rows) {
+        // Prefer the direct URL for migrations — the pooler URL can require an explicitly
+        // configured pool name in DO that migration scripts don't have.
+        const url = (r.databaseDirectUrl || r.databaseUrl)?.trim();
+        if (url) byName.set(r.name, url);
+      }
+    } catch (err: any) {
+      console.warn(`  Control plane tenant lookup failed: ${err?.message || err} (falling back to registry-only tenant list)`);
+    } finally {
+      await cpPool?.end().catch(() => {});
+    }
+  }
+
+  return Array.from(byName.entries()).map(([name, url]) => ({ name, url })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function migrateWithPool(label: string, url: string, mainUrl: string): Promise<void> {

@@ -366,7 +366,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/feedback", label: "Client Feedback", icon: MessageSquare, permission: "read:client", agentHidden: true },
         { href: "/staff/groups", label: "Employer Admin", icon: Layers, permissions: ["write:policy"], agentHidden: true },
         { href: "/staff/admin/sub-groups", label: "Sub Group Admin", icon: GitBranch, agentHidden: true },
-        { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard, agentHidden: true },
+        { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard, permission: "manage:settings", agentHidden: true },
         { href: "/staff/admin/terminals", label: "Terminals + Cards Admin", icon: Monitor, agentHidden: true },
         // Partners & distribution
         { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck, agentHidden: true },
@@ -425,7 +425,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           title: "Policies",
           items: filterNav([
             { href: "/staff/policies", label: "Policies", icon: FileStack, permission: "read:policy" },
-            { href: "/staff/admin/member-cards", label: "Member Cards", icon: CreditCard, agentHidden: true },
+            { href: "/staff/admin/member-cards", label: "Member Cards", icon: CreditCard, permission: "manage:settings", agentHidden: true },
           ]),
         },
         {

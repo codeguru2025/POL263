@@ -749,6 +749,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ success: true });
   });
 
+  // ─── Member Card Admin ──────────────────────────────────────
+  app.get("/api/member-card-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getMemberCardSettings(user.organizationId));
+  });
+
+  app.put("/api/member-card-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const before = await storage.getMemberCardSettings(user.organizationId);
+    const { cardTitle, showLogo, showPhotoBox, showPolicyNumber, showMemberSince, showValidUntil, showQrCode, footerNote } = req.body;
+    const data: Record<string, any> = {};
+    if (typeof cardTitle === "string" && cardTitle.trim()) data.cardTitle = cardTitle.trim();
+    if (typeof showLogo === "boolean") data.showLogo = showLogo;
+    if (typeof showPhotoBox === "boolean") data.showPhotoBox = showPhotoBox;
+    if (typeof showPolicyNumber === "boolean") data.showPolicyNumber = showPolicyNumber;
+    if (typeof showMemberSince === "boolean") data.showMemberSince = showMemberSince;
+    if (typeof showValidUntil === "boolean") data.showValidUntil = showValidUntil;
+    if (typeof showQrCode === "boolean") data.showQrCode = showQrCode;
+    if (footerNote === null || typeof footerNote === "string") data.footerNote = footerNote ? String(footerNote).trim() || null : null;
+    const updated = await storage.upsertMemberCardSettings(user.organizationId, data);
+    await auditLog(req, "UPDATE_MEMBER_CARD_SETTINGS", "MemberCardSettings", user.organizationId, before, updated);
+    return res.json(updated);
+  });
+
+  app.get("/api/policies/:id/member-card/view", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const { streamMemberCardToResponse } = await import("./member-card-pdf");
+    return streamMemberCardToResponse(id, user.organizationId, res, { attachment: false });
+  });
+
+  app.get("/api/policies/:id/member-card/download", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const { streamMemberCardToResponse } = await import("./member-card-pdf");
+    return streamMemberCardToResponse(id, user.organizationId, res, { attachment: true });
+  });
+
   // Avatar upload — any authenticated staff user can upload their own avatar.
   app.post("/api/upload/avatar", requireAuth, logoMemUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });

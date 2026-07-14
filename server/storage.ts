@@ -125,6 +125,8 @@ import {
   directoryContacts,
   type DirectoryContact, type InsertDirectoryContact,
   type ReceiptAdvert, type InsertReceiptAdvert,
+  memberCardSettings,
+  type MemberCardSettings, type InsertMemberCardSettings,
   type UserNotification, type InsertUserNotification,
   type UserDeviceToken,
 } from "@shared/schema";
@@ -633,6 +635,10 @@ export interface IStorage {
   updateReceiptAdvert(id: string, data: Partial<InsertReceiptAdvert>, orgId: string): Promise<ReceiptAdvert | undefined>;
   deleteReceiptAdvert(id: string, orgId: string): Promise<void>;
   setActiveReceiptAdvert(id: string, orgId: string): Promise<void>;
+  /** Returns the org's member-card template settings, or the built-in defaults if the org
+   *  hasn't configured one yet (Member Card Admin hasn't been saved before). */
+  getMemberCardSettings(orgId: string): Promise<MemberCardSettings>;
+  upsertMemberCardSettings(orgId: string, data: Partial<InsertMemberCardSettings>): Promise<MemberCardSettings>;
   getClientDeviceTokens(clientId: string, orgId: string): Promise<{ id: string; token: string; platform: string }[]>;
   addClientDeviceToken(orgId: string, clientId: string, token: string, platform: string): Promise<void>;
   removeClientDeviceToken(orgId: string, token: string, clientId?: string): Promise<void>;
@@ -5734,6 +5740,38 @@ export class DatabaseStorage implements IStorage {
     await tdb.update(receiptAdverts).set({ isActive: false }).where(eq(receiptAdverts.organizationId, orgId));
     await tdb.update(receiptAdverts).set({ isActive: true })
       .where(and(eq(receiptAdverts.id, id), eq(receiptAdverts.organizationId, orgId)));
+  }
+
+  // ─── Member Card Admin ────────────────────────────────────
+  async getMemberCardSettings(orgId: string): Promise<MemberCardSettings> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(memberCardSettings).where(eq(memberCardSettings.organizationId, orgId));
+    if (row) return row;
+    // Not configured yet — built-in defaults, matching the column defaults in schema.ts,
+    // so the admin page and card renderer both work before anyone has saved a template.
+    return {
+      organizationId: orgId,
+      cardTitle: "Membership Card",
+      showLogo: true,
+      showPhotoBox: true,
+      showPolicyNumber: true,
+      showMemberSince: true,
+      showValidUntil: true,
+      showQrCode: true,
+      footerNote: null,
+      updatedAt: new Date(),
+    };
+  }
+  async upsertMemberCardSettings(orgId: string, data: Partial<InsertMemberCardSettings>): Promise<MemberCardSettings> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.insert(memberCardSettings)
+      .values({ ...data, organizationId: orgId, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: memberCardSettings.organizationId,
+        set: { ...data, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
   }
 
   // ─── Mortuary Intakes ───────────────────────────────────────

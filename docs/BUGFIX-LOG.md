@@ -10,6 +10,44 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — `npm run db:migrate` (the real deploy-time migration runner) never actually reached Falakhe
+
+- **Context:** while adding a new migration (0067, for Member Card Admin — see feature notes),
+  ran `npm run db:migrate` for real to apply it, expecting the same tenant-discovery bug
+  already fixed in `script/migration-status.ts` on 2026-07-13 to be present here too — and it
+  was, in the actual production migration runner this time, which is more consequential.
+- **Root cause:** `script/run-migrations.ts`'s `loadTenantUrls()` had the identical bug: it
+  discovered tenant databases by reading `organizations.database_url` on the shared registry
+  DB, which is empty for isolated-tenant orgs like Falakhe (the real URL only lives in the
+  control plane's `tenant_databases` table). Before this fix, `npm run db:migrate` — run at
+  every deploy via `npm run start:with-migrate` — silently never migrated Falakhe ahead of
+  traffic. It "worked" anyway only because of a separate runtime fallback
+  (`applyPendingMigrations` in `server/tenant-db.ts`, triggered by `getPoolForOrg` the first
+  time a request touches that tenant's DB in a fresh process) — meaning Falakhe's schema
+  changes were actually being applied *inline, inside a live user's first request* after every
+  deploy, not safely offline before traffic, and with no visibility into whether it succeeded.
+- **Fix:** applied the same fix as the 2026-07-13 entry — `loadTenantUrls()` now also queries
+  `tenant_databases` joined to `tenants` on the control plane connection, preferring
+  `databaseDirectUrl`, merged with the registry lookup. Verified for real: ran `npm run
+  db:migrate` after the fix and it now reports "Found 1 tenant DB(s) to migrate… Migrating
+  tenant DB: FALAKHE FUNERAL PARLOUR… Applied 0067_member_card_settings.sql" — before the fix it
+  found zero tenant DBs.
+- **Files:** `script/run-migrations.ts`.
+- **Also noticed, not fixed:** the same migration run reported the `SUPABASE_BACKUP_URL` backup
+  database is significantly behind — missing even `payment_disbursements` (a much older table)
+  — so it's not just missing recent migrations, it looks meaningfully out of sync as a
+  disaster-recovery target. Flagged for Augustus, not investigated further; unrelated to this
+  fix and the script already treats a backup-DB failure as non-fatal by design.
+- **Lesson for next time:** any script that enumerates tenant DBs by reading
+  `organizations.database_url` directly — instead of going through `tenant-db.ts` or the
+  control plane — will silently miss or misroute isolated-tenant orgs. This is the third time
+  this exact bug has been found in a different script (migration status, migration runner);
+  worth grep'ing for `organizations.database_url`/`org.database_url` across `script/` and
+  `scripts/` the next time this class of bug comes up, rather than waiting to hit each instance
+  one at a time.
+
+---
+
 ## 2026-07-14 — Home tab "Pending Approvals" counted every approval request ever made, not just pending ones
 
 - **Symptom:** the Command Center widget on the staff home tab showed a "Pending Approvals"

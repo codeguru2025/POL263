@@ -38,7 +38,6 @@ const STUBS: Record<string, StubInfo> = {
   "/staff/admin/invoice-items": { title: "Invoice Items Admin", blurb: "Define billable line items used on invoices.", related: [{ label: "Products", href: "/staff/products" }] },
   "/staff/admin/agents": { title: "Agent Admin", blurb: "Manage sales agents. Agent accounts are currently managed under Users.", related: [{ label: "Users", href: "/staff/users" }] },
   "/staff/admin/brokers": { title: "Broker Admin", blurb: "Manage broker partners and their distribution agreements.", related: [{ label: "Users", href: "/staff/users" }] },
-  "/staff/admin/member-cards": { title: "Member Card Admin", blurb: "Configure membership-card templates and issuance.", related: [{ label: "Policies", href: "/staff/policies" }] },
   "/staff/admin/terminals": { title: "Terminals + Cards Admin", blurb: "Manage POS terminals and card stock." },
   "/staff/admin/sub-groups": { title: "Sub Group Admin", blurb: "Manage sub-groups within a scheme.", related: [{ label: "Schemes", href: "/staff/groups" }] },
   "/staff/admin/underwriters": { title: "Underwriter Admin", blurb: "Maintain underwriter partners and payable terms.", related: [{ label: "Products", href: "/staff/products" }] },

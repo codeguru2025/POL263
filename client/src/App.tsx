@@ -81,6 +81,7 @@ const StaffReminders = lazy(() => retryLazy(() => import("@/pages/staff/reminder
 const StaffOrderServices = lazy(() => retryLazy(() => import("@/pages/staff/order-services")));
 const StaffAssetsRegister = lazy(() => retryLazy(() => import("@/pages/staff/assets-register")));
 const StaffComingSoon = lazy(() => retryLazy(() => import("@/pages/staff/coming-soon")));
+const StaffMemberCardAdmin = lazy(() => retryLazy(() => import("@/pages/staff/member-card-admin")));
 const StaffBranchAdmin = lazy(() => retryLazy(() => import("@/pages/staff/admin/branches")));
 const StaffDebitOrders = lazy(() => retryLazy(() => import("@/pages/staff/transactions/debit-orders")));
 const StaffEmployeeReports = lazy(() => retryLazy(() => import("@/pages/staff/employee-reports")));
@@ -229,7 +230,7 @@ function Router() {
       <SafeRoute path="/staff/admin/invoice-items" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/agents" component={StaffAgentsAdmin} />
       <SafeRoute path="/staff/admin/brokers" component={StaffBrokers} />
-      <SafeRoute path="/staff/admin/member-cards" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/member-cards" component={StaffMemberCardAdmin} />
       <SafeRoute path="/staff/admin/terminals" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/branches" component={StaffBranchAdmin} />
       <SafeRoute path="/staff/admin/sub-groups" component={StaffComingSoon} />
