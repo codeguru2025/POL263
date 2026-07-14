@@ -10,6 +10,31 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — Home tab "Pending Approvals" counted every approval request ever made, not just pending ones
+
+- **Symptom:** the Command Center widget on the staff home tab showed a "Pending Approvals"
+  count (e.g. 20) even when every approval request in the org had already been approved.
+- **Root cause:** `client/src/components/command-center.tsx` fetches `GET /api/approvals` with
+  no `?status=` filter, which returns every approval request regardless of status (this is
+  correct/intended API behavior — the actual Approvals page relies on it, filtering client-side
+  into pending/resolved tabs). But the widget computed `pendingApprovals = arr(approvals).length`
+  — the raw array length, with no status filter at all — so it was really showing "total
+  approval requests ever created for this org," permanently overstating the count once any
+  had been resolved.
+- **Fix:** `pendingApprovals = arr(approvals).filter((a) => a?.status === "pending").length`,
+  matching the exact filter already used correctly on the real Approvals page
+  (`client/src/pages/staff/approvals.tsx:59`). Checked every other widget on the same
+  component (requisitions, claims, leads, funerals) — all already filter by status client-side;
+  this was the one spot that didn't.
+- **Files:** `client/src/components/command-center.tsx`.
+- **Lesson for next time:** any dashboard/summary widget that reuses a list-fetching query
+  designed for a different (unfiltered) consumer needs its own filter applied at the point of
+  counting — `.length` on a shared query's raw result is a red flag worth checking for exactly
+  this bug whenever a "pending X" or "open Y" count looks too high. This is invisible to
+  `npm run check` and the test suite; it only shows up as a wrong number on screen.
+
+---
+
 ## 2026-07-14 — Group receipt "print" button 404'd because the API never returned the receipt's real id
 
 - **Context:** while adding a consolidated "print group receipt" document (a feature add, see

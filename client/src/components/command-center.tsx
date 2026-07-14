@@ -43,7 +43,7 @@ export function CommandCenter() {
   const reviewClaims = arr(claims).filter((c) => c?.status === "submitted" || c?.status === "verified").length;
   const openPipeline = arr(leads).filter((l) => !["lost", "activated"].includes(l?.stage)).length;
   const activeFunerals = arr(funerals).filter((f) => f?.status !== "closed" && f?.status !== "completed").length;
-  const pendingApprovals = arr(approvals).length;
+  const pendingApprovals = arr(approvals).filter((a) => a?.status === "pending").length;
   const unallocatedCount = arr(unallocated).length;
 
   // ── Primary actions per role ──
