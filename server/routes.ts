@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+﻿import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import argon2 from "argon2";
 import crypto from "crypto";
@@ -1683,7 +1683,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const list = isAgent
-      ? await storage.getClientsByAgent(user.id, user.organizationId, limit, offset, search)
+      ? await storage.getClientsByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId, limit, offset, search)
       : await storage.getClientsByOrg(user.organizationId, limit, offset, search);
     return res.json(list);
   });
@@ -1696,7 +1696,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent) {
-      const hasAccess = await storage.isClientAccessibleByAgent(user.id, client.id, user.organizationId);
+      const hasAccess = await storage.isClientAccessibleByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), client.id, user.organizationId);
       if (!hasAccess) return res.status(403).json({ message: "Access denied" });
     }
     const { passwordHash: _cph, securityAnswerHash: _csah, activationCode: _cac, ...safeClient } = client as any;
@@ -1844,7 +1844,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent) {
-      const hasAccess = await storage.isClientAccessibleByAgent(user.id, before.id, user.organizationId);
+      const hasAccess = await storage.isClientAccessibleByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), before.id, user.organizationId);
       if (!hasAccess) return res.status(403).json({ message: "Access denied" });
     }
     delete req.body.id;
@@ -1959,7 +1959,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent) {
-      const hasAccess = await storage.isClientAccessibleByAgent(user.id, client.id, user.organizationId);
+      const hasAccess = await storage.isClientAccessibleByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), client.id, user.organizationId);
       if (!hasAccess) return res.status(403).json({ message: "Access denied" });
     }
     return res.json(await storage.getClientDocuments(client.id, user.organizationId));
@@ -4767,7 +4767,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : undefined;
     if (!date) return res.status(400).json({ message: "Query 'date' (YYYY-MM-DD) is required" });
-    const result = await storage.getReceiptTotalsByUserDate(user.organizationId, user.id, date);
+    const result = await storage.getReceiptTotalsByUserDate(user.organizationId, await resolveOrSyncTenantUserId(user.organizationId, user.id), date);
     return res.json(result);
   });
 
@@ -4785,11 +4785,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (fromDate) filters.fromDate = fromDate;
     if (toDate) filters.toDate = toDate;
     if (status) filters.status = status;
-    // preparedBy is stored as the resolved tenant-db id — filter by that, not the raw registry id.
-    const resolvedSelfId = (isAgent || !canReadFinance) ? await resolveUserIdForOrgDatabase(user.id, user.organizationId) : null;
-    if (isAgent) filters.preparedBy = resolvedSelfId ?? user.id;
+    // preparedBy is stored as the resolved tenant-db id (see the write path below, which uses
+    // resolveOrSyncTenantUserId) — filter by that, not the raw registry id. Use the same
+    // function here, not the null-degrading resolveUserIdForOrgDatabase: a null fallback to
+    // the raw user.id would still mismatch in exactly the email-collision case it's meant to
+    // guard against, since the stored value is never the raw id in that case either.
+    const resolvedSelfId = (isAgent || !canReadFinance) ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : null;
+    if (isAgent) filters.preparedBy = resolvedSelfId!;
     else if (canReadFinance && userId) filters.preparedBy = userId;
-    else if (!canReadFinance) filters.preparedBy = resolvedSelfId ?? user.id;
+    else if (!canReadFinance) filters.preparedBy = resolvedSelfId!;
     const list = await storage.getCashups(user.organizationId, 100, filters);
     return res.json(list);
   });
@@ -4831,8 +4835,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const isAgent = isAgentScoped(userRoles);
     // Compare against the resolved tenant-db id — preparedBy is stored as that, not the raw
     // registry id, so an unresolved comparison would wrongly deny the platform owner (whose
-    // registry/tenant ids can differ) access to their own cashup.
-    const resolvedViewerId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+    // registry/tenant ids can differ) access to their own cashup. resolveOrSyncTenantUserId,
+    // not resolveUserIdForOrgDatabase — the latter's null fallback still mismatches in the
+    // email-collision case, the one case this guard actually exists for.
+    const resolvedViewerId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     if ((isAgent || !perms.includes("read:finance")) && cashup.preparedBy !== resolvedViewerId) return res.status(403).json({ message: "You can only view your own cashups" });
     return res.json(cashup);
   });
@@ -5971,7 +5977,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/fleet/:vehicleId/checkout", requireAuth, requireTenantScope, requirePermission("use:fleet"), async (req, res) => {
     const user = req.user as any;
     try {
-      const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
+      const emp = await storage.getPayrollEmployeeByUserId(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId);
       const todayLog = emp ? await storage.getAttendanceLogForDate(emp.id, user.organizationId, todayInHarare()) : undefined;
       const isClockedIn = !!todayLog?.clockInAt && !todayLog?.clockOutAt;
       if (!isClockedIn) {
@@ -6257,7 +6263,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const list = isAgent
-      ? (await storage.getLeadsByAgent(user.id, user.organizationId)).slice(offset, offset + limit)
+      ? (await storage.getLeadsByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)).slice(offset, offset + limit)
       : await storage.getLeadsByOrg(user.organizationId, limit, offset);
     return res.json(list);
   });
@@ -8111,7 +8117,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Employee: get own logs
   app.get("/api/attendance/my", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
-    const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
+    const emp = await storage.getPayrollEmployeeByUserId(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId);
     if (!emp) return res.json([]);
     return res.json(await storage.getMyAttendanceLogs(emp.id, user.organizationId));
   });
@@ -8122,7 +8128,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/attendance", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try {
-      const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
+      const emp = await storage.getPayrollEmployeeByUserId(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId);
       if (!emp) return res.status(422).json({ message: "No payroll employee record linked to your account. Ask your administrator to link your user account." });
 
       // Validate date: must be a valid ISO date, not more than 7 days in the past, not in the future
@@ -8290,7 +8296,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/attendance/scan", requireAuth, requireTenantScope, async (req, res) => {
     const user = req.user as any;
     try {
-      const emp = await storage.getPayrollEmployeeByUserId(user.id, user.organizationId);
+      const emp = await storage.getPayrollEmployeeByUserId(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId);
       if (!emp) return res.status(422).json({ message: "No payroll employee record linked to your account. Ask your administrator to link your user account." });
 
       const token = typeof req.body.qrToken === "string" ? req.body.qrToken : "";
@@ -8663,35 +8669,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── User (staff/agent) notifications ───────────────────
 
   // SSE stream — agent-app and web keep this open for real-time delivery
-  app.get("/api/notifications/stream", requireAuth, (req, res) => {
-    const user = (req as any).user as { id: string };
-    sseConnect(user.id, req, res);
+  // notifyUser() writes/emits under the tenant-resolved recipient id (entity-derived ids like
+  // policy.agentId are already tenant ids), so every read/subscribe below must resolve the raw
+  // session id the same way or an isolated-tenant user's notifications are invisible to them.
+  app.get("/api/notifications/stream", requireAuth, async (req, res) => {
+    const user = (req as any).user as { id: string; organizationId: string };
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    sseConnect(effectiveUserId, req, res);
   });
 
   app.get("/api/notifications", requireAuth, requireTenantScope, async (req, res) => {
     const user = (req as any).user as { id: string; organizationId: string };
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const limit = Math.min(Number(req.query.limit) || 50, 100);
     const offset = Number(req.query.offset) || 0;
-    const notifications = await storage.getUserNotifications(user.organizationId, user.id, limit, offset);
-    const unreadCount = await storage.getUnreadUserNotificationCount(user.organizationId, user.id);
+    const notifications = await storage.getUserNotifications(user.organizationId, effectiveUserId, limit, offset);
+    const unreadCount = await storage.getUnreadUserNotificationCount(user.organizationId, effectiveUserId);
     return res.json({ notifications, unreadCount });
   });
 
   app.get("/api/notifications/unread-count", requireAuth, requireTenantScope, async (req, res) => {
     const user = (req as any).user as { id: string; organizationId: string };
-    const count = await storage.getUnreadUserNotificationCount(user.organizationId, user.id);
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const count = await storage.getUnreadUserNotificationCount(user.organizationId, effectiveUserId);
     return res.json({ count });
   });
 
   app.patch("/api/notifications/:id/read", requireAuth, requireTenantScope, async (req, res) => {
     const user = (req as any).user as { id: string; organizationId: string };
-    await storage.markUserNotificationRead(req.params.id as string, user.id, user.organizationId);
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    await storage.markUserNotificationRead(req.params.id as string, effectiveUserId, user.organizationId);
     return res.json({ ok: true });
   });
 
   app.patch("/api/notifications/mark-all-read", requireAuth, requireTenantScope, async (req, res) => {
     const user = (req as any).user as { id: string; organizationId: string };
-    await storage.markAllUserNotificationsRead(user.organizationId, user.id);
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    await storage.markAllUserNotificationsRead(user.organizationId, effectiveUserId);
     return res.json({ ok: true });
   });
 
@@ -8700,7 +8714,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = (req as any).user as { id: string; organizationId: string };
     const { token, platform } = req.body;
     if (!token || typeof token !== "string") return res.status(400).json({ message: "token required" });
-    await storage.upsertUserDeviceToken(user.organizationId, user.id, token, platform || "unknown");
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    await storage.upsertUserDeviceToken(user.organizationId, effectiveUserId, token, platform || "unknown");
     return res.json({ ok: true });
   });
 
@@ -9118,7 +9133,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const isAgent = isAgentScoped(userRoles);
     let payments: any[];
     if (isAgent) {
-      const agentPolicyIds = new Set((await storage.getPoliciesByAgent(user.id, user.organizationId)).map((p) => p.id));
+      const agentPolicyIds = new Set((await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)).map((p) => p.id));
       const allPayments = await storage.getPaymentsByOrg(user.organizationId, 5000, 0);
       payments = allPayments.filter((p: any) => p.policyId && agentPolicyIds.has(p.policyId));
     } else {
@@ -9148,7 +9163,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const allPolicies = isAgent
-      ? await storage.getPoliciesByAgent(user.id, user.organizationId)
+      ? await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
       : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
     const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
@@ -9168,7 +9183,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const allLeads = isAgent
-      ? await storage.getLeadsByAgent(user.id, user.organizationId)
+      ? await storage.getLeadsByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
       : await storage.getLeadsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const stages: Record<string, number> = {};
     allLeads.forEach((l: any) => {
@@ -9183,7 +9198,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent) {
-      const agentPolicies = await storage.getPoliciesByAgent(user.id, user.organizationId);
+      const agentPolicies = await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId);
       const activePolicies = agentPolicies.filter((p: any) => p.status === "active");
       const policyIds = activePolicies.map(p => p.id);
       const membersByPolicy = await storage.getPolicyMembersBatch(policyIds, user.organizationId);
@@ -9202,7 +9217,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const isAgent = isAgentScoped(userRoles);
     const allProducts = await storage.getProductsByOrg(user.organizationId);
     const allPolicies = isAgent
-      ? await storage.getPoliciesByAgent(user.id, user.organizationId)
+      ? await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
       : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const allPaymentsRaw = await storage.getPaymentsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const allPayments = isAgent
@@ -9249,7 +9264,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     const allPolicies = isAgent
-      ? await storage.getPoliciesByAgent(user.id, user.organizationId)
+      ? await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
       : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
     const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
     const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;

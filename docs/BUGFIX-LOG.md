@@ -10,6 +10,55 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — Notification bell, self-service attendance, and agent dashboards silently broken on isolated-tenant orgs
+
+Deeper follow-up to the same-day `resolveOrSyncTenantUserId` sweep — the first pass only
+grepped `<field>: user.id`-shaped literals; this pass grepped every remaining call of the form
+`someStorageCall(user.id, ...)` and found the pattern was much more widespread than the object-
+literal grep caught, including some genuinely high-impact ones:
+
+- **The entire notification bell/inbox (built 2026-07-06) never showed anything to a Falakhe
+  user.** `notifyUser()` writes/emits under the tenant-resolved recipient id (entity-derived ids
+  like `policy.agentId` are already tenant ids), but all 6 notification routes — the SSE stream,
+  list, unread-count, mark-read, mark-all-read, and push-token registration — read/subscribed
+  under the raw registry `user.id`. On an isolated-tenant org this is a hard 0-for-0 mismatch:
+  notifications are created correctly but the recipient can never see or receive them, silently.
+- **Self-service attendance was broken for the same reason.** `GET /api/attendance/my` and
+  `POST /api/attendance` (and the fleet vehicle-checkout clock-in guard) all looked up
+  `payrollEmployees` by raw `user.id` — an isolated-tenant employee would see an empty
+  attendance history and get "No payroll employee record linked to your account" when trying to
+  clock in, even though they are linked, just under a different (resolved) id.
+- **Six agent-facing dashboard widgets and 3 more list/access-check routes had the identical
+  bug** (`GET /api/clients`, `GET /api/clients/:id` access check ×3, `GET
+  /api/dashboard/revenue-trend`, `/policy-status-breakdown`, `/lead-funnel`, `/covered-lives`,
+  `/product-performance`, `/lapse-retention`, `GET /api/leads`, `GET
+  /api/cashups/my-receipt-totals`): each used `isAgent ? user.id : ...` as a query filter or
+  `!== user.id` as an access check against a column actually holding the resolved tenant id, so
+  an agent's own portfolio/dashboard came back empty or falsely 403'd on isolated-tenant orgs.
+- **Also upgraded two sites that already partially guarded against this** (`GET /api/cashups`
+  filter and `GET /api/cashups/:id` access check) from `resolveUserIdForOrgDatabase(...) ??
+  user.id` to `resolveOrSyncTenantUserId(...)` — the null-degrading helper's fallback to the raw
+  id doesn't actually help in the one case it exists for (an email-collision mirrored row under
+  a different id), since the stored value is never the raw id in that case either.
+- **Deliberately left alone:** the two `issuedByUserId` resolution sites in
+  `POST /api/policies/:id/payments` premium-override branches, which already comment through
+  *why* they degrade to `null` rather than resolve fully (the column is nullable, and losing
+  attribution in the rare collision case was judged acceptable there) — not the same bug,
+  already a considered decision.
+- **Verified:** `npm run check` and `npm run test` (179/179) pass.
+- **Files:** `server/routes.ts` only (~20 more call sites on top of the ~25 from the first pass
+  the same day).
+- **Lesson for next time:** the write-side grep (`<field>: user.id`) and the read-side grep
+  (`someCall(user.id, ...)` / `!== user.id` / `isAgent ? user.id`) are genuinely two different
+  searches — a route can pass every write-side check and still be completely broken on the read
+  side, and it fails *silently* (empty list, 403, no live notification) rather than with a 500,
+  which is why none of this surfaced in `npm run check` or the test suite. Any feature described
+  as "self-service" or "my own X" (my attendance, my cashups, my P&L, my clients, my dashboard)
+  is exactly the shape of code this bug hides in — audit those first if a report ever comes in
+  as "works for [some staff] but not for [other staff] doing the identical action."
+
+---
+
 ## 2026-07-14 — Full `resolveOrSyncTenantUserId` sweep across routes.ts
 
 Follow-up to the open item logged 2026-07-06: the requisition/expenditure fix for the
