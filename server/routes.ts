@@ -6186,10 +6186,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (const e of inPeriod) {
       const amt = parseFloat(String(e.amount));
       const c = (e.currency || "USD").toUpperCase();
-      if (e.entryType === "clawback")  { commClawbacks[c] = (commClawbacks[c] || 0) + amt; continue; }
-      if (e.entryType === "rollback")  { commRollbacks[c] = (commRollbacks[c] || 0) + amt; continue; }
-      if (e.status === "paid")         { commPaid[c] = (commPaid[c] || 0) + amt; }
-      else                             { commEarned[c] = (commEarned[c] || 0) + amt; }
+      // clawback/rollback/clawback_reversal entries carry a real signed amount (clawback is
+      // negative, its reversal positive) with status "earned" — they must still flow into
+      // commEarned so outstanding nets correctly; commClawbacks/commRollbacks below are an
+      // additional display breakdown, not a substitute for that netting.
+      if (e.entryType === "clawback") commClawbacks[c] = (commClawbacks[c] || 0) + amt;
+      if (e.entryType === "rollback") commRollbacks[c] = (commRollbacks[c] || 0) + amt;
+      if (e.status === "paid")        { commPaid[c] = (commPaid[c] || 0) + amt; }
+      else                            { commEarned[c] = (commEarned[c] || 0) + amt; }
     }
     const commOutstanding: Record<string, number> = {};
     const allCommCurrencies = Array.from(new Set([...Object.keys(commEarned), ...Object.keys(commPaid)]));
@@ -6202,7 +6206,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const lifetimeEarned: Record<string, number> = {};
     const lifetimePaid:   Record<string, number> = {};
     for (const e of allLedger) {
-      if (e.entryType === "clawback" || e.entryType === "rollback") continue;
+      // Same netting rule as the period loop above — clawback (negative) and rollback
+      // (positive) entries must count toward lifetimeEarned, not be skipped, or lifetime
+      // outstanding permanently overstates what's actually owed by the clawed-back amount.
       const amt = parseFloat(String(e.amount));
       const c = (e.currency || "USD").toUpperCase();
       if (e.status === "paid") lifetimePaid[c] = (lifetimePaid[c] || 0) + amt;
@@ -7226,7 +7232,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const safe = await storage.getSafe(String(safeId), user.organizationId);
       if (!safe) return res.status(400).json({ message: "Safe not found" });
     }
-    const byUserId = depositedByUserId || user.id;
+    const byUserId = await resolveOrSyncTenantUserId(user.organizationId, depositedByUserId || user.id);
     try {
       const deposit = await storage.createBankDeposit({
         organizationId: user.organizationId,
@@ -7252,8 +7258,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const existing = await storage.getBankDepositById(id, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Deposit not found" });
     if (existing.verifiedAt) return res.status(409).json({ message: "Deposit has already been verified" });
+    const verifiedByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const updated = await storage.updateBankDeposit(id, user.organizationId, {
-      verifiedByUserId: user.id,
+      verifiedByUserId,
       verifiedAt: new Date(),
     });
     await auditLog(req, "VERIFY_BANK_DEPOSIT", "BankDeposit", id, existing, updated);

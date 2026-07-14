@@ -10,6 +10,94 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-14 — Financial suite edge-case sweep: clawback netting, historical balance sheet, bank-deposit cross-tenant IDs
+
+First real pass at the "edge case and bug testing" checklist left open since the financial
+suite build (see `project-financial-suite` memory). No test-DB harness exists for the
+DB-coupled report builders in `server/financial-statements.ts`, so this was a careful code
+read against the specific checklist items rather than new integration tests — three real bugs
+found and fixed:
+
+- **Agent P&L permanently overstated outstanding commission after any clawback.** `GET
+  /api/agent/pnl` computed `outstanding = earned - paid`, but its loop used `continue` to divert
+  `clawback`/`rollback` ledger entries into separate display-only buckets (`commClawbacks`/
+  `commRollbacks`) instead of also netting them into `commEarned`/`lifetimeEarned`. Clawback
+  entries are created with a **negative** amount and `status: "earned"` (see
+  `recordClawback()`/`rollbackClawbacks()` in `server/route-helpers.ts`); excluding them means
+  the negative never reduces earned, while an offsetting `clawback_reversal` (positive, not
+  excluded) still gets added — so every clawback inflates "outstanding" by the clawed-back
+  amount, permanently if never reversed. Confirmed against `storage.ts`'s legacy commission
+  summary report (~line 3471), which correctly nets every entry type into its total — this is
+  the intended semantic. **Fix:** removed the `continue`; clawback/rollback amounts now both
+  feed the separate display buckets *and* flow into commEarned/lifetimeEarned like any other
+  entry. `server/routes.ts` (`GET /api/agent/pnl`, both the period and lifetime loops).
+- **Balance sheet "as of" a past date silently used today's live cash position.** `reports.tsx`
+  lets a user pick any `asOf`/`toDate` for the Balance Sheet, and bank balances/premium
+  receivables/retained earnings all correctly scope to that date — but `buildBalanceSheet()`'s
+  "Cash on hand" line called `storage.getAdminCashPosition(orgId)` with no date filter at all,
+  which always sums *all* cashups and bank deposits ever recorded. Picking a historical date
+  mixed a live, present-day cash figure into an otherwise-historical statement, which could
+  make the Assets = Liabilities + Equity check fail (or falsely pass) for reasons unrelated to
+  the actual historical position. **Fix:** `getAdminCashPosition(orgId, asOf?)` now takes an
+  optional date and filters `cashups.cashup_date <= asOf` / `bank_deposits.deposit_date <=
+  asOf`; `buildBalanceSheet` passes its `asOf`, `buildExecutiveSummary` passes its period's `to`
+  (so a past-month executive summary doesn't show today's cash position either), and the live
+  `GET /api/cash-position` endpoint is unchanged (omits `asOf`, same all-time-to-now behavior as
+  before). `server/storage.ts`, `server/financial-statements.ts`.
+  **Not fixed, flagged only:** claims-payable (`status = 'approved'`) and platform-fees-payable
+  (`isSettled = false`) on the same balance sheet have the identical class of bug — both reflect
+  *current* status, not status as of the historical date — but neither `claims` nor
+  `platform_receivables` has a dated column to reconstruct history from (no `approvedAt`/
+  `paidAt` on claims, no `settledAt` on platform_receivables). Fixing those needs a schema
+  change or audit-log reconstruction; out of scope for this pass, left as a known gap.
+- **Bank deposit create/verify wrote the raw registry `user.id` into a `users.id` FK on
+  isolated-tenant orgs.** Same bug class as the requisition/expenditure fix from 2026-07-06
+  (entry below, "resolveOrSyncTenantUserId"), just not yet applied here: `POST
+  /api/bank-deposits` used `depositedByUserId || user.id` directly, and `POST
+  /api/bank-deposits/:id/verify` wrote `verifiedByUserId: user.id` directly. On an
+  isolated-tenant org (e.g. Falakhe) where the mirrored tenant-DB user id differs from the
+  registry session id, this either violates the FK or silently attributes the deposit/
+  verification to the wrong tenant user. **Fix:** both routes now resolve through
+  `resolveOrSyncTenantUserId(orgId, ...)` first, same as every other write path that touches a
+  `users.id` FK on a per-org table. `server/routes.ts`.
+- **Verified:** `npm run check` and `npm run test` (179/179) pass after all three fixes.
+- **Lesson for next time:** any DB-coupled report/route change should be checked against two
+  recurring failure classes before considering it done: (1) does this loop's early-`continue`/
+  `if...else` actually cover every entry type that can appear, or does it silently drop some
+  into a side bucket that never reaches the total (the clawback bug); (2) does every storage
+  call inside a function parameterized by a historical date (`asOf`, `to`) actually thread that
+  date through, or does one of them quietly default to "now" (the cash-position bug). Neither
+  is caught by `npm run check` or a green test suite — both require reading what each helper
+  function actually queries, not just that it returns without throwing.
+
+---
+
+## 2026-07-13 — `npm run db:migrate:status` silently skipped tenants whose URL only lives in the control plane
+
+- **Symptom:** running the status check reported only the main/registry DB; Falakhe's isolated
+  tenant DB connection failed with `getaddrinfo ENOTFOUND base` and was never actually checked,
+  even though migration 0066 had in fact been applied there.
+- **Root cause:** `script/migration-status.ts`'s `loadTenantUrls()` discovered tenant DBs by
+  reading `organizations.database_url` on the shared registry DB — but per the established
+  pattern (entry below, "Legacy-issuance relaxation..."), that column is frequently empty for
+  isolated-tenant orgs; the real routing lives in the control plane's `tenant_databases` table
+  (same source `getPoolForOrg` in `server/tenant-db.ts` treats as authoritative). Falakhe's
+  registry `database_url` held a stale/malformed value (hostname resolved to literally `base`),
+  so the script tried to connect to garbage instead of skipping or using the real URL.
+- **Fix:** `loadTenantUrls()` now also queries `tenant_databases` joined to `tenants` on the
+  control plane connection (`CONTROL_PLANE_DIRECT_URL`/`CONTROL_PLANE_DATABASE_URL`, falling
+  back to `DATABASE_URL` if neither is set), preferring `databaseDirectUrl` over the pooler
+  `databaseUrl` for status/migration checks, and merges by tenant name with the registry lookup
+  (control plane wins on conflict). Verified: `npm run check` passes; `npm run db:migrate:status`
+  now correctly reports Falakhe as 73/73 applied, none pending.
+- **Files:** `script/migration-status.ts`.
+- **Lesson for next time:** any script that enumerates tenant DBs by reading
+  `organizations.database_url` directly (rather than going through `tenant-db.ts` or the control
+  plane) will silently miss or misroute isolated-tenant orgs — this is the same class of bug as
+  the `resolveOrSyncTenantUserId` gap, just in a dev/ops script instead of a request handler.
+
+---
+
 ## 2026-07-10 — QR attendance/fleet-tracking: manual-correction gap, silent tracking-loss gap, and clock-in/checkout relationship
 
 Follow-up to the self-review below, addressing the three gaps that review flagged as needing

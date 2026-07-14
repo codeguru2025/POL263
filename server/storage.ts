@@ -610,7 +610,7 @@ export interface IStorage {
   updateBankDeposit(id: string, orgId: string, data: Partial<BankDeposit>): Promise<BankDeposit | undefined>;
   getBankStatementBalances(orgId: string, bankAccountId?: string): Promise<BankStatementBalance[]>;
   createBankStatementBalance(data: InsertBankStatementBalance): Promise<BankStatementBalance>;
-  getAdminCashPosition(orgId: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>>;
+  getAdminCashPosition(orgId: string, asOf?: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>>;
   getBalanceSheetEntries(orgId: string, filters?: { section?: string; asOfDate?: string }): Promise<BalanceSheetEntry[]>;
   getBalanceSheetEntry(id: string, orgId: string): Promise<BalanceSheetEntry | undefined>;
   createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry>;
@@ -4777,7 +4777,7 @@ export class DatabaseStorage implements IStorage {
 
   // ── Per-admin cash position ────────────────────────────────
   // Returns how much unbanked cash each admin currently holds.
-  async getAdminCashPosition(orgId: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>> {
+  async getAdminCashPosition(orgId: string, asOf?: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>> {
     const tdb = await getDbForOrg(orgId);
     // Cash collected: sum cashup cash amounts per admin (submitted or confirmed cashups)
     const cashupRows = await tdb.execute(sql`
@@ -4788,6 +4788,7 @@ export class DatabaseStorage implements IStorage {
       FROM cashups
       WHERE organization_id = ${orgId}
         AND status IN ('submitted','confirmed')
+        ${asOf ? sql`AND cashup_date <= ${asOf}` : sql``}
       GROUP BY prepared_by, currency
     `);
     // Cash deposited: sum bank deposits per admin
@@ -4799,6 +4800,7 @@ export class DatabaseStorage implements IStorage {
         MAX(deposit_date)                  AS last_deposit_date
       FROM bank_deposits
       WHERE organization_id = ${orgId}
+        ${asOf ? sql`AND deposit_date <= ${asOf}` : sql``}
       GROUP BY deposited_by_user_id, currency
     `);
 

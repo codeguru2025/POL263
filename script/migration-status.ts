@@ -11,6 +11,9 @@ import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import pg from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { eq } from "drizzle-orm";
+import * as cpSchema from "@shared/control-plane-schema";
 
 const migrationsDir = path.resolve(process.cwd(), "migrations");
 
@@ -80,19 +83,57 @@ async function status(label: string, connectionString: string | undefined) {
 }
 
 async function loadTenantUrls(mainConnStr: string): Promise<{ name: string; url: string }[]> {
-  const pool = new pg.Pool(poolConfig(mainConnStr));
+  // Registry `organizations.database_url` is a best-effort fallback only — the
+  // authoritative source is the control plane `tenant_databases` table (same
+  // resolution order as getPoolForOrg in server/tenant-db.ts). Relying on the
+  // registry column alone silently skips tenants whose URL only lives in the
+  // control plane (e.g. Falakhe), reporting them as "not configured" instead
+  // of actually checking migration status.
+  const byName = new Map<string, string>();
+
+  const registryPool = new pg.Pool(poolConfig(mainConnStr));
   try {
-    const { rows } = await pool.query<{ name: string; database_url: string }>(`
+    const { rows } = await registryPool.query<{ name: string; database_url: string }>(`
       SELECT name, database_url FROM organizations
       WHERE database_url IS NOT NULL AND database_url <> ''
       ORDER BY name
     `);
-    return rows.map((r) => ({ name: r.name, url: r.database_url.trim() }));
+    for (const r of rows) byName.set(r.name, r.database_url.trim());
   } catch {
-    return [];
+    // ignore — control plane lookup below is authoritative anyway
   } finally {
-    await pool.end().catch(() => {});
+    await registryPool.end().catch(() => {});
   }
+
+  const cpUrl = (process.env.CONTROL_PLANE_DIRECT_URL || process.env.CONTROL_PLANE_DATABASE_URL || mainConnStr)?.trim();
+  if (cpUrl) {
+    const cpPool = new pg.Pool(poolConfig(cpUrl));
+    try {
+      const cpDb = drizzle(cpPool, { schema: cpSchema });
+      const rows = await cpDb
+        .select({
+          name: cpSchema.tenants.name,
+          databaseUrl: cpSchema.tenantDatabases.databaseUrl,
+          databaseDirectUrl: cpSchema.tenantDatabases.databaseDirectUrl,
+        })
+        .from(cpSchema.tenantDatabases)
+        .innerJoin(cpSchema.tenants, eq(cpSchema.tenants.id, cpSchema.tenantDatabases.tenantId));
+      for (const r of rows) {
+        // Prefer the direct URL for migration/status checks (pooler URLs can require
+        // an explicitly configured pool name that migration scripts don't have).
+        const url = (r.databaseDirectUrl || r.databaseUrl)?.trim();
+        if (url) byName.set(r.name, url);
+      }
+    } catch (e: any) {
+      console.log(`\ncontrol plane tenant lookup failed: ${e?.message || e} (falling back to registry-only tenant list)`);
+    } finally {
+      await cpPool.end().catch(() => {});
+    }
+  }
+
+  return Array.from(byName.entries())
+    .map(([name, url]) => ({ name, url }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function main() {

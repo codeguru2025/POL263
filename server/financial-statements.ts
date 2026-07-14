@@ -612,8 +612,9 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
 
   // ── ASSETS ──────────────────────────────────────────────────
 
-  // 1. Cash on hand (unbanked cash held by admins)
-  const positions = await storage.getAdminCashPosition(orgId);
+  // 1. Cash on hand (unbanked cash held by admins) — scoped to asOf, not "now",
+  // so a historical balance sheet doesn't mix a live cash position with a past date.
+  const positions = await storage.getAdminCashPosition(orgId, asOf);
   const cashOnHand: AmountMap = {};
   for (const p of positions) {
     if (p.onHand > 0) add(cashOnHand, p.currency, p.onHand);
@@ -812,7 +813,9 @@ export async function buildExecutiveSummary(orgId: string, params: ExecutiveSumm
 
   const is = await buildIncomeStatement(orgId, { from, to, branchId });
 
-  const positions = await storage.getAdminCashPosition(orgId);
+  // Cash position as of the end of the requested period, not "now" — matters when
+  // viewing a past period rather than the current month-to-date default.
+  const positions = await storage.getAdminCashPosition(orgId, to);
   const posUserIds = positions.map((p) => p.userId);
   const posUsers = posUserIds.length ? await storage.getUsersByIds(posUserIds, orgId) : [];
   const findU = (id: string) => posUsers.find((u: any) => u.id === id);
