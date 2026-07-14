@@ -1963,11 +1963,16 @@ export default function StaffFinance() {
       const res = await apiRequest("POST", `/api/settlements/${id}/approve`, {});
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/settlements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/platform/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/platform/receivables"] });
-      toast({ title: "Settlement approved" });
+      const allocated = parseFloat(data?.allocated ?? "0");
+      const settlementAmount = parseFloat(data?.amount ?? "0");
+      const description = allocated < settlementAmount - 0.01
+        ? `Applied ${data.currency} ${allocated.toFixed(2)} of ${data.currency} ${settlementAmount.toFixed(2)} to ${data.receivablesSettled} fee(s) — no more unsettled fees to cover the rest yet.`
+        : `Applied to ${data.receivablesSettled} outstanding fee(s).`;
+      toast({ title: "Settlement approved", description });
     },
     onError: (err: any) => toast({ title: "Approval failed", description: err.message, variant: "destructive" }),
   });

@@ -1615,7 +1615,7 @@ export const vehicleAlerts = pgTable(
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     assignmentId: uuid("assignment_id").notNull().references(() => driverAssignments.id),
     vehicleId: uuid("vehicle_id").notNull().references(() => fleetVehicles.id),
-    type: text("type").notNull(), // speeding | parked_too_long
+    type: text("type").notNull(), // speeding | parked_too_long | no_signal | clocked_out_with_vehicle
     triggeredAt: timestamp("triggered_at").defaultNow().notNull(),
     details: jsonb("details"),
     resolvedAt: timestamp("resolved_at"),

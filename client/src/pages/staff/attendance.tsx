@@ -59,7 +59,7 @@ function ScanAttendancePanel({ onScanned }: { onScanned: () => void }) {
   const scannerRef = useRef<any>(null);
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ eventType: string; log: any } | null>(null);
+  const [result, setResult] = useState<{ eventType: string; log: any; activeVehicleCheckout?: { registration: string | null } | null } | null>(null);
 
   const scanMutation = useMutation({
     mutationFn: async (qrToken: string) => {
@@ -71,6 +71,12 @@ function ScanAttendancePanel({ onScanned }: { onScanned: () => void }) {
       setResult(data);
       onScanned();
       toast({ title: data.eventType === "clock_in" ? "Clocked in" : "Clocked out" });
+      if (data.activeVehicleCheckout) {
+        toast({
+          title: "Vehicle still checked out",
+          description: `${data.activeVehicleCheckout.registration || "A vehicle"} is still checked out to you. Return it once your trip is done.`,
+        });
+      }
     },
     onError: (err: any) => toast({ title: "Scan failed", description: err.message, variant: "destructive" }),
   });
@@ -120,6 +126,11 @@ function ScanAttendancePanel({ onScanned }: { onScanned: () => void }) {
             {result.log.hoursWorked && (
               <p className="text-emerald-700">{Number(result.log.hoursWorked).toFixed(1)} hrs worked today</p>
             )}
+          </div>
+        )}
+        {result?.activeVehicleCheckout && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            {result.activeVehicleCheckout.registration || "A vehicle"} is still checked out to you. Return it once your trip is done.
           </div>
         )}
         {!scanning ? (

@@ -6024,6 +6024,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const updated = await storage.endDriverAssignment(assignment.id, user.organizationId);
     await storage.updateFleetVehicle(assignment.vehicleId, { status: "available" } as any, user.organizationId);
+    const openClockedOutAlert = await storage.getOpenVehicleAlert(assignment.id, user.organizationId, "clocked_out_with_vehicle");
+    if (openClockedOutAlert) await storage.resolveVehicleAlert(openClockedOutAlert.id, user.organizationId);
     await auditLog(req, "RETURN_VEHICLE", "DriverAssignment", assignment.id, assignment, updated);
     return res.json(updated);
   });
@@ -8309,7 +8311,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const { log, eventType } = await storage.recordAttendanceScan(emp.id, user.organizationId, qr.id, lat, lng);
       await auditLog(req, "QR_ATTENDANCE_SCAN", "AttendanceLog", log.id, null, { eventType, log });
-      return res.status(201).json({ eventType, log });
+
+      // Clocking out deliberately does NOT force-return an active vehicle checkout (a trip
+      // legitimately running past shift end shouldn't be interrupted) — but flag it so the
+      // driver sees a heads-up and fleet ops gets an alert to follow up on, rather than this
+      // going unnoticed until someone asks "where's the vehicle?" days later.
+      let activeVehicleCheckout: any = null;
+      if (eventType === "clock_out") {
+        const driverId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+        const active = await storage.getActiveDriverAssignments(user.organizationId);
+        const mine = active.find((a) => a.driverId === driverId);
+        if (mine) {
+          activeVehicleCheckout = { assignmentId: mine.id, vehicleId: mine.vehicleId, registration: (mine as any).vehicle?.registration ?? null };
+          const existingAlert = await storage.getOpenVehicleAlert(mine.id, user.organizationId, "clocked_out_with_vehicle");
+          if (!existingAlert) {
+            const alert = await storage.createVehicleAlert({
+              organizationId: user.organizationId,
+              assignmentId: mine.id,
+              vehicleId: mine.vehicleId,
+              type: "clocked_out_with_vehicle",
+              details: { employeeId: emp.id },
+            } as any);
+            await notifyUsersWithPermission(user.organizationId, "write:fleet", {
+              type: "GENERAL",
+              title: "Driver clocked out with a vehicle still checked out",
+              body: `${(mine as any).vehicle?.registration || "A vehicle"} is still checked out, but the driver has clocked out for the day.`,
+              metadata: { alertId: alert.id, vehicleId: mine.vehicleId, assignmentId: mine.id },
+            });
+          }
+        }
+      }
+
+      return res.status(201).json({ eventType, log, activeVehicleCheckout });
     } catch (err: any) {
       if (err?.statusCode === 409) return res.status(409).json({ message: err.message });
       return res.status(500).json({ message: err?.message || "Failed to record scan" });
@@ -9025,9 +9058,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!settlement) return res.status(404).json({ message: "Settlement not found" });
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     if (settlement.initiatedBy === effectiveUserId) return res.status(400).json({ message: "Cannot approve own settlement" });
-    const updated = await storage.updateSettlement(id, { status: "approved", approvedBy: effectiveUserId }, user.organizationId);
-    await auditLog(req, "APPROVE_SETTLEMENT", "Settlement", id, settlement, updated);
-    return res.json(updated);
+    if (settlement.status === "approved") return res.status(409).json({ message: "Settlement already approved" });
+    try {
+      const { settlement: updated, allocated, receivablesSettled } = await storage.approveSettlementWithAllocation(id, user.organizationId, effectiveUserId);
+      await auditLog(req, "APPROVE_SETTLEMENT", "Settlement", id, settlement, updated);
+      return res.json({ ...updated, allocated, receivablesSettled });
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   // ─── Cost Sheets ────────────────────────────────────────

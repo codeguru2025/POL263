@@ -656,6 +656,11 @@ export interface IStorage {
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
   updateSettlement(id: string, data: Partial<InsertSettlement>, orgId: string): Promise<Settlement | undefined>;
+  /** Approves a settlement and auto-allocates its amount against the oldest unsettled
+   *  platform_receivables (same currency) FIFO, atomically. Returns the updated settlement
+   *  plus how much of it was actually allocated (can be less than the settlement amount if
+   *  there aren't enough unsettled receivables to absorb it all). */
+  approveSettlementWithAllocation(id: string, orgId: string, approvedBy: string): Promise<{ settlement: Settlement; allocated: string; receivablesSettled: number }>;
   getCostSheetsByOrg(orgId: string, filters?: { funeralCaseId?: string }): Promise<any[]>;
   getCostSheet(id: string, orgId: string): Promise<any>;
   createCostSheet(data: any): Promise<any>;
@@ -5545,6 +5550,62 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(settlements).set(data).where(eq(settlements.id, id)).returning();
     return updated;
+  }
+
+  async approveSettlementWithAllocation(id: string, orgId: string, approvedBy: string): Promise<{ settlement: Settlement; allocated: string; receivablesSettled: number }> {
+    return withOrgTransaction(orgId, async (tx) => {
+      const [settlement] = await tx.select().from(settlements)
+        .where(and(eq(settlements.id, id), eq(settlements.organizationId, orgId)));
+      if (!settlement) throw new Error("Settlement not found");
+      if (settlement.status === "approved") {
+        // Already approved (e.g. a retried request) — don't allocate a second time.
+        return { settlement, allocated: "0.00", receivablesSettled: 0 };
+      }
+
+      // Oldest unsettled receivables first, same currency as the settlement — never blend
+      // currencies. Left join settlement_allocations to account for a receivable that was
+      // already partially covered by an earlier settlement (can only ever be the single
+      // oldest unsettled row, since allocation always fully covers a receivable before
+      // moving to the next one).
+      const rows = await tx
+        .select({
+          id: platformReceivables.id,
+          amount: platformReceivables.amount,
+          alreadyAllocated: sql<string>`COALESCE((SELECT SUM(sa.amount) FROM settlement_allocations sa WHERE sa.receivable_id = ${platformReceivables.id}), 0)`,
+        })
+        .from(platformReceivables)
+        .where(and(
+          eq(platformReceivables.organizationId, orgId),
+          eq(platformReceivables.isSettled, false),
+          eq(platformReceivables.currency, settlement.currency),
+        ))
+        .orderBy(platformReceivables.createdAt);
+
+      let remaining = parseFloat(String(settlement.amount));
+      let receivablesSettled = 0;
+      let totalAllocated = 0;
+      for (const r of rows) {
+        if (remaining <= 0.005) break;
+        const owed = parseFloat(r.amount) - parseFloat(r.alreadyAllocated || "0");
+        if (owed <= 0.005) continue;
+        const applied = Math.min(remaining, owed);
+        await tx.insert(settlementAllocations).values({
+          settlementId: settlement.id,
+          receivableId: r.id,
+          amount: applied.toFixed(2),
+        });
+        totalAllocated += applied;
+        remaining -= applied;
+        if (applied >= owed - 0.005) {
+          await tx.update(platformReceivables).set({ isSettled: true }).where(eq(platformReceivables.id, r.id));
+          receivablesSettled++;
+        }
+      }
+
+      const [updated] = await tx.update(settlements).set({ status: "approved", approvedBy })
+        .where(eq(settlements.id, id)).returning();
+      return { settlement: updated, allocated: totalAllocated.toFixed(2), receivablesSettled };
+    });
   }
 
   // ─── Cost Sheets ────────────────────────────────────────
