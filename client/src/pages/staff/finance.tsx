@@ -128,6 +128,7 @@ function ReceiptingByStaffPanel() {
               {!data?.byUser.length ? (
                 <EmptyState title="No receipts in this period" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -146,6 +147,7 @@ function ReceiptingByStaffPanel() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </div>
             <div>
@@ -153,6 +155,7 @@ function ReceiptingByStaffPanel() {
               {!data?.byBranch.length ? (
                 <EmptyState title="No receipts in this period" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -171,6 +174,7 @@ function ReceiptingByStaffPanel() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </div>
           </div>
@@ -599,7 +603,7 @@ function PaymentHistoryTable({ disbursements, currency }: { disbursements: any[]
   return (
     <div className="space-y-2 mt-2">
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Payment History</p>
-      <div className="border rounded-md overflow-hidden">
+      <div className="border rounded-md overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -623,7 +627,7 @@ function PaymentHistoryTable({ disbursements, currency }: { disbursements: any[]
                 <TableCell className="font-mono">{d.reference || "—"}</TableCell>
                 <TableCell className="pr-4 text-right">
                   <a href={getApiBase() + `/api/payment-disbursements/${d.id}/pdf`} target="_blank" rel="noopener noreferrer" title="Print payment voucher">
-                    <Button size="icon" variant="ghost" className="h-6 w-6" type="button">
+                    <Button size="icon" variant="ghost" className="h-6 w-6" type="button" aria-label="Print payment voucher">
                       <Printer className="h-3.5 w-3.5" />
                     </Button>
                   </a>
@@ -3573,6 +3577,7 @@ export default function StaffFinance() {
                           onClick={() => removeReqItem(idx)}
                           disabled={reqItems.length === 1}
                           title="Remove item"
+                          aria-label="Remove item"
                         >
                           ×
                         </button>

@@ -208,7 +208,7 @@ export default function StaffDiagnostics() {
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               ) : failures && failures.length > 0 ? (
-                <div className="border rounded-md overflow-hidden">
+                <div className="border rounded-md overflow-x-auto">
                   <Table>
                     <TableHeader className="bg-muted/50">
                       <TableRow>
@@ -257,7 +257,7 @@ export default function StaffDiagnostics() {
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               ) : unallocated && unallocated.length > 0 ? (
-                <div className="border rounded-md overflow-hidden">
+                <div className="border rounded-md overflow-x-auto">
                   <Table>
                     <TableHeader className="bg-muted/50">
                       <TableRow>
@@ -306,7 +306,7 @@ export default function StaffDiagnostics() {
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               ) : errors && errors.length > 0 ? (
-                <div className="border rounded-md overflow-hidden">
+                <div className="border rounded-md overflow-x-auto">
                   <Table>
                     <TableHeader className="bg-muted/50">
                       <TableRow>

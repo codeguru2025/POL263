@@ -187,6 +187,7 @@ function QrKiosksPanel() {
           className="border-0 bg-transparent py-8"
         />
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -224,6 +225,7 @@ function QrKiosksPanel() {
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
@@ -440,6 +442,7 @@ export default function StaffAttendance() {
                   className="border-0 bg-transparent py-8"
                 />
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -466,6 +469,7 @@ export default function StaffAttendance() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardSection>
           </TabsContent>
@@ -507,6 +511,7 @@ export default function StaffAttendance() {
                   className="border-0 bg-transparent py-8"
                 />
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -573,6 +578,7 @@ export default function StaffAttendance() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardSection>
           </TabsContent>

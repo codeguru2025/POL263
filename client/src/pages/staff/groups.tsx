@@ -157,13 +157,13 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
                         const base = getApiBase() + `/api/group-receipts/${ref}`;
                         return (
                           <>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="View group receipt" onClick={() => window.open(base + "/view", "_blank", "noopener")}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="View group receipt" aria-label="View group receipt" onClick={() => window.open(base + "/view", "_blank", "noopener")}>
                               <Eye className="h-3.5 w-3.5" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Download group receipt" onClick={() => window.open(base + "/download", "_blank", "noopener")}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Download group receipt" aria-label="Download group receipt" onClick={() => window.open(base + "/download", "_blank", "noopener")}>
                               <Download className="h-3.5 w-3.5" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Print group receipt" onClick={() => printDocument(base + "/view")}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Print group receipt" aria-label="Print group receipt" onClick={() => printDocument(base + "/view")}>
                               <Printer className="h-3.5 w-3.5" />
                             </Button>
                           </>
@@ -178,6 +178,7 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
                   Note: {note}
                 </div>
               )}
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -210,21 +211,21 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
                         </TableCell>
                         <TableCell className="pr-4 print:hidden">
                           <div className="flex items-center justify-end gap-0.5">
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="View receipt" onClick={() => window.open(viewUrl, "_blank", "noopener")}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="View receipt" aria-label="View receipt" onClick={() => window.open(viewUrl, "_blank", "noopener")}>
                               <Eye className="h-3.5 w-3.5" />
                             </Button>
                             {!r.isLegacyReceipt && (
-                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Thermal receipt" onClick={() => window.open(viewUrl + "?format=thermal", "_blank", "noopener")}>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Thermal receipt" aria-label="Thermal receipt" onClick={() => window.open(viewUrl + "?format=thermal", "_blank", "noopener")}>
                                 <ScrollText className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Download" onClick={() => window.open(downloadUrl, "_blank", "noopener")}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Download" aria-label="Download receipt" onClick={() => window.open(downloadUrl, "_blank", "noopener")}>
                               <Download className="h-3.5 w-3.5" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Print" onClick={() => printDocument(viewUrl)}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Print" aria-label="Print receipt" onClick={() => printDocument(viewUrl)}>
                               <Printer className="h-3.5 w-3.5" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Share" onClick={() => shareDocument(downloadUrl, `Receipt-${displayNum}`)}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Share" aria-label="Share receipt" onClick={() => shareDocument(downloadUrl, `Receipt-${displayNum}`)}>
                               <Share2 className="h-3.5 w-3.5" />
                             </Button>
                           </div>
@@ -234,6 +235,7 @@ function GroupReceiptPrintView({ receipts, group, onClose }: { receipts: any[]; 
                   })}
                 </TableBody>
               </Table>
+              </div>
             </div>
           );
         })}
@@ -692,7 +694,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
                   </Button>
                 )}
               </div>
-              <div className="border rounded-lg overflow-hidden">
+              <div className="border rounded-lg overflow-x-auto">
                 <div className="bg-muted/30 px-4 py-2 text-sm font-medium">Receipt Summary</div>
                 <Table>
                   <TableHeader>

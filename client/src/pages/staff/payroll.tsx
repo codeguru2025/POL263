@@ -596,6 +596,7 @@ export default function StaffPayroll() {
                   className="border-0 rounded-none bg-transparent py-10"
                 />
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -653,6 +654,7 @@ export default function StaffPayroll() {
                     })}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardSection>
           </TabsContent>
@@ -670,6 +672,7 @@ export default function StaffPayroll() {
                   className="border-0 rounded-none bg-transparent py-10"
                 />
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -701,6 +704,7 @@ export default function StaffPayroll() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardSection>
 

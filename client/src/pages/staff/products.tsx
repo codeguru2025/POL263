@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { resolveAssetUrl } from "@/lib/assetUrl";
@@ -31,7 +32,7 @@ import {
 import {
   Plus, Box, Search, Loader2, Package, Layers, Puzzle, BarChart3,
   Edit, ChevronDown, ChevronUp, Upload, Image, Users, Baby, Crown,
-  FileText, Trash2, RefreshCw,
+  FileText, Trash2, RefreshCw, AlertTriangle,
 } from "lucide-react";
 
 type Product = {
@@ -733,6 +734,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
               ) : versions.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-2">No versions created yet. Click "+ Version" to define premiums and rules.</p>
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -790,6 +792,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </div>
           </TableCell>
@@ -1099,6 +1102,119 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
   );
 }
 
+// ── Product version form validation ──────────────────────────────────────
+// Shared by CreateVersionDialog and EditVersionDialog, which have identical
+// field shapes. Pricing here directly sets what real policyholders are
+// billed, so mistakes (a negative premium, a typo'd non-numeric value, a
+// minimum eligibility age above the maximum) are caught before submit rather
+// than silently accepted — see the 2026-07-15 UX audit for why this dialog
+// specifically needed it: previously every failure mode here surfaced only
+// as a toast, with no indication of which of the 35 fields was wrong.
+interface VersionFormValues {
+  effectiveFrom: string;
+  premiumMonthlyUsd: string; premiumMonthlyZar: string;
+  premiumWeeklyUsd: string; premiumWeeklyZar: string;
+  premiumBiweeklyUsd: string; premiumBiweeklyZar: string;
+  waitingPeriodDays: string; waitingAccidental: string; waitingSuicide: string;
+  gracePeriodDays: string;
+  eligibilityMinAge: string; eligibilityMaxAge: string; dependentMaxAge: string;
+  cashInLieuAdult: string; cashInLieuChild: string;
+  commFirstMonths: string; commFirstRate: string;
+  commRecurringStart: string; commRecurringRate: string;
+  commClawback: string; commFuneralIncentive: string;
+  underwriterAmountAdult: string; underwriterAmountChild: string;
+  underwriterAdvanceMonths: string;
+  additionalMemberPremiumMonthlyUsd: string; additionalMemberPremiumMonthlyZar: string;
+  ageBandRateChildUsd: string; ageBandRateChildZar: string;
+  ageBandRate21To65Usd: string; ageBandRate21To65Zar: string;
+  ageBandRate66To84Usd: string; ageBandRate66To84Zar: string;
+  ageBandRate85PlusUsd: string; ageBandRate85PlusZar: string;
+}
+
+const VERSION_NUMERIC_FIELDS: { key: keyof VersionFormValues; label: string }[] = [
+  { key: "premiumMonthlyUsd", label: "Monthly Premium (USD)" },
+  { key: "premiumMonthlyZar", label: "Monthly Premium (ZAR)" },
+  { key: "premiumWeeklyUsd", label: "Weekly Premium (USD)" },
+  { key: "premiumWeeklyZar", label: "Weekly Premium (ZAR)" },
+  { key: "premiumBiweeklyUsd", label: "Bi-weekly Premium (USD)" },
+  { key: "premiumBiweeklyZar", label: "Bi-weekly Premium (ZAR)" },
+  { key: "waitingPeriodDays", label: "Natural Death waiting period" },
+  { key: "waitingAccidental", label: "Accidental Death waiting period" },
+  { key: "waitingSuicide", label: "Suicide waiting period" },
+  { key: "gracePeriodDays", label: "Grace period" },
+  { key: "eligibilityMinAge", label: "Minimum eligibility age" },
+  { key: "eligibilityMaxAge", label: "Maximum eligibility age" },
+  { key: "dependentMaxAge", label: "Dependent max age" },
+  { key: "cashInLieuAdult", label: "Cash-in-lieu (adult)" },
+  { key: "cashInLieuChild", label: "Cash-in-lieu (child)" },
+  { key: "commFirstMonths", label: "Commission first-months count" },
+  { key: "commFirstRate", label: "Commission first-months rate" },
+  { key: "commRecurringStart", label: "Commission recurring start month" },
+  { key: "commRecurringRate", label: "Commission recurring rate" },
+  { key: "commClawback", label: "Commission clawback threshold" },
+  { key: "commFuneralIncentive", label: "Commission funeral incentive" },
+  { key: "underwriterAmountAdult", label: "Underwriter amount (adult)" },
+  { key: "underwriterAmountChild", label: "Underwriter amount (child)" },
+  { key: "underwriterAdvanceMonths", label: "Underwriter advance months" },
+  { key: "additionalMemberPremiumMonthlyUsd", label: "Additional member premium (USD)" },
+  { key: "additionalMemberPremiumMonthlyZar", label: "Additional member premium (ZAR)" },
+  { key: "ageBandRateChildUsd", label: "Age band rate — child (USD)" },
+  { key: "ageBandRateChildZar", label: "Age band rate — child (ZAR)" },
+  { key: "ageBandRate21To65Usd", label: "Age band rate 21–65 (USD)" },
+  { key: "ageBandRate21To65Zar", label: "Age band rate 21–65 (ZAR)" },
+  { key: "ageBandRate66To84Usd", label: "Age band rate 66–84 (USD)" },
+  { key: "ageBandRate66To84Zar", label: "Age band rate 66–84 (ZAR)" },
+  { key: "ageBandRate85PlusUsd", label: "Age band rate 85+ (USD)" },
+  { key: "ageBandRate85PlusZar", label: "Age band rate 85+ (ZAR)" },
+];
+
+function validateVersionForm(v: VersionFormValues): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!v.effectiveFrom) errors.effectiveFrom = "Effective date is required.";
+
+  for (const { key, label } of VERSION_NUMERIC_FIELDS) {
+    const raw = v[key];
+    if (raw === "" || raw == null) continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) { errors[key] = `${label} must be a number.`; continue; }
+    if (n < 0) errors[key] = `${label} cannot be negative.`;
+  }
+
+  const hasAnyPremium = [
+    v.premiumMonthlyUsd, v.premiumMonthlyZar, v.premiumWeeklyUsd,
+    v.premiumWeeklyZar, v.premiumBiweeklyUsd, v.premiumBiweeklyZar,
+  ].some((x) => x && x.trim() !== "");
+  if (!hasAnyPremium && !errors.premiumMonthlyUsd) {
+    errors.premiumMonthlyUsd = "Set at least one premium price for this version.";
+  }
+
+  if (v.eligibilityMinAge && v.eligibilityMaxAge && !errors.eligibilityMinAge && !errors.eligibilityMaxAge) {
+    const min = Number(v.eligibilityMinAge);
+    const max = Number(v.eligibilityMaxAge);
+    if (min > max) errors.eligibilityMaxAge = "Maximum age must be greater than or equal to minimum age.";
+  }
+
+  return errors;
+}
+
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return <p className="text-xs text-destructive mt-1">{message}</p>;
+}
+
+function VersionFormErrorSummary({ errors }: { errors: Record<string, string> }) {
+  const messages = Object.values(errors);
+  if (messages.length === 0) return null;
+  return (
+    <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive space-y-1">
+      <p className="font-medium flex items-center gap-1.5"><AlertTriangle className="h-4 w-4" /> Fix the following before saving:</p>
+      <ul className="list-disc list-inside space-y-0.5">
+        {messages.map((m, i) => <li key={i}>{m}</li>)}
+      </ul>
+    </div>
+  );
+}
+
 function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: {
   productId: string; open: boolean; onClose: () => void; onSubmit: (data: Record<string, unknown>) => void; isPending: boolean;
 }) {
@@ -1140,9 +1256,22 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [ageBandRate66To84Zar, setAgeBandRate66To84Zar] = useState("");
   const [ageBandRate85PlusUsd, setAgeBandRate85PlusUsd] = useState("");
   const [ageBandRate85PlusZar, setAgeBandRate85PlusZar] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const errors = validateVersionForm({
+      effectiveFrom, premiumMonthlyUsd, premiumMonthlyZar, premiumWeeklyUsd, premiumWeeklyZar,
+      premiumBiweeklyUsd, premiumBiweeklyZar, waitingPeriodDays, waitingAccidental, waitingSuicide,
+      gracePeriodDays, eligibilityMinAge, eligibilityMaxAge, dependentMaxAge, cashInLieuAdult, cashInLieuChild,
+      commFirstMonths, commFirstRate, commRecurringStart, commRecurringRate, commClawback, commFuneralIncentive,
+      underwriterAmountAdult, underwriterAmountChild, underwriterAdvanceMonths,
+      additionalMemberPremiumMonthlyUsd, additionalMemberPremiumMonthlyZar,
+      ageBandRateChildUsd, ageBandRateChildZar, ageBandRate21To65Usd, ageBandRate21To65Zar,
+      ageBandRate66To84Usd, ageBandRate66To84Zar, ageBandRate85PlusUsd, ageBandRate85PlusZar,
+    });
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     onSubmit({
       effectiveFrom,
       premiumMonthlyUsd: premiumMonthlyUsd || undefined,
@@ -1189,9 +1318,11 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Create Product Version</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
+          <VersionFormErrorSummary errors={fieldErrors} />
           <div className="space-y-2">
             <Label>Effective From *</Label>
-            <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-version-effective-from" />
+            <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
+            <FieldError message={fieldErrors.effectiveFrom} />
           </div>
 
           <Separator />
@@ -1200,29 +1331,35 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Monthly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-version-premium-usd" />
+              <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumMonthlyUsd} />
             </div>
             <div className="space-y-2">
               <Label>Monthly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-version-premium-zar" />
+              <Input type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-version-premium-weekly" />
+              <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumWeeklyUsd} />
             </div>
             <div className="space-y-2">
               <Label>Weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" />
+              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" className={cn(fieldErrors.premiumWeeklyZar && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumWeeklyZar} />
             </div>
             <div className="space-y-2">
               <Label>Bi-weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-version-premium-biweekly" />
+              <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumBiweeklyUsd} />
             </div>
             <div className="space-y-2">
               <Label>Bi-weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" />
+              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumBiweeklyZar} />
             </div>
           </div>
 
@@ -1232,20 +1369,24 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Natural Death (days)</Label>
-              <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-version-waiting" />
+              <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
+              <FieldError message={fieldErrors.waitingPeriodDays} />
             </div>
             <div className="space-y-2">
               <Label>Accidental Death (days)</Label>
-              <Input type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-version-waiting-accidental" />
+              <Input type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-version-waiting-accidental" className={cn(fieldErrors.waitingAccidental && "border-destructive")} />
+              <FieldError message={fieldErrors.waitingAccidental} />
             </div>
             <div className="space-y-2">
               <Label>Suicide (days)</Label>
-              <Input type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-version-waiting-suicide" />
+              <Input type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-version-waiting-suicide" className={cn(fieldErrors.waitingSuicide && "border-destructive")} />
+              <FieldError message={fieldErrors.waitingSuicide} />
             </div>
           </div>
           <div className="space-y-2">
             <Label>Grace Period (days)</Label>
-            <Input type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-version-grace" />
+            <Input type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-version-grace" className={cn(fieldErrors.gracePeriodDays && "border-destructive")} />
+            <FieldError message={fieldErrors.gracePeriodDays} />
           </div>
 
           <Separator />
@@ -1281,15 +1422,18 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Min Age (main member)</Label>
-              <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-version-min-age" />
+              <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
+              <FieldError message={fieldErrors.eligibilityMinAge} />
             </div>
             <div className="space-y-2">
               <Label>Max Age (main member)</Label>
-              <Input type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-version-max-age" />
+              <Input type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-version-max-age" className={cn(fieldErrors.eligibilityMaxAge && "border-destructive")} />
+              <FieldError message={fieldErrors.eligibilityMaxAge} />
             </div>
             <div className="space-y-2">
               <Label>Max Dependent Age</Label>
-              <Input type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-version-dependent-max-age" />
+              <Input type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-version-dependent-max-age" className={cn(fieldErrors.dependentMaxAge && "border-destructive")} />
+              <FieldError message={fieldErrors.dependentMaxAge} />
             </div>
           </div>
 
@@ -1474,9 +1618,22 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [ageBandRate85PlusZar, setAgeBandRate85PlusZar] = useState(version.additionalMemberRate85PlusZar || "");
   const [reinstatementRequiresArrears, setReinstatementRequiresArrears] = useState(version.reinstatementRequiresArrears ?? true);
   const [reinstatementNewWaitingPeriod, setReinstatementNewWaitingPeriod] = useState(version.reinstatementNewWaitingPeriod ?? true);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const errors = validateVersionForm({
+      effectiveFrom, premiumMonthlyUsd, premiumMonthlyZar, premiumWeeklyUsd, premiumWeeklyZar,
+      premiumBiweeklyUsd, premiumBiweeklyZar, waitingPeriodDays, waitingAccidental, waitingSuicide,
+      gracePeriodDays, eligibilityMinAge, eligibilityMaxAge, dependentMaxAge, cashInLieuAdult, cashInLieuChild,
+      commFirstMonths, commFirstRate, commRecurringStart, commRecurringRate, commClawback, commFuneralIncentive,
+      underwriterAmountAdult, underwriterAmountChild, underwriterAdvanceMonths,
+      additionalMemberPremiumMonthlyUsd, additionalMemberPremiumMonthlyZar,
+      ageBandRateChildUsd, ageBandRateChildZar, ageBandRate21To65Usd, ageBandRate21To65Zar,
+      ageBandRate66To84Usd, ageBandRate66To84Zar, ageBandRate85PlusUsd, ageBandRate85PlusZar,
+    });
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     onSubmit({
       effectiveFrom,
       premiumMonthlyUsd: premiumMonthlyUsd || null,
@@ -1524,10 +1681,12 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Edit Version v{version.version}</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
+          <VersionFormErrorSummary errors={fieldErrors} />
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Effective From *</Label>
-              <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-edit-version-effective-from" />
+              <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-edit-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
+              <FieldError message={fieldErrors.effectiveFrom} />
             </div>
             <div className="flex items-center gap-2 pt-7">
               <Checkbox id="edit-version-active" checked={isActive} onCheckedChange={(v) => setIsActive(v === true)} data-testid="checkbox-edit-version-active" />
@@ -1541,29 +1700,35 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Monthly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-edit-version-premium-usd" />
+              <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-edit-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumMonthlyUsd} />
             </div>
             <div className="space-y-2">
               <Label>Monthly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-edit-version-premium-zar" />
+              <Input type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-edit-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-edit-version-premium-weekly" />
+              <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-edit-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumWeeklyUsd} />
             </div>
             <div className="space-y-2">
               <Label>Weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" />
+              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" className={cn(fieldErrors.premiumWeeklyZar && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumWeeklyZar} />
             </div>
             <div className="space-y-2">
               <Label>Bi-weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-edit-version-premium-biweekly" />
+              <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-edit-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumBiweeklyUsd} />
             </div>
             <div className="space-y-2">
               <Label>Bi-weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" />
+              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumBiweeklyZar} />
             </div>
           </div>
 
@@ -1573,20 +1738,24 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Natural Death (days)</Label>
-              <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-edit-version-waiting" />
+              <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-edit-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
+              <FieldError message={fieldErrors.waitingPeriodDays} />
             </div>
             <div className="space-y-2">
               <Label>Accidental Death (days)</Label>
-              <Input type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-edit-version-waiting-accidental" />
+              <Input type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-edit-version-waiting-accidental" className={cn(fieldErrors.waitingAccidental && "border-destructive")} />
+              <FieldError message={fieldErrors.waitingAccidental} />
             </div>
             <div className="space-y-2">
               <Label>Suicide (days)</Label>
-              <Input type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-edit-version-waiting-suicide" />
+              <Input type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-edit-version-waiting-suicide" className={cn(fieldErrors.waitingSuicide && "border-destructive")} />
+              <FieldError message={fieldErrors.waitingSuicide} />
             </div>
           </div>
           <div className="space-y-2">
             <Label>Grace Period (days)</Label>
-            <Input type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-edit-version-grace" />
+            <Input type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-edit-version-grace" className={cn(fieldErrors.gracePeriodDays && "border-destructive")} />
+            <FieldError message={fieldErrors.gracePeriodDays} />
           </div>
 
           <Separator />
@@ -1608,15 +1777,18 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Min Age (main member)</Label>
-              <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-edit-version-min-age" />
+              <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-edit-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
+              <FieldError message={fieldErrors.eligibilityMinAge} />
             </div>
             <div className="space-y-2">
               <Label>Max Age (main member)</Label>
-              <Input type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-edit-version-max-age" />
+              <Input type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-edit-version-max-age" className={cn(fieldErrors.eligibilityMaxAge && "border-destructive")} />
+              <FieldError message={fieldErrors.eligibilityMaxAge} />
             </div>
             <div className="space-y-2">
               <Label>Max Dependent Age</Label>
-              <Input type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-edit-version-dependent-max-age" />
+              <Input type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-edit-version-dependent-max-age" className={cn(fieldErrors.dependentMaxAge && "border-destructive")} />
+              <FieldError message={fieldErrors.dependentMaxAge} />
             </div>
           </div>
 

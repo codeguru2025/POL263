@@ -106,7 +106,9 @@ export default function StaffLogin() {
   };
 
   const showGoogle = authConfig?.googleConfigured !== false;
-  const showDemo = authConfig?.demoLoginEnabled === true;
+  // The server refuses demo-login whenever Google OAuth is configured (see server/auth.ts) —
+  // match that here so the form isn't shown only to always 403.
+  const showDemo = authConfig?.demoLoginEnabled === true && authConfig?.googleConfigured !== true;
 
   return (
     <AppChrome center>

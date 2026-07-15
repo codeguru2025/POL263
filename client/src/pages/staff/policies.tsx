@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, apiFetch, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText, FileDown, ChevronDown } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText, FileDown, ChevronDown, AlertTriangle } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
 import { isAgentScoped } from "@shared/roles";
@@ -241,7 +241,7 @@ export default function StaffPolicies() {
     ? `/api/policies?limit=500&q=${encodeURIComponent(debouncedSearch)}`
     : "/api/policies?limit=500";
 
-  const { data: policies, isLoading: policiesLoading } = useQuery<any[]>({
+  const { data: policies, isLoading: policiesLoading, isError: policiesError, error: policiesErrorObj, refetch: refetchPolicies } = useQuery<any[]>({
     queryKey: ["/api/policies", { q: debouncedSearch }],
     queryFn: async () => {
       const res = await fetch(getApiBase() + policiesQueryUrl, { credentials: "include" });
@@ -2088,7 +2088,7 @@ export default function StaffPolicies() {
                         </TableCell>
                         {canEditPremium && (
                           <TableCell>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit member details" onClick={() => openEditMember(m)}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit member details" aria-label="Edit member details" onClick={() => openEditMember(m)}>
                               <Pencil className="h-3.5 w-3.5" />
                             </Button>
                           </TableCell>
@@ -3662,7 +3662,15 @@ export default function StaffPolicies() {
           title="Policy Directory"
           description="Search and filter your book of business, then open a policy to work on it."
         >
-            {policiesLoading ? (
+            {policiesError ? (
+              <EmptyState
+                icon={AlertTriangle}
+                title="Could not load policies"
+                description={policiesErrorObj instanceof Error ? policiesErrorObj.message : "Something went wrong fetching the policy list."}
+                action={<Button variant="outline" onClick={() => refetchPolicies()}>Try again</Button>}
+                className="py-16"
+              />
+            ) : policiesLoading ? (
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow>

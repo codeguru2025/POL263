@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,7 @@ export function SearchableSelect({
 }: Props) {
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.value === value);
+  const listboxId = useId();
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -46,6 +47,7 @@ export function SearchableSelect({
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          aria-controls={listboxId}
           className={cn("w-full justify-between font-normal", !selected && "text-muted-foreground", className)}
           data-testid={rest["data-testid"]}
         >
@@ -53,7 +55,7 @@ export function SearchableSelect({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+      <PopoverContent id={listboxId} className="w-[--radix-popover-trigger-width] p-0" align="start">
         <Command>
           <CommandInput placeholder={searchPlaceholder} />
           <CommandList>

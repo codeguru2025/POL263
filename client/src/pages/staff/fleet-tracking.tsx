@@ -196,6 +196,7 @@ function LiveTrackingPanel() {
         ) : active.length === 0 ? (
           <EmptyState title="No vehicles checked out" description="Vehicles will appear here once a driver checks one out." className="border-0 bg-transparent py-8" />
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -220,6 +221,7 @@ function LiveTrackingPanel() {
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardSection>
     </div>

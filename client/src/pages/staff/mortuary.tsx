@@ -615,6 +615,7 @@ export default function StaffMortuary() {
             ) : filteredIntakes.length === 0 ? (
               <EmptyState title="No mortuary intakes found" description="No records match the current filter." className="border-0 rounded-none bg-transparent py-10" />
             ) : (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow>
@@ -651,6 +652,7 @@ export default function StaffMortuary() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardSection>
 
@@ -821,6 +823,7 @@ function PartnerParlourVehicleUsageSection({ vehicleOptions, userOptions, partne
         ) : usageRecords.length === 0 ? (
           <EmptyState title="No vehicle usage recorded" description="Logged when we lend a vehicle/driver to a partner parlour." className="border-0 rounded-none bg-transparent py-8" />
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
@@ -865,6 +868,7 @@ function PartnerParlourVehicleUsageSection({ vehicleOptions, userOptions, partne
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardSection>
 
