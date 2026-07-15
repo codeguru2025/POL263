@@ -4,6 +4,8 @@ import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
+import { cpDb } from "./control-plane-db";
+import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
 import { todayInHarare } from "./date-utils";
 import {
@@ -451,7 +453,7 @@ export interface IStorage {
   deletePaymentTransaction(id: string, orgId: string): Promise<void>;
   deleteReceipt(id: string, orgId: string): Promise<void>;
   deletePaymentReceipt(id: string, orgId: string): Promise<void>;
-  getClaimsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<Claim[]>;
+  getClaimsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<(Claim & { funeralCaseId: string | null; funeralCaseNumber: string | null })[]>;
   getClaimsReportByOrg(orgId: string, limit: number, offset: number, filters?: ReportFilters & { status?: string }): Promise<any[]>;
   getClaimsByPolicy(policyId: string, orgId: string): Promise<Claim[]>;
   getClaimsByClient(clientId: string, orgId: string): Promise<Claim[]>;
@@ -688,6 +690,30 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   async getOrganization(id: string): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
+    if (!org) return org;
+    try {
+      const [branding] = await cpDb.select().from(cpTenantBranding).where(eq(cpTenantBranding.tenantId, id)).limit(1);
+      if (branding) {
+        return {
+          ...org,
+          logoUrl: branding.logoUrl ?? org.logoUrl,
+          signatureUrl: branding.signatureUrl ?? org.signatureUrl,
+          primaryColor: branding.primaryColor ?? org.primaryColor,
+          footerText: branding.footerText ?? org.footerText,
+          address: branding.address ?? org.address,
+          phone: branding.phone ?? org.phone,
+          email: branding.email ?? org.email,
+          website: branding.website ?? org.website,
+          policyNumberPrefix: branding.policyNumberPrefix ?? org.policyNumberPrefix,
+          policyNumberPadding: branding.policyNumberPadding ?? org.policyNumberPadding,
+          isWhitelabeled: branding.isWhitelabeled ?? org.isWhitelabeled,
+        };
+      }
+    } catch (err) {
+      structuredLog("error", "getOrganization: control-plane branding lookup failed, falling back to legacy row", {
+        orgId: id, error: (err as Error).message,
+      });
+    }
     return org;
   }
   async getOrganizations(): Promise<Organization[]> {
@@ -3100,12 +3126,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── Claims ────────────────────────────────────────────────
-  async getClaimsByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters): Promise<Claim[]> {
+  async getClaimsByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters): Promise<(Claim & { funeralCaseId: string | null; funeralCaseNumber: string | null })[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions = [eq(claims.organizationId, orgId)];
     if (filters?.fromDate) conditions.push(gte(claims.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(claims.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    return tdb.select().from(claims).where(and(...conditions))
+    // Left-joined (not a separate per-claim lookup) so the claims list carries its linked
+    // funeral case — if any — in one query, for the Claims<->Funerals cross-link in the UI.
+    return tdb
+      .select({ ...getTableColumns(claims), funeralCaseId: funeralCases.id, funeralCaseNumber: funeralCases.caseNumber })
+      .from(claims)
+      .leftJoin(funeralCases, eq(funeralCases.claimId, claims.id))
+      .where(and(...conditions))
       .orderBy(desc(claims.createdAt)).limit(limit).offset(offset);
   }
 

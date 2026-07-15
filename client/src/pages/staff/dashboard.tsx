@@ -40,6 +40,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useMemo } from "react";
 import {
@@ -315,6 +324,7 @@ function BackupHealthSection() {
       ) : runs.length === 0 ? (
         <EmptyState title="No backup runs yet" description="Runs appear here after the nightly scheduler fires, or after triggering one manually." className="border-0 rounded-none bg-transparent py-10" />
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -351,6 +361,7 @@ function BackupHealthSection() {
             })}
           </TableBody>
         </Table>
+        </div>
       )}
     </CardSection>
   );
@@ -404,6 +415,35 @@ export default function StaffDashboard() {
       toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });
     },
   });
+
+  const [tenantAddOpen, setTenantAddOpen] = useState(false);
+  const [newTenant, setNewTenant] = useState({
+    name: "", adminEmail: "", adminPassword: "", adminDisplayName: "",
+    phone: "", email: "", isWhitelabeled: false, databaseUrl: "",
+  });
+  const createTenantMutation = useMutation({
+    mutationFn: async (data: typeof newTenant) => {
+      const res = await apiRequest("POST", "/api/organizations", data);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/dashboard"] });
+      setTenantAddOpen(false);
+      setNewTenant({ name: "", adminEmail: "", adminPassword: "", adminDisplayName: "", phone: "", email: "", isWhitelabeled: false, databaseUrl: "" });
+      toast({ title: "Tenant created", description: `${data?.name ?? "New tenant"} is ready.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to create tenant", variant: "destructive" });
+    },
+  });
+  const handleCreateTenant = () => {
+    if (!newTenant.name.trim()) return;
+    if (newTenant.adminPassword && newTenant.adminPassword.length < 8) {
+      toast({ title: "Validation error", description: "Admin password must be at least 8 characters", variant: "destructive" });
+      return;
+    }
+    createTenantMutation.mutate(newTenant);
+  };
 
   const filterParams = useMemo(() => {
     const p = new URLSearchParams();
@@ -646,7 +686,17 @@ export default function StaffDashboard() {
             <KpiStatCard label="Clients" value={summary?.clients ?? 0} icon={Heart} />
           </div>
 
-          <CardSection title="Tenants" description="Switch into a tenant workspace from here." icon={Building2}>
+          <CardSection
+            title="Tenants"
+            description="Switch into a tenant workspace, or configure branding, payments, and routing from here."
+            icon={Building2}
+            headerRight={
+              <Button size="sm" onClick={() => setTenantAddOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Tenant
+              </Button>
+            }
+          >
               {cpLoading ? (
                 <div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
               ) : tenants.length === 0 ? (
@@ -654,7 +704,7 @@ export default function StaffDashboard() {
                   title="No tenants yet"
                   description="Create your first tenant to get started."
                   action={(
-                    <Button size="sm" onClick={() => setLocation("/staff/settings?tab=tenants")}>
+                    <Button size="sm" onClick={() => setTenantAddOpen(true)}>
                       <Plus className="h-4 w-4 mr-2" />
                       Create first tenant
                     </Button>
@@ -675,13 +725,18 @@ export default function StaffDashboard() {
                         </div>
                         {t.loadError && <p className="text-xs text-destructive mt-1">Metrics unavailable: {t.loadError}</p>}
                       </div>
-                      <button
-                        className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
-                        onClick={() => switchTenantMutation.mutate(t.id)}
-                        disabled={switchTenantMutation.isPending}
-                      >
-                        Enter Tenant
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button size="sm" variant="outline" onClick={() => setLocation(`/staff/platform/tenants/${t.id}`)}>
+                          Configure
+                        </Button>
+                        <button
+                          className="inline-flex items-center justify-center h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+                          onClick={() => switchTenantMutation.mutate(t.id)}
+                          disabled={switchTenantMutation.isPending}
+                        >
+                          Enter Tenant
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -689,6 +744,123 @@ export default function StaffDashboard() {
           </CardSection>
 
           <BackupHealthSection />
+
+          <Dialog open={tenantAddOpen} onOpenChange={setTenantAddOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Create new tenant</DialogTitle>
+                <DialogDescription>Create a new tenant. You can optionally set up an admin account now, or add one later. Branding, payments, and routing are configured afterwards via Configure.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div className="space-y-2">
+                  <Label htmlFor="tenant-org-name">Tenant name *</Label>
+                  <Input
+                    id="tenant-org-name"
+                    value={newTenant.name}
+                    onChange={(e) => setNewTenant((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="e.g. Acme Insurance"
+                    data-testid="input-tenant-name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="tenant-org-email">Tenant email</Label>
+                  <Input
+                    id="tenant-org-email"
+                    type="email"
+                    value={newTenant.email}
+                    onChange={(e) => setNewTenant((p) => ({ ...p, email: e.target.value }))}
+                    placeholder="info@acme.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="tenant-org-phone">Tenant phone</Label>
+                  <Input
+                    id="tenant-org-phone"
+                    value={newTenant.phone}
+                    onChange={(e) => setNewTenant((p) => ({ ...p, phone: e.target.value }))}
+                    placeholder="+1 555 0100"
+                  />
+                </div>
+                <div className="flex items-center justify-between rounded-lg border p-4">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="new-tenant-whitelabel" className="font-medium">White-Label Mode</Label>
+                    <p className="text-xs text-muted-foreground">
+                      When enabled, the app will show this tenant&apos;s name and logo instead of POL263.
+                    </p>
+                  </div>
+                  <Switch
+                    id="new-tenant-whitelabel"
+                    checked={newTenant.isWhitelabeled}
+                    onCheckedChange={(v) => setNewTenant((p) => ({ ...p, isWhitelabeled: v === true }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-tenant-databaseUrl">Dedicated Database URL (optional)</Label>
+                  <Input
+                    id="new-tenant-databaseUrl"
+                    type="password"
+                    autoComplete="off"
+                    value={newTenant.databaseUrl}
+                    onChange={(e) => setNewTenant((p) => ({ ...p, databaseUrl: e.target.value }))}
+                    placeholder="postgresql://... (leave empty for shared database)"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    When set, this tenant&apos;s data is stored in a separate database.
+                  </p>
+                </div>
+                <div className="border-t pt-4 space-y-4">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    Tenant administrator account
+                  </p>
+                  <div className="space-y-2">
+                    <Label htmlFor="tenant-admin-name">Display name</Label>
+                    <Input
+                      id="tenant-admin-name"
+                      value={newTenant.adminDisplayName}
+                      onChange={(e) => setNewTenant((p) => ({ ...p, adminDisplayName: e.target.value }))}
+                      placeholder="John Doe"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tenant-admin-email">Email</Label>
+                    <Input
+                      id="tenant-admin-email"
+                      type="email"
+                      value={newTenant.adminEmail}
+                      onChange={(e) => setNewTenant((p) => ({ ...p, adminEmail: e.target.value }))}
+                      placeholder="admin@acme.com"
+                      data-testid="input-admin-email"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tenant-admin-password">Password (min 8 chars)</Label>
+                    <Input
+                      id="tenant-admin-password"
+                      type="password"
+                      value={newTenant.adminPassword}
+                      onChange={(e) => setNewTenant((p) => ({ ...p, adminPassword: e.target.value }))}
+                      placeholder="Minimum 8 characters"
+                      data-testid="input-admin-password"
+                    />
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setTenantAddOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleCreateTenant}
+                  disabled={!newTenant.name.trim() || createTenantMutation.isPending}
+                  data-testid="btn-confirm-add-tenant"
+                >
+                  {createTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  Create tenant
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </PageShell>
       </StaffLayout>
     );

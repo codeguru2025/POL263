@@ -12,7 +12,7 @@ import {
   ensureRegistryUserMirroredToOrgDataDb,
   getPoolForOrg,
 } from "./tenant-db";
-import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope } from "./auth";
+import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
@@ -32,10 +32,12 @@ import { registerPolicyDocumentRoute } from "./policy-document";
 import { registerMortuaryFormRoutes } from "./routes-pdf-mortuary";
 import { registerPolicyFormRoutes } from "./routes-pdf-policy";
 import { registerFinanceFormRoutes } from "./routes-pdf-finance";
+import { registerPlatformRoutes } from "./platform-routes";
+import { seedTenantBranding } from "./tenant-branding-config";
 import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import * as objectStorage from "./object-storage";
-import { getPaynowConfig, getOrgPaynowConfig, upsertOrgPaynowConfig } from "./paynow-config";
+import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS, ROLE_PERMISSION_MAP } from "./constants";
 import { cpDb } from "./control-plane-db";
@@ -1106,91 +1108,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(403).json({ message: "Cross-tenant access denied or insufficient permissions" });
     }
     const isPlatformOwner = user.isPlatformOwner ?? user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
-    const TENANT_WRITE_FIELDS = new Set([
-      "name", "address", "phone", "email", "website", "logoUrl", "signatureUrl", "primaryColor",
-      "footerText", "policyNumberPrefix", "policyNumberPadding",
-    ]);
-    // Paynow credentials are no longer written to the organizations table — they live
-    // encrypted in control_plane.tenant_integrations (see upsertOrgPaynowConfig). Kept as a
-    // separate field set so the write path (and permission model — same TENANT_WRITE_FIELDS
-    // permission, no platform-owner gate) stays identical to before the migration.
-    const PAYNOW_INTEGRATION_FIELDS = new Set([
-      "paynowIntegrationId", "paynowIntegrationKey", "paynowAuthEmail",
-      "paynowReturnUrl", "paynowResultUrl", "paynowMode",
-    ]);
-    // isWhitelabeled and databaseUrl are real columns on the shared organizations table.
-    // slug/isActive/licenseStatus are NOT — they only exist on control_plane.tenants. Writing
-    // them via storage.updateOrganization() was a silent no-op (or a runtime error, depending on
-    // the drizzle-orm version) since that table has no such columns.
-    const PLATFORM_ONLY_ORG_FIELDS = new Set(["isWhitelabeled", "databaseUrl"]);
-    const PLATFORM_ONLY_TENANT_FIELDS = new Set(["slug", "isActive", "licenseStatus"]);
-    // Mirrored into control_plane.tenant_branding after every write — see comment at the sync
-    // site below for why (drift bug: the platform dashboard reads branding from there).
-    const BRANDING_SYNC_FIELDS = new Set([
-      "logoUrl", "signatureUrl", "primaryColor", "footerText",
-      "address", "phone", "email", "website",
-      "policyNumberPrefix", "policyNumberPadding", "isWhitelabeled",
-    ]);
+    // Branding and PayNow config moved to the platform console (PATCH /api/platform/tenants/:id/branding,
+    // .../payments) and are no longer writable here — see docs/BUGFIX-LOG.md for the drift incident
+    // this endpoint used to enable. "name" is the one registry field kept self-service-adjacent since
+    // it's read from the shared organizations row everywhere (PDFs, storage.getOrganization callers);
+    // it is mirrored into control_plane.tenants too so the platform dashboard list never goes stale.
+    const PLATFORM_ONLY_TENANT_REGISTRY_FIELDS = new Set(["name", "slug", "isActive", "licenseStatus"]);
     const sanitizedOrg: Record<string, any> = {};
     const sanitizedTenant: Record<string, any> = {};
-    const sanitizedPaynow: Record<string, any> = {};
+    const rejectedFields: string[] = [];
     for (const [key, value] of Object.entries(req.body)) {
-      if (PAYNOW_INTEGRATION_FIELDS.has(key)) sanitizedPaynow[key] = value;
-      else if (TENANT_WRITE_FIELDS.has(key)) sanitizedOrg[key] = value;
-      else if (isPlatformOwner && PLATFORM_ONLY_ORG_FIELDS.has(key)) sanitizedOrg[key] = value;
-      else if (isPlatformOwner && PLATFORM_ONLY_TENANT_FIELDS.has(key)) sanitizedTenant[key] = value;
+      if (isPlatformOwner && key === "name") {
+        sanitizedOrg.name = value;
+        sanitizedTenant.name = value;
+      } else if (isPlatformOwner && PLATFORM_ONLY_TENANT_REGISTRY_FIELDS.has(key)) {
+        sanitizedTenant[key] = value;
+      } else {
+        rejectedFields.push(key);
+      }
     }
-    // Narrow paynowMode to the literal union the schema expects
-    if (sanitizedPaynow.paynowMode !== undefined && sanitizedPaynow.paynowMode !== "test" && sanitizedPaynow.paynowMode !== "live") {
-      delete sanitizedPaynow.paynowMode;
+    if (rejectedFields.length > 0) {
+      return res.status(400).json({
+        message: `These fields are no longer editable here: ${rejectedFields.join(", ")}. Branding and payment configuration moved to the platform console.`,
+        fields: rejectedFields,
+      });
     }
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
-    if (Object.keys(sanitizedOrg).length === 0 && Object.keys(sanitizedTenant).length === 0 && Object.keys(sanitizedPaynow).length === 0) {
+    if (Object.keys(sanitizedOrg).length === 0 && Object.keys(sanitizedTenant).length === 0) {
       return res.json(before);
     }
     const updated = Object.keys(sanitizedOrg).length > 0 ? await storage.updateOrganization(id, sanitizedOrg as any) : before;
     if (Object.keys(sanitizedTenant).length > 0) {
       await cpDb.update(cpTenants).set(sanitizedTenant as any).where(eq(cpTenants.id, id));
     }
-    // The shared organizations table remains the source of truth the live app reads for
-    // branding (PDFs, receipts, useBranding()). control_plane.tenant_branding is a read-only
-    // mirror used only by the platform-owner dashboard list (GET /api/organizations,
-    // GET /api/platform/dashboard) — without this sync it silently drifted stale, since
-    // nothing ever wrote to it after the initial (manual) setup.
-    const brandingPatch: Record<string, any> = {};
-    for (const key of Object.keys(sanitizedOrg)) {
-      if (BRANDING_SYNC_FIELDS.has(key)) brandingPatch[key] = sanitizedOrg[key];
-    }
-    if (Object.keys(brandingPatch).length > 0) {
-      const [existingBranding] = await cpDb
-        .select({ tenantId: cpTenantBranding.tenantId })
-        .from(cpTenantBranding)
-        .where(eq(cpTenantBranding.tenantId, id))
-        .limit(1);
-      if (existingBranding) {
-        await cpDb.update(cpTenantBranding).set({ ...brandingPatch, updatedAt: new Date() }).where(eq(cpTenantBranding.tenantId, id));
-      } else {
-        await cpDb.insert(cpTenantBranding).values({ tenantId: id, ...brandingPatch });
-      }
-    }
-    if (Object.keys(sanitizedPaynow).length > 0) {
-      await upsertOrgPaynowConfig(id, {
-        integrationId: sanitizedPaynow.paynowIntegrationId,
-        integrationKey: sanitizedPaynow.paynowIntegrationKey,
-        authEmail: sanitizedPaynow.paynowAuthEmail,
-        returnUrl: sanitizedPaynow.paynowReturnUrl,
-        resultUrl: sanitizedPaynow.paynowResultUrl,
-        mode: sanitizedPaynow.paynowMode,
-      });
-    }
-    // Never persist plaintext Paynow keys into the audit trail.
-    const { paynowIntegrationKey: _bpik, ...beforeForAudit } = before as any;
-    const afterMerged = { ...updated, ...sanitizedTenant, paynowConfigChanged: Object.keys(sanitizedPaynow).length > 0 ? true : undefined };
-    const { paynowIntegrationKey: _apik, ...afterForAudit } = afterMerged as any;
-    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, beforeForAudit, afterForAudit, id);
-    const { paynowIntegrationKey: _upik, databaseUrl: _udu, paynowAuthEmail: _upae, ...safeUpdatedOrg } = (updated || {}) as any;
-    return res.json(isPlatformOwner ? { ...updated, ...sanitizedTenant } : safeUpdatedOrg);
+    await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, { ...updated, ...sanitizedTenant }, id);
+    return res.json({ ...updated, ...sanitizedTenant });
   });
 
   /** URL-safe slug for subdomain routing (tenant-resolver.ts), unique in the control plane. */
@@ -1246,6 +1199,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         isActive: true,
         licenseStatus: "trial",
         provisioningState: "ready",
+      });
+      await seedTenantBranding(org.id, {
+        logoUrl: org.logoUrl,
+        signatureUrl: org.signatureUrl,
+        primaryColor: org.primaryColor,
+        footerText: org.footerText,
+        address: org.address,
+        phone: org.phone,
+        email: org.email,
+        website: org.website,
+        policyNumberPrefix: org.policyNumberPrefix,
+        policyNumberPadding: org.policyNumberPadding,
+        isWhitelabeled: org.isWhitelabeled,
       });
 
       const defaultBranch = await storage.createBranch({
@@ -1361,6 +1327,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     await storage.updateOrganization(id, { name: org.name + " (deleted)" });
+    try {
+      await cpDb.update(cpTenants).set({ isActive: false, name: org.name + " (deleted)" }).where(eq(cpTenants.id, id));
+    } catch (rollbackErr) {
+      structuredLog("error", "Failed to deactivate control-plane tenant on delete", {
+        orgId: id,
+        error: (rollbackErr as Error).message,
+      });
+    }
+    invalidateTenantActiveCache(id);
     await auditLog(req, "DELETE_ORGANIZATION", "Organization", id, org, null, id);
     return res.status(204).send();
   });
@@ -9436,6 +9411,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerMortuaryFormRoutes(app);
   registerPolicyFormRoutes(app);
   registerFinanceFormRoutes(app);
+  registerPlatformRoutes(app);
   registerHrFleetFormRoutes(app);
 
   // ─── Reports CSV Export ────────────────────────────────────

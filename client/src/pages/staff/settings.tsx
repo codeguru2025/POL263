@@ -2,7 +2,6 @@ import { useState, useEffect, type ChangeEvent } from "react";
 import { useSearch, useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -36,23 +35,14 @@ import {
   Trash2,
   KeyRound,
   Shield,
-  Building2,
-  ArrowRightLeft,
-  Globe,
-  Settings as SettingsIcon,
-  Users,
   FileText,
-  Eye,
-  EyeOff,
-  CreditCard,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { resolveAssetUrl, getDefaultLogoUrl } from "@/lib/assetUrl";
+import { resolveAssetUrl } from "@/lib/assetUrl";
 
 export default function StaffSettings() {
   const { user, permissions: userPerms, isPlatformOwner } = useAuth();
@@ -62,60 +52,23 @@ export default function StaffSettings() {
   const queryClient = useQueryClient();
   const permissions = Array.isArray(userPerms) ? userPerms : [];
   const canEditRbac = permissions.includes("write:role") || permissions.includes("create:tenant");
-  const canManageTenants = permissions.includes("create:tenant") || permissions.includes("delete:tenant");
-  const canCreateTenant = permissions.includes("create:tenant");
-  const canDeleteTenant = permissions.includes("delete:tenant");
-  // Only administrators (write:organization) and platform owner can change org/branding/payments settings.
-  const canOrgAdmin = isPlatformOwner || permissions.includes("write:organization");
   const search = useSearch();
   const [, setLocation] = useLocation();
+  const canManageSettings = permissions.includes("manage:settings");
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const defaultTab =
-    isControlPlaneMode && canManageTenants
-      ? "tenants"
-      : tabParam === "tenants" && canManageTenants
-      ? "tenants"
-      : (tabParam === "branding" || tabParam === "payments") && canOrgAdmin
-      ? tabParam
-      : tabParam === "terms"
-        ? "terms"
-        : tabParam === "rbac"
-          ? "rbac"
-          : tabParam === "account"
-            ? "account"
-            : canOrgAdmin ? "branding" : "account";
+  const validTabs = ["terms", "rbac", "adverts", "account"];
+  const defaultTab = tabParam && validTabs.includes(tabParam) ? tabParam : "account";
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   useEffect(() => {
     const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
-    if (isControlPlaneMode && canManageTenants) {
-      setActiveTab("tenants");
-      return;
-    }
-    if (t === "tenants" && canManageTenants) setActiveTab(t);
-    else if ((t === "branding" || t === "payments") && canOrgAdmin) setActiveTab(t);
-    else if (t === "terms" || t === "rbac" || t === "account") setActiveTab(t);
-    else setActiveTab(canOrgAdmin ? "branding" : "account");
-  }, [search, canManageTenants, isControlPlaneMode, canOrgAdmin]);
+    setActiveTab(t && validTabs.includes(t) ? t : "account");
+  }, [search]);
 
   const handleTabChange = (value: string) => {
     setActiveTab(value);
-    setLocation(value === "branding" ? "/staff/settings" : `/staff/settings?tab=${value}`);
+    setLocation(value === "account" ? "/staff/settings" : `/staff/settings?tab=${value}`);
   };
-
-  const {
-    data: orgs,
-    isLoading: orgsLoading,
-    isError: isOrgsError,
-    error: orgsError,
-    refetch: refetchOrgsList,
-  } = useQuery<any[]>({
-    queryKey: ["/api/organizations"],
-  });
-
-  // Safe list for tenants tab: API can return array, null (403), or undefined (loading/error)
-  const orgsList = Array.isArray(orgs) ? orgs : [];
-  const orgsForbidden = orgs === null;
 
   const { data: rolesList } = useQuery<any[]>({
     queryKey: ["/api/roles"],
@@ -128,42 +81,6 @@ export default function StaffSettings() {
   const { data: termsList } = useQuery<any[]>({
     queryKey: ["/api/terms?all=true"],
   });
-
-  const currentOrg = isPlatformOwner && effectiveOrgId
-    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) ?? orgs[0] : undefined)
-    : orgs?.[0];
-
-  // Fetch the full org record (always includes paynow fields even for admin users
-  // whose /api/organizations list goes through the control-plane path that omits them).
-  const { data: fullOrg } = useQuery<any>({
-    queryKey: ["/api/organizations", currentOrg?.id],
-    enabled: !!currentOrg?.id,
-  });
-
-  const [orgName, setOrgName] = useState("");
-  const [primaryColor, setPrimaryColor] = useState("");
-  const [footerText, setFooterText] = useState("");
-  const [address, setAddress] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [website, setWebsite] = useState("");
-  const [logoUrl, setLogoUrl] = useState("");
-  const [signatureUrl, setSignatureUrl] = useState("");
-  const [logoUploading, setLogoUploading] = useState(false);
-  const [signatureUploading, setSignatureUploading] = useState(false);
-  const [policyNumberPrefix, setPolicyNumberPrefix] = useState("");
-  const [policyNumberPadding, setPolicyNumberPadding] = useState(5);
-  const [databaseUrl, setDatabaseUrl] = useState("");
-  const [isWhitelabeled, setIsWhitelabeled] = useState(false);
-
-  // ── PayNow per-tenant credentials ────────────────────────────
-  const [pnIntegrationId, setPnIntegrationId] = useState("");
-  const [pnIntegrationKey, setPnIntegrationKey] = useState("");
-  const [pnAuthEmail, setPnAuthEmail] = useState("");
-  const [pnReturnUrl, setPnReturnUrl] = useState("");
-  const [pnResultUrl, setPnResultUrl] = useState("");
-  const [pnMode, setPnMode] = useState<"test" | "live">("test");
-  const [showPnKey, setShowPnKey] = useState(false);
 
   const [termDialogOpen, setTermDialogOpen] = useState(false);
   const [editingTermId, setEditingTermId] = useState<string | null>(null);
@@ -273,70 +190,6 @@ export default function StaffSettings() {
   const [changePasswordConfirm, setChangePasswordConfirm] = useState("");
   const canManagePermissions = permissions.includes("manage:permissions");
 
-  const [tenantAddOpen, setTenantAddOpen] = useState(false);
-  const [tenantEditId, setTenantEditId] = useState<string | null>(null);
-  const [tenantDeleteId, setTenantDeleteId] = useState<string | null>(null);
-  const [editingTenantForm, setEditingTenantForm] = useState({ name: "", email: "", phone: "", isWhitelabeled: false, databaseUrl: "" });
-  const [newTenant, setNewTenant] = useState({
-    name: "",
-    adminEmail: "",
-    adminPassword: "",
-    adminDisplayName: "",
-    phone: "",
-    email: "",
-    isWhitelabeled: false,
-    databaseUrl: "",
-  });
-
-  // All branding/policy-numbering/tenant fields come from fullOrg (single-org endpoint, reads
-  // storage.getOrganization() directly) in preference to currentOrg (the /api/organizations LIST
-  // endpoint, which for platform-owner/admin users sources these same fields from
-  // cp_tenant_branding — a control-plane MIRROR that can drift stale). Previously this effect
-  // used currentOrg alone; if the mirror ever lagged, the form would load the stale/blank value,
-  // and because handleSaveBranding unconditionally resends every one of these fields on every
-  // save (regardless of which one the user actually meant to change), the next save silently
-  // overwrote the real organizations row with the stale mirrored value — this is exactly how
-  // Falakhe's policyNumberPrefix repeatedly flipped to null, producing policies with no "FLK"
-  // prefix. fullOrg has no such staleness risk (falls straight through to the real table).
-  useEffect(() => {
-    const src = fullOrg ?? currentOrg;
-    if (src) {
-      setOrgName(src.name || "");
-      setPrimaryColor(src.primaryColor || "");
-      setFooterText(src.footerText || "");
-      setAddress(src.address || "");
-      setPhone(src.phone || "");
-      setEmail(src.email || "");
-      setWebsite(src.website || "");
-      setLogoUrl(src.logoUrl || "");
-      setSignatureUrl(src.signatureUrl || "");
-      setPolicyNumberPrefix(src.policyNumberPrefix ?? "");
-      setPolicyNumberPadding(typeof src.policyNumberPadding === "number" ? src.policyNumberPadding : 5);
-      setDatabaseUrl(src.databaseUrl ?? "");
-      setIsWhitelabeled(src.isWhitelabeled ?? false);
-      setPnIntegrationId(src.paynowIntegrationId ?? "");
-      setPnIntegrationKey(src.paynowIntegrationKey ?? "");
-      setPnAuthEmail(src.paynowAuthEmail ?? "");
-      setPnReturnUrl(src.paynowReturnUrl ?? "");
-      setPnResultUrl(src.paynowResultUrl ?? "");
-      setPnMode(src.paynowMode ?? "test");
-    }
-  }, [fullOrg, currentOrg]);
-
-  const updateOrgMutation = useMutation({
-    mutationFn: async (data: any) => {
-      const res = await apiRequest("PATCH", `/api/organizations/${currentOrg?.id}`, data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
-      if (currentOrg?.id) queryClient.invalidateQueries({ queryKey: ["/api/organizations", currentOrg.id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/public/branding"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/product-performance"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-    },
-  });
-
   const changePasswordMutation = useMutation({
     mutationFn: async (body: { currentPassword: string; newPassword: string }) => {
       const res = await apiRequest("POST", "/api/auth/change-password", body);
@@ -348,192 +201,6 @@ export default function StaffSettings() {
       setChangePasswordConfirm("");
     },
   });
-
-  const createTenantMutation = useMutation({
-    mutationFn: async (data: typeof newTenant) => {
-      const res = await apiRequest("POST", "/api/organizations", data);
-      return res.json();
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
-      setTenantAddOpen(false);
-      setNewTenant({ name: "", adminEmail: "", adminPassword: "", adminDisplayName: "", phone: "", email: "", isWhitelabeled: false, databaseUrl: "" });
-      toast({ title: "Tenant created", description: `${data?.name ?? "New tenant"} is ready.` });
-    },
-    onError: (err: any) => {
-      toast({ title: "Error", description: err.message || "Failed to create tenant", variant: "destructive" });
-    },
-  });
-
-  const deleteTenantMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await apiRequest("DELETE", `/api/organizations/${id}`);
-    },
-    onSuccess: (_data, deletedId) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
-      // If the deleted tenant was the one we were actively managing, clear auth state
-      // so the layout reflects the owner is now in no-tenant (control-plane) mode.
-      if (deletedId === effectiveOrgId) {
-        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      }
-      setTenantDeleteId(null);
-      toast({ title: "Tenant removed" });
-    },
-    onError: (err: any) => {
-      toast({ title: "Error", description: err.message || "Failed to remove tenant", variant: "destructive" });
-    },
-  });
-
-  const switchTenantMutation = useMutation({
-    mutationFn: async (tenantId: string) => {
-      const res = await apiRequest("POST", "/api/platform/switch-tenant", { tenantId });
-      return res.json();
-    },
-    onSuccess: () => {
-      window.location.href = "/staff";
-    },
-    onError: (err: any) => {
-      toast({ title: "Switch failed", description: err.message || "Could not switch tenant", variant: "destructive" });
-    },
-  });
-
-  // Fetch full tenant record when edit dialog opens so databaseUrl (and other
-  // fields absent from the control-plane list query) are pre-populated correctly.
-  const { data: editingTenantFull } = useQuery<any>({
-    queryKey: ["/api/organizations", tenantEditId],
-    enabled: !!tenantEditId,
-  });
-
-  useEffect(() => {
-    if (!tenantEditId) return;
-    // Prefer the full record (has databaseUrl); fall back to the list entry.
-    const org = editingTenantFull ?? orgsList.find((o: any) => o.id === tenantEditId);
-    if (org) {
-      setEditingTenantForm({
-        name: org.name || "",
-        email: org.email || "",
-        phone: org.phone || "",
-        isWhitelabeled: org.isWhitelabeled ?? false,
-        databaseUrl: org.databaseUrl ?? "",
-      });
-    }
-  }, [tenantEditId, editingTenantFull, orgsList]);
-
-  const updateTenantMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const res = await apiRequest("PATCH", `/api/organizations/${id}`, data);
-      return res.json();
-    },
-    onSuccess: (_data, vars) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/organizations", vars.id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/public/branding"] });
-      setTenantEditId(null);
-      toast({ title: "Tenant updated" });
-    },
-    onError: (err: any) => {
-      toast({ title: "Error", description: err.message || "Failed to update tenant", variant: "destructive" });
-    },
-  });
-
-  const handleCreateTenant = () => {
-    if (!newTenant.name.trim()) return;
-    if (newTenant.adminPassword && newTenant.adminPassword.length < 8) {
-      toast({
-        title: "Validation error",
-        description: "Admin password must be at least 8 characters",
-        variant: "destructive",
-      });
-      return;
-    }
-    createTenantMutation.mutate(newTenant);
-  };
-
-  const handleSaveBranding = () => {
-    const updates: any = {};
-    if (orgName) updates.name = orgName;
-    if (primaryColor) updates.primaryColor = primaryColor;
-    if (footerText !== undefined) updates.footerText = footerText;
-    if (address !== undefined) updates.address = address;
-    if (phone !== undefined) updates.phone = phone;
-    if (email !== undefined) updates.email = email;
-    if (website !== undefined) updates.website = website;
-    if (logoUrl !== undefined) updates.logoUrl = logoUrl || null;
-    if (signatureUrl !== undefined) updates.signatureUrl = signatureUrl || null;
-    if (policyNumberPrefix !== undefined) updates.policyNumberPrefix = policyNumberPrefix || null;
-    if (policyNumberPadding !== undefined)
-      updates.policyNumberPadding = Math.max(1, Math.min(20, policyNumberPadding));
-    if (isPlatformOwner) {
-      if (databaseUrl !== undefined) updates.databaseUrl = databaseUrl.trim() || null;
-      updates.isWhitelabeled = isWhitelabeled;
-    }
-    updateOrgMutation.mutate(updates);
-  };
-
-  const getApiBase = () => {
-    const u = typeof window !== "undefined" ? window.location.origin : "";
-    return u;
-  };
-
-  const handleLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !currentOrg) return;
-    setLogoUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const headers: Record<string, string> = {};
-      const csrf = getCsrfToken();
-      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
-      const res = await fetch(getApiBase() + "/api/upload/logo", {
-        method: "POST",
-        headers,
-        body: formData,
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        toast({ title: "Upload failed", description: err.message || "Logo must be PNG, JPG, or WebP.", variant: "destructive" });
-        return;
-      }
-      const data = await res.json();
-      setLogoUrl(data.url);
-      updateOrgMutation.mutate({ logoUrl: data.url });
-    } finally {
-      setLogoUploading(false);
-      e.target.value = "";
-    }
-  };
-
-  const handleSignatureUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !currentOrg) return;
-    setSignatureUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const headers: Record<string, string> = {};
-      const csrf = getCsrfToken();
-      if (csrf) headers["X-XSRF-TOKEN"] = csrf;
-      const res = await fetch(getApiBase() + "/api/upload/signature", {
-        method: "POST",
-        headers,
-        body: formData,
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        toast({ title: "Upload failed", description: err.message || "Signature must be PNG or WebP.", variant: "destructive" });
-        return;
-      }
-      const data = await res.json();
-      setSignatureUrl(data.url);
-      updateOrgMutation.mutate({ signatureUrl: data.url });
-    } finally {
-      setSignatureUploading(false);
-      e.target.value = "";
-    }
-  };
 
   const openNewTermDialog = () => {
     setEditingTermId(null);
@@ -651,564 +318,15 @@ export default function StaffSettings() {
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList>
-            {canManageTenants && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
-            {!isControlPlaneMode && canOrgAdmin && <TabsTrigger value="branding">Branding</TabsTrigger>}
             <TabsTrigger value="account">Account</TabsTrigger>
-            {!isControlPlaneMode && canOrgAdmin && <TabsTrigger value="payments">Payments</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
+            {!isControlPlaneMode && canManageSettings && <TabsTrigger value="adverts">Receipt Adverts</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
           </TabsList>
 
-          {canManageTenants && (
-            <TabsContent value="tenants" className="mt-6">
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                      <Globe className="h-6 w-6 text-primary" />
-                      Platform Administration
-                    </h2>
-                    <p className="text-muted-foreground mt-1">Manage tenant organizations across the platform.</p>
-                  </div>
-                  {canCreateTenant && (
-                    <Button onClick={() => setTenantAddOpen(true)} data-testid="btn-add-tenant">
-                      <Plus className="h-4 w-4 mr-2" />
-                      New tenant
-                    </Button>
-                  )}
-                </div>
-
-                {orgsLoading ? (
-                  <div className="flex flex-col items-center justify-center py-16 gap-4">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">Loading tenants…</p>
-                  </div>
-                ) : isOrgsError ? (
-                  <EmptyState
-                    icon={Building2}
-                    title="Could not load tenants"
-                    description={orgsError instanceof Error ? orgsError.message : "Something went wrong."}
-                    action={<Button variant="outline" onClick={() => refetchOrgsList()}>Try again</Button>}
-                    className="py-16"
-                  />
-                ) : orgsForbidden ? (
-                  <EmptyState
-                    icon={Shield}
-                    title="Access restricted"
-                    description="You don't have permission to view or manage tenants."
-                    className="py-16"
-                  />
-                ) : orgsList.length === 0 ? (
-                  <EmptyState
-                    icon={Building2}
-                    title="No tenants yet"
-                    description="Create your first tenant to get started."
-                    action={
-                      canCreateTenant ? (
-                        <Button onClick={() => setTenantAddOpen(true)}>
-                          <Plus className="h-4 w-4 mr-2" />
-                          Create tenant
-                        </Button>
-                      ) : undefined
-                    }
-                    className="py-16"
-                  />
-                ) : (
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {orgsList.map((org: any) => {
-                      const isActive = isPlatformOwner && org.id === effectiveOrgId;
-                      return (
-                        <Card
-                          key={org.id}
-                          className={`relative transition-shadow hover:shadow-md ${isActive ? "ring-2 ring-primary" : ""}`}
-                        >
-                          {isActive && (
-                            <Badge className="absolute top-3 right-3 bg-primary/15 text-primary border-primary/30" variant="outline">
-                              Active
-                            </Badge>
-                          )}
-                          <CardHeader className="pb-3">
-                            <div className="flex items-start gap-3">
-                              {org.logoUrl ? (
-                                <img src={resolveAssetUrl(org.logoUrl)} alt="" className="h-10 w-10 rounded-lg object-contain border bg-white shrink-0" loading="lazy" />
-                              ) : (
-                                <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                                  <Building2 className="h-5 w-5 text-primary" />
-                                </div>
-                              )}
-                              <div className="min-w-0 flex-1">
-                                <CardTitle className="text-base truncate">{org.name}</CardTitle>
-                                <CardDescription className="text-xs truncate">{org.email || "No contact email"}</CardDescription>
-                              </div>
-                            </div>
-                          </CardHeader>
-                          <CardContent className="pt-0">
-                            <div className="text-xs text-muted-foreground space-y-1 mb-4">
-                              {org.phone && <p>Phone: {org.phone}</p>}
-                              <p className="font-mono opacity-60">ID: {org.id.slice(0, 8)}...</p>
-                            </div>
-                            <div className="flex gap-2">
-                              {isPlatformOwner && (
-                                <Button
-                                  variant={isActive ? "secondary" : "default"}
-                                  size="sm"
-                                  className="flex-1"
-                                  disabled={isActive || switchTenantMutation.isPending}
-                                  onClick={() => switchTenantMutation.mutate(org.id)}
-                                >
-                                  <ArrowRightLeft className="h-3.5 w-3.5 mr-1.5" />
-                                  {isActive ? "Current" : "Switch"}
-                                </Button>
-                              )}
-                              {isPlatformOwner && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setTenantEditId(org.id)}
-                                  data-testid={`btn-edit-tenant-${org.id}`}
-                                  aria-label="Edit tenant"
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                </Button>
-                              )}
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  if (isPlatformOwner) {
-                                    switchTenantMutation.mutate(org.id, {
-                                      onSuccess: () => {
-                                        window.location.href = "/staff/settings?tab=branding";
-                                      },
-                                    });
-                                  } else {
-                                    handleTabChange("branding");
-                                  }
-                                }}
-                              >
-                                <SettingsIcon className="h-3.5 w-3.5" />
-                              </Button>
-                              {canDeleteTenant && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  onClick={() => setTenantDeleteId(org.id)}
-                                  data-testid={`btn-delete-tenant-${org.id}`}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
-                              )}
-                            </div>
-                          </CardContent>
-                        </Card>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <Dialog open={tenantAddOpen} onOpenChange={setTenantAddOpen}>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Create new tenant</DialogTitle>
-                    <DialogDescription>Create a new organization. You can optionally set up an admin account now, or add one later.</DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 py-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="tenant-org-name">Organization name *</Label>
-                      <Input
-                        id="tenant-org-name"
-                        value={newTenant.name}
-                        onChange={(e) => setNewTenant((p) => ({ ...p, name: e.target.value }))}
-                        placeholder="e.g. Acme Insurance"
-                        data-testid="input-tenant-name"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="tenant-org-email">Organization email</Label>
-                      <Input
-                        id="tenant-org-email"
-                        type="email"
-                        value={newTenant.email}
-                        onChange={(e) => setNewTenant((p) => ({ ...p, email: e.target.value }))}
-                        placeholder="info@acme.com"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="tenant-org-phone">Organization phone</Label>
-                      <Input
-                        id="tenant-org-phone"
-                        value={newTenant.phone}
-                        onChange={(e) => setNewTenant((p) => ({ ...p, phone: e.target.value }))}
-                        placeholder="+1 555 0100"
-                      />
-                    </div>
-                    {isPlatformOwner && (
-                      <>
-                        <div className="flex items-center justify-between rounded-lg border p-4">
-                          <div className="space-y-0.5">
-                            <Label htmlFor="new-tenant-whitelabel" className="font-medium">White-Label Mode</Label>
-                            <p className="text-xs text-muted-foreground">
-                              When enabled, the app will show this tenant&apos;s name and logo instead of POL263.
-                            </p>
-                          </div>
-                          <Switch
-                            id="new-tenant-whitelabel"
-                            checked={newTenant.isWhitelabeled}
-                            onCheckedChange={(v) => setNewTenant((p) => ({ ...p, isWhitelabeled: v === true }))}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="new-tenant-databaseUrl">Dedicated Database URL (optional)</Label>
-                          <Input
-                            id="new-tenant-databaseUrl"
-                            type="password"
-                            autoComplete="off"
-                            value={newTenant.databaseUrl}
-                            onChange={(e) => setNewTenant((p) => ({ ...p, databaseUrl: e.target.value }))}
-                            placeholder="postgresql://... (leave empty for shared database)"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            When set, this tenant&apos;s data is stored in a separate database.
-                          </p>
-                        </div>
-                      </>
-                    )}
-                    <div className="border-t pt-4 space-y-4">
-                      <p className="text-sm font-medium flex items-center gap-2">
-                        <Users className="h-4 w-4 text-muted-foreground" />
-                        Tenant administrator account
-                      </p>
-                      <div className="space-y-2">
-                        <Label htmlFor="tenant-admin-name">Display name</Label>
-                        <Input
-                          id="tenant-admin-name"
-                          value={newTenant.adminDisplayName}
-                          onChange={(e) => setNewTenant((p) => ({ ...p, adminDisplayName: e.target.value }))}
-                          placeholder="John Doe"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="tenant-admin-email">Email</Label>
-                        <Input
-                          id="tenant-admin-email"
-                          type="email"
-                          value={newTenant.adminEmail}
-                          onChange={(e) => setNewTenant((p) => ({ ...p, adminEmail: e.target.value }))}
-                          placeholder="admin@acme.com"
-                          data-testid="input-admin-email"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="tenant-admin-password">Password (min 8 chars)</Label>
-                        <Input
-                          id="tenant-admin-password"
-                          type="password"
-                          value={newTenant.adminPassword}
-                          onChange={(e) => setNewTenant((p) => ({ ...p, adminPassword: e.target.value }))}
-                          placeholder="Minimum 8 characters"
-                          data-testid="input-admin-password"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setTenantAddOpen(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={handleCreateTenant}
-                      disabled={!newTenant.name.trim() || createTenantMutation.isPending}
-                      data-testid="btn-confirm-add-tenant"
-                    >
-                      {createTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                      Create tenant
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-
-              <Dialog open={!!tenantEditId} onOpenChange={(open) => !open && setTenantEditId(null)}>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Edit tenant</DialogTitle>
-                    <DialogDescription>Update organization details and platform owner settings.</DialogDescription>
-                  </DialogHeader>
-                  {tenantEditId && (
-                    <div className="space-y-4 py-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="edit-tenant-name">Organization name *</Label>
-                        <Input
-                          id="edit-tenant-name"
-                          value={editingTenantForm.name}
-                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, name: e.target.value }))}
-                          placeholder="e.g. Acme Insurance"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="edit-tenant-email">Organization email</Label>
-                        <Input
-                          id="edit-tenant-email"
-                          type="email"
-                          value={editingTenantForm.email}
-                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, email: e.target.value }))}
-                          placeholder="info@acme.com"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="edit-tenant-phone">Organization phone</Label>
-                        <Input
-                          id="edit-tenant-phone"
-                          value={editingTenantForm.phone}
-                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, phone: e.target.value }))}
-                          placeholder="+1 555 0100"
-                        />
-                      </div>
-                      <div className="flex items-center justify-between rounded-lg border p-4">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="edit-tenant-whitelabel" className="font-medium">White-Label Mode</Label>
-                          <p className="text-xs text-muted-foreground">
-                            When enabled, the app shows this tenant&apos;s name and logo instead of POL263.
-                          </p>
-                        </div>
-                        <Switch
-                          id="edit-tenant-whitelabel"
-                          checked={editingTenantForm.isWhitelabeled}
-                          onCheckedChange={(v) => setEditingTenantForm((p) => ({ ...p, isWhitelabeled: v === true }))}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="edit-tenant-databaseUrl">Dedicated Database URL (optional)</Label>
-                        <Input
-                          id="edit-tenant-databaseUrl"
-                          type="password"
-                          autoComplete="off"
-                          value={editingTenantForm.databaseUrl}
-                          onChange={(e) => setEditingTenantForm((p) => ({ ...p, databaseUrl: e.target.value }))}
-                          placeholder="postgresql://... (leave empty for shared database)"
-                        />
-                      </div>
-                    </div>
-                  )}
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setTenantEditId(null)}>Cancel</Button>
-                    <Button
-                      onClick={() => {
-                        if (!tenantEditId || !editingTenantForm.name.trim()) return;
-                        updateTenantMutation.mutate({
-                          id: tenantEditId,
-                          data: {
-                            name: editingTenantForm.name.trim(),
-                            email: editingTenantForm.email || null,
-                            phone: editingTenantForm.phone || null,
-                            isWhitelabeled: editingTenantForm.isWhitelabeled,
-                            databaseUrl: editingTenantForm.databaseUrl.trim() || null,
-                          },
-                        });
-                      }}
-                      disabled={!editingTenantForm.name.trim() || updateTenantMutation.isPending}
-                    >
-                      {updateTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                      Save changes
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-
-              <AlertDialog open={!!tenantDeleteId} onOpenChange={(open) => !open && setTenantDeleteId(null)}>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Remove tenant?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This will soft-delete <strong>{orgsList.find((o: any) => o.id === tenantDeleteId)?.name ?? "this tenant"}</strong>. The tenant must have no active users. This action cannot be easily undone.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      onClick={() => tenantDeleteId && deleteTenantMutation.mutate(tenantDeleteId)}
-                      disabled={deleteTenantMutation.isPending}
-                    >
-                      {deleteTenantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                      Remove
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </TabsContent>
-          )}
-
-          {/* Branding — only admins with write:organization */}
-          {canOrgAdmin && <TabsContent value="branding" className="mt-6">
-            <CardSection
-              title="Organization branding"
-              description="Customize the look and feel for this specific tenant."
-              icon={SettingsIcon}
-            >
-              <div className="space-y-6">
-                <div className="space-y-4">
-                  <Label>Organization Logo</Label>
-                  <div className="flex items-center gap-6">
-                    <div className="h-28 w-28 rounded-xl border-2 border-dashed flex items-center justify-center bg-white overflow-hidden shrink-0 relative">
-                      {logoUploading ? (
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      ) : (logoUrl || currentOrg?.logoUrl) ? (
-                        <img
-                          key={logoUrl || currentOrg?.logoUrl}
-                          src={resolveAssetUrl(logoUrl || currentOrg?.logoUrl)}
-                          alt="Current Logo"
-                          className="object-contain max-h-full max-w-full p-1"
-                          onError={(e) => { (e.target as HTMLImageElement).src = getDefaultLogoUrl(); }}
-                        />
-                      ) : (
-                        <img src={getDefaultLogoUrl()} alt="Default" className="object-contain max-h-full max-w-full p-1 opacity-40" />
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <input id="logo-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleLogoUpload} />
-                      <Button type="button" variant="outline" disabled={logoUploading} onClick={() => document.getElementById("logo-upload")?.click()}>
-                        {logoUploading ? "Uploading…" : "Upload Logo"}
-                      </Button>
-                      <p className="text-xs text-muted-foreground">PNG, JPG, or WebP. Transparent background recommended.</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <Label>Authorized Signature (for receipts & policy documents)</Label>
-                  <div className="flex items-center gap-6">
-                    <div className="h-20 w-48 rounded-lg border-2 border-dashed flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
-                      {signatureUploading ? (
-                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                      ) : (signatureUrl || currentOrg?.signatureUrl) ? (
-                        <img
-                          key={signatureUrl || currentOrg?.signatureUrl}
-                          src={resolveAssetUrl(signatureUrl || currentOrg?.signatureUrl)}
-                          alt="Signature"
-                          className="object-contain max-h-full max-w-full p-1"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                        />
-                      ) : (
-                        <span className="text-xs text-muted-foreground italic">No signature uploaded</span>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <input id="sig-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleSignatureUpload} />
-                      <Button type="button" variant="outline" disabled={signatureUploading} onClick={() => document.getElementById("sig-upload")?.click()}>
-                        {signatureUploading ? "Uploading…" : "Upload Signature"}
-                      </Button>
-                      <p className="text-xs text-muted-foreground">PNG, JPG, or WebP. Transparent background recommended.</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="orgName">Organization Name</Label>
-                    <Input id="orgName" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="address">Address</Label>
-                    <Input id="address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, city, country" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="grid gap-2">
-                      <Label htmlFor="phone">Phone</Label>
-                      <Input id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+263 ..." />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="email">Email</Label>
-                      <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="contact@example.com" />
-                    </div>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="website">Website</Label>
-                    <Input id="website" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://..." />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="primaryColor">Primary Color</Label>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="color"
-                        id="primaryColor"
-                        value={primaryColor || currentOrg?.primaryColor || "#0d9488"}
-                        onChange={(e) => setPrimaryColor(e.target.value)}
-                        className="h-10 w-10 rounded border cursor-pointer p-0.5"
-                      />
-                      <Input
-                        value={primaryColor || currentOrg?.primaryColor || "#0d9488"}
-                        className="font-mono w-32"
-                        onChange={(e) => setPrimaryColor(e.target.value)}
-                        maxLength={7}
-                        placeholder="#0d9488"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 mt-1">
-                      {["#0d9488","#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"].map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${
-                            primaryColor === c ? "border-foreground ring-2 ring-offset-2 ring-primary" : "border-transparent"
-                          }`}
-                          style={{ backgroundColor: c }}
-                          onClick={() => setPrimaryColor(c)}
-                          title={c}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="footerText">Footer Text (on documents)</Label>
-                    <Input id="footerText" value={footerText} onChange={(e) => setFooterText(e.target.value)} />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="grid gap-2">
-                      <Label htmlFor="policyNumberPrefix">Policy Number Prefix (optional)</Label>
-                      <Input
-                        id="policyNumberPrefix"
-                        value={policyNumberPrefix}
-                        onChange={(e) => setPolicyNumberPrefix(e.target.value)}
-                        placeholder="e.g. POL- or leave empty"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="policyNumberPadding">Policy Number Padding (digits)</Label>
-                      <Input
-                        id="policyNumberPadding"
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={policyNumberPadding}
-                        onChange={(e) => setPolicyNumberPadding(parseInt(e.target.value, 10) || 5)}
-                      />
-                      <p className="text-xs text-muted-foreground">e.g. 5 → 00001, 00002 (per tenant)</p>
-                    </div>
-                  </div>
-
-                <Button onClick={handleSaveBranding} disabled={updateOrgMutation.isPending}>
-                  {updateOrgMutation.isPending ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...
-                    </>
-                  ) : (
-                    "Save Branding Changes"
-                  )}
-                </Button>
-
-                {updateOrgMutation.isSuccess && (
-                  <p className="text-sm text-emerald-600 flex items-center gap-1">
-                    <Check className="h-4 w-4" /> Saved successfully. Audit log entry created.
-                  </p>
-                )}
-              </div>
-            </CardSection>
-
-            {/* Receipt Adverts */}
-            {!isControlPlaneMode && (
+          {/* Receipt Adverts */}
+          {!isControlPlaneMode && canManageSettings && (
+            <TabsContent value="adverts" className="mt-6">
               <CardSection
                 title="Receipt Adverts"
                 description="Add a promotional image, title, and message to appear at the bottom of printed receipts."
@@ -1258,72 +376,72 @@ export default function StaffSettings() {
                   )}
                 </div>
               </CardSection>
-            )}
 
-            {/* Advert create/edit dialog */}
-            <Dialog open={advertDialogOpen} onOpenChange={(v) => { if (!v) { setAdvertDialogOpen(false); resetAdvertForm(); } else setAdvertDialogOpen(true); }}>
-              <DialogContent className="max-w-lg">
-                <DialogHeader>
-                  <DialogTitle>{editingAdvertId ? "Edit Advert" : "New Receipt Advert"}</DialogTitle>
-                  <DialogDescription>This advert will appear at the bottom of all printed receipts when set as active.</DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-2">
-                  <div className="space-y-2">
-                    <Label>Advert Image <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                    <div className="flex items-center gap-4">
-                      <div className="h-20 w-32 rounded border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
-                        {advertImageUrl ? (
-                          <img key={advertImageUrl} src={resolveAssetUrl(advertImageUrl)} alt="Advert" className="object-contain max-h-full max-w-full p-1" />
-                        ) : (
-                          <span className="text-xs text-muted-foreground text-center px-2">No image</span>
-                        )}
-                      </div>
-                      <div className="space-y-1">
-                        <input id="advert-img-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleAdvertImageUpload} />
-                        <Button type="button" size="sm" variant="outline" disabled={advertImageUploading} onClick={() => document.getElementById("advert-img-upload")?.click()}>
-                          {advertImageUploading ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Uploading…</> : "Upload Image"}
-                        </Button>
-                        {advertImageUrl && (
-                          <Button type="button" size="sm" variant="ghost" className="text-destructive text-xs" onClick={() => setAdvertImageUrl("")}>Remove</Button>
-                        )}
-                        <p className="text-xs text-muted-foreground">PNG, JPG or WebP. Max 5MB.</p>
+              {/* Advert create/edit dialog */}
+              <Dialog open={advertDialogOpen} onOpenChange={(v) => { if (!v) { setAdvertDialogOpen(false); resetAdvertForm(); } else setAdvertDialogOpen(true); }}>
+                <DialogContent className="max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>{editingAdvertId ? "Edit Advert" : "New Receipt Advert"}</DialogTitle>
+                    <DialogDescription>This advert will appear at the bottom of all printed receipts when set as active.</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-2">
+                    <div className="space-y-2">
+                      <Label>Advert Image <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <div className="flex items-center gap-4">
+                        <div className="h-20 w-32 rounded border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
+                          {advertImageUrl ? (
+                            <img key={advertImageUrl} src={resolveAssetUrl(advertImageUrl)} alt="Advert" className="object-contain max-h-full max-w-full p-1" />
+                          ) : (
+                            <span className="text-xs text-muted-foreground text-center px-2">No image</span>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <input id="advert-img-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleAdvertImageUpload} />
+                          <Button type="button" size="sm" variant="outline" disabled={advertImageUploading} onClick={() => document.getElementById("advert-img-upload")?.click()}>
+                            {advertImageUploading ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Uploading…</> : "Upload Image"}
+                          </Button>
+                          {advertImageUrl && (
+                            <Button type="button" size="sm" variant="ghost" className="text-destructive text-xs" onClick={() => setAdvertImageUrl("")}>Remove</Button>
+                          )}
+                          <p className="text-xs text-muted-foreground">PNG, JPG or WebP. Max 5MB.</p>
+                        </div>
                       </div>
                     </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="advert-title">Title <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <Input id="advert-title" value={advertTitle} onChange={(e) => setAdvertTitle(e.target.value)} placeholder="e.g. Special Offer — Family Cover" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="advert-body">Message <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <Textarea id="advert-body" value={advertBody} onChange={(e) => setAdvertBody(e.target.value)} placeholder="e.g. Add a family member for only $2 extra/month. Ask your agent today." rows={3} />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="advert-title">Title <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                    <Input id="advert-title" value={advertTitle} onChange={(e) => setAdvertTitle(e.target.value)} placeholder="e.g. Special Offer — Family Cover" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="advert-body">Message <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                    <Textarea id="advert-body" value={advertBody} onChange={(e) => setAdvertBody(e.target.value)} placeholder="e.g. Add a family member for only $2 extra/month. Ask your agent today." rows={3} />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => { setAdvertDialogOpen(false); resetAdvertForm(); }}>Cancel</Button>
-                  <Button onClick={handleSaveAdvert} disabled={createAdvertMutation.isPending || updateAdvertMutation.isPending}>
-                    {(createAdvertMutation.isPending || updateAdvertMutation.isPending) ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</> : "Save Advert"}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => { setAdvertDialogOpen(false); resetAdvertForm(); }}>Cancel</Button>
+                    <Button onClick={handleSaveAdvert} disabled={createAdvertMutation.isPending || updateAdvertMutation.isPending}>
+                      {(createAdvertMutation.isPending || updateAdvertMutation.isPending) ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</> : "Save Advert"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
-            {/* Advert delete confirm */}
-            <AlertDialog open={!!advertDeleteId} onOpenChange={(v) => { if (!v) setAdvertDeleteId(null); }}>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete Advert?</AlertDialogTitle>
-                  <AlertDialogDescription>This cannot be undone. The advert will stop appearing on receipts immediately.</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={() => advertDeleteId && deleteAdvertMutation.mutate(advertDeleteId)} className="bg-destructive text-white">
-                    Delete
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </TabsContent>}
+              {/* Advert delete confirm */}
+              <AlertDialog open={!!advertDeleteId} onOpenChange={(v) => { if (!v) setAdvertDeleteId(null); }}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Advert?</AlertDialogTitle>
+                    <AlertDialogDescription>This cannot be undone. The advert will stop appearing on receipts immediately.</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => advertDeleteId && deleteAdvertMutation.mutate(advertDeleteId)} className="bg-destructive text-white">
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </TabsContent>
+          )}
 
           {/* Account */}
           <TabsContent value="account" className="mt-6">
@@ -1553,126 +671,6 @@ export default function StaffSettings() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-          </TabsContent>
-
-          {/* Payments / PayNow */}
-          <TabsContent value="payments" className="mt-6">
-            <CardSection
-              title="PayNow Integration"
-              description="Configure your organisation's PayNow merchant credentials. These override the platform defaults and allow each tenant to use their own merchant account."
-              icon={CreditCard}
-              headerRight={
-                <Button
-                  onClick={() =>
-                    updateOrgMutation.mutate({
-                      paynowIntegrationId: pnIntegrationId || null,
-                      paynowIntegrationKey: pnIntegrationKey || null,
-                      paynowAuthEmail: pnAuthEmail || null,
-                      paynowReturnUrl: pnReturnUrl || null,
-                      paynowResultUrl: pnResultUrl || null,
-                      paynowMode: pnMode,
-                    })
-                  }
-                  disabled={updateOrgMutation.isPending}
-                >
-                  {updateOrgMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
-                  Save
-                </Button>
-              }
-            >
-              <div className="p-6 space-y-5">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="pnIntegrationId">Integration ID</Label>
-                    <Input
-                      id="pnIntegrationId"
-                      value={pnIntegrationId}
-                      onChange={(e) => setPnIntegrationId(e.target.value)}
-                      placeholder="e.g. 12345"
-                    />
-                    <p className="text-xs text-muted-foreground">Your PayNow merchant integration ID</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="pnIntegrationKey">Integration Key</Label>
-                    <div className="relative">
-                      <Input
-                        id="pnIntegrationKey"
-                        type={showPnKey ? "text" : "password"}
-                        value={pnIntegrationKey}
-                        onChange={(e) => setPnIntegrationKey(e.target.value)}
-                        placeholder="Paste key — stored server-side only"
-                        className="pr-10"
-                      />
-                      <button
-                        type="button"
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                        onClick={() => setShowPnKey((v) => !v)}
-                      >
-                        {showPnKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">Leave blank to keep the existing key unchanged</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="pnAuthEmail">Auth Email</Label>
-                    <Input
-                      id="pnAuthEmail"
-                      type="email"
-                      value={pnAuthEmail}
-                      onChange={(e) => setPnAuthEmail(e.target.value)}
-                      placeholder="merchant@yourdomain.com"
-                    />
-                    <p className="text-xs text-muted-foreground">Shown on PayNow card payment page</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="pnMode">Mode</Label>
-                    <select
-                      id="pnMode"
-                      value={pnMode}
-                      onChange={(e) => setPnMode(e.target.value as "test" | "live")}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <option value="test">Test</option>
-                      <option value="live">Live</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="pnReturnUrl">Return URL</Label>
-                  <Input
-                    id="pnReturnUrl"
-                    value={pnReturnUrl}
-                    onChange={(e) => setPnReturnUrl(e.target.value)}
-                    placeholder="https://yourapp.com/payment-complete"
-                  />
-                  <p className="text-xs text-muted-foreground">Where the browser redirects after card payment</p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="pnResultUrl">Result URL</Label>
-                  <Input
-                    id="pnResultUrl"
-                    value={pnResultUrl}
-                    onChange={(e) => setPnResultUrl(e.target.value)}
-                    placeholder={`https://yourapp.com/api/payments/paynow/result?org=${currentOrg?.id ?? "<orgId>"}`}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Server-side callback where PayNow POSTs payment results. Include <code>?org={currentOrg?.id ?? "<orgId>"}</code> so we verify with your key.
-                  </p>
-                </div>
-
-                {currentOrg && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 space-y-1">
-                    <p className="font-semibold">Suggested Result URL</p>
-                    <code className="block text-xs break-all">
-                      {`https://yourapp.com/api/payments/paynow/result?org=${currentOrg.id}`}
-                    </code>
-                    <p>Copy this into the Result URL field above and register it in your PayNow merchant portal.</p>
-                  </div>
-                )}
-              </div>
-            </CardSection>
           </TabsContent>
 
           {/* RBAC */}

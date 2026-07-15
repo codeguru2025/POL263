@@ -53,6 +53,7 @@ const AgentDownload = lazy(() => retryLazy(() => import("@/pages/agent/download"
 const StaffDashboard = lazy(() => retryLazy(() => import("@/pages/staff/dashboard")));
 const AuditLogs = lazy(() => retryLazy(() => import("@/pages/staff/audit")));
 const StaffSettings = lazy(() => retryLazy(() => import("@/pages/staff/settings")));
+const PlatformTenantConsole = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-console")));
 const ProductBuilder = lazy(() => retryLazy(() => import("@/pages/staff/products")));
 const StaffPolicies = lazy(() => retryLazy(() => import("@/pages/staff/policies")));
 const StaffClients = lazy(() => retryLazy(() => import("@/pages/staff/clients")));
@@ -75,7 +76,6 @@ const StaffAttendance = lazy(() => retryLazy(() => import("@/pages/staff/attenda
 const StaffFleetTracking = lazy(() => retryLazy(() => import("@/pages/staff/fleet-tracking")));
 const StaffScheduleReports = lazy(() => retryLazy(() => import("@/pages/staff/schedule-reports")));
 const StaffUsers = lazy(() => retryLazy(() => import("@/pages/staff/users")));
-const StaffTenants = lazy(() => retryLazy(() => import("@/pages/staff/tenants")));
 const StaffHelpCenter = lazy(() => retryLazy(() => import("@/pages/staff/help-center")));
 const StaffReminders = lazy(() => retryLazy(() => import("@/pages/staff/reminders")));
 const StaffOrderServices = lazy(() => retryLazy(() => import("@/pages/staff/order-services")));
@@ -201,7 +201,7 @@ function Router() {
       <SafeRoute path="/staff/fleet-tracking" component={StaffFleetTracking} />
       <SafeRoute path="/staff/schedule-reports" component={StaffScheduleReports} />
       <SafeRoute path="/staff/users" component={StaffUsers} />
-      <SafeRoute path="/staff/tenants" component={StaffTenants} />
+      <SafeRoute path="/staff/platform/tenants/:id" component={PlatformTenantConsole} />
       <SafeRoute path="/staff/help" component={StaffHelpCenter} />
       <SafeRoute path="/staff/reminders" component={StaffReminders} />
       <SafeRoute path="/staff/order-services" component={StaffOrderServices} />

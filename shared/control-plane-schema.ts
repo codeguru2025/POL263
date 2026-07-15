@@ -9,6 +9,7 @@ import {
   pgTable,
   uuid,
   text,
+  integer,
   boolean,
   timestamp,
   jsonb,
@@ -168,7 +169,7 @@ export const tenantBranding = pgTable("tenant_branding", {
   email: text("email"),
   website: text("website"),
   policyNumberPrefix: text("policy_number_prefix"),
-  policyNumberPadding: text("policy_number_padding").default("5"),
+  policyNumberPadding: integer("policy_number_padding").default(5),
   isWhitelabeled: boolean("is_whitelabeled").default(false).notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

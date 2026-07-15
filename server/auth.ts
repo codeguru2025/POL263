@@ -65,6 +65,36 @@ function isPlatformOwnerEmail(email?: string | null) {
   return email.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
 }
 
+// Enforces tenant suspension (set via the platform-owner console) at session-resolution time,
+// which runs on every authenticated request — see the isActive===false check a few lines below
+// this is modeled on. Cached (same 5-min TTL pattern as tenant-resolver.ts) so a suspend/reactivate
+// doesn't add a control-plane round trip to every request platform-wide; invalidateTenantActiveCache()
+// clears a specific tenant's entry immediately after a lifecycle change so enforcement is near-instant
+// rather than waiting out the TTL.
+const tenantActiveCache = new Map<string, { isActive: boolean; cachedAt: number }>();
+const TENANT_ACTIVE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export function invalidateTenantActiveCache(orgId: string) {
+  tenantActiveCache.delete(orgId);
+}
+
+async function isTenantAccessAllowed(orgId: string): Promise<boolean> {
+  const cached = tenantActiveCache.get(orgId);
+  if (cached && Date.now() - cached.cachedAt < TENANT_ACTIVE_CACHE_TTL_MS) return cached.isActive;
+  try {
+    const [row] = await cpDb.select({ isActive: cpTenants.isActive }).from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
+    // No control-plane row for this org (not yet registered, or legacy) — don't block.
+    const isActive = row ? row.isActive : true;
+    tenantActiveCache.set(orgId, { isActive, cachedAt: Date.now() });
+    return isActive;
+  } catch (err) {
+    // Control plane unreachable — fail open. A transient outage there must never lock out the
+    // entire platform; getOrganization()/getOrgPaynowConfig() apply the same fail-open resilience.
+    structuredLog("error", "Tenant active-status lookup failed, failing open", { orgId, error: (err as Error).message });
+    return true;
+  }
+}
+
 function baseUrlFromEnv() {
   return (process.env.APP_BASE_URL || "").replace(/\/$/, "");
 }
@@ -162,6 +192,15 @@ export function setupAuth(app: Express) {
       // so this revocation is near-instant without extra middleware.
       if (user && user.isActive === false) {
         return done(null, null);
+      }
+      // Same near-instant-revocation approach, extended to tenant-level suspension (set via the
+      // platform-owner console). Never applied to the platform owner themselves — they must always
+      // be able to log in to reactivate a tenant they suspended.
+      if (user && orgId && !isPlatformOwnerEmail(user.email)) {
+        const allowed = await isTenantAccessAllowed(orgId);
+        if (!allowed) {
+          return done(null, null);
+        }
       }
       done(null, user || null);
     } catch (err) {
@@ -900,6 +939,18 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
 
     next();
   };
+}
+
+export function requirePlatformOwner(req: Request, res: Response, next: NextFunction) {
+  if (!req.isAuthenticated() || !req.user) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+  const user = req.user as any;
+  const isPlatformOwner = user.isPlatformOwner ?? user.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
+  if (!isPlatformOwner) {
+    return res.status(403).json({ message: "Platform owner access required" });
+  }
+  next();
 }
 
 export function requireTenantScope(req: Request, res: Response, next: NextFunction) {
