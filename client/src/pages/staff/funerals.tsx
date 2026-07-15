@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { useSearch, Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { shareDocument } from "@/lib/share-document";
@@ -166,6 +167,15 @@ export default function StaffFunerals() {
   });
 
   const selectedCase = funeralCases.find((c) => c.id === selectedCaseId) ?? null;
+
+  // Deep-link support for the Claims<->Funerals cross-link (claims.tsx links here via
+  // ?openCase=), matching the ?openPolicy= pattern already used on the Policies page.
+  const deepLinkSearch = useSearch();
+  useEffect(() => {
+    const id = new URLSearchParams(deepLinkSearch).get("openCase");
+    if (!id || funeralCases.length === 0) return;
+    if (funeralCases.some((c) => c.id === id)) setSelectedCaseId(id);
+  }, [deepLinkSearch, funeralCases]);
 
   const { data: caseTasks = [], isLoading: tasksLoading } = useQuery<FuneralTask[]>({
     queryKey: [`/api/funeral-cases/${selectedCaseId}/tasks`],
@@ -546,6 +556,7 @@ export default function StaffFunerals() {
                 ) : filteredCases.length === 0 ? (
                   <EmptyState title="No funeral cases found" description="No cases match the current filter." className="border-0 rounded-none bg-transparent py-10" data-testid="text-no-cases" />
                 ) : (
+                  <div className="overflow-x-auto">
                   <Table>
                     <TableHeader className="bg-muted/50">
                       <TableRow>
@@ -586,6 +597,7 @@ export default function StaffFunerals() {
                       ))}
                     </TableBody>
                   </Table>
+                  </div>
                 )}
               </CardSection>
             )}
@@ -605,6 +617,7 @@ export default function StaffFunerals() {
               ) : fleetVehicles.length === 0 ? (
                 <EmptyState title="No fleet vehicles registered" description="Add vehicles to manage your fleet." className="border-0 rounded-none bg-transparent py-10" data-testid="text-no-vehicles" />
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader className="bg-muted/50">
                     <TableRow>
@@ -642,6 +655,7 @@ export default function StaffFunerals() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardSection>
           </TabsContent>
@@ -696,6 +710,7 @@ export default function StaffFunerals() {
                   ) : parlourPersonnel.length === 0 ? (
                     <EmptyState icon={Users} title="No contacts" description="Add contacts for this parlour." />
                   ) : (
+                    <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -729,6 +744,7 @@ export default function StaffFunerals() {
                         ))}
                       </TableBody>
                     </Table>
+                    </div>
                   )}
                 </CardSection>
               </div>
@@ -1042,6 +1058,15 @@ function CaseDetailView({
         </Badge>
         {fc.serviceType && (
           <Badge variant="outline" className="text-[10px]">{fc.serviceType === "claim" ? "Policy Claim" : "Cash Service"}</Badge>
+        )}
+        {fc.claimId && (
+          <Link
+            href={`/staff/claims?openClaim=${fc.claimId}`}
+            className="text-xs text-primary hover:underline"
+            data-testid="link-view-claim"
+          >
+            View claim →
+          </Link>
         )}
         <div className="ml-auto flex gap-2 flex-wrap">
           <Button size="sm" variant="outline" className="gap-1.5" onClick={onEdit}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
@@ -1373,7 +1398,7 @@ function CaseDetailView({
                       <span className="text-xs text-muted-foreground">{r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : ""}</span>
                       <span className="font-semibold tabular-nums">{r.currency} {Number(r.amount).toFixed(2)}</span>
                       <a href={`/api/service-receipts/${r.id}/pdf?download=1`} target="_blank" rel="noopener noreferrer" title="Print / download receipt">
-                        <Button size="icon" variant="ghost" className="h-6 w-6" data-testid={`button-receipt-pdf-${r.id}`}>
+                        <Button size="icon" variant="ghost" className="h-6 w-6" data-testid={`button-receipt-pdf-${r.id}`} aria-label="Print or download receipt">
                           <FileDown className="h-3.5 w-3.5" />
                         </Button>
                       </a>

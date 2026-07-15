@@ -18,9 +18,9 @@ const STUBS: Record<string, StubInfo> = {
   "/staff/transactions/tombstone": { title: "Tombstone Transactions", blurb: "Capture tombstone orders and related transactions." },
   "/staff/transactions/credit-notes": { title: "Credit Notes", blurb: "Issue and track credit notes against policies and invoices.", related: [{ label: "Finance", href: "/staff/finance" }] },
   "/staff/transactions/invoices": { title: "Invoices", blurb: "Generate and manage customer invoices.", related: [{ label: "Finance", href: "/staff/finance" }] },
-  "/staff/transactions/petty-cash": { title: "Petty Cash", blurb: "Log petty-cash disbursements and reconcile the float.", related: [{ label: "Collections", href: "/staff/finance?tab=payments" }, { label: "Requisitions", href: "/staff/finance?tab=requisitions" }] },
+  "/staff/transactions/petty-cash": { title: "Petty Cash", blurb: "Log petty-cash disbursements and reconcile the float.", related: [{ label: "Payments", href: "/staff/finance?tab=payments" }, { label: "Requisitions", href: "/staff/finance?tab=requisitions" }] },
   "/staff/transactions/bank-deposits": { title: "Bank Deposits", blurb: "Record banking of collected cash and reconcile against receipts.", related: [{ label: "Cash-up", href: "/staff/finance?tab=cashups" }] },
-  "/staff/transactions/debit-orders": { title: "Debit Orders", blurb: "Manage recurring debit-order collections for premiums.", related: [{ label: "Collections", href: "/staff/finance?tab=payments" }] },
+  "/staff/transactions/debit-orders": { title: "Debit Orders", blurb: "Manage recurring debit-order collections for premiums.", related: [{ label: "Payments", href: "/staff/finance?tab=payments" }] },
   "/staff/transactions/fax": { title: "Fax", blurb: "Send and archive fax correspondence." },
   // Reports
   "/staff/reports/dynamic-generic": { title: "Dynamic Reports (Generic)", blurb: "Build ad-hoc reports across any data set.", related: [{ label: "Reports", href: "/staff/reports" }] },

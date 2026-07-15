@@ -250,7 +250,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   // In control-plane mode, keep navigation on control-plane pages only.
   useEffect(() => {
     if (!isLoading && isAuthenticated && isControlPlaneMode) {
-      const allowed = location === "/staff" || location.startsWith("/staff/settings");
+      const allowed = location === "/staff" || location.startsWith("/staff/settings") || location.startsWith("/staff/platform");
       if (!allowed) setLocation("/staff");
     }
   }, [isLoading, isAuthenticated, isControlPlaneMode, location, setLocation]);
@@ -378,7 +378,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/users", label: "User Admin", icon: UserCog, permission: "read:user" },
         { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
         { href: "/staff/settings", label: "System Setup", icon: Settings, agentHidden: true },
-        { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
       ]);
 
   // ── Tools: utilities ──
@@ -426,10 +425,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           items: filterNav([
             { href: "/staff/policies", label: "Policies", icon: FileStack, permission: "read:policy" },
             { href: "/staff/admin/member-cards", label: "Member Cards", icon: CreditCard, permission: "manage:settings", agentHidden: true },
+            { href: "/staff/tools/print-policy-cards", label: "Print Policy Cards", icon: Printer },
           ]),
         },
         {
-          title: "Collections",
+          // Was "Collections" — renamed since that read as debt-collection to anyone coming
+          // from insurance vocabulary. This is money coming in: receipting, cash-up, banking it.
+          title: "Payments",
           items: filterNav([
             { href: "/staff/finance?tab=payments", label: "Receipt a Payment", icon: Receipt, permissions: ["read:finance", "read:commission"] },
             { href: "/staff/finance?tab=paynow", label: "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission"] },
@@ -439,19 +441,23 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard, agentHidden: true },
             { href: "/staff/transactions/bank-deposits", label: "Bank Deposits", icon: Landmark, agentHidden: true },
             { href: "/staff/transactions/petty-cash", label: "Petty Cash", icon: Coins, agentHidden: true },
-            { href: "/staff/tools/print-policy-cards", label: "Print Policy Cards", icon: Printer },
           ]),
         },
         {
           title: "Claims",
           items: filterNav([
             { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim" },
+            { href: "/staff/tools/claims-form", label: "Online Claims Form", icon: ClipboardList, agentHidden: true },
+          ]),
+        },
+        {
+          title: "Funerals",
+          items: filterNav([
             { href: "/staff/funerals", label: "Funeral Cases", icon: Truck, permission: "read:funeral_ops" },
             { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops" },
             { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops" },
             { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"] },
             { href: "/staff/pricebook", label: "Funeral Pricing", icon: BookOpen, permission: "write:product" },
-            { href: "/staff/tools/claims-form", label: "Online Claims Form", icon: ClipboardList, agentHidden: true },
             { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck, agentHidden: true },
           ]),
         },
@@ -489,29 +495,38 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           items: filterNav([
             { href: "/staff/products", label: "Products", icon: Box, permission: "write:product" },
             { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
-            { href: "/staff/users", label: "Users", icon: UserCog, permission: "read:user" },
-            { href: "/staff/settings", label: "Organization & Branding", icon: Settings, permission: "manage:settings", agentHidden: true },
+            { href: "/staff/admin/invoice-items", label: "Invoice Items", icon: ClipboardList, permission: "write:product", agentHidden: true },
+            // Was "Organization & Branding" — branding/payments/tenant management moved to the
+            // platform-owner console; this page now only holds Account, Terms, RBAC, and Receipt
+            // Adverts, so the label needs to stop promising branding that isn't here anymore.
+            { href: "/staff/settings", label: "Settings", icon: Settings, permission: "manage:settings", agentHidden: true },
             { href: "/staff/notifications", label: "Notifications / SMS", icon: Bell, permission: "read:notification" },
             { href: "/staff/order-services", label: "Order Services", icon: DollarSign, permission: "manage:settings", agentHidden: true },
+            { href: "/staff/admin/terminals", label: "Terminals + Cards", icon: Monitor, permission: "manage:settings", agentHidden: true },
+            { href: "/staff/tools/easypay", label: "Manage EasyPay", icon: Zap, permission: "manage:settings", agentHidden: true },
+          ]),
+        },
+        {
+          // Split out of "Setup" — that dropdown had grown to 17 items and needed scrolling.
+          // This holds people/partner/reference-data administration and organizational records,
+          // as distinct from one-time product/org configuration above.
+          title: "Directory",
+          items: filterNav([
+            { href: "/staff/users", label: "Users", icon: UserCog, permission: "read:user" },
             { href: "/staff/admin/branches", label: "Branch Admin", icon: MapPin, permission: "read:branch", agentHidden: true },
             { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck, permission: "read:user", agentHidden: true },
             { href: "/staff/admin/brokers", label: "Broker Admin", icon: Briefcase, permission: "read:user", agentHidden: true },
             { href: "/staff/admin/underwriters", label: "Underwriter Admin", icon: Shield, permission: "manage:settings", agentHidden: true },
             { href: "/staff/admin/undertakers", label: "Undertaker Admin", icon: HeartHandshake, permission: "manage:settings", agentHidden: true },
-            { href: "/staff/admin/terminals", label: "Terminals + Cards", icon: Monitor, permission: "manage:settings", agentHidden: true },
-            { href: "/staff/admin/invoice-items", label: "Invoice Items", icon: ClipboardList, permission: "write:product", agentHidden: true },
+            { href: "/staff/tools/contacts", label: "Contacts Manager", icon: BookOpen, permission: "read:user" },
             { href: "/staff/audit", label: "Audit Trail", icon: History, permission: "read:audit_log" },
             { href: "/staff/tools/assets", label: "Asset Register", icon: Archive, permission: "read:audit_log" },
-            { href: "/staff/tools/easypay", label: "Manage EasyPay", icon: Zap, permission: "manage:settings", agentHidden: true },
-            { href: "/staff/tools/contacts", label: "Contacts Manager", icon: BookOpen, permission: "read:user" },
-            { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
           ]),
         },
       ].filter((s) => s.items.length > 0);
 
   const controlPlaneNavExtras: StaffNavItem[] = isControlPlaneMode
     ? filterNav([
-        { href: "/staff/settings?tab=tenants", label: "Tenants", icon: Building2, permission: "create:tenant" },
         { href: "/staff/settings", label: "Settings", icon: Settings },
       ])
     : [];
@@ -675,7 +690,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="flex items-center gap-2 cursor-pointer text-muted-foreground"
-                    onClick={() => setLocation("/staff/settings?tab=tenants")}
+                    onClick={() => switchTenantMutation.mutate(undefined as any)}
                   >
                     <Building2 className="h-3.5 w-3.5 shrink-0" />
                     <span>Manage tenants</span>
@@ -683,7 +698,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : isPlatformOwner && (orgs == null || !Array.isArray(orgs) || orgs.length === 0) ? (
-              <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setLocation("/staff/settings?tab=tenants")}>
+              <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => switchTenantMutation.mutate(undefined as any)}>
                 <Globe className="h-3.5 w-3.5 text-primary shrink-0" />
                 <span>Add tenant</span>
               </Button>

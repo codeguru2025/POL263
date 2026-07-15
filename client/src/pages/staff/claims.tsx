@@ -1,23 +1,26 @@
 import { useState, useEffect } from "react";
-import { useSearch } from "wouter";
+import { useSearch, Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
-import { PageHeader, PageShell, CardSection, FilterBar, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { Input } from "@/components/ui/input";
-import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye, FileDown } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye, FileDown, AlertTriangle } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { formatAmountWithCode } from "@shared/validation";
 import type { Claim } from "@shared/schema";
+
+/** The claims list is left-joined server-side with any linked funeral case — see
+ *  storage.getClaimsByOrg — so the Claims<->Funerals cross-link needs no extra fetch. */
+type ClaimWithFuneralCase = Claim & { funeralCaseId: string | null; funeralCaseNumber: string | null };
 
 const CLAIM_TRANSITIONS: Record<string, string[]> = {
   submitted: ["verified", "rejected"],
@@ -59,7 +62,7 @@ export default function StaffClaims() {
   }, [createSearch]);
   const [showTransitionDialog, setShowTransitionDialog] = useState(false);
   const [showDetailDialog, setShowDetailDialog] = useState(false);
-  const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
+  const [selectedClaim, setSelectedClaim] = useState<ClaimWithFuneralCase | null>(null);
   const [transitionTarget, setTransitionTarget] = useState("");
   const [transitionReason, setTransitionReason] = useState("");
 
@@ -93,9 +96,21 @@ export default function StaffClaims() {
     setSelectedMemberId("");
   };
 
-  const { data: claims = [], isLoading } = useQuery<Claim[]>({
+  const { data: claims = [], isLoading, isError: claimsError, error: claimsErrorObj, refetch: refetchClaims } = useQuery<ClaimWithFuneralCase[]>({
     queryKey: ["/api/claims"],
   });
+
+  // Deep-link support for the Funerals<->Claims cross-link (funerals.tsx links here via
+  // ?openClaim=), matching the ?openPolicy= pattern already used on the Policies page.
+  useEffect(() => {
+    const id = new URLSearchParams(createSearch).get("openClaim");
+    if (!id || claims.length === 0) return;
+    const claim = claims.find((c) => c.id === id);
+    if (claim) {
+      setSelectedClaim(claim);
+      setShowDetailDialog(true);
+    }
+  }, [createSearch, claims]);
 
   const createMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
@@ -141,7 +156,7 @@ export default function StaffClaims() {
     return matchesSearch && matchesStatus;
   });
 
-  const openTransition = (claim: Claim) => {
+  const openTransition = (claim: ClaimWithFuneralCase) => {
     setSelectedClaim(claim);
     const nextStates = CLAIM_TRANSITIONS[claim.status] || [];
     setTransitionTarget(nextStates[0] || "");
@@ -149,7 +164,7 @@ export default function StaffClaims() {
     setShowTransitionDialog(true);
   };
 
-  const openDetail = (claim: Claim) => {
+  const openDetail = (claim: ClaimWithFuneralCase) => {
     setSelectedClaim(claim);
     setShowDetailDialog(true);
   };
@@ -199,6 +214,89 @@ export default function StaffClaims() {
       raw: notes,
     };
   };
+
+  const claimColumns: EdtColumn<ClaimWithFuneralCase>[] = [
+    {
+      id: "claimNumber",
+      header: "Claim #",
+      accessor: (c) => c.claimNumber,
+      cell: (c) => (
+        <div className="flex items-center gap-2">
+          <FileWarning className="h-4 w-4 text-primary/70 shrink-0" />
+          {c.claimNumber}
+        </div>
+      ),
+      headClassName: "pl-6",
+      cellClassName: "font-medium pl-6",
+    },
+    {
+      id: "claimType",
+      header: "Type",
+      accessor: (c) => c.claimType,
+      cell: (c) => <span className="text-sm capitalize">{c.claimType?.replace(/_/g, " ")}</span>,
+    },
+    {
+      id: "deceasedName",
+      header: "Deceased",
+      accessor: (c) => c.deceasedName,
+      cell: (c) => c.deceasedName || "—",
+    },
+    {
+      id: "dateOfDeath",
+      header: "Date of Death",
+      accessor: (c) => c.dateOfDeath,
+      cell: (c) => <span className="text-muted-foreground text-sm tabular-nums">{formatDate(c.dateOfDeath)}</span>,
+    },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (c) => c.status,
+      cell: (c) => <span data-testid={`status-claim-${c.id}`}><StatusBadge variant="claim" status={c.status} /></span>,
+    },
+    {
+      id: "cashInLieuAmount",
+      header: "Cash-in-Lieu",
+      accessor: (c) => c.cashInLieuAmount ?? 0,
+      cell: (c) => <span className="font-medium tabular-nums">{c.cashInLieuAmount ? formatAmountWithCode(c.cashInLieuAmount, c.currency) : "—"}</span>,
+    },
+    {
+      id: "createdAt",
+      header: "Filed",
+      accessor: (c) => c.createdAt,
+      cell: (c) => <span className="text-muted-foreground text-sm tabular-nums">{formatDate(c.createdAt as any)}</span>,
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      align: "right",
+      sortable: false,
+      exportable: false,
+      headClassName: "text-right pr-6",
+      cellClassName: "text-right pr-6",
+      cell: (claim) => (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-actions-claim-${claim.id}`} aria-label="Claim actions">
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => openDetail(claim)} data-testid={`button-view-claim-${claim.id}`}>
+              <Eye className="h-4 w-4 mr-2" /> View Details
+            </DropdownMenuItem>
+            {CLAIM_TRANSITIONS[claim.status] && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => openTransition(claim)} data-testid={`button-transition-claim-${claim.id}`}>
+                  <ArrowRightLeft className="h-4 w-4 mr-2" /> Transition Status
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ),
+    },
+  ];
 
   return (
     <StaffLayout>
@@ -254,79 +352,32 @@ export default function StaffClaims() {
                   </SelectContent>
                 </Select>
             </FilterBar>
-            {isLoading ? (
+            {claimsError ? (
+              <EmptyState
+                icon={AlertTriangle}
+                title="Could not load claims"
+                description={claimsErrorObj instanceof Error ? claimsErrorObj.message : "Something went wrong fetching the claims list."}
+                action={<Button variant="outline" onClick={() => refetchClaims()}>Try again</Button>}
+                className="border-0 rounded-none bg-transparent py-12"
+              />
+            ) : isLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
-            ) : filteredClaims.length === 0 ? (
-              <EmptyState
-                dataTestId="text-no-claims"
-                icon={FileWarning}
-                title="No claims found"
-                description="Create a new claim or adjust your filters."
-                className="border-0 rounded-none bg-transparent py-12"
-              />
             ) : (
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead className="pl-6">Claim #</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Deceased</TableHead>
-                    <TableHead>Date of Death</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Cash-in-Lieu</TableHead>
-                    <TableHead>Filed</TableHead>
-                    <TableHead className="text-right pr-6">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredClaims.map((claim) => (
-                    <TableRow key={claim.id} className="hover:bg-muted/40 transition-colors" data-testid={`row-claim-${claim.id}`}>
-                      <TableCell className="font-medium pl-6">
-                        <div className="flex items-center gap-2">
-                          <FileWarning className="h-4 w-4 text-primary/70 shrink-0" />
-                          {claim.claimNumber}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-sm capitalize">{claim.claimType?.replace(/_/g, " ")}</TableCell>
-                      <TableCell>{claim.deceasedName || "—"}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm tabular-nums">{formatDate(claim.dateOfDeath)}</TableCell>
-                      <TableCell>
-                        <span data-testid={`status-claim-${claim.id}`}>
-                          <StatusBadge variant="claim" status={claim.status} />
-                        </span>
-                      </TableCell>
-                      <TableCell className="font-medium tabular-nums">
-                        {claim.cashInLieuAmount ? formatAmountWithCode(claim.cashInLieuAmount, claim.currency) : "—"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm tabular-nums">{formatDate(claim.createdAt as any)}</TableCell>
-                      <TableCell className="text-right pr-6">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-actions-claim-${claim.id}`} aria-label="Claim actions">
-                              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => openDetail(claim)} data-testid={`button-view-claim-${claim.id}`}>
-                              <Eye className="h-4 w-4 mr-2" /> View Details
-                            </DropdownMenuItem>
-                            {CLAIM_TRANSITIONS[claim.status] && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => openTransition(claim)} data-testid={`button-transition-claim-${claim.id}`}>
-                                  <ArrowRightLeft className="h-4 w-4 mr-2" /> Transition Status
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
+              <div className="px-4 pb-4 pt-2 sm:px-6">
+                <EnhancedDataTable<ClaimWithFuneralCase>
+                  columns={claimColumns}
+                  rows={filteredClaims}
+                  getRowKey={(c) => c.id}
+                  searchable={false}
+                  exportable
+                  exportFilename="claims"
+                  storageKey="claims"
+                  emptyMessage="No claims found. Create a new claim or adjust your filters."
+                  rowTestId={(c) => `row-claim-${c.id}`}
+                />
+              </div>
             )}
         </CardSection>
       </PageShell>
@@ -640,6 +691,16 @@ export default function StaffClaims() {
                     <p className="font-medium">{formatDate(selectedClaim.createdAt as any)}</p>
                   </div>
                 </div>
+                {selectedClaim.funeralCaseId && (
+                  <Link
+                    href={`/staff/funerals?openCase=${selectedClaim.funeralCaseId}`}
+                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+                    data-testid="link-view-funeral-case"
+                  >
+                    <ArrowRightLeft className="h-3.5 w-3.5" />
+                    View funeral case {selectedClaim.funeralCaseNumber ? `(${selectedClaim.funeralCaseNumber})` : ""}
+                  </Link>
+                )}
                 {assessment && (
                   <div>
                     <p className="text-muted-foreground text-sm font-medium">Assessment</p>
