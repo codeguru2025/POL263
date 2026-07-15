@@ -3,8 +3,9 @@
 This file tracks the ongoing architectural refactor of POL263 from a shared-database
 monolith into a control plane + isolated tenant data plane architecture.
 
-**Last updated:** 2026-04-14  
-**Session summary:** Phase 1 complete, deployed to production on DigitalOcean.
+**Last updated:** 2026-07-15  
+**Session summary:** Phase 1 complete, deployed to production on DigitalOcean. PayNow credentials
+now migrated to `tenant_integrations` in the control plane (part of Phase 2).
 
 ---
 
@@ -115,7 +116,7 @@ Request for any other tenant
 
 ---
 
-## Phase 2: Payment + Integration Abstraction — NOT STARTED
+## Phase 2: Payment + Integration Abstraction — PARTIALLY COMPLETE
 
 ### Goal
 
@@ -123,16 +124,28 @@ Move PayNow credentials out of environment variables and into `tenant_integratio
 in the control plane. Add provider abstraction layer so different tenants can use
 different payment providers.
 
-### What needs to be built
+### What was built (PayNow slice)
 
-- `server/adapters/payment/PaymentAdapter.ts` — interface
-- `server/adapters/payment/PaynowAdapter.ts` — PayNow implementation
+| File | Description |
+|---|---|
+| `server/paynow-config.ts` | `getOrgPaynowConfig(orgId)` — resolves per-org PayNow config: control plane `tenant_integrations` (provider `"paynow"`) first, then legacy plaintext columns on `organizations`, then platform env vars. `upsertOrgPaynowConfig(orgId, patch)` writes/updates it. |
+| `server/tenant-config-crypto.ts` | AES-256-GCM encrypt/decrypt for secret fields (e.g. `integrationKey`) stored in `tenant_integrations.config`, keyed by `TENANT_CONFIG_ENCRYPTION_KEY` |
+| `scripts/migrate-paynow-config-to-control-plane.mjs` | One-time migration: copies legacy `organizations.paynow*` columns into `tenant_integrations` rows, encrypting the key |
+
+Fallback chain is intentional: a control-plane lookup failure does NOT silently fall
+back to the platform merchant account if the org itself can't be confirmed — see the
+comment in `getOrgPaynowConfig()`. Only a genuinely unmigrated org falls back to its
+legacy columns, and only a genuinely unconfigured org falls back to platform env vars.
+
+### What still needs to be built
+
+- `server/adapters/payment/PaymentAdapter.ts` — interface (PayNow is currently called
+  directly, not behind an adapter)
 - `server/adapters/payment/StripeAdapter.ts` — Stripe stub
 - `server/adapters/whatsapp/WhatsAppAdapter.ts` — interface
 - `server/adapters/sms/SMSAdapter.ts` — interface
-- `server/integration-loader.ts` — loads tenant config from control plane, returns adapter
-- Encryption layer for secrets in `tenant_integrations.config` (AES-256-GCM using TENANT_CONFIG_ENCRYPTION_KEY)
-- Migration: move PAYNOW_INTEGRATION_ID/KEY from env vars → tenant_integrations rows
+- `server/integration-loader.ts` — generic loader that returns the right adapter for
+  any `tenant_integrations.provider`, not just PayNow
 
 ---
 
@@ -147,8 +160,13 @@ Same process as Falakhe:
 # For each new production tenant:
 npm run db:push:tenant        # TENANT_DIRECT_URL=<url>
 tsx script/migrate-supabase-to-do.ts  # with TENANT_ORG_ID set
-npm run db:cp:set-falakhe-db  # TENANT_ID=<uuid> TENANT_DB_URL=<pooler_url>
+TENANT_ID=<uuid> TENANT_DB_URL=<pooler_url> tsx script/cp-set-tenant-db.ts
 ```
+
+Despite its name, `script/cp-set-tenant-db.ts` is already tenant-generic — it defaults
+to Falakhe's org id only when `TENANT_ID` is unset. The `db:cp:set-falakhe-db` npm
+script is just that no-args default; pass `TENANT_ID`/`TENANT_DB_URL` (and optionally
+`TENANT_DIRECT_URL`) directly for any other tenant, no new script needed.
 
 ---
 
