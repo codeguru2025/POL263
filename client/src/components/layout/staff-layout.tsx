@@ -380,6 +380,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/users", label: "User Admin", icon: UserCog, permission: "read:user" },
         { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
         { href: "/staff/settings", label: "System Setup", icon: Settings, agentHidden: true },
+        { href: "/staff/billing", label: "Billing", icon: CreditCard, permission: "manage:settings", agentHidden: true },
       ]);
 
   // ── Tools: utilities ──
@@ -504,6 +505,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             // platform-owner console; this page now only holds Account, Terms, RBAC, and Receipt
             // Adverts, so the label needs to stop promising branding that isn't here anymore.
             { href: "/staff/settings", label: "Settings", icon: Settings, permission: "manage:settings", agentHidden: true },
+            { href: "/staff/billing", label: "Billing", icon: CreditCard, permission: "manage:settings", agentHidden: true },
             { href: "/staff/notifications", label: "Notifications / SMS", icon: Bell, permission: "read:notification" },
             { href: "/staff/order-services", label: "Order Services", icon: DollarSign, permission: "manage:settings", agentHidden: true },
             { href: "/staff/admin/terminals", label: "Terminals + Cards", icon: Monitor, permission: "manage:settings", agentHidden: true },
@@ -532,6 +534,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const controlPlaneNavExtras: StaffNavItem[] = isControlPlaneMode
     ? filterNav([
         { href: "/staff/settings", label: "Settings", icon: Settings },
+        { href: "/staff/platform/billing", label: "Billing Plans", icon: CreditCard },
       ])
     : [];
 

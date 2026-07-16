@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Loader2, Check, Eye, EyeOff, Settings as SettingsIcon, CreditCard, Flag, Globe,
-  Database, HardDrive, Trash2, Star, ShieldAlert, PauseCircle, PlayCircle,
+  Database, HardDrive, Trash2, Star, ShieldAlert, PauseCircle, PlayCircle, Receipt, BadgeCheck,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken, getApiBase } from "@/lib/queryClient";
@@ -112,6 +112,7 @@ export default function PlatformTenantConsole() {
               <TabsTrigger value="database">Database</TabsTrigger>
               <TabsTrigger value="storage">Storage</TabsTrigger>
               <TabsTrigger value="lifecycle">Lifecycle</TabsTrigger>
+              <TabsTrigger value="billing">Billing</TabsTrigger>
               <TabsTrigger value="danger">Danger Zone</TabsTrigger>
             </TabsList>
 
@@ -135,6 +136,9 @@ export default function PlatformTenantConsole() {
             </TabsContent>
             <TabsContent value="lifecycle" className="mt-6">
               <LifecycleTab tenantId={id} lifecycle={config.lifecycle} onSaved={invalidate} />
+            </TabsContent>
+            <TabsContent value="billing" className="mt-6">
+              <BillingTab tenantId={id} />
             </TabsContent>
             <TabsContent value="danger" className="mt-6">
               <DangerZoneTab tenantId={id} tenantName={config.name} />
@@ -788,6 +792,191 @@ function LifecycleTab({ tenantId, lifecycle, onSaved }: { tenantId: string; life
         </AlertDialogContent>
       </AlertDialog>
     </CardSection>
+  );
+}
+
+// ── Billing ────────────────────────────────────────────────────────
+interface BillingSubscriptionRow {
+  id: string; planId: string; status: string;
+  trialEndsAt: string | null; currentPeriodStart: string; currentPeriodEnd: string;
+  graceDaysOverride: number | null;
+}
+interface BillingPlanRow { id: string; key: string; name: string; priceMonthlyUsd: string; modules: string[]; isActive: boolean }
+interface BillingInvoiceRow {
+  id: string; amount: string; currency: string; status: string;
+  periodStart: string; periodEnd: string; dueDate: string; issuedAt: string; paidAt: string | null; markedPaidBy: string | null;
+}
+
+const SUBSCRIPTION_STATUS_VARIANT: Record<string, "default" | "outline" | "destructive" | "secondary"> = {
+  trialing: "outline", active: "default", past_due: "secondary", suspended: "destructive", cancelled: "secondary",
+};
+
+function BillingTab({ tenantId }: { tenantId: string }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [graceDaysOverride, setGraceDaysOverride] = useState("");
+  const [selectedPlanId, setSelectedPlanId] = useState("");
+  const [markPaidInvoice, setMarkPaidInvoice] = useState<BillingInvoiceRow | null>(null);
+  const [markPaidReason, setMarkPaidReason] = useState("");
+
+  const subKey = ["/api/platform/tenants", tenantId, "subscription"];
+  const { data: subData, isLoading: subLoading } = useQuery<{ subscription: BillingSubscriptionRow | null; plan: BillingPlanRow | null }>({ queryKey: subKey });
+  const { data: invoices = [] } = useQuery<BillingInvoiceRow[]>({ queryKey: ["/api/platform/tenants", tenantId, "invoices"] });
+  const { data: plansData } = useQuery<{ knownModules: string[]; plans: BillingPlanRow[] }>({ queryKey: ["/api/platform/billing/plans"] });
+
+  useEffect(() => {
+    if (subData?.subscription) {
+      setGraceDaysOverride(subData.subscription.graceDaysOverride == null ? "" : String(subData.subscription.graceDaysOverride));
+      setSelectedPlanId(subData.subscription.planId);
+    }
+  }, [subData]);
+
+  function invalidate() {
+    queryClient.invalidateQueries({ queryKey: subKey });
+    queryClient.invalidateQueries({ queryKey: ["/api/platform/tenants", tenantId, "invoices"] });
+  }
+
+  const updateSubMutation = useMutation({
+    mutationFn: async (body: Record<string, any>) => { await apiRequest("PUT", `/api/platform/tenants/${tenantId}/subscription`, body); },
+    onSuccess: () => { invalidate(); toast({ title: "Subscription updated" }); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const markPaidMutation = useMutation({
+    mutationFn: async () => {
+      if (!markPaidInvoice) return;
+      await apiRequest("POST", `/api/platform/tenants/${tenantId}/invoices/${markPaidInvoice.id}/mark-paid`, { reason: markPaidReason });
+    },
+    onSuccess: () => { invalidate(); setMarkPaidInvoice(null); setMarkPaidReason(""); toast({ title: "Invoice marked as paid — access restored" }); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  if (subLoading) {
+    return <CardSection title="Billing" icon={Receipt}><div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div></CardSection>;
+  }
+
+  const subscription = subData?.subscription;
+  const plan = subData?.plan;
+  const plans = plansData?.plans.filter((p) => p.isActive) ?? [];
+
+  return (
+    <div className="space-y-6">
+      <CardSection title="Subscription" description="Plan, status, and grace period for this tenant." icon={Receipt}>
+        <div className="p-6 space-y-5">
+          {!subscription ? (
+            <EmptyState title="No subscription yet" description="This tenant was created before billing was set up, or no plan has been assigned." />
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant={SUBSCRIPTION_STATUS_VARIANT[subscription.status] ?? "outline"} className="capitalize">{subscription.status.replace("_", " ")}</Badge>
+                <span className="text-sm text-muted-foreground">{plan?.name ?? "Unknown plan"} — {plan ? `$${plan.priceMonthlyUsd}/mo` : ""}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div className="rounded-md border p-3">
+                  <p className="text-muted-foreground text-xs uppercase tracking-wide">Current period</p>
+                  <p>{new Date(subscription.currentPeriodStart).toLocaleDateString()} – {new Date(subscription.currentPeriodEnd).toLocaleDateString()}</p>
+                </div>
+                {subscription.trialEndsAt && (
+                  <div className="rounded-md border p-3">
+                    <p className="text-muted-foreground text-xs uppercase tracking-wide">Trial ends</p>
+                    <p>{new Date(subscription.trialEndsAt).toLocaleDateString()}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="pt-billing-plan">Plan</Label>
+                  <div className="flex items-center gap-2">
+                    <select id="pt-billing-plan" value={selectedPlanId} onChange={(e) => setSelectedPlanId(e.target.value)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                      {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — ${p.priceMonthlyUsd}/mo</option>)}
+                    </select>
+                    <Button variant="outline" disabled={selectedPlanId === subscription.planId || updateSubMutation.isPending}
+                      onClick={() => updateSubMutation.mutate({ planId: selectedPlanId })}>
+                      Save
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pt-billing-grace">Grace period override (days)</Label>
+                  <div className="flex items-center gap-2">
+                    <Input id="pt-billing-grace" type="number" min={0} value={graceDaysOverride}
+                      onChange={(e) => setGraceDaysOverride(e.target.value)} placeholder="Inherit global default" />
+                    <Button variant="outline" disabled={updateSubMutation.isPending}
+                      onClick={() => updateSubMutation.mutate({ graceDaysOverride: graceDaysOverride === "" ? null : parseInt(graceDaysOverride, 10) })}>
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </CardSection>
+
+      <CardSection title="Invoice history" description="Renewal invoices and payment status." icon={BadgeCheck}>
+        {invoices.length === 0 ? (
+          <p className="p-6 text-sm text-muted-foreground">No invoices yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow><TableHead>Period</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Due</TableHead><TableHead>Paid</TableHead><TableHead /></TableRow>
+              </TableHeader>
+              <TableBody>
+                {invoices.map((inv) => (
+                  <TableRow key={inv.id}>
+                    <TableCell className="text-sm">{new Date(inv.periodStart).toLocaleDateString()} – {new Date(inv.periodEnd).toLocaleDateString()}</TableCell>
+                    <TableCell className="font-mono text-sm">{inv.currency} {inv.amount}</TableCell>
+                    <TableCell>
+                      <Badge variant={inv.status === "paid" ? "default" : inv.status === "void" ? "secondary" : "outline"} className="capitalize">{inv.status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{new Date(inv.dueDate).toLocaleDateString()}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {inv.paidAt ? `${new Date(inv.paidAt).toLocaleDateString()}${inv.markedPaidBy ? " (manual)" : ""}` : "—"}
+                    </TableCell>
+                    <TableCell>
+                      {inv.status === "open" && (
+                        <Button size="sm" variant="outline" onClick={() => { setMarkPaidInvoice(inv); setMarkPaidReason(""); }}>
+                          Mark as paid
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardSection>
+
+      <AlertDialog open={!!markPaidInvoice} onOpenChange={(open) => { if (!open) setMarkPaidInvoice(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Manually mark this invoice as paid?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Use this only for payments received outside PayNow (e.g. bank transfer). This immediately
+              restores access if the tenant was suspended, and extends their subscription period.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 px-1">
+            <Label htmlFor="pt-markpaid-reason">Reason (required)</Label>
+            <Input id="pt-markpaid-reason" value={markPaidReason} onChange={(e) => setMarkPaidReason(e.target.value)} placeholder="e.g. Bank transfer received 12 July" />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!markPaidReason.trim() || markPaidMutation.isPending}
+              onClick={() => markPaidMutation.mutate()}
+            >
+              {markPaidMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Mark as paid
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }
 

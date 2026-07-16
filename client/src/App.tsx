@@ -53,7 +53,10 @@ const AgentDownload = lazy(() => retryLazy(() => import("@/pages/agent/download"
 const StaffDashboard = lazy(() => retryLazy(() => import("@/pages/staff/dashboard")));
 const AuditLogs = lazy(() => retryLazy(() => import("@/pages/staff/audit")));
 const StaffSettings = lazy(() => retryLazy(() => import("@/pages/staff/settings")));
+const StaffBilling = lazy(() => retryLazy(() => import("@/pages/staff/billing")));
+const PayInvoice = lazy(() => retryLazy(() => import("@/pages/public/pay-invoice")));
 const PlatformTenantConsole = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-console")));
+const PlatformBilling = lazy(() => retryLazy(() => import("@/pages/staff/platform-billing")));
 const ProductBuilder = lazy(() => retryLazy(() => import("@/pages/staff/products")));
 const StaffPolicies = lazy(() => retryLazy(() => import("@/pages/staff/policies")));
 const StaffClients = lazy(() => retryLazy(() => import("@/pages/staff/clients")));
@@ -178,6 +181,7 @@ function Router() {
       <SafeRoute path="/staff/" component={StaffDashboard} />
       <SafeRoute path="/staff/audit" component={AuditLogs} />
       <SafeRoute path="/staff/settings" component={StaffSettings} />
+      <SafeRoute path="/staff/billing" component={StaffBilling} />
       <SafeRoute path="/staff/settings/" component={StaffSettings} />
       <SafeRoute path="/staff/products" component={ProductBuilder} />
       <SafeRoute path="/staff/policies" component={StaffPolicies} />
@@ -202,6 +206,7 @@ function Router() {
       <SafeRoute path="/staff/schedule-reports" component={StaffScheduleReports} />
       <SafeRoute path="/staff/users" component={StaffUsers} />
       <SafeRoute path="/staff/platform/tenants/:id" component={PlatformTenantConsole} />
+      <SafeRoute path="/staff/platform/billing" component={PlatformBilling} />
       <SafeRoute path="/staff/help" component={StaffHelpCenter} />
       <SafeRoute path="/staff/reminders" component={StaffReminders} />
       <SafeRoute path="/staff/order-services" component={StaffOrderServices} />
@@ -238,6 +243,7 @@ function Router() {
       <SafeRoute path="/staff/admin/undertakers" component={StaffUndertakers} />
 
       <SafeRoute path="/auth/callback" component={AuthCallback} />
+      <SafeRoute path="/pay/:token" component={PayInvoice} />
       <SafeRoute path="/join" component={JoinPage} />
       <SafeRoute path="/join/register" component={JoinRegisterPage} />
       <SafeRoute path="/verify" component={VerifyPage} />
