@@ -8378,7 +8378,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const qr = await storage.getAttendanceQrCodeById(req.params.id as string, user.organizationId);
     if (!qr) return res.status(404).json({ message: "QR code not found" });
     const QRCode = (await import("qrcode")).default;
-    const payload = JSON.stringify({ orgId: qr.organizationId, qrCodeId: qr.id, token: qr.token });
+    // A real URL (not raw JSON) so a phone's native camera app offers "Open" and deep-links
+    // straight into the Attendance page's auto-scan handler, instead of "copy text" (a generic
+    // QR reader has nothing actionable to do with JSON). Falls back to the old JSON payload —
+    // still scannable by the in-app scanner — if APP_BASE_URL isn't configured.
+    const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+    const payload = base
+      ? `${base}/staff/attendance?scan=${encodeURIComponent(qr.token)}`
+      : JSON.stringify({ orgId: qr.organizationId, qrCodeId: qr.id, token: qr.token });
     const buffer = await QRCode.toBuffer(payload, { type: "png", width: 400, margin: 2, errorCorrectionLevel: "M" });
     res.setHeader("Content-Type", "image/png");
     return res.send(buffer);

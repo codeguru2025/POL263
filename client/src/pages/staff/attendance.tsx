@@ -43,6 +43,26 @@ function toHarareHHMM(d: string | null | undefined): string {
   }
 }
 
+/**
+ * The kiosk QR now encodes a real URL (`/staff/attendance?scan=<token>`) so a phone's
+ * native camera app offers "Open" instead of a dead-end "copy text" (JSON isn't
+ * actionable to a generic QR reader). Still accepts the older raw-JSON payload
+ * (`{orgId,qrCodeId,token}`) so QR codes already printed and posted before this change
+ * keep working — nothing needs reprinting.
+ */
+function extractAttendanceQrToken(decodedText: string): string | null {
+  try {
+    const parsed = JSON.parse(decodedText);
+    if (parsed && typeof parsed.token === "string" && parsed.token) return parsed.token;
+  } catch { /* not JSON — try URL below */ }
+  try {
+    const url = new URL(decodedText);
+    const token = url.searchParams.get("scan");
+    if (token) return token;
+  } catch { /* not a URL either */ }
+  return null;
+}
+
 /** Best-effort GPS fix; scanning still proceeds without one if permission is denied. */
 async function getCoords(): Promise<{ latitude?: number; longitude?: number }> {
   try {
@@ -98,13 +118,15 @@ function ScanAttendancePanel({ onScanned }: { onScanned: () => void }) {
     scanner.render(
       async (decodedText: string) => {
         if (busy) return;
+        const token = extractAttendanceQrToken(decodedText);
+        if (!token) {
+          toast({ title: "Not a valid attendance QR code", variant: "destructive" });
+          return;
+        }
         setBusy(true);
         await stopScanner();
         try {
-          const parsed = JSON.parse(decodedText);
-          await scanMutation.mutateAsync(parsed.token);
-        } catch {
-          toast({ title: "Not a valid attendance QR code", variant: "destructive" });
+          await scanMutation.mutateAsync(token);
         } finally {
           setBusy(false);
         }
@@ -114,6 +136,23 @@ function ScanAttendancePanel({ onScanned }: { onScanned: () => void }) {
   };
 
   useEffect(() => () => { scannerRef.current?.clear().catch(() => {}); }, []);
+
+  // Deep-link: a native camera app "Open"-ing the kiosk QR URL lands here with ?scan=<token>
+  // already logged in — complete the clock-in/out immediately rather than making the user
+  // tap "Start Scan" and re-scan the same code a second time from inside the app.
+  const autoScannedRef = useRef(false);
+  useEffect(() => {
+    if (autoScannedRef.current) return;
+    const token = new URLSearchParams(window.location.search).get("scan");
+    if (!token) return;
+    autoScannedRef.current = true;
+    // Strip the param immediately so a page refresh (or the mutation's own re-render)
+    // can't resubmit the same scan.
+    const url = new URL(window.location.href);
+    url.searchParams.delete("scan");
+    window.history.replaceState({}, "", url.toString());
+    scanMutation.mutate(token);
+  }, []);
 
   return (
     <CardSection title="Scan to Clock In / Out" icon={ScanLine}>
