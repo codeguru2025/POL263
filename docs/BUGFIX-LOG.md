@@ -10,6 +10,49 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-16 — Attendance kiosk QR code only offered "copy text" when scanned with a phone's native camera
+
+- **Symptom:** user reported scanning the printed attendance QR code (with their phone's
+  regular Camera app, the natural first instinct for any QR code) only ever gave a "copy
+  text" option — no way to actually clock in/out.
+- **Root cause:** `GET /api/attendance/qr-codes/:id/image` (`server/routes.ts:8375-8385`)
+  encoded the QR as raw JSON — `{"orgId":"...","qrCodeId":"...","token":"..."}` — not a URL.
+  A generic/native QR reader only offers actions it recognizes (open a URL, dial a number,
+  connect to wifi, etc.); plain JSON isn't any of those, so it falls back to "copy text" or a
+  web search. The code was only ever scannable by the app's own in-app scanner (the "Start
+  Scan" button on `/staff/attendance`, using `html5-qrcode` to decode the camera feed
+  in-page and `JSON.parse()` the result directly) — never by a phone's native camera.
+  Checked the two other QR-generating call sites in the app (receipt PDFs and member cards,
+  both via `buildVerifyQrBuffer` in `server/pdf-utils.ts`) and both already encode a real
+  `/verify?type=...&id=...` URL — this was specific to the attendance kiosk code.
+- **Fix:** the QR now encodes `${APP_BASE_URL}/staff/attendance?scan=<token>` — a real URL,
+  so a native camera app offers "Open" and deep-links straight into the app. The in-app
+  scanner (`client/src/pages/staff/attendance.tsx`) now accepts *both* formats (tries
+  `JSON.parse()` first, falls back to reading the `scan` query param from a URL), so QR
+  codes already printed and posted at a physical location keep working without needing to
+  be reprinted. Landing on the Attendance page with `?scan=<token>` in the URL while already
+  logged in now auto-fires the same clock-in/out request a camera-in-app scan would, via a
+  `useRef`-guarded `useEffect` that also strips the query param immediately so a page
+  refresh can't resubmit the same scan twice.
+- **Deliberately left out of scope:** the staff Google OAuth login redirect
+  (`client/src/pages/staff/login.tsx:73`) hardcodes `returnTo=/staff` — so a staff member
+  who scans the physical QR with their camera *while logged out* lands on the login page,
+  authenticates, reaches the normal dashboard, and needs to scan again from inside the app
+  to actually complete the clock-in (the `?scan=` param is dropped, not carried through
+  login). Making that fully seamless would mean changing the OAuth redirect default used by
+  *every* staff login, not just this one flow — a much higher-blast-radius change than this
+  fix warranted on its own.
+- **Files:** `server/routes.ts`, `client/src/pages/staff/attendance.tsx`.
+- **Verification:** typecheck clean, lint clean, full test suite green (202/202).
+- **Lesson for next time:** any QR code meant to be scanned by a general-purpose device
+  (a phone's native camera, not just this app's own in-app scanner) must encode a URL, not
+  a bare data payload — a generic QR reader has no way to act on arbitrary JSON/text. When
+  adding a new QR-code generator, check `buildVerifyQrBuffer`/`buildVerifyUrl` in
+  `server/pdf-utils.ts` first; that's the established, already-correct pattern in this
+  codebase, and reusing it costs nothing.
+
+---
+
 ## 2026-07-16 — Edge-case sweep of the billing feature + Finance redesign turned up 9 real bugs
 
 Asked to "check for edge cases in everything we did" (the tenant billing feature and the
