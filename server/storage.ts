@@ -3300,7 +3300,10 @@ export class DatabaseStorage implements IStorage {
   }
   async getFuneralCaseByCaseNumber(caseNumber: string, orgId: string): Promise<FuneralCase | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [fc] = await tdb.select().from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), eq(funeralCases.caseNumber, caseNumber)));
+    // Case-insensitive exact match — case numbers are server-generated uppercase, but a
+    // manually-typed lookup (from memory, a phone call, etc.) shouldn't 404 on casing alone.
+    // sql`upper(...)` rather than ilike() so user input can't be interpreted as a wildcard pattern.
+    const [fc] = await tdb.select().from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), eq(sql`upper(${funeralCases.caseNumber})`, caseNumber.toUpperCase())));
     return fc;
   }
   async createFuneralCase(fc: InsertFuneralCase): Promise<FuneralCase> {

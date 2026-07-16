@@ -10,6 +10,104 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-16 — Edge-case sweep of the billing feature + Finance redesign turned up 9 real bugs
+
+Asked to "check for edge cases in everything we did" (the tenant billing feature and the
+earlier Finance grouped-tab redesign, both this session). Ran 4 parallel deep reviews rather
+than skim — real, fixable bugs below, ranked by what they actually affect.
+
+- **Lost-update race in `applyTenantInvoicePayment`** (`server/tenant-billing-service.ts`) —
+  the invoice row was locked (`FOR UPDATE`) but the subscription row wasn't. Two *different*
+  open invoices for the same subscription paid concurrently would both read the same stale
+  `currentPeriodEnd` and the second UPDATE would silently overwrite the first's period
+  extension — a tenant could pay twice and only get one cycle of access. **Fix:** added
+  `.for("update")` to the subscription select inside the same transaction, so the second
+  concurrent call blocks and re-reads the already-extended period instead of racing.
+- **No guard against overlapping sweep runs, which enabled the race above** —
+  `runTenantBillingSweep` had no lock, so the manual-trigger platform route could fire while
+  the scheduled 06:00 UTC run was still in flight; `generateInvoiceForSubscription`'s
+  idempotency check is a plain SELECT-then-INSERT with no backing unique index, so two
+  overlapping runs could both create a duplicate open invoice for the same subscription+period
+  (plus duplicate reminder emails) — exactly the precondition for the race above. **Fix:**
+  wrapped the sweep body in `withAdvisoryLock` (`server/advisory-lock.ts`, an existing helper
+  already used 3× elsewhere in this codebase for the identical problem — see
+  `PAYMENT_AUTO_LOCK_KEY`/`PARKED_VEHICLE_LOCK_KEY` in `server/routes.ts`); a second concurrent
+  call now returns `{ skipped: true }` instead of running.
+- **`addBillingCycle` did calendar-month arithmetic in local server time, not UTC**
+  (`server/tenant-billing-math.ts`) — `getMonth`/`setMonth`/`getDate` read the Node process's
+  local timezone. No `TZ` is pinned anywhere in this deployment, so correctness silently
+  depended on whatever timezone the host happens to run in; an instant near a month boundary
+  (e.g. `2026-01-31T22:30:00Z` reading as local `2026-02-01T00:30` under `TZ=Africa/Harare`,
+  UTC+2 — plausible for this product) would shift a billing period by a full month. **Fix:**
+  switched to `getUTCMonth`/`setUTCMonth`/`getUTCDate` throughout so the result is
+  deterministic regardless of server TZ config.
+- **Plan `DELETE` could throw an unhandled Postgres FK violation** (`server/platform-billing-routes.ts`)
+  — same bug *class* as the funeral-case-link crash fixed earlier today: the "in use" check
+  only queried `tenantSubscriptions`, never `tenantInvoices` (which also FKs to `billingPlans.id`
+  with no `onDelete` clause). A tenant paid under Plan A, then reassigned to Plan B, leaves
+  Plan A with zero subscribers but a paid invoice still referencing it — deleting it then hit
+  an uncaught `23503` straight to the global handler. **Fix:** check both tables, plus a
+  try/catch around the delete itself catching `23503` as a safety net for the check-then-act
+  race, matching the existing `23505` pattern already used elsewhere in this file.
+- **Plan `modules` array wasn't validated against known module keys** — a typo'd module key
+  (`"claim"` vs `"claims"`) would save silently and permanently exclude a feature the platform
+  owner meant to include, with no error. **Fix:** validate against `ALL_KNOWN_MODULES`
+  (already exported from `module-gate.ts`) on both create and update, 400 on unknown keys.
+- **The funeral-case link-case fix from earlier today didn't trim whitespace or match
+  case-insensitively** (`server/routes.ts`, `server/storage.ts`) — copy-pasting a case number
+  with a leading/trailing space (very common from a PDF or another field) or typing it in
+  lowercase both 404'd with "Funeral case not found" even though the case exists — the exact
+  same failure *shape* as the bug fixed that same session, just a different trigger the first
+  fix didn't cover. **Fix:** `.trim()` the raw input before the UUID/case-number check (which
+  also fixes a whitespace-only string incorrectly skipping the "required" 400); case-number
+  lookup now compares `upper(...)` on both sides rather than an exact match (`sql`upper(...)``,
+  not `ilike()`, so user input can't be interpreted as a wildcard pattern).
+- **Finance page: an unauthorized `?tab=X` deep-link could set `activeTab` to a tab with no
+  visible group** (`client/src/pages/staff/finance.tsx`) — `resolveTab` validated the URL
+  param against the full static list of all 14 tab values, not the current user's actually-
+  visible subset (computed separately, later, in the render). A bookmarked/shared link to a
+  tab the viewer lacks permission for (or a live mid-session permission downgrade — the effect
+  only re-ran on `[search, commissionOnly]`) would light up the wrong group pill while still
+  rendering the named tab's content underneath. No data leak (the backend was always properly
+  gated), just a broken-looking page. **Fix:** hoisted the per-tab visibility computation to
+  the top of the component (moved `canManageSettings`'s declaration up to make this possible)
+  so `resolveTab` and the render use the exact same `visibleTabDefs`, and widened the
+  re-resolve effect's dependencies to the underlying permission booleans, not just the URL.
+- **Platform console: reassigning a tenant's plan silently broke if no active plans existed,
+  or if the tenant's current plan had since been retired** (`platform-tenant-console.tsx`) —
+  the `<select>` filtered to `isActive` plans only, so a retired-but-still-assigned plan
+  matched no `<option>`, and zero active plans left an empty dropdown with no guidance.
+  **Fix:** always include the tenant's currently-assigned plan (labeled "(retired)" if
+  inactive), and show an inline message when the resulting list is empty.
+- **Three minor UI edge cases**, all in the billing frontend added this session: a plan's
+  Active toggle could flip the wrong direction on a rapid double-click before the first PATCH
+  resolved (now disabled while its own mutation is pending); the public pay page kept showing
+  a stale payment-error message after switching payment methods (now resets on method change);
+  the public pay page had no explicit handling for a `"void"` invoice status, letting a
+  no-longer-payable invoice fall through to a live payment form (now shows its own message).
+- **Files:** `server/tenant-billing-service.ts`, `server/tenant-billing-sweep.ts`,
+  `server/tenant-billing-math.ts`, `server/platform-billing-routes.ts`, `server/routes.ts`,
+  `server/storage.ts`, `client/src/pages/staff/finance.tsx`,
+  `client/src/pages/staff/platform-tenant-console.tsx`,
+  `client/src/pages/staff/platform-billing.tsx`, `client/src/pages/public/pay-invoice.tsx`.
+- **Verification:** typecheck clean, full test suite green (202/202) after every fix. Did
+  **not** run a live concurrent-sweep test against production to confirm the advisory lock —
+  that would mean executing the real production billing sweep (which can auto-suspend real
+  tenants and send real emails) against live data with no seeded test tenant, and was
+  correctly blocked by the permission system as outside the scope of the earlier PayNow-only
+  test authorization. Confidence instead rests on `withAdvisoryLock` being an already-proven
+  pattern used identically 3× elsewhere in this exact codebase, plus direct code review.
+- **Lesson for next time:** when a fix closes one gap in a class of bug (e.g. "route trusts
+  unresolved user input against a typed DB column," "route doesn't check every table that FKs
+  to the thing it's deleting"), grep for every other occurrence of that same pattern in the
+  same session rather than assuming the one reported instance was the only one — three of the
+  nine bugs above are the *same* underlying mistake recurring in a different route. Also:
+  after building anything with concurrent-write potential (a payment-application function, a
+  scheduled sweep), explicitly ask "what happens if this runs twice at once" before shipping —
+  it's cheap to check with a fresh review pass and expensive to discover in production.
+
+---
+
 ## 2026-07-16 — Linking a funeral case to a quotation by case number threw "Internal Server Error"
 
 - **Symptom:** User reported linking a funeral case to a quotation failed with a generic

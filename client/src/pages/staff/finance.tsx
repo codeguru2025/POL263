@@ -1402,8 +1402,6 @@ const FINANCE_TAB_META: FinanceTabMeta[] = [
   { value: "approvals", label: "Receipt Approvals", title: "Review and approve backdated group receipts before they are applied", group: "approvals" },
 ];
 
-const FINANCE_TAB_VALUES = FINANCE_TAB_META.map((t) => t.value);
-
 const FINANCE_GROUP_META: Record<FinanceGroup, { label: string; icon: LucideIcon }> = {
   payments: { label: "Payments", icon: Receipt },
   banking: { label: "Banking", icon: Landmark },
@@ -1427,6 +1425,7 @@ export default function StaffFinance() {
   const canDeleteExpenditure = permissions.includes("delete:expenditure") || (authUser as any)?.isPlatformOwner;
   const canReadCommission = permissions.includes("read:commission");
   const commissionOnly = canReadCommission && !canReadFinance;
+  const canManageSettings = permissions.includes("manage:settings") || (authUser as any)?.isPlatformOwner;
 
   // Shares its cache entry with PendingApprovalsPanel's identical query below (same
   // queryKey) — this doesn't cost an extra network request, just reads the count.
@@ -1441,21 +1440,48 @@ export default function StaffFinance() {
   });
   const pendingApprovalsCount = pendingApprovalsForBadge.length;
 
+  // Single source of truth for per-tab visibility, computed once here so both the
+  // deep-link validator (resolveTab) and the render-time group/tab pills below stay
+  // in sync — previously resolveTab validated against the full static tab list
+  // regardless of the current user's actual permissions, so a ?tab=X deep-link for a
+  // tab this user can't see would set activeTab to a value with no visible group
+  // pill, rendering a mismatched highlight (wrong pill lit, orphaned content below).
+  const tabVisibility: Record<string, boolean> = {
+    payments: !commissionOnly,
+    "receipting-by-staff": !commissionOnly && !isAgent,
+    paynow: !commissionOnly,
+    cashups: !commissionOnly,
+    "group-receipt": canWriteFinance && !isAgent,
+    banking: !commissionOnly && !isAgent,
+    requisitions: !commissionOnly && !isAgent,
+    expenditures: !commissionOnly && !isAgent,
+    commissions: canReadCommission,
+    "my-pnl": commissionOnly,
+    "fx-rates": canManageSettings && !isAgent,
+    platform: !commissionOnly && !isAgent,
+    "month-end": canWriteFinance && !isAgent,
+    approvals: canApproveFinance && !isAgent,
+  };
+  const visibleTabDefs = FINANCE_TAB_META.filter((t) => tabVisibility[t.value]);
+  const visibleTabValues = new Set(visibleTabDefs.map((t) => t.value));
+
   // Deep-linkable tabs: keep nav links like /staff/finance?tab=requisitions in sync
   // with the active tab so Finance sub-sections are reachable from the menu.
-  const FINANCE_TABS = FINANCE_TAB_VALUES;
   const search = useSearch();
   const [, setLocation] = useLocation();
   const resolveTab = (raw: string | null) => {
     if (commissionOnly) return "commissions";
-    return raw && FINANCE_TABS.includes(raw) ? raw : "payments";
+    return raw && visibleTabValues.has(raw) ? raw : (visibleTabDefs[0]?.value ?? "payments");
   };
   const [activeTab, setActiveTab] = useState(() =>
     resolveTab(typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null),
   );
   useEffect(() => {
     setActiveTab(resolveTab(new URLSearchParams(search).get("tab")));
-  }, [search, commissionOnly]);
+    // Re-resolve whenever anything feeding tabVisibility changes (not just the URL) — a
+    // live permission change (role edit, mid-session re-fetch) must not leave activeTab
+    // pointing at a tab that just became invisible.
+  }, [search, commissionOnly, canApproveFinance, canWriteFinance, canManageSettings, canReadCommission, isAgent]);
   const handleTabChange = (value: string) => {
     setActiveTab(value);
     setLocation(value === (commissionOnly ? "commissions" : "payments") ? "/staff/finance" : `/staff/finance?tab=${value}`);
@@ -1719,7 +1745,6 @@ export default function StaffFinance() {
   });
 
   // FX rates (USD base) for consolidated statements.
-  const canManageSettings = permissions.includes("manage:settings") || (authUser as any)?.isPlatformOwner;
   const { data: rawFxRates } = useQuery<any[]>({ queryKey: ["/api/fx-rates"], enabled: canReadFinance });
   const fxRateMap: Record<string, string> = {};
   for (const r of (Array.isArray(rawFxRates) ? rawFxRates : [])) fxRateMap[r.currency] = String(r.rateToUsd);
@@ -2245,23 +2270,9 @@ export default function StaffFinance() {
         )}
 
         {(() => {
-          const tabVisibility: Record<string, boolean> = {
-            payments: !commissionOnly,
-            "receipting-by-staff": !commissionOnly && !isAgent,
-            paynow: !commissionOnly,
-            cashups: !commissionOnly,
-            "group-receipt": canWriteFinance && !isAgent,
-            banking: !commissionOnly && !isAgent,
-            requisitions: !commissionOnly && !isAgent,
-            expenditures: !commissionOnly && !isAgent,
-            commissions: canReadCommission,
-            "my-pnl": commissionOnly,
-            "fx-rates": canManageSettings && !isAgent,
-            platform: !commissionOnly && !isAgent,
-            "month-end": canWriteFinance && !isAgent,
-            approvals: canApproveFinance && !isAgent,
-          };
-          const visibleTabDefs = FINANCE_TAB_META.filter((t) => tabVisibility[t.value]);
+          // visibleTabDefs is computed once, near the top of the component (see
+          // resolveTab) — reused here rather than recomputed, so deep-link validation
+          // and this render can never disagree about which tabs are visible.
           const visibleGroups = FINANCE_GROUP_ORDER.filter((g) => visibleTabDefs.some((t) => t.group === g));
           const activeGroup = visibleTabDefs.find((t) => t.value === activeTab)?.group ?? visibleGroups[0];
           return (

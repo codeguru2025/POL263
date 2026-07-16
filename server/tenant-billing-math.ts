@@ -9,15 +9,21 @@ export function getEffectiveGraceDays(subscription: Pick<TenantSubscription, "gr
   return subscription.graceDaysOverride ?? settings.graceDays;
 }
 
-/** Adds N calendar months to a date, clamping to the last day of the target month (e.g. Jan 31 + 1mo = Feb 28/29). */
+/**
+ * Adds N calendar months to a date, clamping to the last day of the target month
+ * (e.g. Jan 31 + 1mo = Feb 28/29). Uses UTC methods throughout — no server TZ is
+ * pinned anywhere in this deployment, and get/setMonth (local-time) would silently
+ * shift results by a full month near month-boundary instants if the process ever
+ * runs in a non-UTC timezone.
+ */
 export function addBillingCycle(date: Date, months: number): Date {
   const d = new Date(date.getTime());
-  const targetMonth = d.getMonth() + months;
-  d.setMonth(targetMonth);
-  // If setMonth overflowed (e.g. Jan 31 -> Mar 3 because Feb has no 31st), clamp back to
-  // the last day of the intended month.
-  if (d.getMonth() !== ((targetMonth % 12) + 12) % 12) {
-    d.setDate(0);
+  const targetMonth = d.getUTCMonth() + months;
+  d.setUTCMonth(targetMonth);
+  // If setUTCMonth overflowed (e.g. Jan 31 -> Mar 3 because Feb has no 31st), clamp back
+  // to the last day of the intended month.
+  if (d.getUTCMonth() !== ((targetMonth % 12) + 12) % 12) {
+    d.setUTCDate(0);
   }
   return d;
 }

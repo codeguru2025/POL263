@@ -18,18 +18,48 @@ import { generateInvoiceForSubscription, getEffectiveGraceDays, getBillingSettin
 import { sendInvoiceReminderEmail, sendGracePeriodEmail, sendSuspendedEmail } from "./tenant-billing-email";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache } from "./module-gate";
+import { withAdvisoryLock } from "./advisory-lock";
 import { structuredLog } from "./logger";
 
 let sweepTimer: NodeJS.Timeout | null = null;
+
+// Stable pg advisory lock key for this scheduler — see PAYMENT_AUTO_LOCK_KEY (9_002_630_001)
+// and PARKED_VEHICLE_LOCK_KEY (9_002_630_002) in server/routes.ts for the numbering convention.
+const TENANT_BILLING_SWEEP_LOCK_KEY = 9_002_630_003;
 
 export interface SweepResult {
   invoicesGenerated: number;
   pastDueTransitions: number;
   autoSuspensions: number;
   errors: string[];
+  /** true if this call found another sweep already running and did nothing — not a failure. */
+  skipped?: boolean;
 }
 
+/**
+ * Wraps the actual sweep in a Postgres advisory lock so the manual-trigger route
+ * can never run concurrently with the scheduled run (or with itself). Without
+ * this, two overlapping runs could both pass generateInvoiceForSubscription's
+ * idempotency check before either INSERT commits, creating duplicate open
+ * invoices for the same subscription+period — which in turn lets two "different"
+ * invoices for the same subscription be paid concurrently and race in
+ * applyTenantInvoicePayment.
+ */
 export async function runTenantBillingSweep(trigger: "scheduler" | "manual" = "scheduler"): Promise<SweepResult> {
+  let result: SweepResult = { invoicesGenerated: 0, pastDueTransitions: 0, autoSuspensions: 0, errors: [] };
+  let ran = false;
+  await withAdvisoryLock(TENANT_BILLING_SWEEP_LOCK_KEY, async () => {
+    ran = true;
+    result = await runSweepBody(trigger);
+  });
+  if (!ran) {
+    structuredLog("warn", "Tenant billing sweep skipped — another run is already in progress", { trigger });
+    return { ...result, skipped: true };
+  }
+  return result;
+}
+
+async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResult> {
   const result: SweepResult = { invoicesGenerated: 0, pastDueTransitions: 0, autoSuspensions: 0, errors: [] };
   const startedAt = new Date();
   structuredLog("info", "Tenant billing sweep starting", { trigger });

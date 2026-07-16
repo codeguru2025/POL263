@@ -83,6 +83,8 @@ export function registerPlatformBillingRoutes(app: Express): void {
     const price = parseFloat(priceMonthlyUsd);
     if (!Number.isFinite(price) || price < 0) return res.status(400).json({ message: "priceMonthlyUsd must be a non-negative number" });
     const moduleList = Array.isArray(modules) ? modules.filter((m) => typeof m === "string") : [];
+    const unknownModules = moduleList.filter((m) => !(ALL_KNOWN_MODULES as readonly string[]).includes(m));
+    if (unknownModules.length > 0) return res.status(400).json({ message: `Unknown module key(s): ${unknownModules.join(", ")}` });
 
     try {
       const [created] = await cpDb.insert(billingPlans).values({
@@ -112,7 +114,12 @@ export function registerPlatformBillingRoutes(app: Express): void {
       if (!Number.isFinite(price) || price < 0) return res.status(400).json({ message: "priceMonthlyUsd must be a non-negative number" });
       patch.priceMonthlyUsd = String(price);
     }
-    if (modules !== undefined) patch.modules = Array.isArray(modules) ? modules.filter((m: any) => typeof m === "string") : [];
+    if (modules !== undefined) {
+      const moduleList = Array.isArray(modules) ? modules.filter((m: any) => typeof m === "string") : [];
+      const unknownModules = moduleList.filter((m: string) => !(ALL_KNOWN_MODULES as readonly string[]).includes(m));
+      if (unknownModules.length > 0) return res.status(400).json({ message: `Unknown module key(s): ${unknownModules.join(", ")}` });
+      patch.modules = moduleList;
+    }
     if (isActive !== undefined) patch.isActive = !!isActive;
     if (sortOrder !== undefined && Number.isInteger(sortOrder)) patch.sortOrder = sortOrder;
 
@@ -128,16 +135,32 @@ export function registerPlatformBillingRoutes(app: Express): void {
 
   app.delete("/api/platform/billing/plans/:id", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
-    const [inUse] = await cpDb.select({ id: tenantSubscriptions.id }).from(tenantSubscriptions).where(eq(tenantSubscriptions.planId, id)).limit(1);
-    if (inUse) {
-      // Never hard-delete a plan with subscribers — historical invoices reference it.
+    // Check both tables that FK to billingPlans.id — a plan can have zero current
+    // subscriptions but still be referenced by a historical (already-paid) invoice
+    // if a tenant was since reassigned to a different plan.
+    const [subscriberRow] = await cpDb.select({ id: tenantSubscriptions.id }).from(tenantSubscriptions).where(eq(tenantSubscriptions.planId, id)).limit(1);
+    const [invoiceRow] = await cpDb.select({ id: tenantInvoices.id }).from(tenantInvoices).where(eq(tenantInvoices.planId, id)).limit(1);
+    if (subscriberRow || invoiceRow) {
+      // Never hard-delete a plan with subscribers or invoice history referencing it.
       await cpDb.update(billingPlans).set({ isActive: false, updatedAt: new Date() }).where(eq(billingPlans.id, id));
       await auditLog(req, "RETIRE_BILLING_PLAN", "BillingPlan", id, null, { isActive: false });
       return res.json({ retired: true });
     }
-    await cpDb.delete(billingPlans).where(eq(billingPlans.id, id));
-    await auditLog(req, "DELETE_BILLING_PLAN", "BillingPlan", id, { id }, null);
-    return res.status(204).send();
+    try {
+      await cpDb.delete(billingPlans).where(eq(billingPlans.id, id));
+      await auditLog(req, "DELETE_BILLING_PLAN", "BillingPlan", id, { id }, null);
+      return res.status(204).send();
+    } catch (err: any) {
+      // Safety net for the check-then-act race (a subscription/invoice created between
+      // the checks above and this delete) — same 23505 pattern used elsewhere in this
+      // file, but for the foreign_key_violation code instead.
+      if (err?.code === "23503") {
+        await cpDb.update(billingPlans).set({ isActive: false, updatedAt: new Date() }).where(eq(billingPlans.id, id));
+        await auditLog(req, "RETIRE_BILLING_PLAN", "BillingPlan", id, null, { isActive: false });
+        return res.json({ retired: true });
+      }
+      throw err;
+    }
   });
 
   // ── Per-tenant subscription ─────────────────────────────────────

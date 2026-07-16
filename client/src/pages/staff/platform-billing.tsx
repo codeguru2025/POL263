@@ -209,7 +209,11 @@ function PlansCard() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Switch checked={plan.isActive} onCheckedChange={() => toggleActiveMutation.mutate(plan)} />
+                    <Switch
+                      checked={plan.isActive}
+                      disabled={toggleActiveMutation.isPending && toggleActiveMutation.variables?.id === plan.id}
+                      onCheckedChange={() => toggleActiveMutation.mutate(plan)}
+                    />
                   </TableCell>
                   <TableCell className="flex gap-1 justify-end">
                     <Button size="sm" variant="ghost" onClick={() => openEdit(plan)}><Pencil className="h-4 w-4" /></Button>

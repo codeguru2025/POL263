@@ -98,6 +98,12 @@ export default function PayInvoice() {
               <p className="font-semibold">Payment received</p>
               <p className="text-sm text-gray-500">Access has been restored. You can close this page.</p>
             </div>
+          ) : invoice.status === "void" ? (
+            <div className="flex flex-col items-center gap-3 text-center py-6">
+              <XCircle className="w-10 h-10 text-gray-400" />
+              <p className="font-semibold">This invoice is no longer payable</p>
+              <p className="text-sm text-gray-500">It's been voided. Contact your platform administrator if you believe this is a mistake.</p>
+            </div>
           ) : (
             <div className="space-y-5">
               <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm">
@@ -108,7 +114,7 @@ export default function PayInvoice() {
 
               <div className="space-y-2">
                 <Label>Payment method</Label>
-                <Select value={method} onValueChange={setMethod}>
+                <Select value={method} onValueChange={(v) => { setMethod(v); initiateMutation.reset(); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ecocash">EcoCash</SelectItem>

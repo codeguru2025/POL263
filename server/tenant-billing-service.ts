@@ -120,7 +120,10 @@ export async function applyTenantInvoicePayment(
       if (!invoice) return { ok: false as const, error: "Invoice not found" };
       if (invoice.status === "paid") return { ok: true as const, alreadyPaid: true };
 
-      const [subscription] = await tx.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.id, invoice.subscriptionId)).limit(1);
+      // Locked too, not just the invoice row — otherwise two different open invoices for the
+      // same subscription paid concurrently would both read the same stale currentPeriodEnd
+      // and the second UPDATE would silently overwrite the first's period extension.
+      const [subscription] = await tx.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.id, invoice.subscriptionId)).for("update").limit(1);
       if (!subscription) return { ok: false as const, error: "Subscription not found" };
       const [plan] = await tx.select().from(billingPlans).where(eq(billingPlans.id, invoice.planId)).limit(1);
       if (!plan) return { ok: false as const, error: "Plan not found" };

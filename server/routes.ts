@@ -7760,7 +7760,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/quotations/:id/link-case", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const { funeralCaseId: rawFuneralCaseId } = req.body;
+    const rawFuneralCaseId = typeof req.body.funeralCaseId === "string" ? req.body.funeralCaseId.trim() : req.body.funeralCaseId;
     if (!rawFuneralCaseId) return res.status(400).json({ message: "funeralCaseId required" });
     try {
       // The dialog accepts either the case's UUID or its human-readable case number (e.g.

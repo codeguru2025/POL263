@@ -857,7 +857,12 @@ function BillingTab({ tenantId }: { tenantId: string }) {
 
   const subscription = subData?.subscription;
   const plan = subData?.plan;
-  const plans = plansData?.plans.filter((p) => p.isActive) ?? [];
+  // Always include the tenant's currently-assigned plan even if it's since been retired
+  // (deactivated) — otherwise the <select> silently matches no option and looks broken,
+  // even though the subscription itself is fine and Save stays correctly disabled.
+  const activePlans = plansData?.plans.filter((p) => p.isActive) ?? [];
+  const currentPlanIsRetired = !!plan && !plan.isActive;
+  const plans = currentPlanIsRetired ? [plan, ...activePlans] : activePlans;
 
   return (
     <div className="space-y-6">
@@ -887,16 +892,20 @@ function BillingTab({ tenantId }: { tenantId: string }) {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="pt-billing-plan">Plan</Label>
-                  <div className="flex items-center gap-2">
-                    <select id="pt-billing-plan" value={selectedPlanId} onChange={(e) => setSelectedPlanId(e.target.value)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                      {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — ${p.priceMonthlyUsd}/mo</option>)}
-                    </select>
-                    <Button variant="outline" disabled={selectedPlanId === subscription.planId || updateSubMutation.isPending}
-                      onClick={() => updateSubMutation.mutate({ planId: selectedPlanId })}>
-                      Save
-                    </Button>
-                  </div>
+                  {plans.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No plans exist yet — create one on the Billing Plans page first.</p>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <select id="pt-billing-plan" value={selectedPlanId} onChange={(e) => setSelectedPlanId(e.target.value)}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                        {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — ${p.priceMonthlyUsd}/mo{!p.isActive ? " (retired)" : ""}</option>)}
+                      </select>
+                      <Button variant="outline" disabled={selectedPlanId === subscription.planId || updateSubMutation.isPending}
+                        onClick={() => updateSubMutation.mutate({ planId: selectedPlanId })}>
+                        Save
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="pt-billing-grace">Grace period override (days)</Label>
