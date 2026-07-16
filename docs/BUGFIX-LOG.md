@@ -10,6 +10,53 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-16 — Linking a funeral case to a quotation by case number threw "Internal Server Error"
+
+- **Symptom:** User reported linking a funeral case to a quotation failed with a generic
+  Internal Server Error. Production log line pinpointed it exactly:
+  `"invalid input syntax for type uuid: \"FNC-000048\""`, thrown from `storage.getFuneralCase`.
+- **Root cause:** `LinkCaseDialog` (`client/src/pages/staff/quotations.tsx`) has a single free-text
+  input whose label says "Enter the Funeral Case ID" and whose placeholder literally reads
+  **"UUID or case number"** — explicitly inviting the user to type either. But `POST
+  /api/quotations/:id/link-case` (`server/routes.ts:7761`) passed whatever string was typed
+  straight into `storage.getFuneralCase(funeralCaseId, orgId)`, `storage.getFuneralQuotation(...)`,
+  and `storage.linkQuotationToCase(...)` — all three do `eq(<uuidColumn>, funeralCaseId)` against
+  a `uuid`-typed Postgres column. Typing a case number like `"FNC-000048"` (not a UUID) makes
+  Postgres itself throw `invalid input syntax for type uuid` on the very first query, which had no
+  specific handling and fell through to the route's catch-all `safeError(err)` — in production that
+  always returns the literal string "Internal server error" (`route-helpers.ts:33`), masking the
+  real cause from both the user and (without checking the raw server log) from debugging.
+  Same class of "route trusts the UI's promised input shape without validating it" bug as the
+  2026-07-08 entry below, but a different failure mode: that one was a missing-conflict-check;
+  this one is a missing-input-resolution step for a UI element that explicitly advertises two
+  accepted formats but only one was ever actually implemented server-side.
+- **Fix:** Added `storage.getFuneralCaseByCaseNumber(caseNumber, orgId)` (`server/storage.ts`,
+  interface + implementation, sibling to `getFuneralCase`). The route now checks the incoming
+  string against a UUID regex (the same one already used in `server/client-auth.ts:151`) and
+  resolves via `getFuneralCase` (UUID) or `getFuneralCaseByCaseNumber` (anything else) *before*
+  any query touches the `funeralCaseId` FK column, then uses the resolved real UUID
+  (`existingCase.id`) for every downstream call. This makes the dialog's "UUID or case number"
+  promise actually true instead of only working by accident when a UUID happens to be pasted in.
+- **Files:** `server/routes.ts` (`POST /api/quotations/:id/link-case`), `server/storage.ts`
+  (`getFuneralCaseByCaseNumber`, interface + implementation).
+- **Verification:** typecheck clean, full test suite green (202/202). Did not query production
+  data to confirm the specific case (`FNC-000048`) resolves — that would have printed a real
+  deceased person's name into this session's transcript without the user having authorized direct
+  production queries, and was correctly blocked by the permission system; the fix's correctness
+  rests on code review (the UUID regex and the new lookup method both mirror existing, working
+  patterns elsewhere in the codebase) rather than a live reproduction against that specific row.
+- **Lesson for next time:** when a UI's label/placeholder text promises multiple accepted input
+  formats ("UUID or case number", "email or phone", etc.), grep the server route it submits to and
+  confirm every one of those formats is actually handled — it's easy for only the first-built
+  format to work while the placeholder's promise silently bit-rots into a false claim. Also: any
+  route that takes a user-suppliable string and passes it into a query against a `uuid`-typed
+  column needs either an explicit UUID-shape check first, or a catch for Postgres's `22P02`
+  invalid-text-representation error — `safeError()` masking the real message in production means
+  the *server log* (not the client toast) is the only place this class of bug is diagnosable from,
+  so always ask for or check the raw log line before guessing at a fix.
+
+---
+
 ## 2026-07-16 — Finance page: hand-maintained tab allowlist had drifted out of sync with the actual tabs, silently swallowing 3 deep links
 
 Surfaced while redesigning the Finance page's 13-tab (actually 14-tab) strip into grouped

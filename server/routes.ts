@@ -7760,11 +7760,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/quotations/:id/link-case", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    const { funeralCaseId } = req.body;
-    if (!funeralCaseId) return res.status(400).json({ message: "funeralCaseId required" });
+    const { funeralCaseId: rawFuneralCaseId } = req.body;
+    if (!rawFuneralCaseId) return res.status(400).json({ message: "funeralCaseId required" });
     try {
-      const existingCase = await storage.getFuneralCase(funeralCaseId, user.organizationId);
+      // The dialog accepts either the case's UUID or its human-readable case number (e.g.
+      // "FNC-000048") — resolve to the real UUID before any query touches the funeralCaseId
+      // FK column, since Postgres throws a raw "invalid input syntax for type uuid" (an
+      // unhandled 500) if a non-UUID string reaches an eq() against a uuid column.
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const existingCase = uuidRegex.test(rawFuneralCaseId)
+        ? await storage.getFuneralCase(rawFuneralCaseId, user.organizationId)
+        : await storage.getFuneralCaseByCaseNumber(rawFuneralCaseId, user.organizationId);
       if (!existingCase) return res.status(404).json({ message: "Funeral case not found" });
+      const funeralCaseId = existingCase.id;
       // A case can only have one quotation linked (fq_org_case_partial_idx, migrations/0036) —
       // surface that as a clear 409 instead of letting the unique-violation bubble up as a bare
       // 500 (this route previously had no try/catch at all).

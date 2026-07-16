@@ -469,6 +469,7 @@ export interface IStorage {
   updateFeedbackStatus(id: string, status: string, orgId: string): Promise<ClientFeedback | undefined>;
   getFuneralCasesByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<FuneralCase[]>;
   getFuneralCase(id: string, orgId: string): Promise<FuneralCase | undefined>;
+  getFuneralCaseByCaseNumber(caseNumber: string, orgId: string): Promise<FuneralCase | undefined>;
   createFuneralCase(fc: InsertFuneralCase): Promise<FuneralCase>;
   updateFuneralCase(id: string, data: Partial<InsertFuneralCase>, orgId: string): Promise<FuneralCase | undefined>;
   getFuneralTasks(caseId: string, orgId: string): Promise<FuneralTask[]>;
@@ -3295,6 +3296,11 @@ export class DatabaseStorage implements IStorage {
   async getFuneralCase(id: string, orgId: string): Promise<FuneralCase | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [fc] = await tdb.select().from(funeralCases).where(eq(funeralCases.id, id));
+    return fc;
+  }
+  async getFuneralCaseByCaseNumber(caseNumber: string, orgId: string): Promise<FuneralCase | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [fc] = await tdb.select().from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), eq(funeralCases.caseNumber, caseNumber)));
     return fc;
   }
   async createFuneralCase(fc: InsertFuneralCase): Promise<FuneralCase> {
