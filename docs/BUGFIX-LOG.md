@@ -10,6 +10,71 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-16 — Self-approval (maker-checker) was silently unenforced in 3 of 6 approval flows
+
+- **Symptom:** none reported directly — surfaced by an audit requested after the user asked
+  how the app's various "approval" screens related to each other. POL263 turned out to have
+  five separate approval systems (a generic `approval_requests` table, `waiting_period_waivers`,
+  an inline `approvalStatus` column on `payment_receipts`, `requisitions`, and `settlements` —
+  the platform-fee reconciliation mechanism), and while requisitions correctly blocked a person
+  from approving their own request, three other flows didn't check at all, and two more checked
+  but didn't exempt the platform owner (the intended sole exception).
+- **Root cause:** each of the five approval flows was built independently, at different times,
+  without a shared "who resolves this" convention to copy from. Waivers
+  (`POST /api/waivers/:id/resolve`), payment-receipt approval
+  (`POST /api/payment-receipts/:id/approve` and its `/reject` sibling), and claims entering
+  `approved`/`paid` status (`POST /api/claims/:id/transition`) had **no same-person check at
+  all** — whoever requested a waiver, issued a receipt, or submitted/verified a claim could
+  approve their own request outright, given the right permission. Settlements
+  (`POST /api/settlements/:id/approve`) and the generic `approval_requests` resolver
+  (`POST /api/approvals/:id/resolve`) *did* block self-approval, but — unlike requisitions —
+  neither exempted the platform owner, meaning even they were blocked from resolving their own
+  settlement or request, contrary to intent.
+- **Fix:** all five now follow the exact pattern requisitions already used correctly: resolve
+  the acting user's id via `resolveOrSyncTenantUserId` (never compare the raw registry
+  `user.id` — the stored initiator field is a tenant-DB id, which diverges from the registry id
+  on isolated-tenant orgs), compare against the record's initiator field
+  (`waiver.requestedBy` / `receipt.issuedByUserId` / `claim.submittedBy` or `claim.verifiedBy` /
+  `settlement.initiatedBy` / `approval.initiatedBy`), and reject with a 403/400 unless
+  `user.isPlatformOwner` is true.
+- **Files:** `server/routes.ts` — `POST /api/waivers/:id/resolve`,
+  `POST /api/payment-receipts/:id/approve` + `/reject`, `POST /api/claims/:id/transition`,
+  `POST /api/settlements/:id/approve`, `POST /api/approvals/:id/resolve`.
+- **Verification:** typecheck clean, full test suite green (202/202). Live-server verification
+  was deliberately **not** done — see the permission-scoping entry immediately below for why
+  starting the dev server in this environment is not currently a safe no-op action.
+- **Lesson for next time:** when a codebase grows the same *kind* of control (maker-checker,
+  rate limiting, audit logging, etc.) independently in multiple places over time, grep for
+  every occurrence of the pattern's signature line (here, `initiatedBy ===` / `requestedBy ===`
+  and the absence thereof) rather than assuming the one flow you're looking at is representative
+  of all of them — this is the fourth time this session a "some call sites have it, some don't"
+  gap was found by checking siblings rather than trusting one example (funeral case number
+  lookup, Finance tab allowlist, attendance QR format, now this).
+
+## 2026-07-16 — `manage:approvals` split into scoped permissions; the split changes tenant role_permissions on every server restart, not just this one
+
+Not a bug fix — a design note worth logging because of an unusual side effect. `manage:approvals`
+(previously gating three unrelated domains: generic requests, waivers, settlements) was split
+into `approve:waivers`, `approve:settlements`, and `approve:requests` in `server/constants.ts`'s
+`ROLE_PERMISSION_MAP`. **This is not a one-time migration** — `seedOrgRoles()`
+(`server/seed.ts`), invoked for every organization on every server startup
+(`server/index.ts:301-314`), does a full clear-and-reapply of each system role's permissions
+from `ROLE_PERMISSION_MAP` every single time the process boots. That means the *next* time this
+app's server process restarts for any reason (a deploy, a crash recovery, a manual restart —
+not just this specific change), every tenant's `manager` and `administrator` roles will have
+their `role_permissions` rows cleared and rebuilt from whatever `ROLE_PERMISSION_MAP` says at
+that moment — which is by design and has been true since `seedOrgRoles` was written, but is easy
+to forget when editing that map, since the blast radius is "every live tenant, next restart,"
+not "the org I'm testing against, right now." **Consequence for this session specifically:**
+starting even a local dev server pointed at this environment's configured database is not a
+safe, side-effect-free verification step for anything touching `ROLE_PERMISSION_MAP` — it
+immediately rewrites real tenants' real role permissions the moment the process boots. Verified
+this change is net-safe (both new scoped permissions were added to exactly the two roles that
+held the old broad one, so no access regresses) via static analysis of `ROLE_PERMISSION_MAP`
+rather than a live restart.
+
+---
+
 ## 2026-07-16 — Attendance kiosk QR code only offered "copy text" when scanned with a phone's native camera
 
 - **Symptom:** user reported scanning the printed attendance QR code (with their phone's

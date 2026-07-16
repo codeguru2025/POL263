@@ -194,6 +194,14 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const { data: appInfo } = useQuery<any>({ queryKey: ["/api/app-info"], staleTime: 5 * 60 * 1000 });
+  const canApproveAnything = permissions.includes("approve:requests") || permissions.includes("approve:waivers")
+    || permissions.includes("approve:settlements") || permissions.includes("approve:finance");
+  const { data: approvalsSummary } = useQuery<{ totalCount: number }>({
+    queryKey: ["/api/approvals/summary"],
+    enabled: isAuthenticated && canApproveAnything,
+    staleTime: 60_000,
+  });
+  const approvalsPendingCount = approvalsSummary?.totalCount || 0;
 
   async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -378,7 +386,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         // Org, access & system
         { href: "/staff/admin/branches", label: "Branch Admin", icon: MapPin, agentHidden: true },
         { href: "/staff/users", label: "User Admin", icon: UserCog, permission: "read:user" },
-        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
+        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permissions: ["approve:requests", "approve:waivers", "approve:settlements", "approve:finance"], badge: approvalsPendingCount },
         { href: "/staff/settings", label: "System Setup", icon: Settings, agentHidden: true },
         { href: "/staff/billing", label: "Billing", icon: CreditCard, permission: "manage:settings", agentHidden: true },
       ]);
@@ -476,7 +484,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
             { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=approvals", label: "Receipt Approvals", icon: ShieldCheck, permission: "approve:finance", agentHidden: true },
-            { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
+            { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permissions: ["approve:requests", "approve:waivers", "approve:settlements", "approve:finance"], badge: approvalsPendingCount },
             { href: "/staff/transactions/credit-notes", label: "Credit Notes", icon: FileMinus, agentHidden: true },
             { href: "/staff/transactions/invoices", label: "Invoices", icon: FileText, agentHidden: true },
           ]),

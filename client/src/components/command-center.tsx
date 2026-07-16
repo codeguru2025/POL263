@@ -23,7 +23,7 @@ export function CommandCenter() {
   const has = (p: string) => permissions.includes(p);
 
   const canFinance = has("read:finance") || has("read:commission");
-  const canApprovals = has("manage:approvals");
+  const canApprovals = has("approve:requests");
   const canClaims = has("read:claim");
   const canLeads = has("read:lead");
   const canFuneral = has("read:funeral_ops");

@@ -79,7 +79,13 @@ export const SYSTEM_PERMISSIONS = [
   { name: "write:lead", description: "Manage leads", category: "leads" },
   { name: "read:notification", description: "View notifications", category: "notifications" },
   { name: "write:notification", description: "Manage notification templates", category: "notifications" },
-  { name: "manage:approvals", description: "Handle maker-checker approvals", category: "approvals" },
+  // manage:approvals is retained (not deleted) so existing role_permissions rows referencing
+  // it don't dangle, but no route checks it anymore — split into the three below so approval
+  // rights can be granted per-domain instead of all-or-nothing.
+  { name: "manage:approvals", description: "(Legacy — superseded by approve:waivers/approve:settlements/approve:requests)", category: "approvals" },
+  { name: "approve:waivers", description: "Resolve waiting-period waiver requests", category: "approvals" },
+  { name: "approve:settlements", description: "Approve platform-fee settlements", category: "approvals" },
+  { name: "approve:requests", description: "Resolve generic maker-checker requests — policy/receipt/quote deletion, claim review, quotation authorization", category: "approvals" },
   { name: "create:tenant", description: "Add new tenants (organizations)", category: "platform" },
   { name: "delete:tenant", description: "Remove tenants (organizations)", category: "platform" },
   { name: "use:ai", description: "Use AI-powered insights and note assistance", category: "ai" },
@@ -101,7 +107,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "write:product", "manage:settings",
     "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet", "use:fleet",
     "read:commission", "read:report", "write:report", "read:lead", "write:lead",
-    "read:notification", "manage:approvals",
+    "read:notification", "approve:waivers", "approve:settlements", "approve:requests",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:all_clients", "use:ai", "manage:attendance",
   ],
@@ -115,7 +121,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:fleet", "write:fleet", "use:fleet", "read:commission", "write:commission",
     "read:payroll", "write:payroll", "read:report", "write:report",
     "read:lead", "write:lead", "read:notification", "write:notification",
-    "manage:approvals", "backdate:payment",
+    "approve:waivers", "approve:settlements", "approve:requests", "backdate:payment",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:own_clients", "view:all_clients",
     "delete:policy", "delete:payment", "delete:receipt", "edit:payment", "edit:receipt",

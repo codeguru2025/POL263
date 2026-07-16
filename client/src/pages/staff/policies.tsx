@@ -681,7 +681,7 @@ export default function StaffPolicies() {
   const [showWaiverDialog, setShowWaiverDialog] = useState(false);
   const [waiverSubmitting, setWaiverSubmitting] = useState(false);
 
-  const canManageApprovals = safePermissions.includes("manage:approvals");
+  const canManageApprovals = safePermissions.includes("approve:waivers");
 
   async function uploadPolicyDoc(file: File) {
     setDocUploading(true);

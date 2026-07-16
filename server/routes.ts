@@ -2922,7 +2922,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(waiver || null);
   });
 
-  app.get("/api/waivers", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+  app.get("/api/waivers", requireAuth, requireTenantScope, requirePermission("approve:waivers"), async (req, res) => {
     const user = req.user as any;
     const all = await storage.getAllWaivers(user.organizationId);
     const status = req.query.status as string | undefined;
@@ -2930,7 +2930,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(all);
   });
 
-  app.post("/api/waivers/:id/resolve", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+  app.post("/api/waivers/:id/resolve", requireAuth, requireTenantScope, requirePermission("approve:waivers"), async (req, res) => {
     const user = req.user as any;
     const { action, rejectionReason } = req.body;
     if (action !== "approve" && action !== "reject") return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
@@ -2938,6 +2938,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!waiver) return res.status(404).json({ message: "Waiver not found" });
     if (waiver.status !== "pending") return res.status(400).json({ message: "This waiver has already been resolved." });
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    // Segregation of duties: whoever requested the waiver cannot resolve it themselves —
+    // platform owner is the sole exception. Same pattern as requisitions (routes.ts ~6676).
+    if (waiver.requestedBy === effectiveUserId && !user.isPlatformOwner) {
+      return res.status(403).json({ message: "You cannot resolve a waiver you requested yourself." });
+    }
     const result = await withOrgTransaction(user.organizationId, async (txDb) => {
       // Lock the waiver row to prevent concurrent approvals
       await txDb.execute(sql`SELECT id FROM waiting_period_waivers WHERE id = ${waiver.id} FOR UPDATE`);
@@ -3300,7 +3305,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(req, "REQUEST_DELETE_POLICY", "Policy", policy.id, policy, { pendingDeletion: true, approvalId: approval.id });
-      await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+      await notifyUsersWithPermission(user.organizationId, "approve:requests", {
         type: "APPROVAL_NEEDED",
         title: "Policy Deletion Approval Required",
         body: `Policy ${policy.policyNumber} has been submitted for deletion and requires management approval.`,
@@ -3392,7 +3397,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(req, "REQUEST_DELETE_RECEIPT", "PaymentReceipt", receipt.id, receipt, { pendingDeletion: true, approvalId: approval.id });
-      await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+      await notifyUsersWithPermission(user.organizationId, "approve:requests", {
         type: "APPROVAL_NEEDED",
         title: "Receipt Deletion Approval Required",
         body: `Receipt ${receipt.receiptNumber} has been submitted for deletion and requires management approval.`,
@@ -4622,6 +4627,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [receipt] = await tdb.select().from(paymentReceipts).where(and(eq(paymentReceipts.id, receiptId), eq(paymentReceipts.organizationId, user.organizationId))).limit(1);
       if (!receipt) return res.status(404).json({ message: "Receipt not found." });
       if (receipt.approvalStatus !== "pending") return res.status(400).json({ message: "Receipt is not pending approval." });
+      // Segregation of duties: whoever issued the receipt cannot approve it themselves —
+      // platform owner is the sole exception. Same pattern as requisitions (routes.ts ~6676).
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      if (receipt.issuedByUserId === effectiveUserId && !user.isPlatformOwner) {
+        return res.status(403).json({ message: "You cannot approve a receipt you issued yourself." });
+      }
       const policy = await storage.getPolicy(receipt.policyId, user.organizationId);
       if (!policy) return res.status(404).json({ message: "Policy not found." });
       const effectiveDate = receipt.backdatedDate || new Date().toISOString().split("T")[0];
@@ -4711,6 +4722,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [receipt] = await tdb.select().from(paymentReceipts).where(and(eq(paymentReceipts.id, receiptId), eq(paymentReceipts.organizationId, user.organizationId))).limit(1);
       if (!receipt) return res.status(404).json({ message: "Receipt not found." });
       if (receipt.approvalStatus !== "pending") return res.status(400).json({ message: "Receipt is not pending approval." });
+      // Segregation of duties: whoever issued the receipt cannot reject it themselves either —
+      // platform owner is the sole exception. Same pattern as requisitions (routes.ts ~6676).
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      if (receipt.issuedByUserId === effectiveUserId && !user.isPlatformOwner) {
+        return res.status(403).json({ message: "You cannot reject a receipt you issued yourself." });
+      }
       const resolvedRejectUserId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
       await tdb.update(paymentReceipts)
         .set({
@@ -5046,7 +5063,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           status: "pending",
           initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
         });
-        await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+        await notifyUsersWithPermission(user.organizationId, "approve:requests", {
           type: "APPROVAL_NEEDED",
           title: "Claim Requires Approval",
           body: `Claim ${claim.claimNumber} has been submitted and requires your approval.`,
@@ -5075,15 +5092,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: `Invalid transition from ${claim.status} to ${toStatus}` });
     }
 
+    const effectiveUserId = await resolveOrSyncTenantUserId(claim.organizationId, user.id);
     if (["approved", "paid"].includes(toStatus)) {
       const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
       if (!perms.includes("approve:claim")) {
         return res.status(403).json({ message: "Approval permission required" });
       }
+      // Segregation of duties: whoever submitted or verified this claim cannot be the one to
+      // approve/mark it paid — platform owner is the sole exception. Same pattern as
+      // requisitions (routes.ts ~6676).
+      const isSelfClaim = (claim.submittedBy === effectiveUserId || claim.verifiedBy === effectiveUserId) && !user.isPlatformOwner;
+      if (isSelfClaim) {
+        return res.status(403).json({ message: "You cannot approve or mark paid a claim you submitted or verified yourself." });
+      }
     }
 
     const before = { ...claim };
-    const effectiveUserId = await resolveOrSyncTenantUserId(claim.organizationId, user.id);
     const updateData: any = { status: toStatus };
     if (toStatus === "verified") updateData.verifiedBy = effectiveUserId;
     if (toStatus === "approved") updateData.approvedBy = effectiveUserId;
@@ -6863,7 +6887,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         existing,
         { pendingCorrection: true, approvalId: correctionApproval.id },
       );
-      notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+      notifyUsersWithPermission(user.organizationId, "approve:requests", {
         type: "APPROVAL_NEEDED",
         title: action === "correct-paid-date" ? "Paid Date Correction Approval Required" : "Paid Currency Correction Approval Required",
         body: `Requisition ${existing.requisitionNumber} has a ${action === "correct-paid-date" ? "paid-date" : "paid-currency"} correction pending your approval.`,
@@ -7840,7 +7864,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         initiatedBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       await auditLog(req, "REQUEST_DELETE_QUOTE", "FuneralQuotation", quote.id, quote, { pendingDeletion: true, approvalId: approval.id });
-      await notifyUsersWithPermission(user.organizationId, "manage:approvals", {
+      await notifyUsersWithPermission(user.organizationId, "approve:requests", {
         type: "APPROVAL_NEEDED",
         title: "Quotation Deletion Approval Required",
         body: `Quotation ${(quote as any).quotationNumber || quote.id} has been submitted for deletion and requires management approval.`,
@@ -7883,6 +7907,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       resolvedAt: null,
     });
     await auditLog(req, "SEND_QUOTATION_FOR_AUTHORIZATION", "FuneralQuotation", quote.id, null, approval);
+    await notifyUsersWithPermission(user.organizationId, "approve:requests", {
+      type: "APPROVAL_NEEDED",
+      title: "Quotation Authorization Required",
+      body: `Quotation ${quote.quotationNumber || quote.id} has been submitted for authorization and requires management approval.`,
+      metadata: { approvalId: approval.id, quotationId: quote.id },
+    });
     return res.status(201).json(approval);
   });
 
@@ -7927,7 +7957,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Approvals (Maker-Checker) ──────────────────────────────
 
-  app.get("/api/approvals", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+  // Cross-cutting "what's waiting on me" view across all five approval systems (generic
+  // requests, waivers, settlements, receipt approvals, requisitions). Read-only aggregation —
+  // the actual approve/reject action stays on each domain's own native page; this just tells
+  // you where to go and how many. Each category is only included if the requester actually
+  // holds the permission to act on it, not just view it.
+  app.get("/api/approvals/summary", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const has = (p: string) => !!user.isPlatformOwner || perms.includes(p);
+
+    const categories: { key: string; label: string; count: number; nativeUrl: string }[] = [];
+
+    if (has("approve:requests")) {
+      const requests = await storage.getApprovalRequests(user.organizationId, "pending");
+      categories.push({ key: "requests", label: "Requests", count: requests.length, nativeUrl: "/staff/approvals" });
+    }
+    if (has("approve:waivers")) {
+      const waivers = await storage.getAllWaivers(user.organizationId);
+      const pending = waivers.filter((w: any) => w.status === "pending");
+      categories.push({ key: "waivers", label: "Waivers", count: pending.length, nativeUrl: "/staff/approvals" });
+    }
+    if (has("approve:settlements")) {
+      const settlements = await storage.getSettlements(user.organizationId);
+      const pending = settlements.filter((s: any) => s.status === "pending");
+      categories.push({ key: "settlements", label: "Platform Fee Settlements", count: pending.length, nativeUrl: "/staff/finance?tab=platform" });
+    }
+    if (has("approve:finance")) {
+      const tdb = await getDbForOrg(user.organizationId);
+      const pendingReceipts = await tdb.select({ id: paymentReceipts.id }).from(paymentReceipts)
+        .where(and(eq(paymentReceipts.organizationId, user.organizationId), eq(paymentReceipts.approvalStatus, "pending")));
+      categories.push({ key: "receipts", label: "Receipt Approvals", count: pendingReceipts.length, nativeUrl: "/staff/finance?tab=approvals" });
+
+      const pendingRequisitions = await storage.getRequisitions(user.organizationId, { status: "submitted" });
+      categories.push({ key: "requisitions", label: "Requisitions", count: pendingRequisitions.length, nativeUrl: "/staff/finance?tab=requisitions" });
+    }
+
+    const totalCount = categories.reduce((sum, c) => sum + c.count, 0);
+    return res.json({ totalCount, categories });
+  });
+
+  app.get("/api/approvals", requireAuth, requireTenantScope, requirePermission("approve:requests"), async (req, res) => {
     const user = req.user as any;
     const status = req.query.status as string | undefined;
     return res.json(await storage.getApprovalRequests(user.organizationId, status));
@@ -7947,7 +8017,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(approval);
   });
 
-  app.post("/api/approvals/:id/resolve", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+  app.post("/api/approvals/:id/resolve", requireAuth, requireTenantScope, requirePermission("approve:requests"), async (req, res) => {
     const user = req.user as any;
     const { action, rejectionReason } = req.body;
     if (action !== "approve" && action !== "reject") {
@@ -7960,7 +8030,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // comparing against the raw registry user.id would false-mismatch (and let someone
     // approve their own request) on an isolated-tenant org where the ids diverge.
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-    if (approval.initiatedBy === effectiveUserId) {
+    if (approval.initiatedBy === effectiveUserId && !user.isPlatformOwner) {
       return res.status(400).json({ message: "Cannot approve own request (maker-checker)" });
     }
     const updated = await storage.updateApprovalRequest(approval.id, {
@@ -9147,14 +9217,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(settlement);
   });
 
-  app.post("/api/settlements/:id/approve", requireAuth, requireTenantScope, requirePermission("manage:approvals"), async (req, res) => {
+  app.post("/api/settlements/:id/approve", requireAuth, requireTenantScope, requirePermission("approve:settlements"), async (req, res) => {
     const id = String(req.params.id);
     const user = req.user as any;
     const existing = await storage.getSettlements(user.organizationId);
     const settlement = existing.find(s => s.id === id);
     if (!settlement) return res.status(404).json({ message: "Settlement not found" });
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-    if (settlement.initiatedBy === effectiveUserId) return res.status(400).json({ message: "Cannot approve own settlement" });
+    if (settlement.initiatedBy === effectiveUserId && !user.isPlatformOwner) return res.status(400).json({ message: "Cannot approve own settlement" });
     if (settlement.status === "approved") return res.status(409).json({ message: "Settlement already approved" });
     try {
       const { settlement: updated, allocated, receivablesSettled } = await storage.approveSettlementWithAllocation(id, user.organizationId, effectiveUserId);

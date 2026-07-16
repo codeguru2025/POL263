@@ -51,7 +51,7 @@ const ACTIONS: ActionDef[] = [
   { label: "Claims", icon: FileText, href: "/staff/claims", perms: ["read:claim"], group: "Go to" },
   { label: "Funeral Cases", icon: Truck, href: "/staff/funerals", perms: ["read:funeral_ops"], group: "Go to" },
   { label: "Payments", icon: Receipt, href: "/staff/finance?tab=payments", perms: ["read:finance", "read:commission"], group: "Go to" },
-  { label: "Approvals", icon: ShieldCheck, href: "/staff/approvals", perms: ["manage:approvals"], group: "Go to" },
+  { label: "Approvals", icon: ShieldCheck, href: "/staff/approvals", perms: ["approve:requests", "approve:waivers", "approve:settlements", "approve:finance"], group: "Go to" },
 ];
 
 interface PolicyHit { id: string; policyNumber: string; status?: string }

@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { CheckCircle2, XCircle, Clock, Loader2, Eye, ShieldCheck } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Loader2, Eye, ShieldCheck, ArrowRight, Inbox } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -18,7 +18,7 @@ export default function StaffApprovals() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [, navigate] = useLocation();
-  const [activeTab, setActiveTab] = useState("pending");
+  const [activeTab, setActiveTab] = useState("overview");
   const [selectedApproval, setSelectedApproval] = useState<any>(null);
   const [resolveAction, setResolveAction] = useState<"approve" | "reject" | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -28,6 +28,11 @@ export default function StaffApprovals() {
 
   const { data: approvals, isLoading } = useQuery<any[]>({
     queryKey: ["/api/approvals"],
+  });
+
+  interface ApprovalCategory { key: string; label: string; count: number; nativeUrl: string }
+  const { data: summary, isLoading: summaryLoading } = useQuery<{ totalCount: number; categories: ApprovalCategory[] }>({
+    queryKey: ["/api/approvals/summary"],
   });
 
   const { data: waivers, isLoading: waiversLoading } = useQuery<any[]>({
@@ -72,6 +77,7 @@ export default function StaffApprovals() {
 
   const requestTypeLabel: Record<string, string> = {
     CLAIM_REVIEW: "Claim Review",
+    QUOTATION_CONDITIONS: "Quotation Authorization",
     delete_policy: "Delete Policy",
     delete_receipt: "Delete Receipt",
     delete_quote: "Delete Quotation",
@@ -262,6 +268,9 @@ export default function StaffApprovals() {
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList>
+            <TabsTrigger value="overview" data-testid="tab-overview">
+              Overview {!!summary?.totalCount && <Badge variant="secondary" className="ml-2 h-5 px-1.5">{summary.totalCount}</Badge>}
+            </TabsTrigger>
             <TabsTrigger value="pending" data-testid="tab-pending">
               Pending {pendingApprovals.length > 0 && <Badge variant="secondary" className="ml-2 h-5 px-1.5">{pendingApprovals.length}</Badge>}
             </TabsTrigger>
@@ -270,6 +279,41 @@ export default function StaffApprovals() {
               Waivers {(waivers?.filter(w => w.status === "pending").length ?? 0) > 0 && <Badge variant="secondary" className="ml-2 h-5 px-1.5">{waivers!.filter(w => w.status === "pending").length}</Badge>}
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="overview" className="mt-4">
+            <CardSection title="Everything waiting on you" description="Across requests, waivers, platform-fee settlements, receipt approvals, and requisitions. Act on requests and waivers here — the rest link to their own page." icon={Inbox}>
+              {summaryLoading ? (
+                <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+              ) : !summary || summary.categories.length === 0 ? (
+                <div className="py-12 text-center text-sm text-muted-foreground">You don't have approval rights for any category yet.</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-1">
+                  {summary.categories.map((cat) => (
+                    <div key={cat.key} className="rounded-lg border p-4 flex flex-col gap-3" data-testid={`card-summary-${cat.key}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-muted-foreground">{cat.label}</span>
+                        <span className={cat.count > 0 ? "text-2xl font-semibold text-amber-600" : "text-2xl font-semibold text-muted-foreground"}>{cat.count}</span>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="self-start"
+                        disabled={cat.count === 0}
+                        onClick={() => {
+                          if (cat.key === "requests") setActiveTab("pending");
+                          else if (cat.key === "waivers") setActiveTab("waivers");
+                          else navigate(cat.nativeUrl);
+                        }}
+                        data-testid={`btn-review-${cat.key}`}
+                      >
+                        Review <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardSection>
+          </TabsContent>
 
           <TabsContent value="pending" className="mt-4">
             <CardSection title="Pending Approvals" description="These requests require your review and action." icon={ShieldCheck}>
