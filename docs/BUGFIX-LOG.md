@@ -10,6 +10,54 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-16 — Finance page: hand-maintained tab allowlist had drifted out of sync with the actual tabs, silently swallowing 3 deep links
+
+Surfaced while redesigning the Finance page's 13-tab (actually 14-tab) strip into grouped
+navigation ("LETS MAKE THIS WORLD CLASS"). Investigating the flat tab strip before touching
+layout turned up a real, pre-existing correctness bug riding along with the visual complaint.
+
+- **Symptom:** Deep links to `/staff/finance?tab=banking`, `?tab=receipting-by-staff`, and
+  `?tab=my-pnl` silently opened the Payments tab instead of the tab that was actually
+  requested. No error, no console warning — just the wrong content on screen.
+- **Root cause:** `client/src/pages/staff/finance.tsx`'s `resolveTab()` validated the URL's
+  `?tab=` param against a hand-maintained `FINANCE_TABS` array (previously hardcoded at what
+  is now line ~1391) that was supposed to mirror the `value` props of the page's
+  `<TabsTrigger>` elements. It didn't: `receipting-by-staff`, `my-pnl`, and `banking` all had
+  real, working `<TabsTrigger>`/`<TabsContent>` pairs in the JSX but were missing from the
+  array, so `FINANCE_TABS.includes(raw)` returned `false` for them and `resolveTab()` fell
+  back to `"payments"`. This is the same class of bug as a permission allowlist that isn't
+  regenerated when a new permission is added — a list hand-copied from another list will
+  eventually diverge, silently, because nothing forces them to stay equal.
+  Compounding this: `banking` (the `BankingPanel` component, ~700 lines — the single largest
+  section on the page) and `receipting-by-staff`/`my-pnl` had **zero nav entry point** in
+  `client/src/components/layout/staff-layout.tsx` either, so in practice they were only
+  reachable by already being on the Finance page and clicking around — the deep-link bug had
+  gone unnoticed because almost nothing linked to the affected tabs in the first place.
+- **Fix:** Introduced `FINANCE_TAB_META` (`finance.tsx`, module scope, ~line 1374) as the
+  single source of truth for every tab's `value`/`label`/`title`/`group`. `FINANCE_TABS` is
+  now `FINANCE_TAB_META.map(t => t.value)` — derived, not hand-copied, so it can't drift out
+  of sync with the tabs again. Also added nav entries for `?tab=receipting-by-staff` and
+  `?tab=banking` to both `newNavSections` and the legacy `financeMenu` in `staff-layout.tsx`,
+  and removed the now-redundant "Bank Deposits" stub nav entry (`/staff/transactions/
+  bank-deposits`, a `StaffComingSoon` placeholder) since `BankingPanel` already fully
+  implements bank deposit recording.
+- **Verified:** `npm run check`, `npm run lint`, `npm run test` (179/179 passing) all clean;
+  confirmed via grep that all 14 `<TabsContent value="...">` blocks have a matching entry in
+  `FINANCE_TAB_META`; confirmed via Vite dev-server transform check (curl against
+  `/src/pages/staff/finance.tsx` and `/src/components/layout/staff-layout.tsx`, PID-tracked
+  PowerShell server per this session's established pattern) that both files compile cleanly.
+- **Lesson for next time:** when a component maintains a validation allowlist (valid tab
+  values, valid enum strings, valid route names) that's meant to mirror a list that already
+  exists elsewhere in the same file (JSX trigger values, a permission set, a route table),
+  derive it with `.map()`/`.filter()` from the canonical list instead of hand-copying the
+  values a second time. Two lists that are supposed to be equal but aren't mechanically tied
+  together *will* diverge — and because the failure mode here was a silent fallback rather
+  than a crash, it can ship and sit unnoticed for a long time. When auditing a tab/nav strip
+  for UX reasons, also check reachability (does anything link to it?) and validation (does
+  the deep-link allowlist actually match the tabs?) before assuming the only problem is visual.
+
+---
+
 ## 2026-07-14 — Live production bugs found while chasing "confirm data parity"; backup sync rewritten to prevent recurrence
 
 Follow-up to the two entries below (Supabase backup schema gap, deploy-time migration runner

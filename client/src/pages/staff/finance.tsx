@@ -16,7 +16,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Separator } from "@/components/ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown, ChevronRight, ShieldCheck, ShieldX, Building2, ArrowDownToLine, Banknote, TriangleAlert, Printer, Users, Trash2 } from "lucide-react";
+import { DollarSign, Plus, Receipt, Wallet, TrendingUp, Loader2, Search, CheckCircle2, AlertCircle, FileText, Landmark, Clock, CalendarDays, ArrowUpRight, RefreshCw, FileDown, ChevronDown, ChevronRight, ShieldCheck, ShieldX, Building2, ArrowDownToLine, Banknote, TriangleAlert, Printer, Users, Trash2, FileMinus, type LucideIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { PeriodSelector, periodForPreset, type Period } from "@/components/period-selector";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
@@ -1371,6 +1372,47 @@ function BankingPanel() {
   );
 }
 
+type FinanceGroup = "payments" | "banking" | "spend" | "people" | "approvals";
+
+interface FinanceTabMeta {
+  value: string;
+  label: string;
+  title: string;
+  group: FinanceGroup;
+}
+
+// Single source of truth for every Finance tab: value, label, tooltip, and which
+// group row it belongs to. Per-tab visibility is permission-dependent and is
+// resolved inside the component; this list is what deep-link validation and the
+// grouped nav are both derived from, so it can't drift out of sync with the JSX.
+const FINANCE_TAB_META: FinanceTabMeta[] = [
+  { value: "payments", label: "Payments & Receipts", title: "All receipted payments linked to policies and clients", group: "payments" },
+  { value: "receipting-by-staff", label: "Receipting by Staff", title: "How much each staff member and branch has receipted, by period", group: "payments" },
+  { value: "paynow", label: "Mobile & Cash", title: "Mobile money (Paynow) and cash payment collection", group: "payments" },
+  { value: "cashups", label: "Cash-up Reconciliation", title: "Daily cash reconciliation — count cash collected against receipts issued", group: "payments" },
+  { value: "group-receipt", label: "Group Receipt", title: "Receipt a single payment across multiple policies in a group", group: "payments" },
+  { value: "banking", label: "Banking & Cash", title: "Bank accounts, cash deposits, and per-admin cash accountability", group: "banking" },
+  { value: "requisitions", label: "Requisitions", title: "Expenditure requests: raise, approve, and mark paid", group: "spend" },
+  { value: "expenditures", label: "Expenditures", title: "Operating expenses and outgoing payments", group: "spend" },
+  { value: "commissions", label: "Commissions", title: "Agent commission earnings and payout status", group: "people" },
+  { value: "my-pnl", label: "My P&L", title: "Your collections vs commissions P&L for the period", group: "people" },
+  { value: "fx-rates", label: "FX Rates", title: "USD-base exchange rates for consolidated financial statements", group: "people" },
+  { value: "platform", label: "Platform Fees", title: "Platform revenue owed to POL263 (2.5% on all cleared receipts — policy premiums and funeral service payments)", group: "people" },
+  { value: "month-end", label: "Month-End Close", title: "Run the month-end close: batch premium collection for overdue policies", group: "people" },
+  { value: "approvals", label: "Receipt Approvals", title: "Review and approve backdated group receipts before they are applied", group: "approvals" },
+];
+
+const FINANCE_TAB_VALUES = FINANCE_TAB_META.map((t) => t.value);
+
+const FINANCE_GROUP_META: Record<FinanceGroup, { label: string; icon: LucideIcon }> = {
+  payments: { label: "Payments", icon: Receipt },
+  banking: { label: "Banking", icon: Landmark },
+  spend: { label: "Spend", icon: FileMinus },
+  people: { label: "People & Periodic", icon: Users },
+  approvals: { label: "Receipt Approvals", icon: ShieldCheck },
+};
+const FINANCE_GROUP_ORDER: FinanceGroup[] = ["payments", "banking", "spend", "people", "approvals"];
+
 export default function StaffFinance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -1386,12 +1428,22 @@ export default function StaffFinance() {
   const canReadCommission = permissions.includes("read:commission");
   const commissionOnly = canReadCommission && !canReadFinance;
 
+  // Shares its cache entry with PendingApprovalsPanel's identical query below (same
+  // queryKey) — this doesn't cost an extra network request, just reads the count.
+  const { data: pendingApprovalsForBadge = [] } = useQuery<any[]>({
+    queryKey: ["/api/payment-receipts/pending-approvals"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/payment-receipts/pending-approvals", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: canApproveFinance && !isAgent,
+  });
+  const pendingApprovalsCount = pendingApprovalsForBadge.length;
+
   // Deep-linkable tabs: keep nav links like /staff/finance?tab=requisitions in sync
   // with the active tab so Finance sub-sections are reachable from the menu.
-  const FINANCE_TABS = [
-    "payments", "paynow", "cashups", "commissions", "requisitions",
-    "fx-rates", "expenditures", "platform", "month-end", "group-receipt", "approvals",
-  ];
+  const FINANCE_TABS = FINANCE_TAB_VALUES;
   const search = useSearch();
   const [, setLocation] = useLocation();
   const resolveTab = (raw: string | null) => {
@@ -2192,23 +2244,69 @@ export default function StaffFinance() {
           <AiInsightsPanel surface="finance" title="AI Insights" description="Ask AI to summarize the financial position and flag anything unusual." />
         )}
 
-        <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <TabsList>
-            {!commissionOnly && <TabsTrigger value="payments" data-testid="tab-payments" title="All receipted payments linked to policies and clients">Payments &amp; Receipts</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="receipting-by-staff" data-testid="tab-receipting-by-staff" title="How much each staff member and branch has receipted, by period">Receipting by Staff</TabsTrigger>}
-            {!commissionOnly && <TabsTrigger value="paynow" data-testid="tab-paynow" title="Mobile money (Paynow) and cash payment collection">Mobile &amp; Cash</TabsTrigger>}
-            {!commissionOnly && <TabsTrigger value="cashups" data-testid="tab-cashups" title="Daily cash reconciliation — count cash collected against receipts issued">Cash-up Reconciliation</TabsTrigger>}
-            {canReadCommission && <TabsTrigger value="commissions" data-testid="tab-commissions" title="Agent commission earnings and payout status">Commissions</TabsTrigger>}
-            {commissionOnly && <TabsTrigger value="my-pnl" data-testid="tab-my-pnl" title="Your collections vs commissions P&L for the period">My P&amp;L</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="requisitions" data-testid="tab-requisitions" title="Expenditure requests: raise, approve, and mark paid">Requisitions</TabsTrigger>}
-            {canManageSettings && !isAgent && <TabsTrigger value="fx-rates" data-testid="tab-fx-rates" title="USD-base exchange rates for consolidated financial statements">FX Rates</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="expenditures" data-testid="tab-expenditures" title="Operating expenses and outgoing payments">Expenditures</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="platform" data-testid="tab-platform" title="Platform revenue owed to POL263 (2.5% on all cleared receipts — policy premiums and funeral service payments)">Platform Fees</TabsTrigger>}
-            {canWriteFinance && !isAgent && <TabsTrigger value="month-end" data-testid="tab-month-end" title="Run the month-end close: batch premium collection for overdue policies">Month-End Close</TabsTrigger>}
-            {canWriteFinance && !isAgent && <TabsTrigger value="group-receipt" data-testid="tab-group-receipt" title="Receipt a single payment across multiple policies in a group">Group Receipt</TabsTrigger>}
-            {canApproveFinance && !isAgent && <TabsTrigger value="approvals" data-testid="tab-approvals" title="Review and approve backdated group receipts before they are applied">Pending Approvals</TabsTrigger>}
-            {!commissionOnly && !isAgent && <TabsTrigger value="banking" data-testid="tab-banking" title="Bank accounts, cash deposits, and per-admin cash accountability">Banking &amp; Cash</TabsTrigger>}
-          </TabsList>
+        {(() => {
+          const tabVisibility: Record<string, boolean> = {
+            payments: !commissionOnly,
+            "receipting-by-staff": !commissionOnly && !isAgent,
+            paynow: !commissionOnly,
+            cashups: !commissionOnly,
+            "group-receipt": canWriteFinance && !isAgent,
+            banking: !commissionOnly && !isAgent,
+            requisitions: !commissionOnly && !isAgent,
+            expenditures: !commissionOnly && !isAgent,
+            commissions: canReadCommission,
+            "my-pnl": commissionOnly,
+            "fx-rates": canManageSettings && !isAgent,
+            platform: !commissionOnly && !isAgent,
+            "month-end": canWriteFinance && !isAgent,
+            approvals: canApproveFinance && !isAgent,
+          };
+          const visibleTabDefs = FINANCE_TAB_META.filter((t) => tabVisibility[t.value]);
+          const visibleGroups = FINANCE_GROUP_ORDER.filter((g) => visibleTabDefs.some((t) => t.group === g));
+          const activeGroup = visibleTabDefs.find((t) => t.value === activeTab)?.group ?? visibleGroups[0];
+          return (
+            <div className="space-y-3">
+              {visibleGroups.length > 1 && (
+                <div className="flex flex-wrap gap-1.5 border-b pb-2" role="tablist" aria-label="Finance sections">
+                  {visibleGroups.map((g) => {
+                    const meta = FINANCE_GROUP_META[g];
+                    const isActiveGroup = g === activeGroup;
+                    return (
+                      <button
+                        key={g}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActiveGroup}
+                        data-testid={`group-${g}`}
+                        onClick={() => {
+                          const firstTab = visibleTabDefs.find((t) => t.group === g);
+                          if (firstTab) handleTabChange(firstTab.value);
+                        }}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                          isActiveGroup ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                        )}
+                      >
+                        <meta.icon className="h-4 w-4" />
+                        {meta.label}
+                        {g === "approvals" && pendingApprovalsCount > 0 && (
+                          <Badge variant={isActiveGroup ? "secondary" : "default"} className="ml-0.5 h-5 min-w-5 justify-center px-1.5 text-[11px]">
+                            {pendingApprovalsCount}
+                          </Badge>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <Tabs value={activeTab} onValueChange={handleTabChange}>
+                <TabsList>
+                  {visibleTabDefs.filter((t) => t.group === activeGroup).map((t) => (
+                    <TabsTrigger key={t.value} value={t.value} data-testid={`tab-${t.value}`} title={t.title}>
+                      {t.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
 
           <TabsContent value="payments">
             <CardSection title="Payment transactions" description="Receipted movements linked to policies and clients." icon={Receipt} flush>
@@ -3193,7 +3291,10 @@ export default function StaffFinance() {
           <TabsContent value="banking">
             <BankingPanel />
           </TabsContent>
-        </Tabs>
+              </Tabs>
+            </div>
+          );
+        })()}
       </PageShell>
 
       <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>

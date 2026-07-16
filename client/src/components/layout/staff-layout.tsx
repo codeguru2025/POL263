@@ -315,14 +315,15 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     : filterNav([
         // Money in
         { href: "/staff/finance?tab=payments", label: "Receipts & Payments", icon: Receipt, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/finance?tab=receipting-by-staff", label: "Receipting by Staff", icon: Users, permission: "read:finance", agentHidden: true },
         { href: "/staff/finance?tab=paynow", label: "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission"] },
         { href: "/staff/finance?tab=group-receipt", label: "Group Receipt", icon: Layers, permission: "write:finance", agentHidden: true },
         { href: "/staff/finance?tab=cashups", label: "Cash-up Reconciliation", icon: Wallet2, permissions: ["read:finance", "read:commission"] },
+        { href: "/staff/finance?tab=banking", label: "Banking & Cash", icon: Landmark, permission: "read:finance", agentHidden: true },
         // Money out
         { href: "/staff/finance?tab=requisitions", label: "Requisitions", icon: ClipboardList, permission: "read:finance", agentHidden: true },
         { href: "/staff/finance?tab=expenditures", label: "Expenditures", icon: FileMinus, permission: "read:finance", agentHidden: true },
         { href: "/staff/transactions/petty-cash", label: "Petty Cash", icon: Coins, agentHidden: true },
-        { href: "/staff/transactions/bank-deposits", label: "Bank Deposits", icon: Landmark, agentHidden: true },
         { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard, agentHidden: true },
         // People & periodic
         { href: "/staff/finance?tab=commissions", label: "Commissions", icon: TrendingUp, permission: "read:commission" },
@@ -331,6 +332,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/finance?tab=month-end", label: "Month-End Close", icon: CalendarDays, permission: "write:finance", agentHidden: true },
         { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
         { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
+        { href: "/staff/finance?tab=approvals", label: "Receipt Approvals", icon: ShieldCheck, permission: "approve:finance", agentHidden: true },
       ]);
 
   // ── Reports ──
@@ -434,12 +436,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           title: "Payments",
           items: filterNav([
             { href: "/staff/finance?tab=payments", label: "Receipt a Payment", icon: Receipt, permissions: ["read:finance", "read:commission"] },
+            { href: "/staff/finance?tab=receipting-by-staff", label: "Receipting by Staff", icon: Users, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=paynow", label: "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission"] },
             { href: "/staff/finance?tab=cashups", label: "Cash-up", icon: Wallet2, permissions: ["read:finance", "read:commission"] },
             { href: "/staff/finance?tab=group-receipt", label: "Group Receipt", icon: Layers, permission: "write:finance", agentHidden: true },
+            { href: "/staff/finance?tab=banking", label: "Banking & Cash", icon: Landmark, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=month-end", label: "Month-End Close", icon: CalendarDays, permission: "write:finance", agentHidden: true },
             { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard, agentHidden: true },
-            { href: "/staff/transactions/bank-deposits", label: "Bank Deposits", icon: Landmark, agentHidden: true },
             { href: "/staff/transactions/petty-cash", label: "Petty Cash", icon: Coins, agentHidden: true },
           ]),
         },
@@ -471,6 +474,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/attendance", label: "Attendance", icon: ClipboardList },
             { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
             { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
+            { href: "/staff/finance?tab=approvals", label: "Receipt Approvals", icon: ShieldCheck, permission: "approve:finance", agentHidden: true },
             { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permission: "manage:approvals" },
             { href: "/staff/transactions/credit-notes", label: "Credit Notes", icon: FileMinus, agentHidden: true },
             { href: "/staff/transactions/invoices", label: "Invoices", icon: FileText, agentHidden: true },
