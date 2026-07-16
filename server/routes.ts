@@ -33,6 +33,11 @@ import { registerMortuaryFormRoutes } from "./routes-pdf-mortuary";
 import { registerPolicyFormRoutes } from "./routes-pdf-policy";
 import { registerFinanceFormRoutes } from "./routes-pdf-finance";
 import { registerPlatformRoutes } from "./platform-routes";
+import { registerPlatformBillingRoutes } from "./platform-billing-routes";
+import { registerBillingPublicRoutes } from "./billing-public-routes";
+import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
+import { requireModule } from "./module-gate";
+import { tenantSubscriptions, billingPlans, tenantInvoices, billingSettings } from "@shared/control-plane-schema";
 import { seedTenantBranding } from "./tenant-branding-config";
 import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
@@ -70,7 +75,7 @@ import {
   groupPaymentIntents, groupPaymentAllocations,
   paymentDisbursements, requisitions, expenditures,
 } from "@shared/schema";
-import { sql, eq, count, and, max, asc } from "drizzle-orm";
+import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
 import { pool, db } from "./db";
 import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
@@ -90,6 +95,21 @@ import { createRedisStore } from "./rate-limit-redis-store";
 
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+
+  // ─── Module gating (billing) ────────────────────────────────────────────────
+  // Mounted first so these run before any of the many individual route handlers
+  // registered below — Express dispatches in registration order regardless of a
+  // later handler's specificity. Each covers every route under that prefix in a
+  // single line rather than touching dozens of individual registrations. A no-op
+  // unless billingSettings.moduleEnforcementEnabled is on (default: off) — see
+  // server/module-gate.ts.
+  app.use("/api/claims", requireModule("claims"));
+  app.use("/api/funeral-cases", requireModule("funeral_ops"));
+  app.use("/api/mortuary-intakes", requireModule("funeral_ops"));
+  app.use("/api/quotations", requireModule("funeral_ops"));
+  app.use("/api/fleet", requireModule("fleet"));
+  app.use("/api/payroll", requireModule("payroll"));
+  app.use("/api/attendance", requireModule("payroll"));
 
   const DASHBOARD_MAX_ROWS =
     (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 5000;
@@ -1258,6 +1278,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         const adminRoleId = roleMap.get("administrator");
         if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId, org.id);
+      }
+
+      // Auto-trial: every new tenant starts on a trial subscription so billing
+      // enforcement (once turned on, see server/module-gate.ts) has something to
+      // check from day one. Fails soft if no plan has been seeded yet (e.g. before
+      // Phase 7's platform console UI creates the first plan) — tenant creation
+      // must never fail just because billing setup hasn't happened yet.
+      try {
+        const [trialPlan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.isActive, true)).orderBy(asc(billingPlans.sortOrder)).limit(1);
+        if (trialPlan) {
+          const [settings] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
+          const trialDays = settings?.trialDays ?? 14;
+          const now = new Date();
+          const trialEndsAt = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
+          await cpDb.insert(tenantSubscriptions).values({
+            tenantId: org.id,
+            planId: trialPlan.id,
+            status: "trialing",
+            trialEndsAt,
+            currentPeriodStart: now,
+            currentPeriodEnd: trialEndsAt,
+          });
+        } else {
+          structuredLog("warn", "No billing plan exists yet — skipping auto-trial subscription", { orgId: org.id });
+        }
+      } catch (err) {
+        structuredLog("error", "Auto-trial subscription creation failed — tenant created without one", { orgId: org.id, error: (err as Error).message });
       }
 
       await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, {
@@ -9412,7 +9459,54 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerPolicyFormRoutes(app);
   registerFinanceFormRoutes(app);
   registerPlatformRoutes(app);
+  registerPlatformBillingRoutes(app);
+  registerBillingPublicRoutes(app);
   registerHrFleetFormRoutes(app);
+
+  // ─── Tenant-facing billing (logged-in Pay Now flow) ────────────────
+  app.get("/api/billing/subscription", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const orgId = (req.user as any).organizationId as string;
+    const [subscription] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, orgId)).limit(1);
+    if (!subscription) return res.json({ subscription: null, plan: null });
+    const [plan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, subscription.planId)).limit(1);
+    return res.json({ subscription, plan: plan || null });
+  });
+
+  app.get("/api/billing/invoices", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const orgId = (req.user as any).organizationId as string;
+    const invoices = await cpDb.select().from(tenantInvoices).where(eq(tenantInvoices.tenantId, orgId)).orderBy(desc(tenantInvoices.issuedAt));
+    return res.json(invoices);
+  });
+
+  app.post("/api/billing/invoices/:id/pay", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const orgId = (req.user as any).organizationId as string;
+    const invoiceId = req.params.id as string;
+    const [invoice] = await cpDb.select({ id: tenantInvoices.id, paymentToken: tenantInvoices.paymentToken }).from(tenantInvoices)
+      .where(and(eq(tenantInvoices.id, invoiceId), eq(tenantInvoices.tenantId, orgId))).limit(1);
+    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+    const { method, payerPhone, payerEmail } = req.body;
+    if (!method || typeof method !== "string") return res.status(400).json({ message: "method is required" });
+
+    const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+    const result = await initiatePaynowForInvoice({
+      invoiceId: invoice.id,
+      method, payerPhone, payerEmail,
+      returnUrl: `${base}/staff/billing?paid=1`,
+    });
+    if (!result.ok) return res.status(400).json({ message: result.error || "Payment initiation failed" });
+    return res.json({ redirectUrl: result.redirectUrl });
+  });
+
+  app.post("/api/billing/invoices/:id/poll", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const orgId = (req.user as any).organizationId as string;
+    const invoiceId = req.params.id as string;
+    const [invoice] = await cpDb.select({ id: tenantInvoices.id }).from(tenantInvoices)
+      .where(and(eq(tenantInvoices.id, invoiceId), eq(tenantInvoices.tenantId, orgId))).limit(1);
+    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    const result = await pollInvoiceStatus(invoice.id);
+    return res.json(result);
+  });
 
   // ─── Reports CSV Export ────────────────────────────────────
 

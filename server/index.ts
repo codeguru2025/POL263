@@ -190,6 +190,7 @@ if (enableCsrf) {
   app.use("/api/upload", writeLimiter);
   app.use("/api/public/register-policy", writeLimiter);
   app.use("/api/public/walkin-register", writeLimiter);
+  app.use("/api/public/billing", writeLimiter);
   app.use("/api/admin/run-notifications", writeLimiter);
 
   app.use(
@@ -292,6 +293,11 @@ if (enableCsrf) {
       // Start daily backup sync to Supabase (if SUPABASE_BACKUP_URL is configured)
       import("./backup-sync").then(({ startBackupScheduler }) => startBackupScheduler()).catch(() => {});
 
+      // Start the daily tenant billing sweep (invoice generation, past-due transitions,
+      // auto-suspend). Enforcement of module gating is a separate kill switch — see
+      // billingSettings.moduleEnforcementEnabled — so this can run safely before that's on.
+      import("./tenant-billing-sweep").then(({ startTenantBillingSweepScheduler }) => startTenantBillingSweepScheduler()).catch(() => {});
+
       // Ensure all orgs have every role defined in ROLE_PERMISSION_MAP (e.g. newly added roles like "driver")
       import("./seed").then(async ({ seedPermissions, seedOrgRoles }) => {
         const { storage } = await import("./storage");
@@ -323,6 +329,7 @@ if (enableCsrf) {
     structuredLog("info", `Received ${signal}, shutting down gracefully`);
     httpServer.close();
     import("./backup-sync").then(({ stopBackupScheduler }) => stopBackupScheduler()).catch(() => {});
+    import("./tenant-billing-sweep").then(({ stopTenantBillingSweepScheduler }) => stopTenantBillingSweepScheduler()).catch(() => {});
     await drainActiveJobs(30_000);
     structuredLog("info", "Graceful shutdown complete");
     process.exit(0);

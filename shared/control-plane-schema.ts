@@ -10,6 +10,7 @@ import {
   uuid,
   text,
   integer,
+  numeric,
   boolean,
   timestamp,
   jsonb,
@@ -195,6 +196,152 @@ export const tenantFeatureFlags = pgTable(
   ]
 );
 
+// ─── BILLING: PLANS ───────────────────────────────────────────────────────────
+
+/**
+ * Platform-owner-defined pricing packages. Each plan bundles a set of gateable
+ * app modules (see server/module-gate.ts) at a monthly USD price.
+ *
+ * Plans are never hard-deleted once a tenant has subscribed to them — retire
+ * with isActive:false instead, so historical invoices keep a valid planId.
+ */
+export const billingPlans = pgTable(
+  "billing_plans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Stable code referenced by module-gate config, e.g. "starter" */
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    priceMonthlyUsd: numeric("price_monthly_usd").notNull(),
+    /** v1: always 1 (monthly). Reserved for future quarterly/annual billing. */
+    billingIntervalMonths: integer("billing_interval_months").default(1).notNull(),
+    /** Module keys included in this plan, e.g. ["claims","funeral_ops"] */
+    modules: jsonb("modules").notNull().default([]),
+    isActive: boolean("is_active").default(true).notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("billing_plans_key_idx").on(t.key)]
+);
+
+// ─── BILLING: SUBSCRIPTIONS ───────────────────────────────────────────────────
+
+/**
+ * One active subscription row per tenant. status lifecycle:
+ * trialing → active → past_due → suspended, or → cancelled at any point.
+ * currentPeriodEnd equals trialEndsAt while trialing, so the billing sweep
+ * (server/tenant-billing-sweep.ts) uses one code path for both trial expiry
+ * and ordinary renewals.
+ */
+export const tenantSubscriptions = pgTable(
+  "tenant_subscriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    planId: uuid("plan_id")
+      .notNull()
+      .references(() => billingPlans.id),
+    /** trialing | active | past_due | suspended | cancelled */
+    status: text("status").default("trialing").notNull(),
+    trialEndsAt: timestamp("trial_ends_at"),
+    currentPeriodStart: timestamp("current_period_start").notNull(),
+    currentPeriodEnd: timestamp("current_period_end").notNull(),
+    /** null = inherit billingSettings.graceDays (global default) */
+    graceDaysOverride: integer("grace_days_override"),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("tenant_subscriptions_tenant_idx").on(t.tenantId)]
+);
+
+// ─── BILLING: INVOICES ────────────────────────────────────────────────────────
+
+/**
+ * One invoice per billing period. paymentToken is the ONLY identifier ever
+ * exposed on an unauthenticated route (server/billing-public-routes.ts) — never
+ * look up an invoice by id/tenantId on a public endpoint.
+ */
+export const tenantInvoices = pgTable(
+  "tenant_invoices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    subscriptionId: uuid("subscription_id")
+      .notNull()
+      .references(() => tenantSubscriptions.id),
+    /** Price snapshot at issue time — later plan-price edits never change an issued invoice */
+    planId: uuid("plan_id")
+      .notNull()
+      .references(() => billingPlans.id),
+    amount: numeric("amount").notNull(),
+    currency: text("currency").default("USD").notNull(),
+    /** open | paid | void */
+    status: text("status").default("open").notNull(),
+    periodStart: timestamp("period_start").notNull(),
+    periodEnd: timestamp("period_end").notNull(),
+    dueDate: timestamp("due_date").notNull(),
+    issuedAt: timestamp("issued_at").defaultNow().notNull(),
+    paidAt: timestamp("paid_at"),
+    /** Opaque public identifier for the unauthenticated pay page, crypto.randomBytes(24).hex */
+    paymentToken: text("payment_token").notNull(),
+    merchantReference: text("merchant_reference"),
+    paynowPollUrl: text("paynow_poll_url"),
+    paynowStatus: text("paynow_status"),
+    /** Platform-owner user id, set only when paid via the manual mark-paid escape hatch */
+    markedPaidBy: text("marked_paid_by"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("tenant_invoices_token_idx").on(t.paymentToken),
+    index("tenant_invoices_tenant_idx").on(t.tenantId),
+    index("tenant_invoices_status_due_idx").on(t.status, t.dueDate),
+  ]
+);
+
+// ─── BILLING: GLOBAL SETTINGS ─────────────────────────────────────────────────
+
+/** Singleton row (id always "global") — platform-owner-editable billing defaults. */
+export const billingSettings = pgTable("billing_settings", {
+  id: text("id").primaryKey().default("global"),
+  trialDays: integer("trial_days").default(14).notNull(),
+  graceDays: integer("grace_days").default(7).notNull(),
+  reminderLeadDays: integer("reminder_lead_days").default(3).notNull(),
+  /** Kill switch for module-gate enforcement — default off, see server/module-gate.ts */
+  moduleEnforcementEnabled: boolean("module_enforcement_enabled").default(false).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ─── BILLING: EVENT LOG ───────────────────────────────────────────────────────
+
+/**
+ * Append-only audit trail for system-triggered billing events (no req context
+ * to hang an auditLog() call off of, unlike platform-owner-driven actions).
+ */
+export const tenantBillingEvents = pgTable(
+  "tenant_billing_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    invoiceId: uuid("invoice_id"),
+    /** invoice_generated | reminder_sent | past_due | auto_suspended | auto_restored | manual_mark_paid */
+    type: text("type").notNull(),
+    detail: jsonb("detail"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("tenant_billing_events_tenant_idx").on(t.tenantId)]
+);
+
 // ─── BACKUP SYNC HISTORY ──────────────────────────────────────────────────────
 
 /**
@@ -221,3 +368,8 @@ export type TenantDatabase = typeof tenantDatabases.$inferSelect;
 export type TenantIntegration = typeof tenantIntegrations.$inferSelect;
 export type TenantBranding = typeof tenantBranding.$inferSelect;
 export type BackupSyncRun = typeof backupSyncRuns.$inferSelect;
+export type BillingPlan = typeof billingPlans.$inferSelect;
+export type TenantSubscription = typeof tenantSubscriptions.$inferSelect;
+export type TenantInvoice = typeof tenantInvoices.$inferSelect;
+export type BillingSettings = typeof billingSettings.$inferSelect;
+export type TenantBillingEvent = typeof tenantBillingEvents.$inferSelect;
