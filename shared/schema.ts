@@ -1940,6 +1940,15 @@ export const attendanceLogs = pgTable(
     clockInLng: numeric("clock_in_lng", { precision: 9, scale: 6 }),
     clockOutLat: numeric("clock_out_lat", { precision: 9, scale: 6 }),
     clockOutLng: numeric("clock_out_lng", { precision: 9, scale: 6 }),
+    // Geofence: set when a scan lands outside the kiosk's configured radius. Advisory only
+    // — never blocks the scan (staff sent off-site for removals/errands are a normal case,
+    // not fraud) — a manager can dismiss the flag once reviewed.
+    clockInOffSite: boolean("clock_in_off_site").default(false).notNull(),
+    clockInDistanceMeters: integer("clock_in_distance_meters"),
+    clockOutOffSite: boolean("clock_out_off_site").default(false).notNull(),
+    clockOutDistanceMeters: integer("clock_out_distance_meters"),
+    offSiteReviewedBy: uuid("off_site_reviewed_by").references(() => users.id),
+    offSiteReviewedAt: timestamp("off_site_reviewed_at"),
   },
   (t) => [
     index("al_org_idx").on(t.organizationId),
@@ -1959,6 +1968,12 @@ export const attendanceQrCodes = pgTable(
     token: text("token").notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Geofence centre + radius for this kiosk. Optional — null lat/lng means no geofence
+    // is enforced for scans at this kiosk (backward compatible with kiosks created before
+    // this feature).
+    latitude: numeric("latitude", { precision: 9, scale: 6 }),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }),
+    geofenceRadiusMeters: integer("geofence_radius_meters").default(500),
   },
   (t) => [
     index("aqc_org_idx").on(t.organizationId),

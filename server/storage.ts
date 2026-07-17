@@ -527,6 +527,10 @@ export interface IStorage {
   getAttendanceQrCodeByToken(token: string, orgId: string): Promise<AttendanceQrCode | undefined>;
   getAttendanceQrCodeById(id: string, orgId: string): Promise<AttendanceQrCode | undefined>;
   createAttendanceQrCode(data: InsertAttendanceQrCode): Promise<AttendanceQrCode>;
+  updateAttendanceQrCode(id: string, orgId: string, data: Partial<Pick<AttendanceQrCode, "label" | "branchId" | "isActive" | "latitude" | "longitude" | "geofenceRadiusMeters">>): Promise<AttendanceQrCode | undefined>;
+  getDriverAssignmentsForDriverOnDate(driverId: string, orgId: string, dayStart: Date, dayEnd: Date): Promise<DriverAssignment[]>;
+  setAttendanceOffSiteFlag(logId: string, orgId: string, eventType: "clock_in" | "clock_out", distanceMeters: number): Promise<AttendanceLog | undefined>;
+  dismissAttendanceOffSiteFlag(logId: string, orgId: string, reviewerUserId: string): Promise<AttendanceLog | undefined>;
   createAttendanceScan(data: InsertAttendanceScan): Promise<AttendanceScan>;
   recordAttendanceScan(employeeId: string, orgId: string, qrCodeId: string, lat?: number, lng?: number): Promise<{ log: AttendanceLog; eventType: "clock_in" | "clock_out" }>;
   getActiveDriverAssignment(vehicleId: string, orgId: string): Promise<DriverAssignment | undefined>;
@@ -3979,6 +3983,55 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(data.organizationId);
     const [created] = await tdb.insert(attendanceQrCodes).values(data).returning();
     return created;
+  }
+  async updateAttendanceQrCode(
+    id: string,
+    orgId: string,
+    data: Partial<Pick<AttendanceQrCode, "label" | "branchId" | "isActive" | "latitude" | "longitude" | "geofenceRadiusMeters">>,
+  ): Promise<AttendanceQrCode | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(attendanceQrCodes).set(data)
+      .where(and(eq(attendanceQrCodes.id, id), eq(attendanceQrCodes.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  /** Any vehicle checkout (active or already returned) overlapping the given day — the
+   *  signal used to auto-suppress an off-site geofence flag for drivers/staff legitimately
+   *  sent out on removals or errands that day. */
+  async getDriverAssignmentsForDriverOnDate(driverId: string, orgId: string, dayStart: Date, dayEnd: Date): Promise<DriverAssignment[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(driverAssignments)
+      .where(and(
+        eq(driverAssignments.organizationId, orgId),
+        eq(driverAssignments.driverId, driverId),
+        lte(driverAssignments.startDate, dayEnd),
+        or(isNull(driverAssignments.endDate), gte(driverAssignments.endDate, dayStart)),
+      ));
+  }
+  /** Marks a single clock-in/out event as off-site. Advisory only — never blocks the scan. */
+  async setAttendanceOffSiteFlag(logId: string, orgId: string, eventType: "clock_in" | "clock_out", distanceMeters: number): Promise<AttendanceLog | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const data = eventType === "clock_in"
+      ? { clockInOffSite: true, clockInDistanceMeters: Math.round(distanceMeters) }
+      : { clockOutOffSite: true, clockOutDistanceMeters: Math.round(distanceMeters) };
+    const [updated] = await tdb.update(attendanceLogs).set(data)
+      .where(and(eq(attendanceLogs.id, logId), eq(attendanceLogs.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  /** Manager reviewed an off-site flag and confirmed it's fine (e.g. a legitimate errand
+   *  not caught by the vehicle-checkout exemption). Clears both flags — distances are kept
+   *  on the row for the audit trail even though the "needs review" flag is gone. */
+  async dismissAttendanceOffSiteFlag(logId: string, orgId: string, reviewerUserId: string): Promise<AttendanceLog | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(attendanceLogs).set({
+      clockInOffSite: false,
+      clockOutOffSite: false,
+      offSiteReviewedBy: reviewerUserId,
+      offSiteReviewedAt: new Date(),
+    }).where(and(eq(attendanceLogs.id, logId), eq(attendanceLogs.organizationId, orgId)))
+      .returning();
+    return updated;
   }
   async createAttendanceScan(data: InsertAttendanceScan): Promise<AttendanceScan> {
     const tdb = await getDbForOrg(data.organizationId);

@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown, QrCode, ScanLine, Printer, Plus, Activity, UserCheck, UserX, Building2 } from "lucide-react";
+import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown, QrCode, ScanLine, Printer, Plus, Activity, UserCheck, UserX, Building2, MapPin } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 
 function statusBadge(status: string) {
@@ -208,6 +208,12 @@ function QrKiosksPanel() {
   const [label, setLabel] = useState("");
   const [branchId, setBranchId] = useState("");
 
+  const [geofenceKiosk, setGeofenceKiosk] = useState<any | null>(null);
+  const [geoLat, setGeoLat] = useState("");
+  const [geoLng, setGeoLng] = useState("");
+  const [geoRadius, setGeoRadius] = useState("500");
+  const [locatingSelf, setLocatingSelf] = useState(false);
+
   const { data: kiosks = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/attendance/qr-codes"] });
   const { data: branches = [] } = useQuery<any[]>({ queryKey: ["/api/branches"] });
 
@@ -217,6 +223,52 @@ function QrKiosksPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/attendance/qr-codes"] });
       setShowCreate(false); setLabel(""); setBranchId("");
       toast({ title: "QR kiosk created" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const openGeofenceDialog = (k: any) => {
+    setGeofenceKiosk(k);
+    setGeoLat(k.latitude != null ? String(k.latitude) : "");
+    setGeoLng(k.longitude != null ? String(k.longitude) : "");
+    setGeoRadius(k.geofenceRadiusMeters != null ? String(k.geofenceRadiusMeters) : "500");
+  };
+
+  const useMyLocation = async () => {
+    setLocatingSelf(true);
+    try {
+      const { latitude, longitude } = await getCoords();
+      if (latitude == null || longitude == null) {
+        toast({ title: "Couldn't get your location", description: "Grant location permission and try again.", variant: "destructive" });
+        return;
+      }
+      setGeoLat(String(latitude));
+      setGeoLng(String(longitude));
+    } finally {
+      setLocatingSelf(false);
+    }
+  };
+
+  const saveGeofenceMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/attendance/qr-codes/${geofenceKiosk.id}`, {
+      latitude: parseFloat(geoLat),
+      longitude: parseFloat(geoLng),
+      geofenceRadiusMeters: parseInt(geoRadius, 10),
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/qr-codes"] });
+      setGeofenceKiosk(null);
+      toast({ title: "Geofence saved" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const clearGeofenceMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/attendance/qr-codes/${geofenceKiosk.id}`, { clearGeofence: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/qr-codes"] });
+      setGeofenceKiosk(null);
+      toast({ title: "Geofence removed" });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -243,6 +295,7 @@ function QrKiosksPanel() {
               <TableHead>Label</TableHead>
               <TableHead>Branch</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Geofence</TableHead>
               <TableHead>QR Code</TableHead>
             </TableRow>
           </TableHeader>
@@ -255,6 +308,15 @@ function QrKiosksPanel() {
                 </TableCell>
                 <TableCell>
                   {k.isActive ? <Badge className="bg-emerald-600 text-white text-xs">Active</Badge> : <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+                </TableCell>
+                <TableCell>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs px-2" onClick={() => openGeofenceDialog(k)}>
+                    {k.latitude != null ? (
+                      <Badge variant="secondary" className="text-xs">{k.geofenceRadiusMeters}m radius</Badge>
+                    ) : (
+                      <span className="text-muted-foreground underline decoration-dotted">Not set</span>
+                    )}
+                  </Button>
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
@@ -311,6 +373,57 @@ function QrKiosksPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!geofenceKiosk} onOpenChange={(v) => { if (!v) setGeofenceKiosk(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Geofence — {geofenceKiosk?.label}</DialogTitle>
+            <DialogDescription>
+              Scans more than the radius away from this point are flagged for manager review
+              (never blocked — staff sent out on removals or errands are auto-exempted).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <Button variant="outline" size="sm" onClick={useMyLocation} disabled={locatingSelf}>
+              {locatingSelf ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <QrCode className="h-4 w-4 mr-2" />}
+              Use my current location
+            </Button>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Latitude</Label>
+                <Input value={geoLat} onChange={(e) => setGeoLat(e.target.value)} placeholder="e.g. -17.8252" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Longitude</Label>
+                <Input value={geoLng} onChange={(e) => setGeoLng(e.target.value)} placeholder="e.g. 31.0335" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Radius (metres)</Label>
+              <Input type="number" min={50} max={20000} value={geoRadius} onChange={(e) => setGeoRadius(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter className="flex-wrap gap-2">
+            {geofenceKiosk?.latitude != null && (
+              <Button
+                variant="ghost"
+                className="text-red-600 hover:bg-red-50 mr-auto"
+                onClick={() => clearGeofenceMutation.mutate()}
+                disabled={clearGeofenceMutation.isPending}
+              >
+                Remove geofence
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setGeofenceKiosk(null)}>Cancel</Button>
+            <Button
+              onClick={() => saveGeofenceMutation.mutate()}
+              disabled={!geoLat || !geoLng || !geoRadius || saveGeofenceMutation.isPending}
+            >
+              {saveGeofenceMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </CardSection>
   );
 }
@@ -322,6 +435,7 @@ interface LiveAttendanceStats {
   clockedOutToday: number;
   notYetIn: number;
   pendingApprovals: number;
+  offSiteFlags: number;
   currentlyIn: {
     logId: string;
     employeeId: string;
@@ -331,6 +445,8 @@ interface LiveAttendanceStats {
     department: string | null;
     clockInAt: string;
     source: string;
+    offSite: boolean;
+    offSiteDistanceMeters: number | null;
   }[];
   byDepartment: { department: string; count: number }[];
 }
@@ -363,11 +479,18 @@ function LiveDashboardPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiStatCard label="Currently In" value={data.currentlyInCount} icon={UserCheck} hint="Clocked in, not yet out" />
         <KpiStatCard label="Clocked Out Today" value={data.clockedOutToday} icon={UserX} hint="Completed their shift today" />
         <KpiStatCard label="Not Yet In" value={data.notYetIn} icon={Clock} hint="Active staff with no log today" />
         <KpiStatCard label="Active Staff" value={data.totalActiveEmployees} icon={Users} hint="Total active employees" />
+        <KpiStatCard
+          label="Off-site Flags"
+          value={data.offSiteFlags}
+          icon={MapPin}
+          hint="Clock-in/out beyond a kiosk's geofence, not on an errand — review in Team Attendance"
+          className={data.offSiteFlags > 0 ? "border-red-200 bg-red-50/50" : undefined}
+        />
       </div>
 
       <CardSection
@@ -402,7 +525,14 @@ function LiveDashboardPanel() {
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{p.position || "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{p.department || "—"}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{fmtTime(p.clockInAt)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {fmtTime(p.clockInAt)}
+                      {p.offSite && (
+                        <Badge variant="destructive" className="ml-2 text-xs" title={`${p.offSiteDistanceMeters}m from kiosk`}>
+                          Off-site
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Badge variant="secondary" className="text-xs">{durationSince(p.clockInAt)}</Badge>
                     </TableCell>
@@ -522,6 +652,15 @@ export default function StaffAttendance() {
       queryClient.invalidateQueries({ queryKey: ["/api/attendance"] });
       setRejectId(null); setActionNotes("");
       toast({ title: "Attendance rejected" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const dismissOffSiteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/attendance/${id}/dismiss-offsite`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance"] });
+      toast({ title: "Off-site flag dismissed" });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -715,8 +854,18 @@ export default function StaffAttendance() {
                           <div className="text-xs text-muted-foreground">{log.employee?.employeeNumber}</div>
                         </TableCell>
                         <TableCell>{fmtDate(log.date)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.clockInAt)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{fmtTime(log.clockOutAt)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {fmtTime(log.clockInAt)}
+                          {log.clockInOffSite && (
+                            <Badge variant="destructive" className="ml-1.5 text-xs" title={`${log.clockInDistanceMeters}m from kiosk`}>Off-site</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {fmtTime(log.clockOutAt)}
+                          {log.clockOutOffSite && (
+                            <Badge variant="destructive" className="ml-1.5 text-xs" title={`${log.clockOutDistanceMeters}m from kiosk`}>Off-site</Badge>
+                          )}
+                        </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{log.hoursWorked ? Number(log.hoursWorked).toFixed(1) : "—"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground max-w-xs truncate">{log.notes || "—"}</TableCell>
                         <TableCell>{statusBadge(log.status)}</TableCell>
@@ -753,6 +902,16 @@ export default function StaffAttendance() {
                             >
                               Correct
                             </Button>
+                            {(log.clockInOffSite || log.clockOutOffSite) && (
+                              <Button
+                                size="sm" variant="ghost"
+                                className="h-7 text-xs text-muted-foreground"
+                                onClick={() => dismissOffSiteMutation.mutate(log.id)}
+                                disabled={dismissOffSiteMutation.isPending}
+                              >
+                                Dismiss off-site
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>

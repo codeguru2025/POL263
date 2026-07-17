@@ -8418,6 +8418,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  // Admin/manager: dismiss an off-site geofence flag after review (e.g. confirmed a
+  // legitimate errand the vehicle-checkout exemption didn't catch). Never blocking to
+  // begin with — this just clears the "needs review" state.
+  app.post("/api/attendance/:id/dismiss-offsite", requireAuth, requireTenantScope, requirePermission("write:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getAttendanceLogById(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Log not found" });
+    if (!existing.clockInOffSite && !existing.clockOutOffSite) return res.status(409).json({ message: "No off-site flag to dismiss." });
+    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+    const resolvedReviewer = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+    const updated = await storage.dismissAttendanceOffSiteFlag(existing.id, user.organizationId, resolvedReviewer ?? user.id);
+    await auditLog(req, "DISMISS_ATTENDANCE_OFFSITE", "AttendanceLog", existing.id, existing, updated);
+    return res.json(updated);
+  });
+
   // Admin/manager: live "who's in right now" stats for the attendance dashboard.
   // Deliberately built from the existing per-day-log query rather than a new storage
   // method — `date` is a plain column (no timezone-range logic needed) and this is a
@@ -8443,6 +8458,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         department: l.employee.department,
         clockInAt: l.clockInAt,
         source: l.source,
+        offSite: !!l.clockInOffSite,
+        offSiteDistanceMeters: l.clockInOffSite ? l.clockInDistanceMeters : null,
       }))
       .sort((a: any, b: any) => new Date(a.clockInAt).getTime() - new Date(b.clockInAt).getTime());
 
@@ -8459,6 +8476,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       clockedOutToday: todayLogs.filter((l: any) => l.clockInAt && l.clockOutAt).length,
       notYetIn: Math.max(0, activeEmployees.length - loggedEmployeeIds.size),
       pendingApprovals: todayLogs.filter((l: any) => l.status === "pending").length,
+      offSiteFlags: todayLogs.filter((l: any) => l.clockInOffSite || l.clockOutOffSite).length,
       currentlyIn,
       byDepartment: Array.from(byDepartment.entries())
         .map(([department, count]) => ({ department, count }))
@@ -8488,6 +8506,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
     await auditLog(req, "CREATE_ATTENDANCE_QR_CODE", "AttendanceQrCode", created.id, null, created);
     return res.status(201).json(created);
+  });
+
+  // Admin/manager: set/clear a kiosk's geofence (centre + radius) used to flag off-site scans
+  app.patch("/api/attendance/qr-codes/:id", requireAuth, requireTenantScope, requirePermission("manage:attendance"), async (req, res) => {
+    const user = req.user as any;
+    const existing = await storage.getAttendanceQrCodeById(req.params.id as string, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "QR code not found" });
+
+    const patch: Record<string, unknown> = {};
+    if (typeof req.body.label === "string" && req.body.label.trim()) patch.label = req.body.label.trim();
+    if ("branchId" in req.body) patch.branchId = typeof req.body.branchId === "string" && req.body.branchId ? req.body.branchId : null;
+    if (typeof req.body.isActive === "boolean") patch.isActive = req.body.isActive;
+
+    if (req.body.clearGeofence === true) {
+      patch.latitude = null;
+      patch.longitude = null;
+    } else if ("latitude" in req.body || "longitude" in req.body) {
+      const lat = Number(req.body.latitude);
+      const lng = Number(req.body.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        return res.status(400).json({ message: "Invalid coordinates." });
+      }
+      patch.latitude = String(lat);
+      patch.longitude = String(lng);
+    }
+    if (req.body.geofenceRadiusMeters != null) {
+      const radius = Number(req.body.geofenceRadiusMeters);
+      if (!Number.isFinite(radius) || radius < 50 || radius > 20_000) {
+        return res.status(400).json({ message: "Radius must be between 50 and 20,000 metres." });
+      }
+      patch.geofenceRadiusMeters = Math.round(radius);
+    }
+
+    const updated = await storage.updateAttendanceQrCode(existing.id, user.organizationId, patch as any);
+    await auditLog(req, "UPDATE_ATTENDANCE_QR_CODE", "AttendanceQrCode", existing.id, existing, updated);
+    return res.json(updated);
   });
 
   // Admin/manager: printable PNG for a kiosk QR code
@@ -8526,6 +8580,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const { log, eventType } = await storage.recordAttendanceScan(emp.id, user.organizationId, qr.id, lat, lng);
       await auditLog(req, "QR_ATTENDANCE_SCAN", "AttendanceLog", log.id, null, { eventType, log });
+
+      // Geofence: flag a scan that lands outside the kiosk's configured radius. Advisory
+      // only — never blocks the scan, and never surfaced to the employee (a bad GPS fix
+      // shouldn't alarm someone standing right at the kiosk). Auto-suppressed when the
+      // employee has any vehicle checkout that day — covers drivers, morticians on body
+      // removals, and anyone else legitimately sent out on an errand — so only genuinely
+      // unexplained off-site scans reach a manager for review in Team Attendance.
+      if (qr.latitude != null && qr.longitude != null && lat != null && lng != null) {
+        const radius = qr.geofenceRadiusMeters ?? 500;
+        const distance = haversineMeters(lat, lng, Number(qr.latitude), Number(qr.longitude));
+        if (distance > radius) {
+          const today = todayInHarare();
+          const dayStart = harareLocalToUtcDate(today, "00:00");
+          const dayEnd = harareLocalToUtcDate(today, "23:59");
+          const driverId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+          const todaysAssignments = await storage.getDriverAssignmentsForDriverOnDate(driverId, user.organizationId, dayStart, dayEnd);
+          if (todaysAssignments.length === 0) {
+            await storage.setAttendanceOffSiteFlag(log.id, user.organizationId, eventType, distance);
+            await notifyUsersWithPermission(user.organizationId, "manage:attendance", {
+              type: "GENERAL",
+              title: `Off-site ${eventType === "clock_in" ? "clock-in" : "clock-out"}`,
+              body: `${emp.firstName} ${emp.lastName} ${eventType === "clock_in" ? "clocked in" : "clocked out"} ${Math.round(distance)}m from ${qr.label}. Review in Team Attendance.`,
+              metadata: { logId: log.id, employeeId: emp.id, distanceMeters: Math.round(distance) },
+            });
+          }
+        }
+      }
 
       // Clocking out deliberately does NOT force-return an active vehicle checkout (a trip
       // legitimately running past shift end shouldn't be interrupted) — but flag it so the
