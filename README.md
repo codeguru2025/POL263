@@ -4,13 +4,9 @@
 
 **Website:** Run `npm run dev`, then open the URL it shows in your browser.
 
-**Android app:** Run `npm run setup` once, then `npm run cap:android` to open Android Studio and run the app.
+**Mobile app:** The native Capacitor Android/iOS app has been removed. A mobile app is being rebuilt separately with Expo — nothing to run yet.
 
-**iOS app:** After `npm run setup`, run `npm run cap:ios` to open Xcode (requires macOS and Xcode). On Windows, the `ios/` project is in the repo; build and run on a Mac or in CI.
-
-**Builds on every push:** Pushing to `main` triggers a GitHub Actions workflow that builds the web app, Android APK, and iOS (simulator). Download artifacts from the **Actions** tab. See **[docs/WEB-AND-MOBILE-SINGLE-CODEBASE.md](docs/WEB-AND-MOBILE-SINGLE-CODEBASE.md)** for CI details and release signing.
-
-**Publish to stores:** To ship to **Google Play** and **App Store Connect**, follow **[docs/GOOGLE-PLAY-AND-APP-STORE.md](docs/GOOGLE-PLAY-AND-APP-STORE.md)** (keystore, GitHub Secrets, store listing, and upload steps).
+**Builds on every push:** Pushing to `main` triggers a GitHub Actions workflow that builds the web app. Download artifacts from the **Actions** tab.
 
 Full step-by-step instructions: **[docs/HOW-TO-RUN.md](docs/HOW-TO-RUN.md)**  
 **Database setup (PostgreSQL):** **[docs/DATABASE-SETUP.md](docs/DATABASE-SETUP.md)**  
@@ -31,9 +27,10 @@ Run all commands from the **repository root** (this directory). The app is a sin
 *   **`script/`** – Build, DB migrations, seed, lockfile checks
 *   **`migrations/`** – SQL migrations
 *   **`tests/`** – Unit tests (Vitest)
-*   **`android/`**, **`ios/`** – Capacitor native projects (synced via `npm run cap:sync`)
 
 Build output: **`dist/public/`** (client) and **`dist/index.cjs`** (server). The `fxq/` folder is a legacy mirror; use the root `client/`, `server/`, and configs as the single source of truth.
+
+No mobile app currently exists in this repo — the native Capacitor Android/iOS app was removed; a mobile app is being rebuilt separately with Expo.
 
 ## Architecture & Tech Stack
 *   **Frontend**: React (Vite) + Tailwind CSS + shadcn/ui + Wouter + TanStack Query

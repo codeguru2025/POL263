@@ -1,5 +1,9 @@
 # Publish to Google Play Console and App Store Connect
 
+> **Obsolete.** Describes publishing the Capacitor-based Android/iOS apps, which have been
+> removed from this repo. A mobile app is being rebuilt separately with Expo (which has its
+> own store-publishing flow via EAS). Kept for historical reference only.
+
 This guide walks you through taking the POL263 Android and iOS apps from this repo to **Google Play** and **App Store Connect** so you can publish (or use Internal Testing / TestFlight).
 
 ---

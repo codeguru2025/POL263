@@ -1,5 +1,11 @@
 # Web + Mobile from a Single Codebase
 
+> **Obsolete.** This document describes the Capacitor-based mobile app, which has been
+> removed from this repo (native `android/`/`ios/` projects, Capacitor config, and the CI
+> jobs described below no longer exist). A mobile app is being rebuilt separately with
+> Expo, which does not share a single codebase with the web app the way described here.
+> Kept for historical reference only.
+
 Yes — you can run the same app as a **web app** and a **mobile app**, with one codebase so that changes apply to both.
 
 ---

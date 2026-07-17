@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-POL263 is a multi-tenant Policy Management System (SaaS) for insurance companies. It supports web, Android, and iOS from a single codebase via Capacitor. The stack is TypeScript throughout: React 19 + Vite (frontend), Express 5 (backend), Drizzle ORM on PostgreSQL.
+POL263 is a multi-tenant Policy Management System (SaaS) for insurance companies. The stack is TypeScript throughout: React 19 + Vite (frontend), Express 5 (backend), Drizzle ORM on PostgreSQL. The native Capacitor mobile app has been removed (see git history) — a mobile app is being rebuilt separately with Expo; no mobile app currently exists in this repo.
 
 ## Commands
 
@@ -28,11 +28,6 @@ npm run db:migrate           # Run SQL migrations (DATABASE_URL; also DATABASE_U
 npm run db:migrate:status    # List pending/applied migrations vs disk (optional second DB)
 npm run db:seed              # Seed initial data
 npm run db:reset             # Reset DB (keeps platform owner)
-
-# Mobile (Capacitor)
-npm run cap:sync             # Sync web build to native projects
-npm run cap:android          # Open Android Studio
-npm run cap:ios              # Open Xcode
 
 # Production
 npm run start:with-migrate   # Run migrations then start server
