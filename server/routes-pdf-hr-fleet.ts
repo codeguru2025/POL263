@@ -3,6 +3,7 @@ import { requireAuth, requirePermission, requireTenantScope } from "./auth";
 import {
   streamAttendanceLogPDF,
   streamAttendanceLogBlankPDF,
+  streamAttendanceQrPosterPDF,
   streamEmployeeEnrollmentPDF,
   streamEmployeeEnrollmentBlankPDF,
   streamVehicleRegistrationPDF,
@@ -33,6 +34,24 @@ export function registerHrFleetFormRoutes(app: Express): void {
           attachment: req.query.download === "1",
           dateFrom: req.query.dateFrom as string | undefined,
           dateTo: req.query.dateTo as string | undefined,
+        });
+      } catch (err: any) {
+        if (!res.headersSent) res.status(500).json({ message: err.message });
+      }
+    }
+  );
+
+  // ── Attendance QR Kiosk Poster (A4, printable) ────────────────
+  app.get(
+    "/api/attendance/qr-codes/:id/poster-pdf",
+    requireAuth,
+    requireTenantScope,
+    requirePermission("manage:attendance"),
+    async (req, res) => {
+      const user = req.user as any;
+      try {
+        await streamAttendanceQrPosterPDF(req.params.id as string, user.organizationId, res, {
+          attachment: req.query.download === "1",
         });
       } catch (err: any) {
         if (!res.headersSent) res.status(500).json({ message: err.message });

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, CardSection, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, EmptyState, KpiStatCard } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown, QrCode, ScanLine, Printer, Plus } from "lucide-react";
+import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown, QrCode, ScanLine, Printer, Plus, Activity, UserCheck, UserX, Building2 } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 
 function statusBadge(status: string) {
@@ -61,6 +61,16 @@ function extractAttendanceQrToken(decodedText: string): string | null {
     if (token) return token;
   } catch { /* not a URL either */ }
   return null;
+}
+
+/** "2h 15m" elapsed since an ISO clock-in instant, for the live dashboard. */
+function durationSince(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "0m";
+  const totalMin = Math.floor(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
 /** Best-effort GPS fix; scanning still proceeds without one if permission is denied. */
@@ -254,6 +264,11 @@ function QrKiosksPanel() {
                       className="h-12 w-12 border rounded"
                     />
                     <Button size="sm" variant="outline" className="h-8 text-xs" asChild>
+                      <a href={`${getApiBase()}/api/attendance/qr-codes/${k.id}/poster-pdf?download=1`} target="_blank" rel="noopener noreferrer">
+                        <FileDown className="h-3.5 w-3.5 mr-1" />A4 Poster
+                      </a>
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-8 text-xs" asChild>
                       <a href={`${getApiBase()}/api/attendance/qr-codes/${k.id}/image`} target="_blank" rel="noopener noreferrer">
                         <Printer className="h-3.5 w-3.5 mr-1" />Print
                       </a>
@@ -297,6 +312,127 @@ function QrKiosksPanel() {
         </DialogContent>
       </Dialog>
     </CardSection>
+  );
+}
+
+interface LiveAttendanceStats {
+  date: string;
+  totalActiveEmployees: number;
+  currentlyInCount: number;
+  clockedOutToday: number;
+  notYetIn: number;
+  pendingApprovals: number;
+  currentlyIn: {
+    logId: string;
+    employeeId: string;
+    name: string;
+    employeeNumber: string;
+    position: string | null;
+    department: string | null;
+    clockInAt: string;
+    source: string;
+  }[];
+  byDepartment: { department: string; count: number }[];
+}
+
+function LiveDashboardPanel() {
+  const { data, isLoading, dataUpdatedAt } = useQuery<LiveAttendanceStats | null>({
+    queryKey: ["/api/attendance/live"],
+    queryFn: async () => {
+      const res = await fetch("/api/attendance/live", { credentials: "include" });
+      if (!res.ok) { if (res.status === 403) return null; throw new Error(await res.text()); }
+      return res.json();
+    },
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
+  if (isLoading) {
+    return <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin" /></div>;
+  }
+
+  if (!data) {
+    return (
+      <EmptyState
+        title="No access to live attendance stats"
+        description="Ask an administrator for payroll read access to see who's clocked in."
+        className="border-0 bg-transparent py-8"
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiStatCard label="Currently In" value={data.currentlyInCount} icon={UserCheck} hint="Clocked in, not yet out" />
+        <KpiStatCard label="Clocked Out Today" value={data.clockedOutToday} icon={UserX} hint="Completed their shift today" />
+        <KpiStatCard label="Not Yet In" value={data.notYetIn} icon={Clock} hint="Active staff with no log today" />
+        <KpiStatCard label="Active Staff" value={data.totalActiveEmployees} icon={Users} hint="Total active employees" />
+      </div>
+
+      <CardSection
+        title="Who's In Right Now"
+        icon={Activity}
+        description={`As of ${new Date(dataUpdatedAt).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })} · refreshes every 30s`}
+      >
+        {data.currentlyIn.length === 0 ? (
+          <EmptyState
+            title="Nobody is currently clocked in"
+            description="Staff will appear here as soon as they scan in at a kiosk."
+            className="border-0 bg-transparent py-8"
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead>Position</TableHead>
+                  <TableHead>Department</TableHead>
+                  <TableHead>Clocked In</TableHead>
+                  <TableHead>Time In</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.currentlyIn.map((p) => (
+                  <TableRow key={p.logId}>
+                    <TableCell className="font-medium">
+                      {p.name}
+                      <div className="text-xs text-muted-foreground">{p.employeeNumber}</div>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{p.position || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{p.department || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{fmtTime(p.clockInAt)}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className="text-xs">{durationSince(p.clockInAt)}</Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardSection>
+
+      {data.byDepartment.length > 0 && (
+        <CardSection title="By Department" icon={Building2}>
+          <div className="space-y-2">
+            {data.byDepartment.map((d) => (
+              <div key={d.department} className="flex items-center gap-3">
+                <span className="text-sm w-40 truncate">{d.department}</span>
+                <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full bg-primary"
+                    style={{ width: `${Math.max(4, (d.count / data.currentlyInCount) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-sm text-muted-foreground w-8 text-right">{d.count}</span>
+              </div>
+            ))}
+          </div>
+        </CardSection>
+      )}
+    </div>
   );
 }
 
@@ -411,6 +547,7 @@ export default function StaffAttendance() {
         <Tabs defaultValue="scan">
           <TabsList>
             <TabsTrigger value="scan"><ScanLine className="h-4 w-4 mr-2" />Scan</TabsTrigger>
+            <TabsTrigger value="live"><Activity className="h-4 w-4 mr-2" />Live</TabsTrigger>
             <TabsTrigger value="my"><CalendarDays className="h-4 w-4 mr-2" />My Attendance</TabsTrigger>
             <TabsTrigger value="team">
               <Users className="h-4 w-4 mr-2" />
@@ -427,6 +564,11 @@ export default function StaffAttendance() {
           {/* ── Scan (QR clock in/out) ── */}
           <TabsContent value="scan" className="space-y-4">
             <ScanAttendancePanel onScanned={refetchMine} />
+          </TabsContent>
+
+          {/* ── Live dashboard: who's in, doing what ── */}
+          <TabsContent value="live" className="space-y-4">
+            <LiveDashboardPanel />
           </TabsContent>
 
           {/* ── QR Kiosks (admin) ── */}

@@ -214,6 +214,99 @@ export async function streamAttendanceLogBlankPDF(orgId: string, res: Response, 
   doc.end();
 }
 
+// ── ATTENDANCE QR KIOSK POSTER (A4, printable) ────────────────
+
+export async function streamAttendanceQrPosterPDF(
+  qrCodeId: string,
+  orgId: string,
+  res: Response,
+  opts?: { attachment?: boolean }
+) {
+  const org = await storage.getOrganization(orgId);
+  if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
+  const qr = await storage.getAttendanceQrCodeById(qrCodeId, orgId);
+  if (!qr) { res.status(404).json({ message: "QR code not found" }); return; }
+  const branch = qr.branchId ? await storage.getBranch(qr.branchId, orgId) : undefined;
+
+  const QRCode = (await import("qrcode")).default;
+  // Same URL scheme as the kiosk PNG endpoint — a real deep-link URL when APP_BASE_URL is
+  // configured (so a phone's native camera app offers "Open"), else the older JSON payload.
+  const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+  const payload = base
+    ? `${base}/staff/attendance?scan=${encodeURIComponent(qr.token)}`
+    : JSON.stringify({ orgId: qr.organizationId, qrCodeId: qr.id, token: qr.token });
+  const qrBuffer = await QRCode.toBuffer(payload, { type: "png", width: 640, margin: 1, errorCorrectionLevel: "M" });
+
+  const doc = new PDFDocument({ size: "A4", margin: 0, autoFirstPage: true });
+  const safeName = (qr.label || "kiosk").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const filename = `attendance-qr-${safeName || "kiosk"}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  if (opts?.attachment) res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  doc.pipe(res);
+
+  let y = MARGIN + 4;
+  const logoData = await resolveImage(org.logoUrl);
+  if (logoData) {
+    // Square fit box, not a wide rectangle: most org logos here are circular seals, and
+    // `fit` preserves aspect ratio — a wide box just left-shifts a square image inside it
+    // instead of centering it (bit us in review: a seal rendered ~22pt left of true centre).
+    const logoBox = 70;
+    try { doc.image(logoData, (A4_W - logoBox) / 2, y, { fit: [logoBox, logoBox] }); } catch { /* skip */ }
+    y += logoBox + 14;
+  }
+  doc.font("Helvetica-Bold").fontSize(17).fillColor(C_PRIMARY)
+    .text(org.name || "Organisation", MARGIN, y, { width: COL, align: "center" });
+  y += 26;
+
+  doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
+  y += 26;
+
+  doc.font("Helvetica-Bold").fontSize(25).fillColor(C_TEXT)
+    .text("SCAN TO CLOCK IN / OUT", MARGIN, y, { width: COL, align: "center" });
+  y += 40;
+
+  doc.font("Helvetica-Bold").fontSize(15).fillColor(C_PRIMARY)
+    .text(qr.label, MARGIN, y, { width: COL, align: "center" });
+  y += 22;
+  if (branch?.name) {
+    doc.font("Helvetica").fontSize(10).fillColor(C_MUTED)
+      .text(branch.name, MARGIN, y, { width: COL, align: "center" });
+    y += 16;
+  }
+  y += 18;
+
+  const qrSize = 300;
+  const qrX = (A4_W - qrSize) / 2;
+  doc.rect(qrX - 14, y - 14, qrSize + 28, qrSize + 28).lineWidth(1.5).strokeColor(C_BORDER).stroke();
+  doc.image(qrBuffer, qrX, y, { width: qrSize, height: qrSize });
+  y += qrSize + 42;
+
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(C_TEXT)
+    .text("HOW TO USE", MARGIN, y, { width: COL, align: "center" });
+  y += 24;
+
+  const steps = [
+    "Open your phone's camera app and point it at the QR code above.",
+    "Tap the notification/link that appears to open it in the app.",
+    "Your first scan of the day clocks you IN — your next scan clocks you OUT.",
+  ];
+  const stepX = MARGIN + 70;
+  const stepW = COL - 140;
+  for (let i = 0; i < steps.length; i++) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(C_PRIMARY)
+      .text(`${i + 1}.`, MARGIN + 50, y, { width: 20 });
+    doc.font("Helvetica").fontSize(10).fillColor(C_TEXT)
+      .text(steps[i], stepX, y, { width: stepW });
+    y += Math.max(18, doc.heightOfString(steps[i], { width: stepW }) + 8);
+  }
+
+  const footerY = A4_H - MARGIN - 20;
+  doc.font("Helvetica").fontSize(8).fillColor(C_MUTED)
+    .text(`${org.name || "POL263"} · Attendance Kiosk · Please keep this notice posted and unobstructed`, MARGIN, footerY, { width: COL, align: "center" });
+
+  doc.end();
+}
+
 // ── FORM 21: EMPLOYEE ENROLLMENT FORM ────────────────────────
 
 export async function streamEmployeeEnrollmentPDF(

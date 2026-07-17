@@ -8418,6 +8418,54 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  // Admin/manager: live "who's in right now" stats for the attendance dashboard.
+  // Deliberately built from the existing per-day-log query rather than a new storage
+  // method — `date` is a plain column (no timezone-range logic needed) and this is a
+  // read-only aggregation, so keeping it here avoids duplicating query logic in storage.ts.
+  app.get("/api/attendance/live", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
+    const user = req.user as any;
+    const today = todayInHarare();
+    const [todayLogs, employees] = await Promise.all([
+      storage.getAttendanceLogs(user.organizationId, { date: today }),
+      storage.getPayrollEmployees(user.organizationId),
+    ]);
+    const activeEmployees = employees.filter((e: any) => e.isActive);
+    const loggedEmployeeIds = new Set(todayLogs.map((l: any) => l.employeeId));
+
+    const currentlyIn = todayLogs
+      .filter((l: any) => l.clockInAt && !l.clockOutAt)
+      .map((l: any) => ({
+        logId: l.id,
+        employeeId: l.employeeId,
+        name: `${l.employee.firstName} ${l.employee.lastName}`.trim(),
+        employeeNumber: l.employee.employeeNumber,
+        position: l.employee.position,
+        department: l.employee.department,
+        clockInAt: l.clockInAt,
+        source: l.source,
+      }))
+      .sort((a: any, b: any) => new Date(a.clockInAt).getTime() - new Date(b.clockInAt).getTime());
+
+    const byDepartment = new Map<string, number>();
+    for (const p of currentlyIn) {
+      const key = p.department || "Unassigned";
+      byDepartment.set(key, (byDepartment.get(key) || 0) + 1);
+    }
+
+    return res.json({
+      date: today,
+      totalActiveEmployees: activeEmployees.length,
+      currentlyInCount: currentlyIn.length,
+      clockedOutToday: todayLogs.filter((l: any) => l.clockInAt && l.clockOutAt).length,
+      notYetIn: Math.max(0, activeEmployees.length - loggedEmployeeIds.size),
+      pendingApprovals: todayLogs.filter((l: any) => l.status === "pending").length,
+      currentlyIn,
+      byDepartment: Array.from(byDepartment.entries())
+        .map(([department, count]) => ({ department, count }))
+        .sort((a, b) => b.count - a.count),
+    });
+  });
+
   // ─── QR Attendance Kiosks ───────────────────────────────────
 
   // Admin/manager: list QR kiosks
