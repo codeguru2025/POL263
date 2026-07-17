@@ -5,8 +5,10 @@
   "dependencies": {
     "@preeternal/react-native-cookie-manager": "^6.3.3",
     "expo": "~57.0.7",
+    "expo-camera": "~57.0.3",
     "expo-constants": "~57.0.6",
     "expo-linking": "~57.0.3",
+    "expo-location": "~57.0.5",
     "expo-router": "~57.0.7",
     "expo-secure-store": "~57.0.1",
     "expo-splash-screen": "~57.0.4",

@@ -24,7 +24,19 @@
     },
     "plugins": [
       "expo-router",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "POL263 needs camera access to scan attendance QR codes."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "POL263 uses your location at the moment you scan to confirm you're at the right site — it does not track you in the background."
+        }
+      ]
     ]
   }
 }
