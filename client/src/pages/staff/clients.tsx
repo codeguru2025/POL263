@@ -1158,15 +1158,15 @@ export default function StaffClients() {
                     sortable: false,
                     cell: (c) => (
                       <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openDetail(c.id)} data-testid={`btn-view-client-${c.id}`} title="View details" aria-label="View client details">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 touch-target" onClick={() => openDetail(c.id)} data-testid={`btn-view-client-${c.id}`} title="View details" aria-label="View client details">
                           <Eye className="h-4 w-4" />
                         </Button>
                         {!clientsWithPolicies.has(c.id) && (
                           <>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`btn-edit-client-${c.id}`} title="Edit lead" aria-label="Edit lead">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 touch-target" onClick={() => openEdit(c)} data-testid={`btn-edit-client-${c.id}`} title="Edit lead" aria-label="Edit lead">
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => { setLocation(`/staff/policies?create=1&clientId=${c.id}`); }} data-testid={`btn-issue-policy-${c.id}`} title="Issue policy" aria-label="Issue policy">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 touch-target text-primary" onClick={() => { setLocation(`/staff/policies?create=1&clientId=${c.id}`); }} data-testid={`btn-issue-policy-${c.id}`} title="Issue policy" aria-label="Issue policy">
                               <ArrowRight className="h-4 w-4" />
                             </Button>
                           </>
@@ -1485,7 +1485,7 @@ function ClientForm({
     setFormData({ ...formData, [field]: value });
 
   return (
-    <div className="grid grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <div className="space-y-2">
         <Label>Title</Label>
         <Select value={formData.title} onValueChange={(v) => update("title", v)}>

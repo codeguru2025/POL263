@@ -85,6 +85,8 @@ import { isAgentScoped } from "@shared/roles";
 import { useFlag } from "@/lib/flags";
 import { GlobalCommandBar, QuickCreateMenu } from "@/components/global-command-bar";
 import { ReceiptDrawerProvider } from "@/components/receipt-drawer";
+import { AgentBottomNav } from "@/components/layout/agent-bottom-nav";
+import { isNativeMobile } from "@/lib/mobile-payment";
 
 type StaffNavItem = {
   href: string;
@@ -236,6 +238,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
   const safeRoles = Array.isArray(roles) ? roles : [];
   const isAgent = isAgentScoped(safeRoles);
+  // Bottom tab bar is a native-app affordance for agents specifically — never shown to
+  // non-agent staff or in a mobile browser/PWA, where the hamburger+Sheet nav still applies.
+  const showAgentBottomNav = isAgent && isNativeMobile();
   const hasAny = (perms: string[]) => perms.length === 0 || perms.some((p) => permissions.includes(p));
 
   const [now, setNow] = useState(() => new Date());
@@ -943,11 +948,12 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         </div>
       </nav>
 
-      <main id="main-content" tabIndex={-1} className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
+      <main id="main-content" tabIndex={-1} className={cn("flex-1 min-h-0 overflow-x-hidden overflow-y-auto", showAgentBottomNav && "pb-16")}>
         <div className={cn(APP_SHELL_MAX, "px-3 py-4 sm:px-6 sm:py-8 min-h-0")}>{children}</div>
       </main>
 
       <AppFooter />
+      {showAgentBottomNav && <AgentBottomNav onMoreClick={() => setMobileMenuOpen(true)} />}
     </div>
     </ReceiptDrawerProvider>
   );

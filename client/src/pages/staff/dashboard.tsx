@@ -1083,7 +1083,7 @@ export default function StaffDashboard() {
                     </p>
                   </div>
                 </div>
-                <div className="grid grid-cols-4 gap-2 text-center">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                   <div className="bg-muted/50 rounded p-2">
                     <p className="text-lg font-bold tabular-nums" data-testid="stat-active-count">{lapseRetention?.active ?? 0}</p>
                     <p className="text-[10px] text-muted-foreground">Active</p>

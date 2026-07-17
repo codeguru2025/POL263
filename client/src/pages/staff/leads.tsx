@@ -6,11 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { PageHeader, PageShell } from "@/components/ds";
-import { Plus, Loader2, FileText, Phone, Mail, User, Calendar, Tag, MessageSquare, X, FileDown } from "lucide-react";
+import { Plus, Loader2, FileText, Phone, Mail, User, Calendar, Tag, MessageSquare, X, FileDown, MoreVertical } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useLocation, useSearch } from "wouter";
 import { cn } from "@/lib/utils";
@@ -341,9 +342,39 @@ export default function StaffLeads() {
                               )}
                               data-testid={`card-lead-${lead.id}`}
                             >
-                              <p className="font-medium text-sm leading-snug truncate" title={fullName}>
-                                {fullName}
-                              </p>
+                              <div className="flex items-start justify-between gap-1">
+                                <p className="font-medium text-sm leading-snug truncate" title={fullName}>
+                                  {fullName}
+                                </p>
+                                {/* Touch-friendly alternative to drag-and-drop (HTML5 DnD doesn't work on
+                                    touch/Capacitor WebViews) — reuses the same moveStage() mutation the
+                                    desktop drop handler calls. stopPropagation so tapping this doesn't
+                                    also trigger the card's onClick (openDetail). */}
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="shrink-0 -mr-1 -mt-1 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground touch-target"
+                                      aria-label={`Move ${fullName} to a different stage`}
+                                      data-testid={`button-move-stage-${lead.id}`}
+                                    >
+                                      <MoreVertical className="h-3.5 w-3.5" />
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                    {PIPELINE_STAGES.map((stage) => (
+                                      <DropdownMenuItem
+                                        key={stage.key}
+                                        disabled={stage.key === curStage}
+                                        onClick={() => moveStage(lead, stage.key)}
+                                      >
+                                        Move to {stage.label}
+                                      </DropdownMenuItem>
+                                    ))}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
                               {lead.phone && (
                                 <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
                                   <Phone className="h-3 w-3 shrink-0" />
