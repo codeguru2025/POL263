@@ -258,7 +258,11 @@ function ExecutiveSummarySection({ execSummary, execLoading, branchesList, perio
                   const days = daysSince(a.lastDepositDate);
                   const stale = a.onHand > 0 && (days === null || days > 2);
                   return (
-                    <div key={a.userId} className={`flex items-center justify-between px-4 py-2.5 ${stale ? "bg-amber-50/60 dark:bg-amber-900/10" : ""}`}>
+                    // Keyed by userId+currency, not userId alone: the backend returns one row
+                    // per admin *per currency* they've handled cash in (server/storage.ts
+                    // getAdminCashPosition groups by user+currency) — an admin with both USD
+                    // and ZAR cash produces two rows here, which collided on a userId-only key.
+                    <div key={`${a.userId}-${a.currency}`} className={`flex items-center justify-between px-4 py-2.5 ${stale ? "bg-amber-50/60 dark:bg-amber-900/10" : ""}`}>
                       <div>
                         <p className="font-medium text-sm">{a.displayName}</p>
                         <p className="text-[11px] text-muted-foreground">Collected: {a.currency} {fmt(a.totalCollected)} · Banked: {a.currency} {fmt(a.totalDeposited)}</p>
