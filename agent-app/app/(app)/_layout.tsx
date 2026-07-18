@@ -10,7 +10,8 @@ function TabIcon({ symbol }: { symbol: string }) {
 }
 
 export default function AppTabsLayout() {
-  const { isAgent } = useAuth();
+  const { isAgent, permissions } = useAuth();
+  const canDrive = permissions.includes("use:fleet");
 
   return (
     <Tabs screenOptions={{ tabBarActiveTintColor: "#0C6B62" }}>
@@ -44,6 +45,13 @@ export default function AppTabsLayout() {
       <Tabs.Screen
         name="fleet"
         options={{ title: "Fleet", tabBarIcon: () => <TabIcon symbol="▭" />, href: !isAgent ? undefined : null }}
+      />
+
+      {/* Driver — gated on the use:fleet permission itself rather than agent/staff role,
+          since a driver may be either (e.g. a mortuary driver is staff, not an agent). */}
+      <Tabs.Screen
+        name="drive"
+        options={{ title: "Drive", tabBarIcon: () => <TabIcon symbol="⛟" />, href: canDrive ? undefined : null }}
       />
 
       {/* Shared */}
