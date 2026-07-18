@@ -19,6 +19,7 @@ module.exports = {
       supportsTablet: true,
     },
     android: {
+      package: "com.pol263.agentapp",
       adaptiveIcon: {
         backgroundColor: "#E6F4FE",
         foregroundImage: "./assets/android-icon-foreground.png",
