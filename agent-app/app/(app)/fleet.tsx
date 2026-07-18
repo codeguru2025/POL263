@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { Pressable } from "react-native";
+import MapView, { Marker, type Region } from "react-native-maps";
 import { getVehicles, getActiveCheckouts, returnVehicle, type Vehicle, type ActiveCheckout } from "../../src/api/fleet";
 
 function fmtDateTime(iso: string): string {
@@ -26,7 +27,9 @@ function StatusPill({ status }: { status: string }) {
   return <View style={[styles.pill, { backgroundColor: bg }]}><Text style={[styles.pillText, { color }]}>{status.replace(/_/g, " ")}</Text></View>;
 }
 
-type Tab = "active" | "vehicles";
+type Tab = "active" | "vehicles" | "map";
+
+const MAP_POLL_INTERVAL_MS = 20_000;
 
 export default function FleetScreen() {
   const [tab, setTab] = useState<Tab>("active");
@@ -41,6 +44,15 @@ export default function FleetScreen() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Live-ish dispatcher map: pings arrive from drivers roughly every 15-30s (src/app/(app)/
+  // drive.tsx), so polling on a similar cadence while this tab is open is close enough --
+  // no websocket/push infra exists in this app to do better.
+  useEffect(() => {
+    if (tab !== "map") return;
+    const interval = setInterval(() => { getActiveCheckouts().then(setCheckouts).catch(() => {}); }, MAP_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [tab]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -80,6 +92,9 @@ export default function FleetScreen() {
         <Pressable style={[styles.tab, tab === "vehicles" && styles.tabActive]} onPress={() => setTab("vehicles")}>
           <Text style={[styles.tabText, tab === "vehicles" && styles.tabTextActive]}>Vehicles</Text>
         </Pressable>
+        <Pressable style={[styles.tab, tab === "map" && styles.tabActive]} onPress={() => setTab("map")}>
+          <Text style={[styles.tabText, tab === "map" && styles.tabTextActive]}>Map</Text>
+        </Pressable>
       </View>
 
       {tab === "active" ? (
@@ -114,26 +129,78 @@ export default function FleetScreen() {
             contentContainerStyle={{ padding: 16, flexGrow: 1 }}
           />
         )
-      ) : vehicles === null ? (
-        <View style={styles.center}><ActivityIndicator /></View>
-      ) : (
-        <FlatList
-          data={vehicles}
-          keyExtractor={(v) => v.id}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>{item.registration}</Text>
-                <Text style={styles.cardSub}>{[item.make, item.model, item.year].filter(Boolean).join(" ") || "—"}</Text>
-                {item.currentMileage != null && <Text style={styles.cardSub}>{item.currentMileage.toLocaleString()} km</Text>}
+      ) : tab === "vehicles" ? (
+        vehicles === null ? (
+          <View style={styles.center}><ActivityIndicator /></View>
+        ) : (
+          <FlatList
+            data={vehicles}
+            keyExtractor={(v) => v.id}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            renderItem={({ item }) => (
+              <View style={styles.card}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{item.registration}</Text>
+                  <Text style={styles.cardSub}>{[item.make, item.model, item.year].filter(Boolean).join(" ") || "—"}</Text>
+                  {item.currentMileage != null && <Text style={styles.cardSub}>{item.currentMileage.toLocaleString()} km</Text>}
+                </View>
+                <StatusPill status={item.status} />
               </View>
-              <StatusPill status={item.status} />
-            </View>
-          )}
-          ListEmptyComponent={<View style={styles.center}><Text style={styles.hint}>No vehicles registered.</Text></View>}
-          contentContainerStyle={{ padding: 16, flexGrow: 1 }}
-        />
+            )}
+            ListEmptyComponent={<View style={styles.center}><Text style={styles.hint}>No vehicles registered.</Text></View>}
+            contentContainerStyle={{ padding: 16, flexGrow: 1 }}
+          />
+        )
+      ) : (
+        <DispatcherMap checkouts={checkouts} vehicles={vehicles} />
+      )}
+    </View>
+  );
+}
+
+const HARARE_REGION: Region = { latitude: -17.8252, longitude: 31.0335, latitudeDelta: 0.2, longitudeDelta: 0.2 };
+
+/** Live positions of every checked-out vehicle, joined against the vehicle roster for a
+ *  readable label (the checkout record itself only carries vehicleId). Vehicles with no
+ *  ping yet (just checked out, GPS not acquired) are omitted from the map rather than
+ *  plotted at a stale/default location. */
+function DispatcherMap({ checkouts, vehicles }: { checkouts: ActiveCheckout[] | null; vehicles: Vehicle[] | null }) {
+  const mapRef = useRef<MapView>(null);
+
+  const points = useMemo(() => {
+    if (!checkouts) return [];
+    const byId = new Map((vehicles ?? []).map((v) => [v.id, v]));
+    return checkouts
+      .filter((c) => c.latestPing)
+      .map((c) => ({ checkout: c, vehicle: byId.get(c.vehicleId) ?? null, ping: c.latestPing! }));
+  }, [checkouts, vehicles]);
+
+  useEffect(() => {
+    if (points.length === 0 || !mapRef.current) return;
+    mapRef.current.fitToCoordinates(
+      points.map((p) => ({ latitude: Number(p.ping.latitude), longitude: Number(p.ping.longitude) })),
+      { edgePadding: { top: 60, right: 60, bottom: 60, left: 60 }, animated: true }
+    );
+  }, [points]);
+
+  if (checkouts === null) return <View style={styles.center}><ActivityIndicator /></View>;
+
+  return (
+    <View style={{ flex: 1 }}>
+      <MapView ref={mapRef} style={{ flex: 1 }} initialRegion={HARARE_REGION}>
+        {points.map(({ checkout, vehicle, ping }) => (
+          <Marker
+            key={checkout.id}
+            coordinate={{ latitude: Number(ping.latitude), longitude: Number(ping.longitude) }}
+            title={vehicle?.registration || "Vehicle"}
+            description={`${timeAgo(ping.recordedAt)}${ping.speedKmh ? ` · ${Number(ping.speedKmh).toFixed(0)} km/h` : ""}`}
+          />
+        ))}
+      </MapView>
+      {points.length === 0 && (
+        <View style={styles.mapEmptyBanner}>
+          <Text style={styles.hint}>No active vehicles have reported a GPS position yet.</Text>
+        </View>
       )}
     </View>
   );
@@ -156,4 +223,5 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 11, fontWeight: "700", textTransform: "capitalize" },
   returnButton: { borderWidth: 1, borderColor: "#0C6B62", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   returnButtonText: { color: "#0C6B62", fontSize: 13, fontWeight: "700" },
+  mapEmptyBanner: { position: "absolute", bottom: 16, left: 16, right: 16, backgroundColor: "#FFFFFF", borderRadius: 10, borderWidth: 1, borderColor: "#DCE3E1", padding: 12, alignItems: "center" },
 });
