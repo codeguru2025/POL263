@@ -31,6 +31,10 @@ export default function AppTabsLayout() {
         name="clients"
         options={{ title: "Clients", tabBarIcon: () => <TabIcon symbol="◫" />, href: isAgent ? undefined : null }}
       />
+      <Tabs.Screen
+        name="commissions"
+        options={{ title: "Commissions", tabBarIcon: () => <TabIcon symbol="$" />, href: isAgent ? undefined : null }}
+      />
 
       {/* Staff-only tabs */}
       <Tabs.Screen
