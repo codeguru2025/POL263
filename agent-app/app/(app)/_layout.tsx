@@ -12,6 +12,7 @@ function TabIcon({ symbol }: { symbol: string }) {
 export default function AppTabsLayout() {
   const { isAgent, permissions } = useAuth();
   const canDrive = permissions.includes("use:fleet");
+  const canSeeMortuary = permissions.includes("read:funeral_ops");
 
   return (
     <Tabs screenOptions={{ tabBarActiveTintColor: "#0C6B62" }}>
@@ -52,6 +53,13 @@ export default function AppTabsLayout() {
       <Tabs.Screen
         name="drive"
         options={{ title: "Drive", tabBarIcon: () => <TabIcon symbol="⛟" />, href: canDrive ? undefined : null }}
+      />
+
+      {/* Mortuary attendant — gated on read:funeral_ops; write actions inside the
+          screen further check write:funeral_ops before showing action buttons. */}
+      <Tabs.Screen
+        name="mortuary"
+        options={{ title: "Mortuary", tabBarIcon: () => <TabIcon symbol="✦" />, href: canSeeMortuary ? undefined : null }}
       />
 
       {/* Shared */}
