@@ -1289,6 +1289,17 @@ export const funeralCases = pgTable(
     // Burial logistics (can be different vehicle/driver)
     burialVehicleId: uuid("burial_vehicle_id").references(() => fleetVehicles.id),
     burialDriverId: uuid("burial_driver_id").references(() => users.id),
+    // Overnighting — some bodies are taken from the mortuary the day before burial to spend the
+    // night at the deceased's residence; that leg can use a different vehicle/driver than burial.
+    overnightUsed: boolean("overnight_used").default(false).notNull(),
+    overnightDate: date("overnight_date"),
+    overnightLocation: text("overnight_location"),
+    overnightVehicleId: uuid("overnight_vehicle_id").references(() => fleetVehicles.id),
+    overnightDriverId: uuid("overnight_driver_id").references(() => users.id),
+    // Optional structured link to the cemeteries registry — layered on top of the free-text
+    // funeralLocation above (picking a cemetery auto-fills that field but doesn't replace it,
+    // so ad-hoc/unregistered burial locations still work).
+    cemeteryId: uuid("cemetery_id").references(() => cemeteries.id),
     // Attending agent
     attendingAgentId: uuid("attending_agent_id").references(() => users.id),
     // Service timing
@@ -1494,6 +1505,141 @@ export const mortuaryPostMortemMovements = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("pmm_intake_idx").on(t.intakeId)]
+);
+
+// Org-scoped rate card for ancillary funeral/mortuary services (body wash, chapel, removal,
+// burial, gravesite chairs, tents, PA system, carpets, flowers, pulpit, livestreaming,
+// videography, photography, vehicle hire, etc). Two rows per service — one per clientType —
+// since a partner-parlour case and a direct (family) client may be charged differently.
+export const MORTUARY_SERVICE_CLIENT_TYPES = ["partner_parlour", "direct_client"] as const;
+export const MORTUARY_SERVICE_PRICING_TYPES = ["flat", "per_km", "tiered_group"] as const;
+export const mortuaryServiceRates = pgTable(
+  "mortuary_service_rates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    serviceKey: text("service_key").notNull(),        // stable slug, e.g. 'body_wash', 'removal'
+    name: text("name").notNull(),                     // display label
+    clientType: text("client_type").notNull(),         // 'partner_parlour' | 'direct_client'
+    category: text("category"),                        // 'mortuary' | 'event_services' | 'transport' (UI grouping)
+    pricingType: text("pricing_type").notNull(),        // 'flat' | 'per_km' | 'tiered_group'
+    baseAmount: numeric("base_amount", { precision: 10, scale: 2 }).notNull(),
+    perKmRate: numeric("per_km_rate", { precision: 10, scale: 4 }),
+    tierGroupSize: integer("tier_group_size"),
+    tierGroupPrice: numeric("tier_group_price", { precision: 10, scale: 2 }),
+    currency: text("currency").default("USD").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("msr_org_idx").on(t.organizationId),
+    uniqueIndex("msr_org_key_clienttype_idx").on(t.organizationId, t.serviceKey, t.clientType),
+  ]
+);
+
+// Actual charges applied to a specific case, computed server-side from mortuaryServiceRates at
+// the time they're added. serviceKey/name are snapshotted so a later rate edit or deactivation
+// never rewrites a historical charge.
+export const caseServiceCharges = pgTable(
+  "case_service_charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    funeralCaseId: uuid("funeral_case_id").notNull().references(() => funeralCases.id),
+    mortuaryIntakeId: uuid("mortuary_intake_id").references(() => mortuaryIntakes.id),
+    serviceRateId: uuid("service_rate_id").references(() => mortuaryServiceRates.id),
+    serviceKey: text("service_key").notNull(),
+    name: text("name").notNull(),
+    quantity: numeric("quantity", { precision: 10, scale: 2 }).default("1").notNull(),
+    distanceKm: numeric("distance_km", { precision: 10, scale: 2 }),
+    computedAmount: numeric("computed_amount", { precision: 10, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    status: text("status").default("unpaid").notNull(),  // 'unpaid' | 'paid'
+    paidAt: timestamp("paid_at"),
+    paidBy: text("paid_by"),
+    paidByUserId: uuid("paid_by_user_id").references(() => users.id),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("csc_case_idx").on(t.funeralCaseId)]
+);
+
+// ─── Cemeteries (org-scoped registry) ────────────────────────
+export const cemeteries = pgTable(
+  "cemeteries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    name: text("name").notNull(),
+    address: text("address"),
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("cem_org_idx").on(t.organizationId)]
+);
+
+// ─── Equipment Items (named, individually-tracked gravesite/event equipment) ──
+export const equipmentItems = pgTable(
+  "equipment_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    name: text("name").notNull(),            // e.g. "Tent #1", "Lowering Device A"
+    equipmentType: text("equipment_type").notNull(),  // org-defined free text, e.g. 'tent' | 'lowering_device' | 'coffin_stand'
+    status: text("status").default("available").notNull(),  // 'available' | 'in_use'
+    notes: text("notes"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("eq_org_idx").on(t.organizationId)]
+);
+
+// ─── Pitching Assignments (cross-case cemetery/equipment/staff scheduling) ──
+// One row per case+cemetery+date — a vehicle/crew commonly serves multiple cemeteries for
+// multiple different cases on the same day, so this is intentionally NOT nested under a single
+// funeral case; it's queried/managed by date across all cases (see Pitching Schedule page).
+export const pitchingAssignments = pgTable(
+  "pitching_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    funeralCaseId: uuid("funeral_case_id").notNull().references(() => funeralCases.id),
+    cemeteryId: uuid("cemetery_id").references(() => cemeteries.id),
+    assignmentDate: date("assignment_date").notNull(),
+    vehicleId: uuid("vehicle_id").references(() => fleetVehicles.id),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pa_date_idx").on(t.organizationId, t.assignmentDate),
+    index("pa_case_idx").on(t.funeralCaseId),
+  ]
+);
+
+export const pitchingAssignmentStaff = pgTable(
+  "pitching_assignment_staff",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    pitchingAssignmentId: uuid("pitching_assignment_id").notNull().references(() => pitchingAssignments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id),
+  },
+  (t) => [index("pas_assignment_idx").on(t.pitchingAssignmentId)]
+);
+
+export const pitchingAssignmentEquipment = pgTable(
+  "pitching_assignment_equipment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    pitchingAssignmentId: uuid("pitching_assignment_id").notNull().references(() => pitchingAssignments.id, { onDelete: "cascade" }),
+    equipmentItemId: uuid("equipment_item_id").notNull().references(() => equipmentItems.id),
+  },
+  (t) => [index("pae_assignment_idx").on(t.pitchingAssignmentId)]
 );
 
 // Free-text notes/insights staff attach to a given day's daily report (e.g. operational
@@ -2763,6 +2909,21 @@ export const insertFuneralTaskSchema = createInsertSchema(funeralTasks).omit({ i
 export const insertPartnerParlourSchema = createInsertSchema(partnerParlours).omit({ id: true, createdAt: true });
 export const insertMortuaryIntakeSchema = createInsertSchema(mortuaryIntakes).omit({ id: true, createdAt: true });
 export const insertMortuaryDispatchSchema = createInsertSchema(mortuaryDispatches).omit({ id: true, createdAt: true });
+export const insertMortuaryServiceRateSchema = createInsertSchema(mortuaryServiceRates).omit({ id: true, createdAt: true });
+export type MortuaryServiceRate = typeof mortuaryServiceRates.$inferSelect;
+export type InsertMortuaryServiceRate = z.infer<typeof insertMortuaryServiceRateSchema>;
+export const insertCaseServiceChargeSchema = createInsertSchema(caseServiceCharges).omit({ id: true, createdAt: true });
+export type CaseServiceCharge = typeof caseServiceCharges.$inferSelect;
+export type InsertCaseServiceCharge = z.infer<typeof insertCaseServiceChargeSchema>;
+export const insertCemeterySchema = createInsertSchema(cemeteries).omit({ id: true, createdAt: true });
+export type Cemetery = typeof cemeteries.$inferSelect;
+export type InsertCemetery = z.infer<typeof insertCemeterySchema>;
+export const insertEquipmentItemSchema = createInsertSchema(equipmentItems).omit({ id: true, createdAt: true });
+export type EquipmentItem = typeof equipmentItems.$inferSelect;
+export type InsertEquipmentItem = z.infer<typeof insertEquipmentItemSchema>;
+export const insertPitchingAssignmentSchema = createInsertSchema(pitchingAssignments).omit({ id: true, createdAt: true });
+export type PitchingAssignment = typeof pitchingAssignments.$inferSelect;
+export type InsertPitchingAssignment = z.infer<typeof insertPitchingAssignmentSchema>;
 export const insertDeceasedBelongingSchema = createInsertSchema(deceasedBelongings).omit({ id: true, createdAt: true });
 export const insertBodyWashRequirementSchema = createInsertSchema(bodyWashRequirements).omit({ id: true, createdAt: true });
 export const insertMortuaryPostMortemMovementSchema = createInsertSchema(mortuaryPostMortemMovements).omit({ id: true, createdAt: true });
@@ -3114,7 +3275,12 @@ export const settlementAllocations = pgTable(
     receivableId: uuid("receivable_id")
       .notNull()
       .references(() => platformReceivables.id),
+    // Amount always in the receivable's own currency (how much of it this allocation covers).
+    // When the settlement's currency differs from the receivable's, fxRateApplied records the
+    // rate used (units of settlement currency per 1 unit of receivable currency) for audit —
+    // null when both are the same currency (the common case, no conversion needed).
     amount: numeric("amount").notNull(),
+    fxRateApplied: numeric("fx_rate_applied", { precision: 18, scale: 8 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   }
 );

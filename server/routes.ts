@@ -50,6 +50,8 @@ import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@share
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
 import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount } from "../shared/validation";
+import { computeServiceCharge } from "../shared/pricing";
+import { checkAvailability } from "./scheduling-availability";
 import {
   insertOrganizationSchema, insertBranchSchema, insertClientSchema,
   insertProductSchema, insertProductVersionSchema, insertPolicySchema,
@@ -61,6 +63,8 @@ import {
   insertFleetVehicleSchema, insertCommissionPlanSchema,
   insertNotificationTemplateSchema, insertLeadSchema, insertExpenditureSchema,
   insertPriceBookItemSchema, insertBenefitCatalogItemSchema,
+  insertMortuaryServiceRateSchema, insertCaseServiceChargeSchema,
+  insertCemeterySchema, insertEquipmentItemSchema, insertPitchingAssignmentSchema,
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
@@ -5574,6 +5578,164 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─── Cemeteries ──────────────────────────────────────────────
+  app.get("/api/cemeteries", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getCemeteries(user.organizationId));
+  });
+
+  app.post("/api/cemeteries", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const parsed = insertCemeterySchema.parse({ ...req.body, organizationId: user.organizationId });
+      const cemetery = await storage.createCemetery(parsed);
+      await auditLog(req, "CREATE_CEMETERY", "Cemetery", cemetery.id, null, cemetery);
+      return res.status(201).json(cemetery);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/cemeteries/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const parsed = insertCemeterySchema.partial().parse(req.body);
+      const cemetery = await storage.updateCemetery(req.params.id as string, parsed, user.organizationId);
+      if (!cemetery) return res.status(404).json({ message: "Cemetery not found" });
+      await auditLog(req, "UPDATE_CEMETERY", "Cemetery", cemetery.id, null, cemetery);
+      return res.json(cemetery);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  // ─── Equipment Items ─────────────────────────────────────────
+  app.get("/api/equipment-items", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getEquipmentItems(user.organizationId));
+  });
+
+  app.post("/api/equipment-items", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const parsed = insertEquipmentItemSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const item = await storage.createEquipmentItem(parsed);
+      await auditLog(req, "CREATE_EQUIPMENT_ITEM", "EquipmentItem", item.id, null, item);
+      return res.status(201).json(item);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/equipment-items/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const parsed = insertEquipmentItemSchema.partial().parse(req.body);
+      const item = await storage.updateEquipmentItem(req.params.id as string, parsed, user.organizationId);
+      if (!item) return res.status(404).json({ message: "Equipment item not found" });
+      await auditLog(req, "UPDATE_EQUIPMENT_ITEM", "EquipmentItem", item.id, null, item);
+      return res.json(item);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  // ─── Pitching Assignments (cross-case cemetery/equipment/staff scheduling) ──
+  app.get("/api/pitching-assignments", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const date = typeof req.query.date === "string" ? req.query.date : "";
+    if (!date) return res.status(400).json({ message: "date is required" });
+    const rows = await storage.getPitchingAssignmentsByDate(user.organizationId, date);
+    const [cases, cemeteriesList, vehicles, allUsers, equipment] = await Promise.all([
+      storage.getFuneralCasesByOrg(user.organizationId, 500, 0),
+      storage.getCemeteries(user.organizationId),
+      storage.getFleetVehicles(user.organizationId),
+      storage.getUsersByOrg(user.organizationId, 500, 0),
+      storage.getEquipmentItems(user.organizationId),
+    ]);
+    const enriched = rows.map((r: any) => ({
+      ...r,
+      funeralCase: (cases as any[]).find((c: any) => c.id === r.funeralCaseId) ?? null,
+      cemetery: (cemeteriesList as any[]).find((c: any) => c.id === r.cemeteryId) ?? null,
+      vehicle: (vehicles as any[]).find((v: any) => v.id === r.vehicleId) ?? null,
+      staff: (r.staffUserIds || []).map((uid: string) => (allUsers as any[]).find((u: any) => u.id === uid)).filter(Boolean),
+      equipment: (r.equipmentItemIds || []).map((eid: string) => (equipment as any[]).find((e: any) => e.id === eid)).filter(Boolean),
+    }));
+    return res.json(enriched);
+  });
+
+  app.post("/api/pitching-assignments", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const userIds = Array.isArray(req.body.userIds) ? req.body.userIds.filter((x: any) => typeof x === "string") : [];
+      const equipmentItemIds = Array.isArray(req.body.equipmentItemIds) ? req.body.equipmentItemIds.filter((x: any) => typeof x === "string") : [];
+      const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const parsed = insertPitchingAssignmentSchema.parse({
+        organizationId: user.organizationId,
+        funeralCaseId: req.body.funeralCaseId,
+        cemeteryId: req.body.cemeteryId || undefined,
+        assignmentDate: req.body.assignmentDate,
+        vehicleId: req.body.vehicleId || undefined,
+        notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+        createdByUserId: effectiveUserId,
+      });
+      const assignment = await storage.createPitchingAssignment(parsed, userIds, equipmentItemIds);
+      await auditLog(req, "CREATE_PITCHING_ASSIGNMENT", "PitchingAssignment", assignment.id, null, assignment);
+      return res.status(201).json(assignment);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/pitching-assignments/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const userIds = Array.isArray(req.body.userIds) ? req.body.userIds.filter((x: any) => typeof x === "string") : undefined;
+      const equipmentItemIds = Array.isArray(req.body.equipmentItemIds) ? req.body.equipmentItemIds.filter((x: any) => typeof x === "string") : undefined;
+      const allowed = ["cemeteryId", "assignmentDate", "vehicleId", "notes"];
+      const patch: Record<string, unknown> = {};
+      for (const k of allowed) { if (k in req.body) patch[k] = req.body[k]; }
+      const parsed = insertPitchingAssignmentSchema.partial().parse(patch);
+      const assignment = await storage.updatePitchingAssignment(req.params.id as string, user.organizationId, parsed, userIds, equipmentItemIds);
+      if (!assignment) return res.status(404).json({ message: "Pitching assignment not found" });
+      await auditLog(req, "UPDATE_PITCHING_ASSIGNMENT", "PitchingAssignment", assignment.id, null, assignment);
+      return res.json(assignment);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.delete("/api/pitching-assignments/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deletePitchingAssignment(req.params.id as string, user.organizationId);
+    await auditLog(req, "DELETE_PITCHING_ASSIGNMENT", "PitchingAssignment", req.params.id as string, null, null);
+    return res.status(204).send();
+  });
+
+  // ─── Scheduling Availability (non-blocking conflict warnings) ──
+  app.get("/api/scheduling/availability", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const date = typeof req.query.date === "string" ? req.query.date : "";
+    if (!date) return res.status(400).json({ message: "date is required" });
+    const userIds = typeof req.query.userIds === "string" && req.query.userIds ? req.query.userIds.split(",") : undefined;
+    const equipmentItemIds = typeof req.query.equipmentItemIds === "string" && req.query.equipmentItemIds ? req.query.equipmentItemIds.split(",") : undefined;
+    const conflicts = await checkAvailability(user.organizationId, date, {
+      vehicleId: typeof req.query.vehicleId === "string" && req.query.vehicleId ? req.query.vehicleId : undefined,
+      driverId: typeof req.query.driverId === "string" && req.query.driverId ? req.query.driverId : undefined,
+      userIds,
+      equipmentItemIds,
+      excludeFuneralCaseId: typeof req.query.excludeFuneralCaseId === "string" && req.query.excludeFuneralCaseId ? req.query.excludeFuneralCaseId : undefined,
+      excludePitchingAssignmentId: typeof req.query.excludePitchingAssignmentId === "string" && req.query.excludePitchingAssignmentId ? req.query.excludePitchingAssignmentId : undefined,
+    });
+    return res.json({ conflicts });
+  });
+
   // ─── Parlour Personnel ─────────────────────────────────────
   app.get("/api/partner-parlours/:parlourId/personnel", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
@@ -5780,16 +5942,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const dispatchBody = { ...req.body };
     if (dispatchBody.dispatchedAt && typeof dispatchBody.dispatchedAt === "string") { const d = new Date(dispatchBody.dispatchedAt); dispatchBody.dispatchedAt = isNaN(d.getTime()) ? undefined : d; }
     else if (!dispatchBody.dispatchedAt) dispatchBody.dispatchedAt = undefined;
-    // Auto-calculate the chapel & wash bay fee for partner-parlour cases that use our facilities.
-    if (dispatchBody.chapelWashBayUsed && intake.partnerParlourId) {
-      dispatchBody.chapelWashBayFeeAmount = "20.00";
-      dispatchBody.chapelWashBayFeeCurrency = "USD";
-      if (!dispatchBody.chapelWashBayFeeStatus) dispatchBody.chapelWashBayFeeStatus = "unpaid";
-    } else {
-      dispatchBody.chapelWashBayUsed = false;
-      dispatchBody.chapelWashBayFeeAmount = undefined;
-      dispatchBody.chapelWashBayFeeStatus = undefined;
-    }
+    // Chapel/wash-bay is no longer a combined flat fee here — it's billed as separate
+    // 'chapel' and 'body_wash' service charges via the mortuary service rate card
+    // (POST /api/funeral-cases/:id/service-charges). These columns are kept for historical
+    // dispatches but are no longer set on new ones.
+    dispatchBody.chapelWashBayUsed = false;
+    dispatchBody.chapelWashBayFeeAmount = undefined;
+    dispatchBody.chapelWashBayFeeStatus = undefined;
     const parsed = insertMortuaryDispatchSchema.parse({
       ...dispatchBody,
       intakeId: req.params.id as string,
@@ -7953,6 +8112,112 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       structuredLog("error", "PATCH /api/price-book/:id failed", { error: err?.message, itemId });
       return res.status(500).json({ message: safeError(err) });
     }
+  });
+
+  // ─── Mortuary Service Rates (rate card for ancillary funeral/mortuary services) ──
+
+  app.get("/api/mortuary-service-rates", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getMortuaryServiceRates(user.organizationId));
+  });
+
+  app.post("/api/mortuary-service-rates", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const parsed = insertMortuaryServiceRateSchema.parse({ ...req.body, organizationId: user.organizationId });
+      const rate = await storage.createMortuaryServiceRate(parsed);
+      await auditLog(req, "CREATE_MORTUARY_SERVICE_RATE", "MortuaryServiceRate", rate.id, null, rate);
+      return res.status(201).json(rate);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/mortuary-service-rates/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const id = req.params.id as string;
+    const before = await storage.getMortuaryServiceRateById(id, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Rate not found" });
+    const allowed = ["name", "category", "pricingType", "baseAmount", "perKmRate", "tierGroupSize", "tierGroupPrice", "currency", "isActive"];
+    const patch: Record<string, unknown> = {};
+    for (const k of allowed) { if (k in req.body) patch[k] = req.body[k]; }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ message: "No fields to update" });
+    const updated = await storage.updateMortuaryServiceRate(id, patch as any, user.organizationId);
+    await auditLog(req, "UPDATE_MORTUARY_SERVICE_RATE", "MortuaryServiceRate", id, before, updated);
+    return res.json(updated);
+  });
+
+  // ─── Case Service Charges ─────────────────────────────────────
+
+  app.get("/api/funeral-cases/:id/service-charges", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getCaseServiceCharges(req.params.id as string, user.organizationId));
+  });
+
+  app.post("/api/funeral-cases/:id/service-charges", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const funeralCaseId = req.params.id as string;
+    const caseRow = await storage.getFuneralCase(funeralCaseId, user.organizationId);
+    if (!caseRow) return res.status(404).json({ message: "Funeral case not found" });
+    const rateId = typeof req.body.serviceRateId === "string" ? req.body.serviceRateId : "";
+    if (!rateId) return res.status(400).json({ message: "serviceRateId is required" });
+    const rate = await storage.getMortuaryServiceRateById(rateId, user.organizationId);
+    if (!rate || !rate.isActive) return res.status(400).json({ message: "Service rate not found or inactive" });
+    const quantity = req.body.quantity !== undefined ? parseFloat(String(req.body.quantity)) : 1;
+    if (!Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ message: "quantity must be a positive number" });
+    const distanceKm = req.body.distanceKm !== undefined && req.body.distanceKm !== "" ? parseFloat(String(req.body.distanceKm)) : undefined;
+    if (rate.pricingType === "per_km" && (distanceKm === undefined || !Number.isFinite(distanceKm) || distanceKm < 0)) {
+      return res.status(400).json({ message: "distanceKm is required for this service" });
+    }
+    // Server always recomputes the amount from the rate card — never trusts a client-sent amount.
+    const computedAmount = computeServiceCharge(rate, { quantity, distanceKm });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const parsed = insertCaseServiceChargeSchema.parse({
+      organizationId: user.organizationId,
+      funeralCaseId,
+      mortuaryIntakeId: typeof req.body.mortuaryIntakeId === "string" && req.body.mortuaryIntakeId ? req.body.mortuaryIntakeId : undefined,
+      serviceRateId: rate.id,
+      serviceKey: rate.serviceKey,
+      name: rate.name,
+      quantity: quantity.toFixed(2),
+      distanceKm: distanceKm !== undefined ? distanceKm.toFixed(2) : undefined,
+      computedAmount: computedAmount.toFixed(2),
+      currency: rate.currency,
+      status: "unpaid",
+      notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+      createdByUserId: effectiveUserId,
+    });
+    const charge = await storage.createCaseServiceCharge(parsed);
+    await auditLog(req, "CREATE_CASE_SERVICE_CHARGE", "CaseServiceCharge", charge.id, null, charge);
+    return res.status(201).json(charge);
+  });
+
+  app.post("/api/case-service-charges/:id/payment", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const id = req.params.id as string;
+    const before = await storage.getCaseServiceChargeById(id, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Charge not found" });
+    if (before.status === "paid") return res.status(400).json({ message: "Charge is already paid" });
+    const paidBy = typeof req.body.paidBy === "string" ? req.body.paidBy.trim() : "";
+    if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
+    const updated = await storage.recordCaseServiceChargePayment(id, user.organizationId, {
+      paidBy,
+      paidByUserId: typeof req.body.paidByUserId === "string" && req.body.paidByUserId ? req.body.paidByUserId : undefined,
+    });
+    await auditLog(req, "RECORD_CASE_SERVICE_CHARGE_PAYMENT", "CaseServiceCharge", id, before, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/case-service-charges/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const id = req.params.id as string;
+    const before = await storage.getCaseServiceChargeById(id, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Charge not found" });
+    if (before.status !== "unpaid") return res.status(400).json({ message: "Only unpaid charges can be removed" });
+    await storage.deleteCaseServiceCharge(id, user.organizationId);
+    await auditLog(req, "DELETE_CASE_SERVICE_CHARGE", "CaseServiceCharge", id, before, null);
+    return res.status(204).send();
   });
 
   // ─── Approvals (Maker-Checker) ──────────────────────────────

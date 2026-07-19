@@ -22,6 +22,8 @@ import {
   partnerParlours, parlourPersonnel,
   mortuaryIntakes, mortuaryDispatches, deceasedBelongings, bodyWashRequirements, driverChecklists,
   mortuaryPostMortemMovements, partnerParlourVehicleUsage, dailyReportNotes,
+  mortuaryServiceRates, caseServiceCharges,
+  cemeteries, equipmentItems, pitchingAssignments, pitchingAssignmentStaff, pitchingAssignmentEquipment,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
   payrollEmployees, payrollRuns, payslips, attendanceLogs, attendanceQrCodes, attendanceScans,
@@ -38,6 +40,11 @@ import {
   userNotifications, userDeviceTokens,
   type Reminder, type InsertReminder,
   type FxRate, type InsertFxRate,
+  type MortuaryServiceRate, type InsertMortuaryServiceRate,
+  type CaseServiceCharge, type InsertCaseServiceCharge,
+  type Cemetery, type InsertCemetery,
+  type EquipmentItem, type InsertEquipmentItem,
+  type PitchingAssignment, type InsertPitchingAssignment,
   type Requisition, type InsertRequisition,
   type RequisitionItem, type InsertRequisitionItem,
   type PaymentDisbursement, type InsertPaymentDisbursement,
@@ -507,6 +514,17 @@ export interface IStorage {
   getPriceBookItems(orgId: string): Promise<PriceBookItem[]>;
   createPriceBookItem(item: InsertPriceBookItem): Promise<PriceBookItem>;
   updatePriceBookItem(id: string, data: Partial<InsertPriceBookItem>, orgId: string): Promise<PriceBookItem | undefined>;
+  getMortuaryServiceRates(orgId: string): Promise<MortuaryServiceRate[]>;
+  createMortuaryServiceRate(rate: InsertMortuaryServiceRate): Promise<MortuaryServiceRate>;
+  updateMortuaryServiceRate(id: string, data: Partial<InsertMortuaryServiceRate>, orgId: string): Promise<MortuaryServiceRate | undefined>;
+  getCaseServiceCharges(funeralCaseId: string, orgId: string): Promise<CaseServiceCharge[]>;
+  createCaseServiceCharge(charge: InsertCaseServiceCharge): Promise<CaseServiceCharge>;
+  getCemeteries(orgId: string): Promise<Cemetery[]>;
+  createCemetery(data: InsertCemetery): Promise<Cemetery>;
+  updateCemetery(id: string, data: Partial<InsertCemetery>, orgId: string): Promise<Cemetery | undefined>;
+  getEquipmentItems(orgId: string): Promise<EquipmentItem[]>;
+  createEquipmentItem(data: InsertEquipmentItem): Promise<EquipmentItem>;
+  updateEquipmentItem(id: string, data: Partial<InsertEquipmentItem>, orgId: string): Promise<EquipmentItem | undefined>;
   getApprovalRequests(orgId: string, status?: string): Promise<ApprovalRequest[]>;
   createApprovalRequest(req: InsertApprovalRequest): Promise<ApprovalRequest>;
   getTermsByOrg(orgId: string): Promise<TermsAndConditions[]>;
@@ -3842,6 +3860,150 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  // ─── Mortuary Service Rates (rate card for partner-parlour / direct-client ancillary services) ──
+  async getMortuaryServiceRates(orgId: string): Promise<MortuaryServiceRate[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(mortuaryServiceRates).where(eq(mortuaryServiceRates.organizationId, orgId));
+  }
+  async getMortuaryServiceRateById(id: string, orgId: string): Promise<MortuaryServiceRate | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(mortuaryServiceRates)
+      .where(and(eq(mortuaryServiceRates.id, id), eq(mortuaryServiceRates.organizationId, orgId)));
+    return row;
+  }
+  async createMortuaryServiceRate(rate: InsertMortuaryServiceRate): Promise<MortuaryServiceRate> {
+    const tdb = await getDbForOrg(rate.organizationId);
+    const [created] = await tdb.insert(mortuaryServiceRates).values(rate).returning();
+    return created;
+  }
+  async updateMortuaryServiceRate(id: string, data: Partial<InsertMortuaryServiceRate>, orgId: string): Promise<MortuaryServiceRate | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(mortuaryServiceRates).set(data)
+      .where(and(eq(mortuaryServiceRates.id, id), eq(mortuaryServiceRates.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+
+  // ─── Case Service Charges ────────────────────────────────────
+  async getCaseServiceCharges(funeralCaseId: string, orgId: string): Promise<CaseServiceCharge[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(caseServiceCharges)
+      .where(and(eq(caseServiceCharges.funeralCaseId, funeralCaseId), eq(caseServiceCharges.organizationId, orgId)))
+      .orderBy(desc(caseServiceCharges.createdAt));
+  }
+  async getCaseServiceChargeById(id: string, orgId: string): Promise<CaseServiceCharge | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(caseServiceCharges)
+      .where(and(eq(caseServiceCharges.id, id), eq(caseServiceCharges.organizationId, orgId)));
+    return row;
+  }
+  async createCaseServiceCharge(charge: InsertCaseServiceCharge): Promise<CaseServiceCharge> {
+    const tdb = await getDbForOrg(charge.organizationId);
+    const [created] = await tdb.insert(caseServiceCharges).values(charge).returning();
+    return created;
+  }
+  async recordCaseServiceChargePayment(id: string, orgId: string, data: { paidBy: string; paidByUserId?: string }): Promise<CaseServiceCharge | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(caseServiceCharges)
+      .set({ status: "paid", paidAt: new Date(), paidBy: data.paidBy, paidByUserId: data.paidByUserId })
+      .where(and(eq(caseServiceCharges.id, id), eq(caseServiceCharges.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  async deleteCaseServiceCharge(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(caseServiceCharges)
+      .where(and(eq(caseServiceCharges.id, id), eq(caseServiceCharges.organizationId, orgId), eq(caseServiceCharges.status, "unpaid")));
+  }
+
+  // ─── Cemeteries ────────────────────────────────────────────
+  async getCemeteries(orgId: string): Promise<Cemetery[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(cemeteries)
+      .where(and(eq(cemeteries.organizationId, orgId), eq(cemeteries.isActive, true)))
+      .orderBy(cemeteries.name);
+  }
+  async createCemetery(data: InsertCemetery): Promise<Cemetery> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(cemeteries).values(data).returning();
+    return row;
+  }
+  async updateCemetery(id: string, data: Partial<InsertCemetery>, orgId: string): Promise<Cemetery | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(cemeteries).set(data)
+      .where(and(eq(cemeteries.id, id), eq(cemeteries.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+
+  // ─── Equipment Items ───────────────────────────────────────
+  async getEquipmentItems(orgId: string): Promise<EquipmentItem[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(equipmentItems)
+      .where(and(eq(equipmentItems.organizationId, orgId), eq(equipmentItems.isActive, true)))
+      .orderBy(equipmentItems.name);
+  }
+  async createEquipmentItem(data: InsertEquipmentItem): Promise<EquipmentItem> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(equipmentItems).values(data).returning();
+    return row;
+  }
+  async updateEquipmentItem(id: string, data: Partial<InsertEquipmentItem>, orgId: string): Promise<EquipmentItem | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(equipmentItems).set(data)
+      .where(and(eq(equipmentItems.id, id), eq(equipmentItems.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+
+  // ─── Pitching Assignments ──────────────────────────────────
+  async getPitchingAssignmentsByDate(orgId: string, date: string): Promise<any[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(pitchingAssignments)
+      .where(and(eq(pitchingAssignments.organizationId, orgId), eq(pitchingAssignments.assignmentDate, date)))
+      .orderBy(desc(pitchingAssignments.createdAt));
+    return Promise.all(rows.map(async (r) => {
+      const [staff, equipment] = await Promise.all([
+        tdb.select().from(pitchingAssignmentStaff).where(eq(pitchingAssignmentStaff.pitchingAssignmentId, r.id)),
+        tdb.select().from(pitchingAssignmentEquipment).where(eq(pitchingAssignmentEquipment.pitchingAssignmentId, r.id)),
+      ]);
+      return { ...r, staffUserIds: staff.map(s => s.userId), equipmentItemIds: equipment.map(e => e.equipmentItemId) };
+    }));
+  }
+  async createPitchingAssignment(data: InsertPitchingAssignment, userIds: string[], equipmentItemIds: string[]): Promise<PitchingAssignment> {
+    return withOrgTransaction(data.organizationId, async (tx) => {
+      const [row] = await tx.insert(pitchingAssignments).values(data).returning();
+      if (userIds.length > 0) {
+        await tx.insert(pitchingAssignmentStaff).values(userIds.map(userId => ({ pitchingAssignmentId: row.id, userId })));
+      }
+      if (equipmentItemIds.length > 0) {
+        await tx.insert(pitchingAssignmentEquipment).values(equipmentItemIds.map(equipmentItemId => ({ pitchingAssignmentId: row.id, equipmentItemId })));
+      }
+      return row;
+    });
+  }
+  async updatePitchingAssignment(id: string, orgId: string, data: Partial<InsertPitchingAssignment>, userIds?: string[], equipmentItemIds?: string[]): Promise<PitchingAssignment | undefined> {
+    return withOrgTransaction(orgId, async (tx) => {
+      const [row] = await tx.update(pitchingAssignments).set(data)
+        .where(and(eq(pitchingAssignments.id, id), eq(pitchingAssignments.organizationId, orgId)))
+        .returning();
+      if (!row) return row;
+      if (userIds) {
+        await tx.delete(pitchingAssignmentStaff).where(eq(pitchingAssignmentStaff.pitchingAssignmentId, id));
+        if (userIds.length > 0) await tx.insert(pitchingAssignmentStaff).values(userIds.map(userId => ({ pitchingAssignmentId: id, userId })));
+      }
+      if (equipmentItemIds) {
+        await tx.delete(pitchingAssignmentEquipment).where(eq(pitchingAssignmentEquipment.pitchingAssignmentId, id));
+        if (equipmentItemIds.length > 0) await tx.insert(pitchingAssignmentEquipment).values(equipmentItemIds.map(equipmentItemId => ({ pitchingAssignmentId: id, equipmentItemId })));
+      }
+      return row;
+    });
+  }
+  async deletePitchingAssignment(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(pitchingAssignments).where(and(eq(pitchingAssignments.id, id), eq(pitchingAssignments.organizationId, orgId)));
+  }
+
   // ─── Approvals ─────────────────────────────────────────────
   async getApprovalRequests(orgId: string, status?: string): Promise<ApprovalRequest[]> {
     const tdb = await getDbForOrg(orgId);
@@ -5662,41 +5824,62 @@ export class DatabaseStorage implements IStorage {
         return { settlement, allocated: "0.00", receivablesSettled: 0 };
       }
 
-      // Oldest unsettled receivables first, same currency as the settlement — never blend
-      // currencies. Left join settlement_allocations to account for a receivable that was
-      // already partially covered by an earlier settlement (can only ever be the single
-      // oldest unsettled row, since allocation always fully covers a receivable before
-      // moving to the next one).
+      // Oldest unsettled receivables first, across ALL currencies — a settlement's currency no
+      // longer has to match a receivable's to cover it. Cross-currency conversion goes through
+      // the org's fx_rates (USD-per-unit-of-currency, same convention as resolveCrossCurrencyPayout
+      // for requisition/expenditure payments). Left join settlement_allocations to account for a
+      // receivable that was already partially covered by an earlier settlement.
       const rows = await tx
         .select({
           id: platformReceivables.id,
           amount: platformReceivables.amount,
+          currency: platformReceivables.currency,
           alreadyAllocated: sql<string>`COALESCE((SELECT SUM(sa.amount) FROM settlement_allocations sa WHERE sa.receivable_id = ${platformReceivables.id}), 0)`,
         })
         .from(platformReceivables)
         .where(and(
           eq(platformReceivables.organizationId, orgId),
           eq(platformReceivables.isSettled, false),
-          eq(platformReceivables.currency, settlement.currency),
         ))
         .orderBy(platformReceivables.createdAt);
+
+      const fxRateRows = await tx.select().from(fxRates).where(eq(fxRates.organizationId, orgId));
+      const fx: Record<string, number> = { USD: 1 };
+      for (const r of fxRateRows) fx[r.currency.toUpperCase()] = parseFloat(String(r.rateToUsd));
 
       let remaining = parseFloat(String(settlement.amount));
       let receivablesSettled = 0;
       let totalAllocated = 0;
+      const settlementCurrency = settlement.currency.toUpperCase();
       for (const r of rows) {
         if (remaining <= 0.005) break;
         const owed = parseFloat(r.amount) - parseFloat(r.alreadyAllocated || "0");
         if (owed <= 0.005) continue;
-        const applied = Math.min(remaining, owed);
+        const receivableCurrency = r.currency.toUpperCase();
+
+        // rate = units of settlement currency per 1 unit of the receivable's currency.
+        let rate = 1;
+        if (receivableCurrency !== settlementCurrency) {
+          if (!(fx[receivableCurrency] > 0) || !(fx[settlementCurrency] > 0)) {
+            // No platform rate configured for one side — can't safely convert; leave this
+            // receivable unsettled rather than guess, same as requisition/expenditure payments.
+            continue;
+          }
+          rate = fx[receivableCurrency] / fx[settlementCurrency];
+        }
+
+        const owedInSettlementCurrency = owed * rate;
+        const appliedInSettlementCurrency = Math.min(remaining, owedInSettlementCurrency);
+        const appliedInReceivableCurrency = appliedInSettlementCurrency / rate;
         await tx.insert(settlementAllocations).values({
           settlementId: settlement.id,
           receivableId: r.id,
-          amount: applied.toFixed(2),
+          amount: appliedInReceivableCurrency.toFixed(2),
+          fxRateApplied: receivableCurrency !== settlementCurrency ? rate.toFixed(8) : null,
         });
-        totalAllocated += applied;
-        remaining -= applied;
-        if (applied >= owed - 0.005) {
+        totalAllocated += appliedInSettlementCurrency;
+        remaining -= appliedInSettlementCurrency;
+        if (appliedInReceivableCurrency >= owed - 0.005) {
           await tx.update(platformReceivables).set({ isSettled: true }).where(eq(platformReceivables.id, r.id));
           receivablesSettled++;
         }
