@@ -491,6 +491,10 @@ function LinkCaseDialog({ open, onClose, quoteId }: { open: boolean; onClose: ()
   const queryClient = useQueryClient();
   const [funeralCaseId, setFuneralCaseId] = useState("");
 
+  const { data: funeralCases = [] } = useQuery<any[]>({ queryKey: ["/api/funeral-cases"], enabled: open });
+  const caseOptions: SearchableOption[] = (funeralCases as any[])
+    .map((c: any) => ({ value: c.id, label: `${c.caseNumber} — ${c.deceasedName}`, hint: c.status || undefined }));
+
   const mutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/quotations/${quoteId}/link-case`, { funeralCaseId });
@@ -513,11 +517,11 @@ function LinkCaseDialog({ open, onClose, quoteId }: { open: boolean; onClose: ()
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>Link to Funeral Case</DialogTitle>
-          <DialogDescription>Enter the Funeral Case ID to link this quotation to an existing case.</DialogDescription>
+          <DialogDescription>Search by case number or deceased name to link this quotation to an existing case.</DialogDescription>
         </DialogHeader>
         <div>
-          <Label>Funeral Case ID</Label>
-          <Input value={funeralCaseId} onChange={(e) => setFuneralCaseId(e.target.value)} placeholder="UUID or case number" />
+          <Label>Funeral Case</Label>
+          <SearchableSelect options={caseOptions} value={funeralCaseId} onChange={setFuneralCaseId} placeholder="Search case number or name…" searchPlaceholder="Search…" />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>

@@ -312,6 +312,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy", agentOnly: true },
         { href: "/staff/funerals", label: "Funeral Files", icon: Truck, permission: "read:funeral_ops" },
         { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops" },
+        { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops" },
         { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops" },
         { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"] },
         { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
@@ -472,6 +473,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           items: filterNav([
             { href: "/staff/funerals", label: "Funeral Cases", icon: Truck, permission: "read:funeral_ops" },
             { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops" },
+        { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops" },
             { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops" },
             { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"] },
             { href: "/staff/pricebook", label: "Funeral Pricing", icon: BookOpen, permission: "write:product" },

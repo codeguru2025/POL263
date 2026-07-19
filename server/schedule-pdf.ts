@@ -81,8 +81,8 @@ export async function streamDailyScheduleToResponse(
   const userIdSet = new Set<string>();
   const vehicleIdSet = new Set<string>();
   for (const fc of cases) {
-    [fc.removalDriverId, fc.burialDriverId, fc.attendingAgentId, fc.assignedTo].forEach(id => { if (id) userIdSet.add(id); });
-    [fc.removalVehicleId, fc.burialVehicleId].forEach(id => { if (id) vehicleIdSet.add(id); });
+    [fc.removalDriverId, fc.burialDriverId, (fc as any).overnightDriverId, fc.attendingAgentId, fc.assignedTo].forEach(id => { if (id) userIdSet.add(id); });
+    [fc.removalVehicleId, fc.burialVehicleId, (fc as any).overnightVehicleId].forEach(id => { if (id) vehicleIdSet.add(id); });
   }
   const usersMap: Record<string, StaffInfo> = {};
   const vehiclesMap: Record<string, { registrationNumber: string | null; make: string | null; model: string | null }> = {};
@@ -96,6 +96,22 @@ export async function streamDailyScheduleToResponse(
       if (v) vehiclesMap[id] = { registrationNumber: (v as any).registrationNumber ?? null, make: (v as any).make ?? null, model: (v as any).model ?? null };
     }),
   ]);
+
+  // Cemeteries + pitching assignments for this date (grouped by case) — surfaces the
+  // overnighting leg and cemetery/pitching crew alongside the rest of the day's logistics.
+  const cemeteriesList = await storage.getCemeteries(orgId);
+  const cemeteriesMap: Record<string, { name: string; address: string | null }> = {};
+  for (const c of cemeteriesList) cemeteriesMap[c.id] = { name: c.name, address: (c as any).address ?? null };
+
+  const pitchingRows = await storage.getPitchingAssignmentsByDate(orgId, date);
+  const pitchingByCase: Record<string, any[]> = {};
+  for (const r of pitchingRows) {
+    if (!pitchingByCase[r.funeralCaseId]) pitchingByCase[r.funeralCaseId] = [];
+    pitchingByCase[r.funeralCaseId].push(r);
+  }
+  const equipmentList = await storage.getEquipmentItems(orgId);
+  const equipmentMap: Record<string, string> = {};
+  for (const e of equipmentList) equipmentMap[e.id] = e.name;
 
   const logoData = await resolveImage(org.logoUrl);
   const dateLabel = fmtDate(date + "T00:00:00");
@@ -233,6 +249,8 @@ export async function streamDailyScheduleToResponse(
     kv2("Cause of Death", fmt(fc.causeOfDeath), "Place of Death", fmt(fc.placeOfDeath));
     kv2("Service Type", fmt(fc.serviceType), "Funeral Date", fmtDate(fc.funeralDate));
     kv("Funeral Location", fmt(fc.funeralLocation));
+    const cemetery = (fc as any).cemeteryId ? cemeteriesMap[(fc as any).cemeteryId] : undefined;
+    if (cemetery) kv("Cemetery", [cemetery.name, cemetery.address].filter(Boolean).join(" — "));
     if (fc.notes) kv("Notes / Instructions", fc.notes);
 
     // Informant
@@ -255,6 +273,17 @@ export async function streamDailyScheduleToResponse(
     subBand("Removal Driver");
     staffContact("Driver", fc.removalDriverId);
 
+    // Overnight team (only when the body overnights before burial — can be a different
+    // vehicle/driver than either removal or burial)
+    if ((fc as any).overnightUsed) {
+      sectionBand("Overnight Team");
+      kv2("Overnight Date", fmtDate((fc as any).overnightDate), "Location", fmt((fc as any).overnightLocation));
+      subBand("Overnight Vehicle");
+      kv("Vehicle", vehicleLabel((fc as any).overnightVehicleId));
+      subBand("Overnight Driver");
+      staffContact("Driver", (fc as any).overnightDriverId);
+    }
+
     // Burial team
     sectionBand("5. Burial / Service Team");
     subBand("Burial Vehicle");
@@ -265,6 +294,21 @@ export async function streamDailyScheduleToResponse(
     // Attending agent
     sectionBand("6. Attending Agent");
     staffContact("Agent", fc.attendingAgentId);
+
+    // Cemetery / pitching team — who's setting up the gravesite, with what equipment/vehicle
+    const pitching = pitchingByCase[fc.id] || [];
+    if (pitching.length > 0) {
+      sectionBand("Cemetery / Pitching Team");
+      for (const p of pitching) {
+        const cem = p.cemeteryId ? cemeteriesMap[p.cemeteryId] : undefined;
+        kv("Cemetery", cem ? cem.name : "—");
+        kv("Vehicle", vehicleLabel(p.vehicleId));
+        const staffNames = (p.staffUserIds || []).map((uid: string) => usersMap[uid]?.displayName).filter(Boolean).join(", ");
+        kv("Crew", staffNames || "—");
+        const equipNames = (p.equipmentItemIds || []).map((eid: string) => equipmentMap[eid]).filter(Boolean).join(", ");
+        kv("Equipment", equipNames || "—");
+      }
+    }
 
     // Case manager
     if (fc.assignedTo) {

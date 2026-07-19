@@ -22,6 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Car, Box, Loader2, ChevronRight, Truck, CheckCircle2, FileDown, Share2, Pencil, User, ChevronDown, Trash2, Building2, Users, DollarSign } from "lucide-react";
 import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
+import { computeServiceCharge } from "@shared/pricing";
 import { QuoteDialog } from "./quotations";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -61,6 +62,28 @@ function shiftTime(local: string, minutes: number): string {
   const d = new Date(local);
   d.setMinutes(d.getMinutes() + minutes);
   return utcToDatetimeLocal(d.toISOString());
+}
+
+// Non-blocking "already assigned elsewhere on this date" notice for a vehicle/driver pair —
+// checks both other funeral cases' legs and pitching assignments server-side, warns only.
+function AvailabilityWarning({ date, vehicleId, driverId, excludeFuneralCaseId }: {
+  date: string; vehicleId?: string; driverId?: string; excludeFuneralCaseId?: string;
+}) {
+  const enabled = !!date && (!!vehicleId || !!driverId);
+  const params = new URLSearchParams({ date });
+  if (vehicleId) params.set("vehicleId", vehicleId);
+  if (driverId) params.set("driverId", driverId);
+  if (excludeFuneralCaseId) params.set("excludeFuneralCaseId", excludeFuneralCaseId);
+  const { data } = useQuery<{ conflicts: string[] }>({
+    queryKey: [`/api/scheduling/availability?${params.toString()}`],
+    enabled,
+  });
+  if (!enabled || !data?.conflicts?.length) return null;
+  return (
+    <p className="col-span-2 text-[11px] text-amber-700 bg-amber-500/10 border border-amber-200 rounded-md px-2.5 py-1.5">
+      {data.conflicts.join(" · ")}
+    </p>
+  );
 }
 
 // Returns true if two time windows [aStart, aEnd] and [bStart, bEnd] overlap.
@@ -114,6 +137,12 @@ type CaseForm = {
   removalDriverId: string;
   burialVehicleId: string;
   burialDriverId: string;
+  overnightUsed: boolean;
+  overnightDate: string;
+  overnightLocation: string;
+  overnightVehicleId: string;
+  overnightDriverId: string;
+  cemeteryId: string;
   attendingAgentId: string;
   bodyWashTime: string;
   burialDepartureTime: string;
@@ -133,7 +162,9 @@ const BLANK_FORM: CaseForm = {
   informantName: "", informantPhone: "", informantRelationship: "",
   serviceType: "", funeralDate: "", funeralLocation: "",
   removalLocation: "", removalVehicleId: "", removalDriverId: "",
-  burialVehicleId: "", burialDriverId: "", attendingAgentId: "",
+  burialVehicleId: "", burialDriverId: "",
+  overnightUsed: false, overnightDate: "", overnightLocation: "", overnightVehicleId: "", overnightDriverId: "",
+  cemeteryId: "", attendingAgentId: "",
   bodyWashTime: "", burialDepartureTime: "", memorialServiceStart: "", memorialServiceEnd: "",
   bodyIdentifierName: "", bodyIdentifierIdNumber: "",
   notes: "", policyId: "", claimId: "", quotationId: "",
@@ -199,6 +230,118 @@ export default function StaffFunerals() {
     queryKey: [`/api/funeral-cases/${selectedCaseId}/profit-loss`],
     enabled: !!selectedCaseId,
   });
+
+  // ── Service Charges (mortuary/funeral-day service rate card) ──
+  const { data: caseServiceCharges = [] } = useQuery<any[]>({
+    queryKey: [`/api/funeral-cases/${selectedCaseId}/service-charges`],
+    enabled: !!selectedCaseId,
+  });
+  const { data: serviceRates = [] } = useQuery<any[]>({ queryKey: ["/api/mortuary-service-rates"] });
+  const [showAddServiceCharge, setShowAddServiceCharge] = useState(false);
+
+  const addServiceChargeMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/service-charges`, data);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message || "Failed to add service charge");
+      return json;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/service-charges`] });
+      setShowAddServiceCharge(false);
+      toast({ title: "Service charge added" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const payServiceChargeMutation = useMutation({
+    mutationFn: async ({ id, paidBy }: { id: string; paidBy: string }) => {
+      const res = await apiRequest("POST", `/api/case-service-charges/${id}/payment`, { paidBy });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/service-charges`] });
+      toast({ title: "Payment recorded" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteServiceChargeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/case-service-charges/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/service-charges`] });
+      toast({ title: "Charge removed" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  // ── Service Rates (org rate-card CRUD) ─────────────────────
+  const [showRateDialog, setShowRateDialog] = useState(false);
+  const [editingRate, setEditingRate] = useState<any>(null);
+  const saveServiceRateMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = editingRate
+        ? await apiRequest("PATCH", `/api/mortuary-service-rates/${editingRate.id}`, data)
+        : await apiRequest("POST", "/api/mortuary-service-rates", data);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message || "Failed to save rate");
+      return json;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/mortuary-service-rates"] });
+      setShowRateDialog(false);
+      setEditingRate(null);
+      toast({ title: editingRate ? "Rate updated" : "Rate added" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  // ── Cemeteries ─────────────────────────────────────────────
+  const { data: cemeteriesList = [] } = useQuery<any[]>({ queryKey: ["/api/cemeteries"] });
+  const [showCemeteryDialog, setShowCemeteryDialog] = useState(false);
+  const [editingCemetery, setEditingCemetery] = useState<any>(null);
+  const [cemeteryForm, setCemeteryForm] = useState({ name: "", address: "", notes: "" });
+  const saveCemeteryMutation = useMutation({
+    mutationFn: async (data: Record<string, string>) => {
+      const res = editingCemetery
+        ? await apiRequest("PATCH", `/api/cemeteries/${editingCemetery.id}`, data)
+        : await apiRequest("POST", "/api/cemeteries", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cemeteries"] });
+      setShowCemeteryDialog(false);
+      setEditingCemetery(null);
+      setCemeteryForm({ name: "", address: "", notes: "" });
+      toast({ title: editingCemetery ? "Cemetery updated" : "Cemetery added" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  // ── Equipment ──────────────────────────────────────────────
+  const { data: equipmentList = [] } = useQuery<any[]>({ queryKey: ["/api/equipment-items"] });
+  const [showEquipmentDialog, setShowEquipmentDialog] = useState(false);
+  const [editingEquipment, setEditingEquipment] = useState<any>(null);
+  const [equipmentForm, setEquipmentForm] = useState({ name: "", equipmentType: "tent", status: "available", notes: "" });
+  const saveEquipmentMutation = useMutation({
+    mutationFn: async (data: Record<string, string>) => {
+      const res = editingEquipment
+        ? await apiRequest("PATCH", `/api/equipment-items/${editingEquipment.id}`, data)
+        : await apiRequest("POST", "/api/equipment-items", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/equipment-items"] });
+      setShowEquipmentDialog(false);
+      setEditingEquipment(null);
+      setEquipmentForm({ name: "", equipmentType: "tent", status: "available", notes: "" });
+      toast({ title: editingEquipment ? "Equipment updated" : "Equipment added" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   // ── Parlours ──────────────────────────────────────────────
   const [selectedParlourId, setSelectedParlourId] = useState<string | null>(null);
   const [showParlourDialog, setShowParlourDialog] = useState(false);
@@ -492,6 +635,9 @@ export default function StaffFunerals() {
             <TabsTrigger value="cases" data-testid="tab-cases">Funeral Cases</TabsTrigger>
             <TabsTrigger value="fleet" data-testid="tab-fleet">Fleet Vehicles</TabsTrigger>
             <TabsTrigger value="parlours" data-testid="tab-parlours">Partner Parlours</TabsTrigger>
+            <TabsTrigger value="rates" data-testid="tab-service-rates">Service Rates</TabsTrigger>
+            <TabsTrigger value="cemeteries" data-testid="tab-cemeteries">Cemeteries</TabsTrigger>
+            <TabsTrigger value="equipment" data-testid="tab-equipment">Equipment</TabsTrigger>
           </TabsList>
 
           {/* ─── Cases tab ─────────────────────────────────────── */}
@@ -527,6 +673,10 @@ export default function StaffFunerals() {
                 onStartTrip={(data) => startTripMutation.mutate({ caseId: selectedCase.id, data })}
                 onEndTrip={(tripId, data) => endTripMutation.mutate({ tripId, data })}
                 profitLoss={caseProfitLoss}
+                serviceCharges={caseServiceCharges}
+                onAddServiceCharge={() => setShowAddServiceCharge(true)}
+                onPayServiceCharge={(id, paidBy) => payServiceChargeMutation.mutate({ id, paidBy })}
+                onDeleteServiceCharge={(id) => deleteServiceChargeMutation.mutate(id)}
               />
             ) : (
               <CardSection title="Logistics Board" icon={Box} flush
@@ -750,6 +900,159 @@ export default function StaffFunerals() {
               </div>
             </div>
           </TabsContent>
+
+          {/* ─── Service Rates tab ─────────────────────────────────── */}
+          <TabsContent value="rates" className="mt-4">
+            <CardSection
+              title="Mortuary & Funeral-Day Service Rates"
+              description="Rate card for ancillary services (storage, chapel, removal, tents, transport, etc). One rate per service per client type — partner-parlour cases and direct-client cases can be priced differently."
+              icon={DollarSign}
+              flush
+              headerRight={canWriteFuneralOps ? (
+                <Button size="sm" onClick={() => { setEditingRate(null); setShowRateDialog(true); }} data-testid="button-add-service-rate">
+                  <Plus className="h-4 w-4 mr-1" />Add Rate
+                </Button>
+              ) : undefined}
+            >
+              {serviceRates.length === 0 ? (
+                <EmptyState icon={DollarSign} title="No rates configured" description="Add service rates to start billing ancillary services." className="border-0 rounded-none bg-transparent py-10" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader className="bg-muted/50">
+                      <TableRow>
+                        <TableHead className="pl-6">Service</TableHead>
+                        <TableHead>Client Type</TableHead>
+                        <TableHead>Pricing</TableHead>
+                        <TableHead>Rate</TableHead>
+                        <TableHead>Active</TableHead>
+                        {canWriteFuneralOps && <TableHead className="text-right pr-6">Actions</TableHead>}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {[...serviceRates].sort((a: any, b: any) => a.name.localeCompare(b.name) || a.clientType.localeCompare(b.clientType)).map((r: any) => (
+                        <TableRow key={r.id} data-testid={`row-service-rate-${r.id}`}>
+                          <TableCell className="pl-6 font-medium text-sm">{r.name}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-[10px]">{r.clientType === "partner_parlour" ? "Partner Parlour" : "Direct Client"}</Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {r.pricingType === "flat" && "Flat"}
+                            {r.pricingType === "per_km" && "Base + per km"}
+                            {r.pricingType === "tiered_group" && `Per ${r.tierGroupSize} unit(s)`}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {r.pricingType === "flat" && `${r.currency} ${parseFloat(r.baseAmount).toFixed(2)}`}
+                            {r.pricingType === "per_km" && `${r.currency} ${parseFloat(r.baseAmount).toFixed(2)} + ${parseFloat(r.perKmRate).toFixed(2)}/km`}
+                            {r.pricingType === "tiered_group" && `${r.currency} ${parseFloat(r.tierGroupPrice).toFixed(2)} / ${r.tierGroupSize}`}
+                          </TableCell>
+                          <TableCell>
+                            {r.isActive
+                              ? <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Active</Badge>
+                              : <Badge variant="outline" className="text-[10px] bg-muted text-muted-foreground">Inactive</Badge>}
+                          </TableCell>
+                          {canWriteFuneralOps && (
+                            <TableCell className="text-right pr-6">
+                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingRate(r); setShowRateDialog(true); }}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardSection>
+          </TabsContent>
+
+          {/* ─── Cemeteries tab ─────────────────────────────────────── */}
+          <TabsContent value="cemeteries" className="mt-4">
+            <CardSection
+              title="Cemeteries"
+              description="Registered burial sites — pick one on a case to auto-fill the burial location and enable pitching assignments there."
+              icon={Box}
+              flush
+              headerRight={canWriteFuneralOps ? (
+                <Button size="sm" onClick={() => { setEditingCemetery(null); setCemeteryForm({ name: "", address: "", notes: "" }); setShowCemeteryDialog(true); }} data-testid="button-add-cemetery">
+                  <Plus className="h-4 w-4 mr-1" />Add Cemetery
+                </Button>
+              ) : undefined}
+            >
+              {cemeteriesList.length === 0 ? (
+                <EmptyState icon={Box} title="No cemeteries yet" description="Add cemeteries to link them on funeral cases and pitching assignments." className="border-0 rounded-none bg-transparent py-10" />
+              ) : (
+                <div className="divide-y">
+                  {cemeteriesList.map((c: any) => (
+                    <div key={c.id} className="px-4 py-3 flex items-start justify-between gap-2" data-testid={`row-cemetery-${c.id}`}>
+                      <div className="min-w-0">
+                        <div className="font-medium text-sm">{c.name}</div>
+                        {c.address && <div className="text-xs text-muted-foreground">{c.address}</div>}
+                      </div>
+                      {canWriteFuneralOps && (
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => { setEditingCemetery(c); setCemeteryForm({ name: c.name || "", address: c.address || "", notes: c.notes || "" }); setShowCemeteryDialog(true); }}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardSection>
+          </TabsContent>
+
+          {/* ─── Equipment tab ──────────────────────────────────────── */}
+          <TabsContent value="equipment" className="mt-4">
+            <CardSection
+              title="Equipment"
+              description="Named, individually-tracked gravesite/event equipment — tents, lowering devices, coffin stands, PA systems, etc."
+              icon={Box}
+              flush
+              headerRight={canWriteFuneralOps ? (
+                <Button size="sm" onClick={() => { setEditingEquipment(null); setEquipmentForm({ name: "", equipmentType: "tent", status: "available", notes: "" }); setShowEquipmentDialog(true); }} data-testid="button-add-equipment">
+                  <Plus className="h-4 w-4 mr-1" />Add Equipment
+                </Button>
+              ) : undefined}
+            >
+              {equipmentList.length === 0 ? (
+                <EmptyState icon={Box} title="No equipment yet" description="Add equipment items to assign them on pitching assignments." className="border-0 rounded-none bg-transparent py-10" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Status</TableHead>
+                        {canWriteFuneralOps && <TableHead className="w-[60px]" />}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {equipmentList.map((e: any) => (
+                        <TableRow key={e.id} data-testid={`row-equipment-${e.id}`}>
+                          <TableCell className="font-medium text-sm">{e.name}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{e.equipmentType}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className={`text-[10px] ${e.status === "in_use" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>
+                              {e.status === "in_use" ? "In Use" : "Available"}
+                            </Badge>
+                          </TableCell>
+                          {canWriteFuneralOps && (
+                            <TableCell>
+                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingEquipment(e); setEquipmentForm({ name: e.name || "", equipmentType: e.equipmentType || "tent", status: e.status || "available", notes: e.notes || "" }); setShowEquipmentDialog(true); }}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardSection>
+          </TabsContent>
         </Tabs>
       </PageShell>
 
@@ -828,6 +1131,102 @@ export default function StaffFunerals() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ServiceRateFormDialog
+        open={showRateDialog}
+        onOpenChange={setShowRateDialog}
+        rate={editingRate}
+        onSubmit={(data) => saveServiceRateMutation.mutate(data)}
+        isPending={saveServiceRateMutation.isPending}
+      />
+
+      <Dialog open={showCemeteryDialog} onOpenChange={setShowCemeteryDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>{editingCemetery ? "Edit Cemetery" : "Add Cemetery"}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Name *</Label>
+              <Input value={cemeteryForm.name} onChange={(e) => setCemeteryForm({ ...cemeteryForm, name: e.target.value })} placeholder="Cemetery name" />
+            </div>
+            <div>
+              <Label className="text-xs">Address</Label>
+              <Textarea rows={2} value={cemeteryForm.address} onChange={(e) => setCemeteryForm({ ...cemeteryForm, address: e.target.value })} placeholder="Physical address" />
+            </div>
+            <div>
+              <Label className="text-xs">Notes</Label>
+              <Textarea rows={2} value={cemeteryForm.notes} onChange={(e) => setCemeteryForm({ ...cemeteryForm, notes: e.target.value })} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCemeteryDialog(false)}>Cancel</Button>
+            <Button onClick={() => saveCemeteryMutation.mutate(cemeteryForm)} disabled={!cemeteryForm.name.trim() || saveCemeteryMutation.isPending}>
+              {saveCemeteryMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              {editingCemetery ? "Save Changes" : "Add Cemetery"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showEquipmentDialog} onOpenChange={setShowEquipmentDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>{editingEquipment ? "Edit Equipment" : "Add Equipment"}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Name *</Label>
+              <Input value={equipmentForm.name} onChange={(e) => setEquipmentForm({ ...equipmentForm, name: e.target.value })} placeholder="e.g. Tent #1" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Type</Label>
+                <Select value={equipmentForm.equipmentType} onValueChange={(v) => setEquipmentForm({ ...equipmentForm, equipmentType: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tent">Tent</SelectItem>
+                    <SelectItem value="lowering_device">Lowering Device</SelectItem>
+                    <SelectItem value="coffin_stand">Coffin Stand</SelectItem>
+                    <SelectItem value="pa_system">PA System</SelectItem>
+                    <SelectItem value="carpet">Carpet</SelectItem>
+                    <SelectItem value="chairs">Chairs</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {editingEquipment && (
+                <div>
+                  <Label className="text-xs">Status</Label>
+                  <Select value={equipmentForm.status} onValueChange={(v) => setEquipmentForm({ ...equipmentForm, status: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="available">Available</SelectItem>
+                      <SelectItem value="in_use">In Use</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+            <div>
+              <Label className="text-xs">Notes</Label>
+              <Textarea rows={2} value={equipmentForm.notes} onChange={(e) => setEquipmentForm({ ...equipmentForm, notes: e.target.value })} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEquipmentDialog(false)}>Cancel</Button>
+            <Button onClick={() => saveEquipmentMutation.mutate(equipmentForm)} disabled={!equipmentForm.name.trim() || saveEquipmentMutation.isPending}>
+              {saveEquipmentMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              {editingEquipment ? "Save Changes" : "Add Equipment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AddServiceChargeDialog
+        open={showAddServiceCharge}
+        onOpenChange={setShowAddServiceCharge}
+        rates={serviceRates.filter((r: any) => r.isActive && r.clientType === (linkedMortuaryIntake?.partnerParlourId ? "partner_parlour" : "direct_client"))}
+        mortuaryIntakeId={linkedMortuaryIntake?.id}
+        onSubmit={(data) => addServiceChargeMutation.mutate(data)}
+        isPending={addServiceChargeMutation.isPending}
+      />
 
       <CaseFormDialog
         open={showCreateCase}
@@ -989,6 +1388,7 @@ function CaseDetailView({
   driverChecklist, linkedMortuaryIntake, onOpenDriverChecklist,
   quotation, receipts, onRecordPayment, onEditQuotation,
   vehicleTrips, onStartTrip, onEndTrip, profitLoss,
+  serviceCharges, onAddServiceCharge, onPayServiceCharge, onDeleteServiceCharge,
 }: {
   funeralCase: FuneralCase;
   tasks: FuneralTask[];
@@ -1012,8 +1412,14 @@ function CaseDetailView({
   onStartTrip?: (data: Record<string, any>) => void;
   onEndTrip?: (tripId: string, data: Record<string, any>) => void;
   profitLoss?: any;
+  serviceCharges?: any[];
+  onAddServiceCharge?: () => void;
+  onPayServiceCharge?: (id: string, paidBy: string) => void;
+  onDeleteServiceCharge?: (id: string) => void;
 }) {
   const completed = tasks.filter((t) => t.status === "completed").length;
+  const [payingChargeId, setPayingChargeId] = useState<string | null>(null);
+  const [payingChargeBy, setPayingChargeBy] = useState("");
   const [startTripFor, setStartTripFor] = useState<{ role: string; vehicleId: string; driverId?: string | null } | null>(null);
   const [endTripFor, setEndTripFor] = useState<any>(null);
   const [tripOdometer, setTripOdometer] = useState("");
@@ -1337,6 +1743,91 @@ function CaseDetailView({
           </CardSection>
         )}
 
+        {/* Service charges — ancillary billing (storage/wash/chapel/removal/tents/etc) */}
+        <div className="md:col-span-2">
+          <CardSection
+            title="Service Charges"
+            icon={DollarSign}
+            description="Ancillary services billed on this case, computed from the rate card."
+            headerRight={onAddServiceCharge ? (
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={onAddServiceCharge} data-testid="button-add-service-charge">
+                <Plus className="h-3.5 w-3.5" /> Add Service
+              </Button>
+            ) : undefined}
+          >
+            {!serviceCharges || serviceCharges.length === 0 ? (
+              <EmptyState icon={DollarSign} title="No service charges yet" description="Add a service to start billing storage, chapel, removal, or funeral-day extras." className="border-0 rounded-none bg-transparent py-8" />
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Service</TableHead>
+                        <TableHead>Qty / Distance</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="w-[140px]" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {serviceCharges.map((c: any) => (
+                        <TableRow key={c.id} data-testid={`row-service-charge-${c.id}`}>
+                          <TableCell className="font-medium text-sm">{c.name}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {c.distanceKm != null ? `${parseFloat(c.distanceKm).toFixed(1)} km` : (parseFloat(c.quantity) !== 1 ? `x${parseFloat(c.quantity)}` : "—")}
+                          </TableCell>
+                          <TableCell className="text-sm">{c.currency} {parseFloat(c.computedAmount).toFixed(2)}</TableCell>
+                          <TableCell>
+                            {c.status === "paid"
+                              ? <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Paid</Badge>
+                              : <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200">Unpaid</Badge>}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {c.status === "unpaid" && (
+                              <div className="flex gap-1 justify-end">
+                                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setPayingChargeId(c.id); setPayingChargeBy(""); }}>Record payment</Button>
+                                {onDeleteServiceCharge && (
+                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => onDeleteServiceCharge(c.id)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                              </div>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <p className="text-sm text-muted-foreground mt-3">
+                  Total: {serviceCharges[0]?.currency || "USD"} {serviceCharges.reduce((sum: number, c: any) => sum + parseFloat(c.computedAmount), 0).toFixed(2)}
+                  {" · "}Outstanding: {serviceCharges.filter((c: any) => c.status === "unpaid").reduce((sum: number, c: any) => sum + parseFloat(c.computedAmount), 0).toFixed(2)}
+                </p>
+              </>
+            )}
+          </CardSection>
+        </div>
+
+        <Dialog open={!!payingChargeId} onOpenChange={(v) => { if (!v) setPayingChargeId(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+            <div>
+              <Label className="text-xs">Received From (Name) *</Label>
+              <Input value={payingChargeBy} onChange={(e) => setPayingChargeBy(e.target.value)} placeholder="Name of person who paid" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPayingChargeId(null)}>Cancel</Button>
+              <Button
+                disabled={!payingChargeBy.trim()}
+                onClick={() => { if (payingChargeId && onPayServiceCharge) onPayServiceCharge(payingChargeId, payingChargeBy.trim()); setPayingChargeId(null); }}
+              >
+                Confirm
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Notes — full width */}
         {fc.notes && (
           <div className="md:col-span-2">
@@ -1525,6 +2016,251 @@ function StatusChanger({ current, onUpdateStatus, blockCompletionReason }: { cur
   );
 }
 
+// ─── Service Rate Form Dialog (create + edit) ────────────────────────────────
+
+function slugify(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function ServiceRateFormDialog({ open, onOpenChange, rate, onSubmit, isPending }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  rate: any | null;
+  onSubmit: (data: Record<string, any>) => void; isPending: boolean;
+}) {
+  const [form, setForm] = useState({
+    name: "", clientType: "partner_parlour", category: "mortuary", pricingType: "flat",
+    baseAmount: "", perKmRate: "", tierGroupSize: "3", tierGroupPrice: "", isActive: true,
+  });
+  useEffect(() => {
+    if (rate) {
+      setForm({
+        name: rate.name || "",
+        clientType: rate.clientType || "partner_parlour",
+        category: rate.category || "mortuary",
+        pricingType: rate.pricingType || "flat",
+        baseAmount: rate.baseAmount != null ? String(rate.baseAmount) : "",
+        perKmRate: rate.perKmRate != null ? String(rate.perKmRate) : "",
+        tierGroupSize: rate.tierGroupSize != null ? String(rate.tierGroupSize) : "3",
+        tierGroupPrice: rate.tierGroupPrice != null ? String(rate.tierGroupPrice) : "",
+        isActive: rate.isActive !== false,
+      });
+    } else {
+      setForm({ name: "", clientType: "partner_parlour", category: "mortuary", pricingType: "flat", baseAmount: "", perKmRate: "", tierGroupSize: "3", tierGroupPrice: "", isActive: true });
+    }
+  }, [rate, open]);
+
+  const handleSubmit = () => {
+    const data: Record<string, any> = {
+      name: form.name.trim(),
+      clientType: form.clientType,
+      category: form.category,
+      pricingType: form.pricingType,
+      baseAmount: form.pricingType === "tiered_group" ? "0" : (parseFloat(form.baseAmount) || 0).toFixed(2),
+      currency: "USD",
+      isActive: form.isActive,
+    };
+    if (!rate) data.serviceKey = slugify(form.name);
+    if (form.pricingType === "per_km") data.perKmRate = (parseFloat(form.perKmRate) || 0).toFixed(4);
+    if (form.pricingType === "tiered_group") {
+      data.tierGroupSize = parseInt(form.tierGroupSize, 10) || 1;
+      data.tierGroupPrice = (parseFloat(form.tierGroupPrice) || 0).toFixed(2);
+    }
+    onSubmit(data);
+  };
+
+  const valid = form.name.trim().length > 0
+    && (form.pricingType !== "flat" || parseFloat(form.baseAmount) >= 0)
+    && (form.pricingType !== "per_km" || (parseFloat(form.baseAmount) >= 0 && parseFloat(form.perKmRate) >= 0))
+    && (form.pricingType !== "tiered_group" || (parseInt(form.tierGroupSize, 10) > 0 && parseFloat(form.tierGroupPrice) >= 0));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{rate ? "Edit Service Rate" : "Add Service Rate"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-xs">Service Name *</Label>
+            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Body Wash" disabled={!!rate} />
+            {!rate && <p className="text-[10px] text-muted-foreground mt-1">Key: {form.name ? slugify(form.name) : "—"}</p>}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Client Type *</Label>
+              <Select value={form.clientType} onValueChange={(v) => setForm({ ...form, clientType: v })} disabled={!!rate}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="partner_parlour">Partner Parlour</SelectItem>
+                  <SelectItem value="direct_client">Direct Client</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Category</Label>
+              <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="mortuary">Mortuary</SelectItem>
+                  <SelectItem value="event_services">Event Services</SelectItem>
+                  <SelectItem value="transport">Transport</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs">Pricing Type *</Label>
+            <Select value={form.pricingType} onValueChange={(v) => setForm({ ...form, pricingType: v })} disabled={!!rate}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="flat">Flat rate</SelectItem>
+                <SelectItem value="per_km">Base fee + per km</SelectItem>
+                <SelectItem value="tiered_group">Per group of N units</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.pricingType === "flat" && (
+            <div>
+              <Label className="text-xs">Amount (USD) *</Label>
+              <Input type="number" step="0.01" min="0" value={form.baseAmount} onChange={(e) => setForm({ ...form, baseAmount: e.target.value })} placeholder="e.g. 10.00" />
+            </div>
+          )}
+          {form.pricingType === "per_km" && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Base Fee (USD) *</Label>
+                <Input type="number" step="0.01" min="0" value={form.baseAmount} onChange={(e) => setForm({ ...form, baseAmount: e.target.value })} placeholder="e.g. 40.00" />
+              </div>
+              <div>
+                <Label className="text-xs">Rate per km (USD) *</Label>
+                <Input type="number" step="0.01" min="0" value={form.perKmRate} onChange={(e) => setForm({ ...form, perKmRate: e.target.value })} placeholder="e.g. 1.50" />
+              </div>
+            </div>
+          )}
+          {form.pricingType === "tiered_group" && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Group Size *</Label>
+                <Input type="number" step="1" min="1" value={form.tierGroupSize} onChange={(e) => setForm({ ...form, tierGroupSize: e.target.value })} placeholder="e.g. 3" />
+              </div>
+              <div>
+                <Label className="text-xs">Price per Group (USD) *</Label>
+                <Input type="number" step="0.01" min="0" value={form.tierGroupPrice} onChange={(e) => setForm({ ...form, tierGroupPrice: e.target.value })} placeholder="e.g. 1.00" />
+              </div>
+            </div>
+          )}
+          {rate && (
+            <div className="flex items-center gap-2">
+              <Checkbox id="rate-active" checked={form.isActive} onCheckedChange={(v) => setForm({ ...form, isActive: v === true })} />
+              <Label htmlFor="rate-active" className="text-sm font-normal cursor-pointer">Active (available to add to cases)</Label>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={!valid || isPending}>
+            {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+            {rate ? "Save Changes" : "Add Rate"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Add Service Charge Dialog ───────────────────────────────────────────────
+
+function AddServiceChargeDialog({ open, onOpenChange, rates, mortuaryIntakeId, onSubmit, isPending }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  rates: any[]; mortuaryIntakeId?: string;
+  onSubmit: (data: Record<string, any>) => void; isPending: boolean;
+}) {
+  const [rateId, setRateId] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [distanceKm, setDistanceKm] = useState("");
+  const [notes, setNotes] = useState("");
+  useEffect(() => {
+    if (open) { setRateId(""); setQuantity("1"); setDistanceKm(""); setNotes(""); }
+  }, [open]);
+
+  const rate = rates.find((r: any) => r.id === rateId);
+  const preview = rate
+    ? computeServiceCharge(rate, { quantity: parseFloat(quantity) || 1, distanceKm: parseFloat(distanceKm) || 0 })
+    : null;
+
+  const valid = !!rate
+    && parseFloat(quantity) > 0
+    && (rate.pricingType !== "per_km" || (distanceKm !== "" && parseFloat(distanceKm) >= 0));
+
+  const handleSubmit = () => {
+    if (!rate) return;
+    onSubmit({
+      serviceRateId: rate.id,
+      quantity: rate.pricingType === "tiered_group" ? quantity : (rate.pricingType === "flat" ? quantity : "1"),
+      distanceKm: rate.pricingType === "per_km" ? distanceKm : undefined,
+      mortuaryIntakeId: mortuaryIntakeId || undefined,
+      notes: notes.trim() || undefined,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Service Charge</DialogTitle>
+          <DialogDescription>Pick a service from the rate card — the amount is computed automatically.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-xs">Service *</Label>
+            <Select value={rateId} onValueChange={setRateId}>
+              <SelectTrigger data-testid="select-service-rate"><SelectValue placeholder="Choose a service…" /></SelectTrigger>
+              <SelectContent>
+                {rates.map((r: any) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {rates.length === 0 && <p className="text-[10px] text-muted-foreground mt-1">No active rates for this client type — add one in the Service Rates tab.</p>}
+          </div>
+          {rate?.pricingType === "tiered_group" && (
+            <div>
+              <Label className="text-xs">Quantity (e.g. number of chairs) *</Label>
+              <Input type="number" step="1" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+            </div>
+          )}
+          {rate?.pricingType === "flat" && (
+            <div>
+              <Label className="text-xs">Quantity</Label>
+              <Input type="number" step="1" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+            </div>
+          )}
+          {rate?.pricingType === "per_km" && (
+            <div>
+              <Label className="text-xs">Distance (km) *</Label>
+              <Input type="number" step="0.1" min="0" value={distanceKm} onChange={(e) => setDistanceKm(e.target.value)} placeholder="0 for local" data-testid="input-distance-km" />
+            </div>
+          )}
+          <div>
+            <Label className="text-xs">Notes</Label>
+            <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" />
+          </div>
+          {preview !== null && (
+            <p className="text-sm rounded-md bg-muted/50 px-3 py-2">
+              Charge: <strong>{rate.currency} {preview.toFixed(2)}</strong>
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={!valid || isPending} data-testid="button-submit-service-charge">
+            {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+            Add Charge
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Case Form Dialog (create + edit) ────────────────────────────────────────
 
 /**
@@ -1576,6 +2312,12 @@ function CaseFormDialog({
         removalDriverId: initial.removalDriverId ?? "",
         burialVehicleId: initial.burialVehicleId ?? "",
         burialDriverId: initial.burialDriverId ?? "",
+        overnightUsed: (initial as any).overnightUsed ?? false,
+        overnightDate: (initial as any).overnightDate ?? "",
+        overnightLocation: (initial as any).overnightLocation ?? "",
+        overnightVehicleId: (initial as any).overnightVehicleId ?? "",
+        overnightDriverId: (initial as any).overnightDriverId ?? "",
+        cemeteryId: (initial as any).cemeteryId ?? "",
         attendingAgentId: initial.attendingAgentId ?? "",
         bodyWashTime: (initial as any).bodyWashTime ? utcToDatetimeLocal((initial as any).bodyWashTime) : "",
         burialDepartureTime: (initial as any).burialDepartureTime ? utcToDatetimeLocal((initial as any).burialDepartureTime) : "",
@@ -1715,6 +2457,9 @@ function CaseFormDialog({
       // Convert datetime-local strings (local time) to UTC ISO before sending to server
       if (TIME_FIELDS.includes(k) && typeof v === "string" && v) {
         (data as any)[k] = datetimeLocalToUtc(v);
+      } else if (typeof v === "boolean") {
+        // `v || null` would coerce `false` to `null` — booleans must be sent as-is.
+        (data as any)[k] = v;
       } else {
         (data as any)[k] = v || null;
       }
@@ -1748,6 +2493,8 @@ function CaseFormDialog({
     label: `${v.registration}${v.make ? ` — ${v.make} ${v.model || ""}`.trim() : ""}`,
     hint: v.vehicleType || undefined,
   }));
+  const { data: cemeteries = [] } = useQuery<any[]>({ queryKey: ["/api/cemeteries"] });
+  const cemeteryOptions: SearchableOption[] = (cemeteries as any[]).map((c: any) => ({ value: c.id, label: c.name, hint: c.address || undefined }));
   // Drivers are staff explicitly assigned the "driver" role; agents are "agent"-role staff.
   const driverOptions: SearchableOption[] = activeUsers
     .filter((u: any) => hasRole(u, "driver"))
@@ -1969,6 +2716,14 @@ function CaseFormDialog({
                     <Input type="date" value={form.funeralDate} onChange={set("funeralDate")} data-testid="input-funeral-date" />
                   </Field>
                   <div className="col-span-2">
+                    <Field label="Cemetery">
+                      <SearchableSelect options={cemeteryOptions} value={form.cemeteryId} onChange={(v) => {
+                        const c = cemeteries.find((x: any) => x.id === v);
+                        setForm((f) => ({ ...f, cemeteryId: v, funeralLocation: c ? c.name : f.funeralLocation }));
+                      }} placeholder="Select a registered cemetery (optional)…" searchPlaceholder="Search cemeteries…" />
+                    </Field>
+                  </div>
+                  <div className="col-span-2">
                     <Field label="Place of Burial">
                       <Input value={form.funeralLocation} onChange={set("funeralLocation")} placeholder="Cemetery or burial site" data-testid="input-funeral-location" />
                     </Field>
@@ -2043,6 +2798,32 @@ function CaseFormDialog({
                     </div>
                   </div>
                   <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Checkbox id="overnight-used" checked={form.overnightUsed}
+                        onCheckedChange={(v) => setForm((f) => ({ ...f, overnightUsed: v === true }))} />
+                      <Label htmlFor="overnight-used" className="text-xs font-semibold text-muted-foreground uppercase tracking-wide cursor-pointer">
+                        Body will overnight before burial
+                      </Label>
+                    </div>
+                    {form.overnightUsed && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="Overnight Date">
+                          <Input type="date" value={form.overnightDate} onChange={set("overnightDate")} />
+                        </Field>
+                        <Field label="Overnight Location">
+                          <Input value={form.overnightLocation} onChange={set("overnightLocation")} placeholder="Deceased's residence" />
+                        </Field>
+                        <Field label="Overnight Vehicle">
+                          <SearchableSelect options={vehicleOptions} value={form.overnightVehicleId} onChange={setSel("overnightVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
+                        </Field>
+                        <Field label="Overnight Driver">
+                          <SearchableSelect options={driverOptions} value={form.overnightDriverId} onChange={setSel("overnightDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" emptyText="No staff have the Driver role yet." />
+                        </Field>
+                        <AvailabilityWarning date={form.overnightDate} vehicleId={form.overnightVehicleId} driverId={form.overnightDriverId} excludeFuneralCaseId={initial?.id} />
+                      </div>
+                    )}
+                  </div>
+                  <div>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Burial Logistics</p>
                     <p className="text-xs text-muted-foreground mb-2">Can be the same or different vehicle/driver as removal.</p>
                     <div className="grid grid-cols-2 gap-3">
@@ -2052,6 +2833,7 @@ function CaseFormDialog({
                       <Field label="Burial Driver">
                         <SearchableSelect options={driverOptions} value={form.burialDriverId} onChange={setSel("burialDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" emptyText="No staff have the Driver role yet." />
                       </Field>
+                      <AvailabilityWarning date={form.funeralDate} vehicleId={form.burialVehicleId} driverId={form.burialDriverId} excludeFuneralCaseId={initial?.id} />
                     </div>
                   </div>
                   <div>

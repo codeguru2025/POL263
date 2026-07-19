@@ -193,7 +193,6 @@ export async function streamDriverChecklistPDF(
     dataRow("Removal Driver:", fmt(removalDriver.displayName));
     if (removalDriver.phone) dataRow("Driver Phone:", removalDriver.phone);
     if (removalDriver.email) dataRow("Driver Email:", removalDriver.email);
-    if (removalDriver.address) dataRow("Driver Address:", removalDriver.address);
     if (removalDriver.nextOfKinName) dataRow("Driver Emerg. Contact:", fmt(removalDriver.nextOfKinName));
     if (removalDriver.nextOfKinPhone) dataRow("Driver Emerg. Phone:", removalDriver.nextOfKinPhone);
   }
@@ -211,7 +210,6 @@ export async function streamDriverChecklistPDF(
     dataRow("Driver Name:", fmt(burialDriver.displayName));
     if (burialDriver.phone) dataRow("Driver Phone:", burialDriver.phone);
     if (burialDriver.email) dataRow("Driver Email:", burialDriver.email);
-    if (burialDriver.address) dataRow("Driver Address:", burialDriver.address);
     if (burialDriver.nextOfKinName) dataRow("Driver Emerg. Contact:", fmt(burialDriver.nextOfKinName));
     if (burialDriver.nextOfKinPhone) dataRow("Driver Emerg. Phone:", burialDriver.nextOfKinPhone);
   } else {
