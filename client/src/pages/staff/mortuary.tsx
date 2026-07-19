@@ -1499,7 +1499,6 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
     destination: "",
     collectorAcknowledgedName: "",
     notes: "",
-    chapelWashBayUsed: false,
   });
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1511,7 +1510,6 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
       destination: form.destination || null,
       collectorAcknowledgedName: form.collectorAcknowledgedName || null,
       notes: form.notes || null,
-      chapelWashBayUsed: form.chapelWashBayUsed,
     });
   };
 
@@ -1568,13 +1566,10 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
               <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
             </div>
             {intake?.partnerParlourId && (
-              <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5">
-                <Checkbox id="chapel-wash-bay-used" checked={form.chapelWashBayUsed}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, chapelWashBayUsed: v === true }))} />
-                <Label htmlFor="chapel-wash-bay-used" className="text-sm font-normal cursor-pointer leading-snug">
-                  Client used our chapel & wash bay <span className="text-muted-foreground">(USD 20.00 fee)</span>
-                </Label>
-              </div>
+              <p className="text-xs text-muted-foreground rounded-md border border-border bg-muted/40 px-3 py-2.5">
+                Chapel, body wash, and any other services used are billed separately from the case's
+                Service Charges section, not from this dispatch form.
+              </p>
             )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
