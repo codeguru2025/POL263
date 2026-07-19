@@ -77,28 +77,11 @@ export async function streamDailyScheduleToResponse(
   };
   cases.sort((a, b) => getEarliestTime(a).localeCompare(getEarliestTime(b)));
 
-  // Resolve all user ids
-  const userIdSet = new Set<string>();
-  const vehicleIdSet = new Set<string>();
-  for (const fc of cases) {
-    [fc.removalDriverId, fc.burialDriverId, (fc as any).overnightDriverId, fc.attendingAgentId, fc.assignedTo].forEach(id => { if (id) userIdSet.add(id); });
-    [fc.removalVehicleId, fc.burialVehicleId, (fc as any).overnightVehicleId].forEach(id => { if (id) vehicleIdSet.add(id); });
-  }
-  const usersMap: Record<string, StaffInfo> = {};
-  const vehiclesMap: Record<string, { registrationNumber: string | null; make: string | null; model: string | null }> = {};
-  await Promise.all([
-    ...Array.from(userIdSet).map(async (id) => {
-      const u = await storage.getUser(id);
-      if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone ?? null, email: u.email ?? null };
-    }),
-    ...Array.from(vehicleIdSet).map(async (id) => {
-      const v = await storage.getFleetVehicleById(id, orgId);
-      if (v) vehiclesMap[id] = { registrationNumber: (v as any).registrationNumber ?? null, make: (v as any).make ?? null, model: (v as any).model ?? null };
-    }),
-  ]);
-
   // Cemeteries + pitching assignments for this date (grouped by case) — surfaces the
   // overnighting leg and cemetery/pitching crew alongside the rest of the day's logistics.
+  // Fetched before the user/vehicle lookup maps below so the pitching crew and vehicle are
+  // included in those maps too — otherwise a pitcher who isn't also a removal/burial/overnight
+  // driver (or a vehicle only used for pitching) would resolve to blank on the printed PDF.
   const cemeteriesList = await storage.getCemeteries(orgId);
   const cemeteriesMap: Record<string, { name: string; address: string | null }> = {};
   for (const c of cemeteriesList) cemeteriesMap[c.id] = { name: c.name, address: (c as any).address ?? null };
@@ -112,6 +95,32 @@ export async function streamDailyScheduleToResponse(
   const equipmentList = await storage.getEquipmentItems(orgId);
   const equipmentMap: Record<string, string> = {};
   for (const e of equipmentList) equipmentMap[e.id] = e.name;
+
+  // Resolve all user ids
+  const userIdSet = new Set<string>();
+  const vehicleIdSet = new Set<string>();
+  for (const fc of cases) {
+    [fc.removalDriverId, fc.burialDriverId, (fc as any).overnightDriverId, fc.attendingAgentId, fc.assignedTo].forEach(id => { if (id) userIdSet.add(id); });
+    [fc.removalVehicleId, fc.burialVehicleId, (fc as any).overnightVehicleId].forEach(id => { if (id) vehicleIdSet.add(id); });
+  }
+  for (const r of pitchingRows) {
+    (r.staffUserIds || []).forEach((id: string) => { if (id) userIdSet.add(id); });
+    if (r.vehicleId) vehicleIdSet.add(r.vehicleId);
+  }
+  const usersMap: Record<string, StaffInfo> = {};
+  const vehiclesMap: Record<string, { registrationNumber: string | null; make: string | null; model: string | null }> = {};
+  await Promise.all([
+    ...Array.from(userIdSet).map(async (id) => {
+      const u = await storage.getUser(id);
+      if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone ?? null, email: u.email ?? null };
+    }),
+    ...Array.from(vehicleIdSet).map(async (id) => {
+      const v = await storage.getFleetVehicleById(id, orgId);
+      // fleetVehicles' actual column is `registration`, not `registrationNumber` — this map key
+      // is just this function's internal naming; read from the real field.
+      if (v) vehiclesMap[id] = { registrationNumber: (v as any).registration ?? null, make: (v as any).make ?? null, model: (v as any).model ?? null };
+    }),
+  ]);
 
   const logoData = await resolveImage(org.logoUrl);
   const dateLabel = fmtDate(date + "T00:00:00");
