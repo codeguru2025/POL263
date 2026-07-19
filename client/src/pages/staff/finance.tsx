@@ -3908,17 +3908,38 @@ export default function StaffFinance() {
                       Actually paid out in a different currency than {payTarget.item.currency}
                     </Label>
                   </div>
-                  {payForm.paidInDifferentCurrency && (
+                  {payForm.paidInDifferentCurrency && (() => {
+                    // Default the rate from the platform's configured fx_rates (Settings → FX
+                    // Rates), same USD-cross convention used server-side — staff can still
+                    // override for the actual cash-counter rate.
+                    const entityCurrency = payTarget.item.currency;
+                    const usdPer = (c: string) => (c === "USD" ? 1 : parseFloat(fxRateMap[c] || "0"));
+                    const platformRateFor = (paidCurrency: string): string => {
+                      if (!paidCurrency || paidCurrency === entityCurrency) return "";
+                      const from = usdPer(entityCurrency);
+                      const to = usdPer(paidCurrency);
+                      if (!(from > 0) || !(to > 0)) return "";
+                      return (from / to).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+                    };
+                    return (
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1">
                         <Label>Currency actually paid</Label>
-                        <CurrencySelect value={payForm.paidCurrency} onValueChange={(v) => setPayForm({ ...payForm, paidCurrency: v })} />
+                        <CurrencySelect value={payForm.paidCurrency} onValueChange={(v) => {
+                          const platformRate = platformRateFor(v);
+                          setPayForm({ ...payForm, paidCurrency: v, fxRateApplied: platformRate || payForm.fxRateApplied });
+                        }} />
                       </div>
                       <div className="space-y-1">
                         <Label>Rate ({payForm.paidCurrency || "?"} per 1 {payTarget.item.currency}) *</Label>
                         <Input type="number" step="0.0001" min="0.0001" value={payForm.fxRateApplied}
                           onChange={(e) => setPayForm({ ...payForm, fxRateApplied: e.target.value })}
                           placeholder="e.g. 20" data-testid="input-fx-rate-applied" />
+                        {platformRateFor(payForm.paidCurrency) && (
+                          <p className="text-xs text-muted-foreground">
+                            Platform rate: {platformRateFor(payForm.paidCurrency)}. Edit if the actual cash-counter rate differs.
+                          </p>
+                        )}
                       </div>
                       {payForm.paidCurrency && payForm.fxRateApplied && parseFloat(payForm.fxRateApplied) > 0 && payForm.amount && (
                         <p className="col-span-2 text-xs text-muted-foreground">
@@ -3927,7 +3948,8 @@ export default function StaffFinance() {
                         </p>
                       )}
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
                 {payMutation.isError && <p className="text-sm text-destructive">{(payMutation.error as Error).message}</p>}
               </div>
