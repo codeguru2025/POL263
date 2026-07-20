@@ -89,8 +89,20 @@ export default function JoinRegisterPage() {
         if (data?.products?.length) {
           setOptions(data);
           setLoadError(null);
-          const first = data.products[0];
-          const firstVersion = first?.versions?.[0];
+          // Carry over a product picked on the agent's vCard "Get a Quote" panel, if any
+          // (same handoff pattern as agent_referral_code above) — falls back to the first
+          // product/version like before when nothing was pre-selected.
+          const preselectedVersionId = sessionStorage.getItem("vcard_selected_product_version_id");
+          sessionStorage.removeItem("vcard_selected_product_version_id");
+          let preselected: { product: any; version: any } | null = null;
+          if (preselectedVersionId) {
+            for (const p of data.products) {
+              const v = p.versions?.find((v: any) => v.id === preselectedVersionId);
+              if (v) { preselected = { product: p, version: v }; break; }
+            }
+          }
+          const first = preselected?.product || data.products[0];
+          const firstVersion = preselected?.version || first?.versions?.[0];
           setForm((f) => ({
             ...f,
             productId: first?.id || "",

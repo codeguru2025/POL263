@@ -168,10 +168,37 @@ export const users = pgTable(
     nextOfKinName: text("next_of_kin_name"),
     nextOfKinPhone: text("next_of_kin_phone"),
     department: text("department"),
+    /** Short bio shown on the agent's public vCard page (/join/:refCode). */
+    bio: text("bio"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("users_org_idx").on(t.organizationId)]
 );
+
+export const AGENT_CONTENT_POST_TYPES = ["video", "post"] as const;
+
+/** Org-wide training/education content pushed to every agent's public vCard page —
+ *  authored by an org admin (manage:settings), shared to all agents, not per-agent. */
+export const agentContentPosts = pgTable(
+  "agent_content_posts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    type: text("type").notNull(), // video | post
+    title: text("title").notNull(),
+    body: text("body"),
+    videoUrl: text("video_url"), // external embed link (YouTube/Vimeo) — no video hosting
+    thumbnailUrl: text("thumbnail_url"),
+    isActive: boolean("is_active").default(true).notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("acp_org_idx").on(t.organizationId)]
+);
+export const insertAgentContentPostSchema = createInsertSchema(agentContentPosts).omit({ id: true, createdAt: true });
+export type AgentContentPost = typeof agentContentPosts.$inferSelect;
+export type InsertAgentContentPost = z.infer<typeof insertAgentContentPostSchema>;
 
 // ─── RBAC ───────────────────────────────────────────────────
 

@@ -34,7 +34,7 @@ import {
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
   bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
-  quotationGuarantors, quotationCollateral, receiptAdverts, reminders,
+  quotationGuarantors, quotationCollateral, receiptAdverts, reminders, agentContentPosts,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   userNotifications, userDeviceTokens,
@@ -135,6 +135,7 @@ import {
   directoryContacts,
   type DirectoryContact, type InsertDirectoryContact,
   type ReceiptAdvert, type InsertReceiptAdvert,
+  type AgentContentPost, type InsertAgentContentPost,
   memberCardSettings,
   type MemberCardSettings, type InsertMemberCardSettings,
   countryFlagSettings,
@@ -676,6 +677,10 @@ export interface IStorage {
   updateReceiptAdvert(id: string, data: Partial<InsertReceiptAdvert>, orgId: string): Promise<ReceiptAdvert | undefined>;
   deleteReceiptAdvert(id: string, orgId: string): Promise<void>;
   setActiveReceiptAdvert(id: string, orgId: string): Promise<void>;
+  getAgentContentPosts(orgId: string, activeOnly?: boolean): Promise<AgentContentPost[]>;
+  createAgentContentPost(data: InsertAgentContentPost): Promise<AgentContentPost>;
+  updateAgentContentPost(id: string, data: Partial<InsertAgentContentPost>, orgId: string): Promise<AgentContentPost | undefined>;
+  deleteAgentContentPost(id: string, orgId: string): Promise<void>;
   /** Returns the org's member-card template settings, or the built-in defaults if the org
    *  hasn't configured one yet (Member Card Admin hasn't been saved before). */
   getMemberCardSettings(orgId: string): Promise<MemberCardSettings>;
@@ -6144,6 +6149,32 @@ export class DatabaseStorage implements IStorage {
     await tdb.update(receiptAdverts).set({ isActive: false }).where(eq(receiptAdverts.organizationId, orgId));
     await tdb.update(receiptAdverts).set({ isActive: true })
       .where(and(eq(receiptAdverts.id, id), eq(receiptAdverts.organizationId, orgId)));
+  }
+
+  // ─── Agent Content Posts (vCard training/education feed) ─────
+  async getAgentContentPosts(orgId: string, activeOnly = false): Promise<AgentContentPost[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions = activeOnly
+      ? and(eq(agentContentPosts.organizationId, orgId), eq(agentContentPosts.isActive, true))
+      : eq(agentContentPosts.organizationId, orgId);
+    return tdb.select().from(agentContentPosts).where(conditions)
+      .orderBy(asc(agentContentPosts.sortOrder), desc(agentContentPosts.createdAt));
+  }
+  async createAgentContentPost(data: InsertAgentContentPost): Promise<AgentContentPost> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(agentContentPosts).values(data).returning();
+    return row;
+  }
+  async updateAgentContentPost(id: string, data: Partial<InsertAgentContentPost>, orgId: string): Promise<AgentContentPost | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(agentContentPosts).set(data)
+      .where(and(eq(agentContentPosts.id, id), eq(agentContentPosts.organizationId, orgId)))
+      .returning();
+    return row;
+  }
+  async deleteAgentContentPost(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(agentContentPosts).where(and(eq(agentContentPosts.id, id), eq(agentContentPosts.organizationId, orgId)));
   }
 
   // ─── Member Card Admin ────────────────────────────────────

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -510,6 +511,10 @@ export default function StaffUsers() {
                       <Label htmlFor="edit-nextOfKinPhone">Next of Kin Phone</Label>
                       <Input id="edit-nextOfKinPhone" placeholder="+263..." value={editingUser.nextOfKinPhone || ""} onChange={e => setEditingUser((p: any) => ({ ...p, nextOfKinPhone: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
                     </div>
+                    <div className="col-span-2 space-y-1">
+                      <Label htmlFor="edit-bio">Bio (shown on their public vCard page, if they're an agent)</Label>
+                      <Textarea id="edit-bio" rows={3} placeholder="A short intro clients see on this agent's referral page…" value={editingUser.bio || ""} onChange={e => setEditingUser((p: any) => ({ ...p, bio: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -528,7 +533,7 @@ export default function StaffUsers() {
               )}
               <div className="flex gap-2 ml-auto">
                 <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
-                <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined, phone: editingUser.phone || "", address: editingUser.address || "", nationalId: editingUser.nationalId || "", dateOfBirth: editingUser.dateOfBirth || "", gender: editingUser.gender || "", maritalStatus: editingUser.maritalStatus || "", nextOfKinName: editingUser.nextOfKinName || "", nextOfKinPhone: editingUser.nextOfKinPhone || "", department: editingUser.department || "" } })} disabled={updateMutation.isPending || !canEditUsers} data-testid="button-submit-edit-user">
+                <Button onClick={() => updateMutation.mutate({ id: editingUser.id, data: { email: editingUser.email, displayName: editingUser.displayName, isActive: editingUser.isActive, branchId: editingUser.branchId || null, roleIds: editingUser.roleIds, password: editingUser.newPassword || undefined, phone: editingUser.phone || "", address: editingUser.address || "", nationalId: editingUser.nationalId || "", dateOfBirth: editingUser.dateOfBirth || "", gender: editingUser.gender || "", maritalStatus: editingUser.maritalStatus || "", nextOfKinName: editingUser.nextOfKinName || "", nextOfKinPhone: editingUser.nextOfKinPhone || "", department: editingUser.department || "", bio: editingUser.bio || "" } })} disabled={updateMutation.isPending || !canEditUsers} data-testid="button-submit-edit-user">
                   {updateMutation.isPending ? "Saving..." : "Save Changes"}
                 </Button>
               </div>

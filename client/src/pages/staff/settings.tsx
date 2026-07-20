@@ -38,6 +38,7 @@ import {
   Shield,
   FileText,
   Globe,
+  Video,
 } from "lucide-react";
 import type { CountryFlagSettings } from "@/components/country-flag-fields";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
@@ -59,7 +60,7 @@ export default function StaffSettings() {
   const [, setLocation] = useLocation();
   const canManageSettings = permissions.includes("manage:settings");
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const validTabs = ["terms", "rbac", "adverts", "account", "countryFlag"];
+  const validTabs = ["terms", "rbac", "adverts", "account", "countryFlag", "agentContent"];
   const defaultTab = tabParam && validTabs.includes(tabParam) ? tabParam : "account";
   const [activeTab, setActiveTab] = useState(defaultTab);
 
@@ -131,6 +132,48 @@ export default function StaffSettings() {
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  // ── Agent Content Posts (vCard training/education feed) ──────
+  const { data: agentContentList = [] } = useQuery<any[]>({
+    queryKey: ["/api/agent-content-posts"],
+    enabled: !isControlPlaneMode && canManageSettings,
+  });
+  const [contentDialogOpen, setContentDialogOpen] = useState(false);
+  const [editingContentId, setEditingContentId] = useState<string | null>(null);
+  const [contentForm, setContentForm] = useState({ type: "post", title: "", body: "", videoUrl: "", thumbnailUrl: "" });
+  const [contentDeleteId, setContentDeleteId] = useState<string | null>(null);
+  const resetContentForm = () => { setEditingContentId(null); setContentForm({ type: "post", title: "", body: "", videoUrl: "", thumbnailUrl: "" }); };
+  const openNewContent = () => { resetContentForm(); setContentDialogOpen(true); };
+  const openEditContent = (post: any) => {
+    setEditingContentId(post.id);
+    setContentForm({ type: post.type, title: post.title || "", body: post.body || "", videoUrl: post.videoUrl || "", thumbnailUrl: post.thumbnailUrl || "" });
+    setContentDialogOpen(true);
+  };
+  const createContentMutation = useMutation({
+    mutationFn: async (data: typeof contentForm) => apiRequest("POST", "/api/agent-content-posts", data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/agent-content-posts"] }); setContentDialogOpen(false); resetContentForm(); toast({ title: "Post added" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const updateContentMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<typeof contentForm> }) => apiRequest("PATCH", `/api/agent-content-posts/${id}`, data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/agent-content-posts"] }); setContentDialogOpen(false); resetContentForm(); toast({ title: "Post updated" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const deleteContentMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/agent-content-posts/${id}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/agent-content-posts"] }); setContentDeleteId(null); toast({ title: "Post deleted" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const toggleContentActiveMutation = useMutation({
+    mutationFn: async ({ id, isActive }: { id: string; isActive: boolean }) => apiRequest("PATCH", `/api/agent-content-posts/${id}`, { isActive }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/agent-content-posts"] }),
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const handleSaveContent = () => {
+    if (!contentForm.title.trim()) return;
+    if (editingContentId) updateContentMutation.mutate({ id: editingContentId, data: contentForm });
+    else createContentMutation.mutate(contentForm);
+  };
 
   const createAdvertMutation = useMutation({
     mutationFn: async (data: { title: string; body: string; imageUrl: string }) => {
@@ -349,6 +392,7 @@ export default function StaffSettings() {
             {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
             {!isControlPlaneMode && canManageSettings && <TabsTrigger value="adverts">Receipt Adverts</TabsTrigger>}
             {!isControlPlaneMode && canManageSettings && <TabsTrigger value="countryFlag">Country Flag</TabsTrigger>}
+            {!isControlPlaneMode && canManageSettings && <TabsTrigger value="agentContent">Agent Content</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
           </TabsList>
 
@@ -518,6 +562,123 @@ export default function StaffSettings() {
                   </Button>
                 </div>
               </CardSection>
+            </TabsContent>
+          )}
+
+          {/* Agent Content Posts */}
+          {!isControlPlaneMode && canManageSettings && (
+            <TabsContent value="agentContent" className="mt-6">
+              <CardSection
+                title="Agent Content"
+                description="Training videos, educational content, and posts pushed to every agent's public referral (vCard) page."
+                icon={Video}
+              >
+                <div className="space-y-4">
+                  <Button size="sm" onClick={openNewContent} className="flex items-center gap-2">
+                    <Plus className="h-4 w-4" /> New Post
+                  </Button>
+
+                  {agentContentList.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No content yet. Add a video or post to show it on every agent's referral page.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {agentContentList.map((post: any) => (
+                        <div key={post.id} className="flex items-start gap-4 rounded-lg border p-4 bg-muted/20">
+                          {post.thumbnailUrl ? (
+                            <img src={post.thumbnailUrl} alt="" className="h-16 w-24 object-cover rounded border bg-white shrink-0" />
+                          ) : (
+                            <div className="h-16 w-24 rounded border bg-muted/40 flex items-center justify-center shrink-0">
+                              {post.type === "video" ? <Video className="h-5 w-5 text-muted-foreground" /> : <FileText className="h-5 w-5 text-muted-foreground" />}
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge variant="outline" className="text-xs capitalize">{post.type}</Badge>
+                              <span className="font-medium text-sm truncate">{post.title}</span>
+                              {post.isActive && <Badge className="bg-emerald-600 text-white text-xs">Active</Badge>}
+                            </div>
+                            {post.body && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{post.body}</p>}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button
+                              size="sm" variant="outline" className="text-xs"
+                              onClick={() => toggleContentActiveMutation.mutate({ id: post.id, isActive: !post.isActive })}
+                              disabled={toggleContentActiveMutation.isPending}
+                            >
+                              {post.isActive ? "Hide" : "Show"}
+                            </Button>
+                            <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="Edit post" onClick={() => openEditContent(post)}>
+                              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                            </Button>
+                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" aria-label="Delete post" onClick={() => setContentDeleteId(post.id)}>
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardSection>
+
+              {/* Post create/edit dialog */}
+              <Dialog open={contentDialogOpen} onOpenChange={(v) => { if (!v) { setContentDialogOpen(false); resetContentForm(); } else setContentDialogOpen(true); }}>
+                <DialogContent className="max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>{editingContentId ? "Edit Post" : "New Agent Content Post"}</DialogTitle>
+                    <DialogDescription>Shown on every agent's public referral page when active.</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-2">
+                    <div className="space-y-2">
+                      <Label>Type</Label>
+                      <div className="flex gap-2">
+                        <Button type="button" size="sm" variant={contentForm.type === "post" ? "default" : "outline"} onClick={() => setContentForm({ ...contentForm, type: "post" })}>Post</Button>
+                        <Button type="button" size="sm" variant={contentForm.type === "video" ? "default" : "outline"} onClick={() => setContentForm({ ...contentForm, type: "video" })}>Video</Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="content-title">Title</Label>
+                      <Input id="content-title" value={contentForm.title} onChange={(e) => setContentForm({ ...contentForm, title: e.target.value })} placeholder="e.g. How to explain family cover" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="content-body">Body / Caption <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <Textarea id="content-body" value={contentForm.body} onChange={(e) => setContentForm({ ...contentForm, body: e.target.value })} rows={3} />
+                    </div>
+                    {contentForm.type === "video" && (
+                      <div className="space-y-2">
+                        <Label htmlFor="content-video">Video URL <span className="text-muted-foreground text-xs">(YouTube / Vimeo link)</span></Label>
+                        <Input id="content-video" value={contentForm.videoUrl} onChange={(e) => setContentForm({ ...contentForm, videoUrl: e.target.value })} placeholder="https://youtube.com/watch?v=…" />
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label htmlFor="content-thumb">Thumbnail URL <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <Input id="content-thumb" value={contentForm.thumbnailUrl} onChange={(e) => setContentForm({ ...contentForm, thumbnailUrl: e.target.value })} placeholder="https://…" />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => { setContentDialogOpen(false); resetContentForm(); }}>Cancel</Button>
+                    <Button onClick={handleSaveContent} disabled={!contentForm.title.trim() || createContentMutation.isPending || updateContentMutation.isPending}>
+                      {(createContentMutation.isPending || updateContentMutation.isPending) ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</> : "Save Post"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Post delete confirm */}
+              <AlertDialog open={!!contentDeleteId} onOpenChange={(v) => { if (!v) setContentDeleteId(null); }}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Post?</AlertDialogTitle>
+                    <AlertDialogDescription>This cannot be undone. It will stop appearing on agent referral pages immediately.</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => contentDeleteId && deleteContentMutation.mutate(contentDeleteId)} className="bg-destructive text-white">
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </TabsContent>
           )}
 

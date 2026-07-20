@@ -70,6 +70,7 @@ import {
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
   insertReceiptAdvertSchema,
+  insertAgentContentPostSchema,
   insertDependentSchema, insertTermsSchema,
   insertRequisitionSchema, insertRequisitionItemSchema, REQUISITION_STATUSES,
   insertPaymentDisbursementSchema,
@@ -773,6 +774,108 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     await storage.updateReceiptAdvert(req.params.id as string, { isActive: false }, user.organizationId);
     return res.json({ success: true });
+  });
+
+  // ─── Agent Content Posts (vCard training/education feed, org admin-authored) ──
+  app.get("/api/agent-content-posts", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getAgentContentPosts(user.organizationId));
+  });
+
+  app.post("/api/agent-content-posts", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const data = insertAgentContentPostSchema.parse({ ...req.body, organizationId: user.organizationId, createdByUserId: user.id });
+      const post = await storage.createAgentContentPost(data);
+      await auditLog(req, "CREATE_AGENT_CONTENT_POST", "AgentContentPost", post.id, null, post);
+      return res.status(201).json(post);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      return res.status(500).json({ message: err?.message || "Failed to create post" });
+    }
+  });
+
+  app.patch("/api/agent-content-posts/:id", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const { title, body, type, videoUrl, thumbnailUrl, isActive, sortOrder } = req.body;
+    const data: Record<string, any> = {};
+    if (typeof title === "string" && title.trim()) data.title = title.trim();
+    if (body === null || typeof body === "string") data.body = body;
+    if (typeof type === "string") data.type = type;
+    if (videoUrl === null || typeof videoUrl === "string") data.videoUrl = videoUrl;
+    if (thumbnailUrl === null || typeof thumbnailUrl === "string") data.thumbnailUrl = thumbnailUrl;
+    if (typeof isActive === "boolean") data.isActive = isActive;
+    if (typeof sortOrder === "number") data.sortOrder = sortOrder;
+    const updated = await storage.updateAgentContentPost(req.params.id as string, data, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Post not found" });
+    await auditLog(req, "UPDATE_AGENT_CONTENT_POST", "AgentContentPost", req.params.id as string, null, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/agent-content-posts/:id", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteAgentContentPost(req.params.id as string, user.organizationId);
+    await auditLog(req, "DELETE_AGENT_CONTENT_POST", "AgentContentPost", req.params.id as string, null, null);
+    return res.status(204).end();
+  });
+
+  // ─── Public Agent vCard ─────────────────────────────────────
+  app.get("/api/public/agent-card/:refCode", async (req, res) => {
+    const refCode = req.params.refCode as string;
+    const agent = await storage.getUserByReferralCode(refCode);
+    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
+    const org = await storage.getOrganization(agent.organizationId);
+    const posts = await storage.getAgentContentPosts(agent.organizationId, true);
+    return res.json({
+      displayName: agent.displayName || agent.email,
+      avatarUrl: agent.avatarUrl,
+      bio: agent.bio,
+      phone: agent.phone,
+      org: org ? { name: org.name, logoUrl: org.logoUrl, primaryColor: org.primaryColor } : null,
+      posts,
+    });
+  });
+
+  app.get("/api/public/agent-card/:refCode/manifest.json", async (req, res) => {
+    const refCode = req.params.refCode as string;
+    const agent = await storage.getUserByReferralCode(refCode);
+    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
+    const org = await storage.getOrganization(agent.organizationId);
+    const icon = agent.avatarUrl || org?.logoUrl || "/assets/logo.png";
+    res.setHeader("Content-Type", "application/manifest+json");
+    return res.json({
+      name: agent.displayName ? `${agent.displayName} — ${org?.name || "POL263"}` : (org?.name || "POL263"),
+      short_name: agent.displayName || org?.name || "POL263",
+      start_url: `/join/${refCode}`,
+      scope: `/join/${refCode}`,
+      display: "standalone",
+      theme_color: org?.primaryColor || "#0d9488",
+      background_color: "#ffffff",
+      icons: [{ src: icon, sizes: "512x512", type: "image/png", purpose: "any maskable" }],
+    });
+  });
+
+  // Instant, read-only premium quote — no client/policy record created. Reuses the exact same
+  // computePolicyPremium function policy creation uses, so a quote can never drift from reality.
+  app.post("/api/public/quote", async (req, res) => {
+    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths } = req.body;
+    if (typeof refCode !== "string" || !refCode.trim()) return res.status(400).json({ message: "refCode is required" });
+    if (typeof productVersionId !== "string" || !productVersionId.trim()) return res.status(400).json({ message: "productVersionId is required" });
+    const agent = await storage.getUserByReferralCode(refCode.trim());
+    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
+    const resolvedCurrency = typeof currency === "string" && currency ? currency : "USD";
+    const resolvedSchedule = typeof paymentSchedule === "string" && paymentSchedule ? paymentSchedule : "monthly";
+    const premium = await computePolicyPremium(
+      agent.organizationId,
+      productVersionId,
+      resolvedCurrency,
+      resolvedSchedule,
+      Array.isArray(addOnIds) ? addOnIds : [],
+      undefined,
+      typeof memberCount === "number" ? memberCount : undefined,
+      Array.isArray(dependentDateOfBirths) ? dependentDateOfBirths : undefined,
+    );
+    return res.json({ premium, currency: resolvedCurrency, paymentSchedule: resolvedSchedule });
   });
 
   // ─── Country Flag Settings (tenant-configurable cross-border flagging) ──────
@@ -1597,8 +1700,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (maritalStatus !== undefined) updates.maritalStatus = maritalStatus || null;
     if (nextOfKinName !== undefined) updates.nextOfKinName = nextOfKinName || null;
     if (nextOfKinPhone !== undefined) updates.nextOfKinPhone = nextOfKinPhone || null;
-    const { department } = req.body;
+    const { department, bio } = req.body;
     if (department !== undefined) updates.department = department || null;
+    if (bio !== undefined) updates.bio = bio || null;
     const updated = await storage.updateUser(req.params.id as string, updates);
 
     if (roleIds && Array.isArray(roleIds)) {
