@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, apiFetch, getApiBase } from "@/lib/queryClient";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText, FileDown, ChevronDown, AlertTriangle } from "lucide-react";
+import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText, FileDown, ChevronDown, AlertTriangle, Send, Copy } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
 import { isAgentScoped } from "@shared/roles";
@@ -129,6 +129,10 @@ export default function StaffPolicies() {
   const [inPolicyReceiptMonths, setInPolicyReceiptMonths] = useState(1);
   const [inPolicyReceiptAmountOverride, setInPolicyReceiptAmountOverride] = useState<string | null>(null);
   const [inPolicyReceiptSubmitterNote, setInPolicyReceiptSubmitterNote] = useState("");
+  const [showPaymentLinkDialog, setShowPaymentLinkDialog] = useState(false);
+  const [paymentLinkAmount, setPaymentLinkAmount] = useState("");
+  const [paymentLinkMethod, setPaymentLinkMethod] = useState("ecocash");
+  const [generatedPaymentLink, setGeneratedPaymentLink] = useState<{ url: string; expiresAt: string } | null>(null);
   const [pnIntentId, setPnIntentId] = useState<string | null>(null);
   const [pnPolling, setPnPolling] = useState(false);
   const [pnPollStartTime, setPnPollStartTime] = useState<number>(0);
@@ -1346,6 +1350,22 @@ export default function StaffPolicies() {
     onError: (e: Error) => toast({ title: "OTP failed", description: e.message, variant: "destructive" }),
   });
 
+  const createPaymentLinkMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedPolicy) throw new Error("No policy");
+      const res = await apiRequest("POST", `/api/policies/${selectedPolicy.id}/payment-links`, {
+        amount: paymentLinkAmount,
+        method: paymentLinkMethod,
+      });
+      return res.json() as Promise<{ token: string; expiresAt: string }>;
+    },
+    onSuccess: (link) => {
+      setGeneratedPaymentLink({ url: `${window.location.origin}/pay/policy/${link.token}`, expiresAt: link.expiresAt });
+      toast({ title: "Payment link created" });
+    },
+    onError: (e: Error) => toast({ title: "Could not create payment link", description: e.message, variant: "destructive" }),
+  });
+
   const { data: pnPollData } = useQuery({
     queryKey: ["pn-poll-policy", pnIntentId],
     queryFn: async () => {
@@ -1511,6 +1531,21 @@ export default function StaffPolicies() {
                     data-testid="btn-receipt-policy"
                   >
                     <Receipt className="h-4 w-4" /> Receipt payment
+                  </Button>
+                )}
+                {(canWriteFinance || isAgent) && (
+                  <Button
+                    variant="outline"
+                    className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
+                    onClick={() => {
+                      setPaymentLinkAmount(displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "");
+                      setPaymentLinkMethod("ecocash");
+                      setGeneratedPaymentLink(null);
+                      setShowPaymentLinkDialog(true);
+                    }}
+                    data-testid="btn-send-payment-link"
+                  >
+                    <Send className="h-4 w-4" /> Send Payment Link
                   </Button>
                 )}
                 <Button variant="outline" className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => openEditDialog(displayPolicy)} data-testid="btn-edit-policy">
@@ -3441,6 +3476,81 @@ export default function StaffPolicies() {
                   {(inPolicyReceiptMutation.isPending || pnInitiateMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   <Receipt className="h-4 w-4 mr-2" />
                   {inPolicyReceiptMethod === "cash" ? "Record Payment" : "Send Payment Request"}
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Send Payment Link */}
+        <Dialog open={showPaymentLinkDialog} onOpenChange={(open) => { setShowPaymentLinkDialog(open); if (!open) setGeneratedPaymentLink(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Send Payment Link</DialogTitle>
+              <DialogDescription>The client opens this link on their own phone and pays directly — no staff needed. Expires in 48 hours, single-use, USD only.</DialogDescription>
+            </DialogHeader>
+            {!generatedPaymentLink ? (
+              <div className="space-y-4">
+                <div>
+                  <Label>Amount (USD)</Label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={paymentLinkAmount}
+                    onChange={(e) => setPaymentLinkAmount(e.target.value)}
+                    data-testid="input-payment-link-amount"
+                  />
+                </div>
+                <div>
+                  <Label>Payment Method</Label>
+                  <Select value={paymentLinkMethod} onValueChange={setPaymentLinkMethod}>
+                    <SelectTrigger data-testid="select-payment-link-method"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ecocash">EcoCash</SelectItem>
+                      <SelectItem value="onemoney">OneMoney</SelectItem>
+                      <SelectItem value="innbucks">InnBucks</SelectItem>
+                      <SelectItem value="omari">O'Mari</SelectItem>
+                      <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">Cash isn't available for payment links — it can't be collected remotely.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="rounded-md border bg-muted/30 p-3 break-all text-sm font-mono" data-testid="text-payment-link-url">{generatedPaymentLink.url}</div>
+                <p className="text-xs text-muted-foreground">Expires {new Date(generatedPaymentLink.expiresAt).toLocaleString()}</p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-1.5"
+                    onClick={() => { navigator.clipboard.writeText(generatedPaymentLink.url); toast({ title: "Link copied" }); }}
+                    data-testid="btn-copy-payment-link"
+                  >
+                    <Copy className="h-4 w-4" /> Copy Link
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-1.5"
+                    onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(`Please use this link to complete your payment: ${generatedPaymentLink.url}`)}`, "_blank")}
+                    data-testid="btn-whatsapp-payment-link"
+                  >
+                    <Share2 className="h-4 w-4" /> WhatsApp
+                  </Button>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setShowPaymentLinkDialog(false)}>{generatedPaymentLink ? "Done" : "Cancel"}</Button>
+              {!generatedPaymentLink && (
+                <Button
+                  onClick={() => createPaymentLinkMutation.mutate()}
+                  disabled={!paymentLinkAmount || parseFloat(paymentLinkAmount) <= 0 || createPaymentLinkMutation.isPending}
+                  data-testid="btn-generate-payment-link"
+                >
+                  {createPaymentLinkMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  <Send className="h-4 w-4 mr-2" /> Generate Link
                 </Button>
               )}
             </DialogFooter>

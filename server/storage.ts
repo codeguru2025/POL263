@@ -16,7 +16,7 @@ import {
   ageBandConfigs, policies, policyMembers, policyStatusHistory, policyAddOns,
   orgMemberSequences, orgPolicySequences,
   paymentTransactions, receipts, reversalEntries, cashups,
-  paymentIntents, paymentEvents, paymentReceipts,
+  paymentIntents, paymentEvents, paymentReceipts, paymentLinks, paymentLinkTokens,
   claims, claimDocuments, claimStatusHistory,
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
   partnerParlours, parlourPersonnel,
@@ -91,6 +91,7 @@ import {
   type Receipt, type InsertReceipt,
   type PaymentIntent, type InsertPaymentIntent,
   type PaymentEvent, type InsertPaymentEvent,
+  type PaymentLink, type InsertPaymentLink,
   type PaymentReceipt, type InsertPaymentReceipt,
   type Claim, type InsertClaim,
   type ClaimDocument, type InsertClaimDocument,
@@ -452,6 +453,13 @@ export interface IStorage {
   getPaymentIntentsByPolicy(policyId: string, orgId: string): Promise<PaymentIntent[]>;
   createPaymentIntent(intent: InsertPaymentIntent): Promise<PaymentIntent>;
   updatePaymentIntent(id: string, data: Partial<InsertPaymentIntent>, orgId: string): Promise<PaymentIntent | undefined>;
+  /** Creates the tenant-DB payment_links row AND the central token->org routing pointer. */
+  createPaymentLink(link: InsertPaymentLink): Promise<PaymentLink>;
+  /** Central-DB lookup only — resolves which org a /pay/:token belongs to, before any tenant DB can be reached. */
+  resolveOrgIdForPaymentLinkToken(token: string): Promise<string | undefined>;
+  getPaymentLinkByToken(token: string, orgId: string): Promise<PaymentLink | undefined>;
+  getPaymentLinksByPolicy(policyId: string, orgId: string): Promise<PaymentLink[]>;
+  updatePaymentLink(id: string, data: Partial<InsertPaymentLink>, orgId: string): Promise<PaymentLink | undefined>;
   createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent>;
   getPaymentEventsByIntentId(paymentIntentId: string, orgId: string): Promise<PaymentEvent[]>;
   createPaymentReceipt(receipt: InsertPaymentReceipt): Promise<PaymentReceipt>;
@@ -3136,6 +3144,33 @@ export class DatabaseStorage implements IStorage {
   async updatePaymentIntent(id: string, data: Partial<InsertPaymentIntent>, orgId: string): Promise<PaymentIntent | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(paymentIntents).set({ ...data, updatedAt: new Date() }).where(eq(paymentIntents.id, id)).returning();
+    return updated;
+  }
+  async createPaymentLink(link: InsertPaymentLink): Promise<PaymentLink> {
+    const tdb = await getDbForOrg(link.organizationId);
+    const [created] = await tdb.insert(paymentLinks).values(link).returning();
+    // Central routing pointer so the public /pay/:token page (no session) can resolve an org
+    // before it can reach that org's own tenant DB — see the paymentLinkTokens schema comment.
+    await db.insert(paymentLinkTokens).values({ token: link.token, organizationId: link.organizationId });
+    return created;
+  }
+  async resolveOrgIdForPaymentLinkToken(token: string): Promise<string | undefined> {
+    const [row] = await db.select().from(paymentLinkTokens).where(eq(paymentLinkTokens.token, token));
+    return row?.organizationId;
+  }
+  async getPaymentLinkByToken(token: string, orgId: string): Promise<PaymentLink | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(paymentLinks).where(and(eq(paymentLinks.token, token), eq(paymentLinks.organizationId, orgId)));
+    return row;
+  }
+  async getPaymentLinksByPolicy(policyId: string, orgId: string): Promise<PaymentLink[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(paymentLinks).where(and(eq(paymentLinks.policyId, policyId), eq(paymentLinks.organizationId, orgId)))
+      .orderBy(desc(paymentLinks.createdAt));
+  }
+  async updatePaymentLink(id: string, data: Partial<InsertPaymentLink>, orgId: string): Promise<PaymentLink | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(paymentLinks).set(data).where(and(eq(paymentLinks.id, id), eq(paymentLinks.organizationId, orgId))).returning();
     return updated;
   }
   async createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent> {

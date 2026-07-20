@@ -192,6 +192,7 @@ if (enableCsrf) {
   app.use("/api/public/walkin-register", writeLimiter);
   app.use("/api/public/billing", writeLimiter);
   app.use("/api/admin/run-notifications", writeLimiter);
+  app.use("/api/pay", writeLimiter);
 
   app.use(
     "/api/public/agent-app-latest",

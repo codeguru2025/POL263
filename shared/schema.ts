@@ -45,6 +45,18 @@ export const organizations = pgTable("organizations", {
   paynowMode: text("paynow_mode").$type<"test" | "live">(),
 });
 
+/** Central-DB-only routing pointer: the public /pay/:token page has no session, so it can't
+ *  resolve which tenant database to query (isolated-tenant orgs like Falakhe have their own DB —
+ *  see server/tenant-db.ts). This tiny table lives in the main DB and is queried with the plain
+ *  `db` export (never getDbForOrg) purely to answer "which org does this token belong to", the
+ *  same bootstrapping role `users.referralCode` already plays for the public registration flow.
+ *  The real payment_links row (with its policy/client FKs) lives in that org's own database. */
+export const paymentLinkTokens = pgTable("payment_link_tokens", {
+  token: text("token").primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const branches = pgTable(
   "branches",
   {
@@ -963,6 +975,40 @@ export const paymentEvents = pgTable(
     index("pe_created_idx").on(t.createdAt),
   ]
 );
+
+export const PAYMENT_LINK_STATUSES = ["active", "paid", "expired", "cancelled"] as const;
+
+/** A shareable, unauthenticated pay-by-link URL for a specific policy/amount/method — the
+ *  client opens /pay/:token and pays without a staff member present. Cash is deliberately not
+ *  a valid method here (it's not a Paynow method at all); currency is USD-only, matching the
+ *  Paynow integration's own USD-only constraint (see payment-service.ts). */
+export const paymentLinks = pgTable(
+  "payment_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    policyId: uuid("policy_id").notNull().references(() => policies.id),
+    clientId: uuid("client_id").notNull().references(() => clients.id),
+    token: text("token").notNull().unique(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    method: text("method").notNull(), // ecocash | onemoney | innbucks | omari | visa_mastercard
+    payerPhone: text("payer_phone"),
+    status: text("status").default("active").notNull(), // active | paid | expired | cancelled
+    paymentIntentId: uuid("payment_intent_id").references(() => paymentIntents.id),
+    createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pl_org_idx").on(t.organizationId),
+    index("pl_policy_idx").on(t.policyId),
+    index("pl_status_idx").on(t.status),
+  ]
+);
+export const insertPaymentLinkSchema = createInsertSchema(paymentLinks).omit({ id: true, createdAt: true });
+export type PaymentLink = typeof paymentLinks.$inferSelect;
+export type InsertPaymentLink = z.infer<typeof insertPaymentLinkSchema>;
 
 export const paymentReceipts = pgTable(
   "payment_receipts",

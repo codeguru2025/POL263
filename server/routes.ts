@@ -4191,6 +4191,167 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─── Shareable payment links (/pay/:token) ───────────────────
+  // Cash is deliberately never a valid method — it isn't a Paynow method at all. Currency is
+  // USD-only, matching Paynow's own USD-only constraint (see payment-service.ts:129-131).
+  const PAYMENT_LINK_METHODS = new Set(["ecocash", "onemoney", "innbucks", "omari", "visa_mastercard"]);
+  const PAYMENT_LINK_TTL_MS = 48 * 60 * 60 * 1000; // fixed 48h window, not configurable
+
+  app.post("/api/policies/:id/payment-links", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const policyId = req.params.id as string;
+    const { amount, method } = req.body;
+    const parsedAmount = parsePositiveAmount(amount);
+    if (parsedAmount == null) return res.status(400).json({ message: "Amount must be a positive number." });
+    if (typeof method !== "string" || !PAYMENT_LINK_METHODS.has(method)) {
+      return res.status(400).json({ message: "Invalid payment method. Cash is not available for payment links." });
+    }
+    const policy = await storage.getPolicy(policyId, user.organizationId);
+    if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
+    const client = await storage.getClient(policy.clientId, user.organizationId);
+    if (!client) return res.status(404).json({ message: "Client not found" });
+    const token = crypto.randomBytes(24).toString("base64url");
+    const createdByUserId = (await resolveUserIdForOrgDatabase(user.id, user.organizationId)) ?? user.id;
+    const link = await storage.createPaymentLink({
+      organizationId: user.organizationId,
+      policyId,
+      clientId: policy.clientId,
+      token,
+      amount: String(parsedAmount),
+      currency: "USD",
+      method,
+      payerPhone: client.phone || null,
+      status: "active",
+      createdByUserId,
+      expiresAt: new Date(Date.now() + PAYMENT_LINK_TTL_MS),
+    });
+    await auditLog(req, "CREATE_PAYMENT_LINK", "PaymentLink", link.id, null, link);
+    return res.status(201).json(link);
+  });
+
+  app.get("/api/policies/:id/payment-links", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const links = await storage.getPaymentLinksByPolicy(req.params.id as string, user.organizationId);
+    return res.json(links);
+  });
+
+  app.post("/api/policies/:id/payment-links/:linkId/cancel", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const linkId = req.params.linkId as string;
+    const updated = await storage.updatePaymentLink(linkId, { status: "cancelled" }, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Payment link not found" });
+    await auditLog(req, "CANCEL_PAYMENT_LINK", "PaymentLink", linkId, null, updated);
+    return res.json(updated);
+  });
+
+  // Public, unauthenticated — a client opens this on their own phone with no session. Resolve
+  // org via the central paymentLinkTokens pointer first (see schema comment), then everything
+  // else is a normal tenant-scoped lookup/call into the same payment-service.ts Paynow logic
+  // the staff-side payment-intent routes already use.
+  async function loadPublicPaymentLink(token: string) {
+    const orgId = await storage.resolveOrgIdForPaymentLinkToken(token);
+    if (!orgId) return { link: null, orgId: null };
+    const link = await storage.getPaymentLinkByToken(token, orgId);
+    return { link, orgId };
+  }
+
+  app.get("/api/pay/:token", async (req, res) => {
+    const token = req.params.token as string;
+    const { link, orgId } = await loadPublicPaymentLink(token);
+    if (!link || !orgId) return res.status(404).json({ status: "not_found" });
+    if (link.status === "active" && link.expiresAt.getTime() < Date.now()) {
+      await storage.updatePaymentLink(link.id, { status: "expired" }, orgId);
+      return res.json({ status: "expired" });
+    }
+    if (link.status !== "active") return res.json({ status: link.status });
+    const policy = await storage.getPolicy(link.policyId, orgId);
+    return res.json({
+      status: "active",
+      policyNumber: policy?.policyNumber ?? null,
+      amount: link.amount,
+      currency: link.currency,
+      method: link.method,
+      payerPhone: link.payerPhone,
+      expiresAt: link.expiresAt,
+    });
+  });
+
+  app.post("/api/pay/:token/initiate", async (req, res) => {
+    const token = req.params.token as string;
+    const { link, orgId } = await loadPublicPaymentLink(token);
+    if (!link || !orgId) return res.status(404).json({ message: "Payment link not found" });
+    if (link.status === "active" && link.expiresAt.getTime() < Date.now()) {
+      await storage.updatePaymentLink(link.id, { status: "expired" }, orgId);
+      return res.status(410).json({ message: "This payment link has expired." });
+    }
+    if (link.status !== "active") return res.status(410).json({ message: "This payment link is no longer usable." });
+    try {
+      let intentId = link.paymentIntentId;
+      if (!intentId) {
+        const intentResult = await createPaymentIntent({
+          organizationId: orgId,
+          clientId: link.clientId,
+          policyId: link.policyId,
+          amount: link.amount,
+          currency: link.currency,
+          purpose: "premium",
+          idempotencyKey: `paylink-${link.id}`,
+        });
+        if (intentResult.error || !intentResult.intent) return res.status(400).json({ message: intentResult.error || "Could not start payment." });
+        intentId = intentResult.intent.id;
+        await storage.updatePaymentLink(link.id, { paymentIntentId: intentId }, orgId);
+      }
+      const result = await initiatePaynowPayment({
+        intentId,
+        organizationId: orgId,
+        method: link.method,
+        payerPhone: link.payerPhone || undefined,
+        actorType: "client",
+      });
+      if (!result.ok) return res.status(400).json({ message: result.error });
+      return res.json({
+        redirectUrl: result.redirectUrl,
+        pollUrl: result.pollUrl,
+        innbucksCode: result.innbucksCode,
+        innbucksExpiry: result.innbucksExpiry,
+        omariOtpReference: result.omariOtpReference,
+        needsOtp: !!result.omariOtpUrl,
+      });
+    } catch (err) {
+      structuredLog("error", "Public payment-link initiate failed", { error: (err as Error).message, token });
+      return res.status(500).json({ message: "Failed to initiate payment" });
+    }
+  });
+
+  app.post("/api/pay/:token/poll", async (req, res) => {
+    const token = req.params.token as string;
+    const { link, orgId } = await loadPublicPaymentLink(token);
+    if (!link || !orgId || !link.paymentIntentId) return res.status(404).json({ message: "Payment link not found" });
+    const result = await pollPaynowStatus(link.paymentIntentId, orgId);
+    if (result.paid && link.status !== "paid") {
+      await storage.updatePaymentLink(link.id, { status: "paid" }, orgId);
+    }
+    return res.json(result);
+  });
+
+  app.post("/api/pay/:token/otp", async (req, res) => {
+    const token = req.params.token as string;
+    const { link, orgId } = await loadPublicPaymentLink(token);
+    if (!link || !orgId || !link.paymentIntentId) return res.status(404).json({ message: "Payment link not found" });
+    const { otp } = req.body;
+    if (!otp || typeof otp !== "string" || otp.trim().length < 4) return res.status(400).json({ message: "Enter a valid OTP" });
+    try {
+      const { submitOmariOtp } = await import("./payment-service");
+      const result = await submitOmariOtp(link.paymentIntentId, orgId, otp.trim(), "client", null);
+      if (!result.ok) return res.status(400).json({ message: result.error });
+      if (result.paid) await storage.updatePaymentLink(link.id, { status: "paid" }, orgId);
+      return res.json({ paid: result.paid });
+    } catch (err) {
+      structuredLog("error", "Public payment-link OTP submit failed", { error: (err as Error).message, token });
+      return res.status(500).json({ message: "OTP verification failed" });
+    }
+  });
+
   app.get("/api/receipts/:id/download", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;

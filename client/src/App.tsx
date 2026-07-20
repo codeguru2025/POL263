@@ -55,6 +55,7 @@ const AuditLogs = lazy(() => retryLazy(() => import("@/pages/staff/audit")));
 const StaffSettings = lazy(() => retryLazy(() => import("@/pages/staff/settings")));
 const StaffBilling = lazy(() => retryLazy(() => import("@/pages/staff/billing")));
 const PayInvoice = lazy(() => retryLazy(() => import("@/pages/public/pay-invoice")));
+const PayPolicyLink = lazy(() => retryLazy(() => import("@/pages/public/pay-policy")));
 const PlatformTenantConsole = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-console")));
 const PlatformBilling = lazy(() => retryLazy(() => import("@/pages/staff/platform-billing")));
 const ProductBuilder = lazy(() => retryLazy(() => import("@/pages/staff/products")));
@@ -246,6 +247,7 @@ function Router() {
 
       <SafeRoute path="/auth/callback" component={AuthCallback} />
       <SafeRoute path="/pay/:token" component={PayInvoice} />
+      <SafeRoute path="/pay/policy/:token" component={PayPolicyLink} />
       <SafeRoute path="/join" component={JoinPage} />
       <SafeRoute path="/join/register" component={JoinRegisterPage} />
       <SafeRoute path="/verify" component={VerifyPage} />
