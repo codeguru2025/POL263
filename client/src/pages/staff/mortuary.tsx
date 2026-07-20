@@ -46,6 +46,7 @@ type IntakeForm = {
   storageCategory: string;
   storageFeeStatus: string;
   storageFeePaidBy: string;
+  branchId: string;
 };
 
 const BLANK_INTAKE: IntakeForm = {
@@ -75,6 +76,7 @@ const BLANK_INTAKE: IntakeForm = {
   storageCategory: "adult",
   storageFeeStatus: "unpaid",
   storageFeePaidBy: "",
+  branchId: "",
 };
 
 function fmtDateTime(v: string | Date | null | undefined): string {
@@ -131,6 +133,10 @@ export default function StaffMortuary() {
   const { data: funeralCases = [] } = useQuery<any[]>({
     queryKey: ["/api/funeral-cases"],
   });
+  const { data: branches = [] } = useQuery<any[]>({
+    queryKey: ["/api/branches"],
+  });
+  const defaultBranchId = branches.find((b: any) => b.isHeadOffice && b.isActive)?.id ?? "";
 
   const selectedIntake = intakes.find((i) => i.id === selectedIntakeId) ?? null;
 
@@ -677,6 +683,8 @@ export default function StaffMortuary() {
         onSubmit={(data) => createIntakeMutation.mutate(data)}
         isPending={createIntakeMutation.isPending}
         onParlourCreated={() => queryClient.invalidateQueries({ queryKey: ["/api/partner-parlours"] })}
+        branches={branches}
+        defaultBranchId={defaultBranchId}
       />
 
       {/* Dispatch Dialog */}
@@ -1052,7 +1060,7 @@ function FeePaymentDialog({ open, onOpenChange, feeAmount, feeCurrency, onSubmit
 
 // ─── New Intake Dialog ────────────────────────────────────────────────────────
 
-function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, funeralCases, funeralCaseOptions, onSubmit, isPending, onParlourCreated }: {
+function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, funeralCases, funeralCaseOptions, onSubmit, isPending, onParlourCreated, branches, defaultBranchId }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   vehicleOptions: SearchableOption[];
@@ -1063,10 +1071,20 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
   onSubmit: (data: Record<string, any>) => void;
   isPending: boolean;
   onParlourCreated: () => void;
+  branches: any[];
+  defaultBranchId: string;
 }) {
   const [form, setForm] = useState<IntakeForm>({ ...BLANK_INTAKE });
   const [showCreateParlour, setShowCreateParlour] = useState(false);
   const [autoFilledFromCase, setAutoFilledFromCase] = useState(false);
+
+  // Branch list/head-office flag load async after this dialog mounts — backfill the default
+  // once available instead of only at initial mount.
+  useEffect(() => {
+    if (defaultBranchId) {
+      setForm((f) => (f.branchId ? f : { ...f, branchId: defaultBranchId }));
+    }
+  }, [defaultBranchId]);
 
   const set = (k: keyof IntakeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -1143,6 +1161,18 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
                   <SelectItem value="full_service">Full Service (we handle burial)</SelectItem>
                   <SelectItem value="storage_only">Storage Only (another parlour does burial)</SelectItem>
                   <SelectItem value="removal_only">Removal Only (we collected, they bury)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Branch</Label>
+              <Select value={form.branchId} onValueChange={setSel("branchId")}>
+                <SelectTrigger data-testid="select-intake-branch"><SelectValue placeholder="Select branch" /></SelectTrigger>
+                <SelectContent>
+                  {branches.map((b: any) => (
+                    <SelectItem key={b.id} value={b.id}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

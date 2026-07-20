@@ -775,6 +775,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ success: true });
   });
 
+  // ─── Country Flag Settings (tenant-configurable cross-border flagging) ──────
+  // GET has no manage:settings gate — unlike most settings, this drives whether
+  // the checkbox/label shows on policy and funeral-case create forms, so any
+  // staff member with access to those forms needs to be able to read it.
+  app.get("/api/country-flag-settings", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getCountryFlagSettings(user.organizationId));
+  });
+
+  app.put("/api/country-flag-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const before = await storage.getCountryFlagSettings(user.organizationId);
+    const { isEnabled, flagLabel, homeLabel } = req.body;
+    const data: Record<string, any> = {};
+    if (typeof isEnabled === "boolean") data.isEnabled = isEnabled;
+    if (typeof flagLabel === "string" && flagLabel.trim()) data.flagLabel = flagLabel.trim();
+    if (typeof homeLabel === "string" && homeLabel.trim()) data.homeLabel = homeLabel.trim();
+    const updated = await storage.upsertCountryFlagSettings(user.organizationId, data);
+    await auditLog(req, "UPDATE_COUNTRY_FLAG_SETTINGS", "CountryFlagSettings", user.organizationId, before, updated);
+    return res.json(updated);
+  });
+
   // ─── Member Card Admin ──────────────────────────────────────
   app.get("/api/member-card-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
@@ -1242,6 +1264,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         organizationId: org.id,
         name: "Head Office",
         isActive: true,
+        isHeadOffice: true,
       });
 
       const allPerms = await storage.getPermissions();
@@ -1401,7 +1424,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/branches", requireAuth, requireTenantScope, requirePermission("write:branch"), async (req, res) => {
     const user = req.user as any;
     try {
-      const parsed = insertBranchSchema.parse({ ...req.body, organizationId: user.organizationId });
+      // isHeadOffice can only be set via PATCH /api/branches/:id, which atomically unsets it
+      // on every other branch first — creating a branch as head office here would bypass that
+      // and risk two branches flagged at once (or silently clobbering the invariant on retry).
+      const { isHeadOffice, ...body } = req.body ?? {};
+      const parsed = insertBranchSchema.parse({ ...body, organizationId: user.organizationId });
       const branch = await storage.createBranch(parsed);
       await auditLog(req, "CREATE_BRANCH", "Branch", branch.id, null, branch);
       return res.status(201).json(branch);
@@ -1410,6 +1437,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       structuredLog("error", "POST /api/branches failed", { error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
+  });
+
+  app.patch("/api/branches/:id", requireAuth, requireTenantScope, requirePermission("write:branch"), async (req, res) => {
+    const user = req.user as any;
+    const branchId = req.params.id as string;
+    const before = await storage.getBranch(branchId, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Branch not found" });
+    const { name, address, phone, isActive, isHeadOffice } = req.body;
+    const data: Record<string, any> = {};
+    if (typeof name === "string" && name.trim()) data.name = name.trim();
+    if (address === null || typeof address === "string") data.address = address ? String(address).trim() || null : null;
+    if (phone === null || typeof phone === "string") data.phone = phone ? String(phone).trim() || null : null;
+    if (typeof isActive === "boolean") data.isActive = isActive;
+    if (typeof isHeadOffice === "boolean") data.isHeadOffice = isHeadOffice;
+    const updated = await storage.updateBranch(branchId, user.organizationId, data);
+    await auditLog(req, "UPDATE_BRANCH", "Branch", branchId, before, updated);
+    return res.json(updated);
   });
 
   // ─── Users ──────────────────────────────────────────────────
@@ -2709,6 +2753,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (resolvedBranchId) {
       const branchRow = await storage.getBranch(resolvedBranchId, user.organizationId);
       if (!branchRow) resolvedBranchId = null;
+    }
+    if (!resolvedBranchId) {
+      const headOffice = await storage.getHeadOfficeBranch(user.organizationId);
+      if (headOffice) resolvedBranchId = headOffice.id;
     }
     const changedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
     const policyInsert: typeof parsed & { premiumOverride?: string | null; premiumOverrideNote?: string | null } = {
@@ -5246,6 +5294,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (const uid of userIdsToMirrorFuneralCreate) {
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, uid);
     }
+    if (!caseBody.branchId) {
+      const headOffice = await storage.getHeadOfficeBranch(user.organizationId);
+      if (headOffice) caseBody.branchId = headOffice.id;
+    }
     const parsed = insertFuneralCaseSchema.parse({
       ...caseBody,
       organizationId: user.organizationId,
@@ -5279,6 +5331,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         "bodyIdentifierName", "bodyIdentifierIdNumber",
         "status", "assignedTo", "notes", "slaDeadline", "completedAt",
         "branchId", "claimId", "policyId",
+        "isCrossBorderFlag", "crossBorderReference",
       ]);
       const VALID_CASE_STATUSES = new Set(["open", "in_progress", "completed", "cancelled"]);
       if ("status" in req.body && !VALID_CASE_STATUSES.has(req.body.status)) {
@@ -5853,6 +5906,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (body.storageFeeStatus === "paid_at_admission" && !body.storageFeePaidAt) {
           body.storageFeePaidAt = new Date();
         }
+      }
+      if (!body.branchId) {
+        const headOffice = await storage.getHeadOfficeBranch(user.organizationId);
+        if (headOffice) body.branchId = headOffice.id;
       }
       const parsed = insertMortuaryIntakeSchema.parse({ ...body, organizationId: user.organizationId, intakeNumber });
       const intake = await storage.createMortuaryIntake(parsed);

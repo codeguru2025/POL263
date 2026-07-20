@@ -34,6 +34,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { AiInsightsPanel } from "@/components/ai-insights-panel";
+import { CountryFlagFields, type CountryFlagSettings } from "@/components/country-flag-fields";
 
 function readEstatementDateRange() {
   const from = (document.getElementById("estatement-dateFrom") as HTMLInputElement | null)?.value;
@@ -210,6 +211,7 @@ export default function StaffPolicies() {
     isLegacy: false,
     isSouthAfrica: false,
     externalReference: "",
+    branchId: "",
   });
   const [createStep, setCreateStep] = useState(1);
   const [clientMode, setClientMode] = useState<"search" | "new">("search");
@@ -307,6 +309,15 @@ export default function StaffPolicies() {
     queryKey: ["/api/branches"],
   });
   const branches = rawBranches ?? [];
+  const headOfficeBranchId = branches.find((b: any) => b.isHeadOffice && b.isActive)?.id ?? "";
+  const { data: countryFlagSettings } = useQuery<CountryFlagSettings>({
+    queryKey: ["/api/country-flag-settings"],
+  });
+  useEffect(() => {
+    if (headOfficeBranchId) {
+      setCreateForm((f) => (f.branchId ? f : { ...f, branchId: headOfficeBranchId }));
+    }
+  }, [headOfficeBranchId]);
   const { data: rawGroups } = useQuery<any[]>({
     queryKey: ["/api/groups"],
   });
@@ -850,6 +861,7 @@ export default function StaffPolicies() {
           isLegacy: data.isLegacy || undefined,
           isSouthAfrica: (data as any).isSouthAfrica || undefined,
           externalReference: (data as any).externalReference?.trim() || undefined,
+          branchId: (data as any).branchId || undefined,
         });
         return res.json();
       } catch (err) {
@@ -889,6 +901,7 @@ export default function StaffPolicies() {
         isLegacy: false,
         isSouthAfrica: false,
         externalReference: "",
+        branchId: headOfficeBranchId,
       });
       toast({ title: "Policy created", description: policy.isLegacy ? `Policy ${policy.policyNumber} has been created and auto-activated as a legacy policy.` : `Policy ${policy.policyNumber} has been created in inactive status.` });
     },
@@ -1472,14 +1485,14 @@ export default function StaffPolicies() {
                   <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tight break-words tabular-nums" data-testid="text-policy-number">{displayPolicy.policyNumber}</h1>
                   <p className="text-muted-foreground mt-1 text-sm leading-relaxed max-w-2xl">Holder, cover, lifecycle, and ledger — structured for quick scanning.</p>
                   {displayPolicy.isSouthAfrica && displayPolicy.externalReference && (
-                    <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-external-reference">RSA reference: <span className="font-medium text-foreground">{displayPolicy.externalReference}</span></p>
+                    <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-external-reference">{countryFlagSettings?.flagLabel || "South Africa"} reference: <span className="font-medium text-foreground">{displayPolicy.externalReference}</span></p>
                   )}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0" data-testid="badge-policy-status">
                 <StatusBadge status={displayPolicy.status} />
                 {displayPolicy.isSouthAfrica && (
-                  <Badge variant="outline" className="font-medium bg-blue-500/10 text-blue-700 border-blue-200" data-testid="badge-detail-south-africa">South Africa</Badge>
+                  <Badge variant="outline" className="font-medium bg-blue-500/10 text-blue-700 border-blue-200" data-testid="badge-detail-south-africa">{countryFlagSettings?.flagLabel || "South Africa"}</Badge>
                 )}
               </div>
             </div>
@@ -2882,30 +2895,14 @@ export default function StaffPolicies() {
                 </div>
               )}
 
-              <div className="flex items-start gap-3 rounded-md border p-3">
-                <Checkbox
-                  id="edit-is-south-africa"
-                  checked={editForm.isSouthAfrica}
-                  onCheckedChange={(v) => setEditForm({ ...editForm, isSouthAfrica: !!v })}
-                  className="mt-0.5"
-                  data-testid="checkbox-edit-is-south-africa"
-                />
-                <div className="space-y-0.5">
-                  <label htmlFor="edit-is-south-africa" className="text-sm font-medium cursor-pointer">South Africa-based policy</label>
-                  <p className="text-xs text-muted-foreground">Client is based in South Africa. Leave unchecked for Zimbabwe-based policies.</p>
-                </div>
-              </div>
-              {editForm.isSouthAfrica && (
-                <div>
-                  <Label className="text-xs">RSA Policy Number / Reference</Label>
-                  <Input
-                    value={editForm.externalReference}
-                    onChange={(e) => setEditForm({ ...editForm, externalReference: e.target.value })}
-                    placeholder="e.g. the South Africa branch's own policy number"
-                    data-testid="input-edit-external-reference"
-                  />
-                </div>
-              )}
+              <CountryFlagFields
+                settings={countryFlagSettings}
+                idPrefix="edit-policy"
+                checked={editForm.isSouthAfrica}
+                reference={editForm.externalReference}
+                onCheckedChange={(v) => setEditForm({ ...editForm, isSouthAfrica: v })}
+                onReferenceChange={(v) => setEditForm({ ...editForm, externalReference: v })}
+              />
 
               <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
                 <strong>Note:</strong> {canEditPremium
@@ -3710,7 +3707,7 @@ export default function StaffPolicies() {
                         <FileText className="h-4 w-4 text-primary/70 shrink-0" />
                         {p.policyNumber}
                         {p.isSouthAfrica && (
-                          <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 border-blue-200" data-testid={`badge-south-africa-${p.id}`}>SA</Badge>
+                          <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 border-blue-200" data-testid={`badge-south-africa-${p.id}`}>{countryFlagSettings?.flagLabel || "SA"}</Badge>
                         )}
                       </div>
                     ),
@@ -3834,16 +3831,18 @@ export default function StaffPolicies() {
                         <SelectItem value="cancelled">Cancelled</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Select value={countryFilter} onValueChange={setCountryFilter}>
-                      <SelectTrigger className="w-full sm:w-40 shrink-0 h-9" data-testid="select-country-filter">
-                        <SelectValue placeholder="All Countries" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Countries</SelectItem>
-                        <SelectItem value="zimbabwe">Zimbabwe</SelectItem>
-                        <SelectItem value="south_africa">South Africa</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    {countryFlagSettings?.isEnabled && (
+                      <Select value={countryFilter} onValueChange={setCountryFilter}>
+                        <SelectTrigger className="w-full sm:w-40 shrink-0 h-9" data-testid="select-country-filter">
+                          <SelectValue placeholder="All" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="zimbabwe">{countryFlagSettings.homeLabel}</SelectItem>
+                          <SelectItem value="south_africa">{countryFlagSettings.flagLabel}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                   </>
                 }
               />
@@ -4448,6 +4447,19 @@ export default function StaffPolicies() {
                     />
                   </div>
                 </div>
+                <div>
+                  <Label>Branch</Label>
+                  <Select value={createForm.branchId} onValueChange={(v) => setCreateForm({ ...createForm, branchId: v })}>
+                    <SelectTrigger data-testid="select-create-branch">
+                      <SelectValue placeholder="Select branch" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {branches.map((b: any) => (
+                        <SelectItem key={b.id} value={b.id}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 {canEditPremium && (
                   <div className="flex items-start gap-3 border rounded-md p-3 bg-amber-50/50 dark:bg-amber-950/20">
                     <Checkbox
@@ -4462,29 +4474,14 @@ export default function StaffPolicies() {
                     </div>
                   </div>
                 )}
-                <div className="flex items-start gap-3 border rounded-md p-3">
-                  <Checkbox
-                    id="create-south-africa-flag"
-                    checked={createForm.isSouthAfrica}
-                    onCheckedChange={(v) => setCreateForm({ ...createForm, isSouthAfrica: !!v })}
-                    data-testid="checkbox-is-south-africa"
-                  />
-                  <div className="space-y-1 leading-none">
-                    <label htmlFor="create-south-africa-flag" className="text-sm font-medium cursor-pointer">South Africa-based policy</label>
-                    <p className="text-xs text-muted-foreground">Client is based in South Africa (currency alone doesn't always indicate this — some SA clients pay in USD). Leave unchecked for Zimbabwe-based policies.</p>
-                  </div>
-                </div>
-                {createForm.isSouthAfrica && (
-                  <div>
-                    <Label>RSA Policy Number / Reference</Label>
-                    <Input
-                      value={createForm.externalReference}
-                      onChange={(e) => setCreateForm({ ...createForm, externalReference: e.target.value })}
-                      placeholder="e.g. the South Africa branch's own policy number"
-                      data-testid="input-external-reference"
-                    />
-                  </div>
-                )}
+                <CountryFlagFields
+                  settings={countryFlagSettings}
+                  idPrefix="create-policy"
+                  checked={createForm.isSouthAfrica}
+                  reference={createForm.externalReference}
+                  onCheckedChange={(v) => setCreateForm({ ...createForm, isSouthAfrica: v })}
+                  onReferenceChange={(v) => setCreateForm({ ...createForm, externalReference: v })}
+                />
                 <div className="space-y-3 border rounded-md p-3">
                   <p className="text-sm font-medium">Saved mobile wallet (automation)</p>
                   <p className="text-xs text-muted-foreground">When automation runs for overdue balances, we use this number so the client can approve on their phone. Stored cards are not used for recurring collection.</p>

@@ -26,6 +26,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { FeatureFlagsCard } from "@/components/feature-flags-card";
 import {
   Check,
@@ -36,7 +37,9 @@ import {
   KeyRound,
   Shield,
   FileText,
+  Globe,
 } from "lucide-react";
+import type { CountryFlagSettings } from "@/components/country-flag-fields";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -56,7 +59,7 @@ export default function StaffSettings() {
   const [, setLocation] = useLocation();
   const canManageSettings = permissions.includes("manage:settings");
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const validTabs = ["terms", "rbac", "adverts", "account"];
+  const validTabs = ["terms", "rbac", "adverts", "account", "countryFlag"];
   const defaultTab = tabParam && validTabs.includes(tabParam) ? tabParam : "account";
   const [activeTab, setActiveTab] = useState(defaultTab);
 
@@ -103,6 +106,30 @@ export default function StaffSettings() {
   const { data: advertsList = [], refetch: refetchAdverts } = useQuery<any[]>({
     queryKey: ["/api/receipt-adverts"],
     enabled: !isControlPlaneMode,
+  });
+
+  // ── Country Flag Settings ────────────────────────────────────
+  const { data: countryFlagSettings } = useQuery<CountryFlagSettings>({
+    queryKey: ["/api/country-flag-settings"],
+    enabled: !isControlPlaneMode && canManageSettings,
+  });
+  const [countryFlagForm, setCountryFlagForm] = useState({ isEnabled: false, flagLabel: "South Africa", homeLabel: "Zimbabwe" });
+  useEffect(() => {
+    if (countryFlagSettings) {
+      setCountryFlagForm({
+        isEnabled: countryFlagSettings.isEnabled,
+        flagLabel: countryFlagSettings.flagLabel,
+        homeLabel: countryFlagSettings.homeLabel,
+      });
+    }
+  }, [countryFlagSettings]);
+  const saveCountryFlagMutation = useMutation({
+    mutationFn: async () => apiRequest("PUT", "/api/country-flag-settings", countryFlagForm),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/country-flag-settings"] });
+      toast({ title: "Country flag settings saved" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const createAdvertMutation = useMutation({
@@ -321,6 +348,7 @@ export default function StaffSettings() {
             <TabsTrigger value="account">Account</TabsTrigger>
             {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
             {!isControlPlaneMode && canManageSettings && <TabsTrigger value="adverts">Receipt Adverts</TabsTrigger>}
+            {!isControlPlaneMode && canManageSettings && <TabsTrigger value="countryFlag">Country Flag</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
           </TabsList>
 
@@ -440,6 +468,56 @@ export default function StaffSettings() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
+            </TabsContent>
+          )}
+
+          {/* Country Flag */}
+          {!isControlPlaneMode && canManageSettings && (
+            <TabsContent value="countryFlag" className="mt-6">
+              <CardSection
+                title="Country Flag"
+                description="Flag policies and funeral cases tied to another country (e.g. a tenant operating across a border). Off by default — turn on and set your own labels if this applies to your organization."
+                icon={Globe}
+              >
+                <div className="space-y-4 max-w-md">
+                  <div className="flex items-center justify-between rounded-md border p-3">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="country-flag-enabled">Enable country flag</Label>
+                      <p className="text-xs text-muted-foreground">Shows a checkbox on policy and funeral case forms, plus a filter and badge.</p>
+                    </div>
+                    <Switch
+                      id="country-flag-enabled"
+                      checked={countryFlagForm.isEnabled}
+                      onCheckedChange={(v) => setCountryFlagForm({ ...countryFlagForm, isEnabled: v })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="country-flag-label">Flagged country label</Label>
+                    <Input
+                      id="country-flag-label"
+                      value={countryFlagForm.flagLabel}
+                      onChange={(e) => setCountryFlagForm({ ...countryFlagForm, flagLabel: e.target.value })}
+                      placeholder="e.g. South Africa"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="country-home-label">Home country label</Label>
+                    <Input
+                      id="country-home-label"
+                      value={countryFlagForm.homeLabel}
+                      onChange={(e) => setCountryFlagForm({ ...countryFlagForm, homeLabel: e.target.value })}
+                      placeholder="e.g. Zimbabwe"
+                    />
+                  </div>
+                  <Button
+                    onClick={() => saveCountryFlagMutation.mutate()}
+                    disabled={saveCountryFlagMutation.isPending || !countryFlagForm.flagLabel.trim() || !countryFlagForm.homeLabel.trim()}
+                  >
+                    {saveCountryFlagMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </CardSection>
             </TabsContent>
           )}
 

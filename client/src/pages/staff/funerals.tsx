@@ -25,6 +25,7 @@ import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 import { computeServiceCharge } from "@shared/pricing";
 import { QuoteDialog } from "./quotations";
 import { useAuth } from "@/hooks/use-auth";
+import { CountryFlagFields, type CountryFlagSettings } from "@/components/country-flag-fields";
 
 // Funeral cases store date of birth, not age — the quotation form wants age directly.
 function ageFromDob(dob: string | null | undefined): string {
@@ -154,6 +155,9 @@ type CaseForm = {
   policyId: string;
   claimId: string;
   quotationId: string;
+  branchId: string;
+  isCrossBorderFlag: boolean;
+  crossBorderReference: string;
 };
 
 const BLANK_FORM: CaseForm = {
@@ -168,6 +172,7 @@ const BLANK_FORM: CaseForm = {
   bodyWashTime: "", burialDepartureTime: "", memorialServiceStart: "", memorialServiceEnd: "",
   bodyIdentifierName: "", bodyIdentifierIdNumber: "",
   notes: "", policyId: "", claimId: "", quotationId: "",
+  branchId: "", isCrossBorderFlag: false, crossBorderReference: "",
 };
 
 export default function StaffFunerals() {
@@ -195,6 +200,14 @@ export default function StaffFunerals() {
 
   const { data: users = [] } = useQuery<any[]>({
     queryKey: ["/api/users"],
+  });
+
+  const { data: branches = [] } = useQuery<any[]>({
+    queryKey: ["/api/branches"],
+  });
+  const defaultBranchId = branches.find((b: any) => b.isHeadOffice && b.isActive)?.id ?? "";
+  const { data: countryFlagSettings } = useQuery<CountryFlagSettings>({
+    queryKey: ["/api/country-flag-settings"],
   });
 
   const selectedCase = funeralCases.find((c) => c.id === selectedCaseId) ?? null;
@@ -673,6 +686,7 @@ export default function StaffFunerals() {
                 onStartTrip={(data) => startTripMutation.mutate({ caseId: selectedCase.id, data })}
                 onEndTrip={(tripId, data) => endTripMutation.mutate({ tripId, data })}
                 profitLoss={caseProfitLoss}
+                countryFlagSettings={countryFlagSettings}
                 serviceCharges={caseServiceCharges}
                 onAddServiceCharge={() => setShowAddServiceCharge(true)}
                 onPayServiceCharge={(id, paidBy) => payServiceChargeMutation.mutate({ id, paidBy })}
@@ -1237,6 +1251,9 @@ export default function StaffFunerals() {
         otherCases={funeralCases}
         onSubmit={(data) => createCaseMutation.mutate(data)}
         isPending={createCaseMutation.isPending}
+        branches={branches}
+        defaultBranchId={defaultBranchId}
+        countryFlagSettings={countryFlagSettings}
       />
 
       {selectedCase && (
@@ -1250,6 +1267,9 @@ export default function StaffFunerals() {
           otherCases={funeralCases}
           onSubmit={(data) => updateCaseMutation.mutate({ id: selectedCase.id, data })}
           isPending={updateCaseMutation.isPending}
+          branches={branches}
+          defaultBranchId={defaultBranchId}
+          countryFlagSettings={countryFlagSettings}
         />
       )}
 
@@ -1389,6 +1409,7 @@ function CaseDetailView({
   quotation, receipts, onRecordPayment, onEditQuotation,
   vehicleTrips, onStartTrip, onEndTrip, profitLoss,
   serviceCharges, onAddServiceCharge, onPayServiceCharge, onDeleteServiceCharge,
+  countryFlagSettings,
 }: {
   funeralCase: FuneralCase;
   tasks: FuneralTask[];
@@ -1416,6 +1437,7 @@ function CaseDetailView({
   onAddServiceCharge?: () => void;
   onPayServiceCharge?: (id: string, paidBy: string) => void;
   onDeleteServiceCharge?: (id: string) => void;
+  countryFlagSettings?: CountryFlagSettings;
 }) {
   const completed = tasks.filter((t) => t.status === "completed").length;
   const [payingChargeId, setPayingChargeId] = useState<string | null>(null);
@@ -1464,6 +1486,11 @@ function CaseDetailView({
         </Badge>
         {fc.serviceType && (
           <Badge variant="outline" className="text-[10px]">{fc.serviceType === "claim" ? "Policy Claim" : "Cash Service"}</Badge>
+        )}
+        {(fc as any).isCrossBorderFlag && countryFlagSettings?.isEnabled && (
+          <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 border-blue-200" data-testid="badge-case-country-flag">
+            {countryFlagSettings.flagLabel}
+          </Badge>
         )}
         {fc.claimId && (
           <Link
@@ -2278,7 +2305,7 @@ function Field({ label, children, required }: { label: string; children: React.R
 }
 
 function CaseFormDialog({
-  open, onOpenChange, title, vehicles, users, initial, onSubmit, isPending, otherCases,
+  open, onOpenChange, title, vehicles, users, initial, onSubmit, isPending, otherCases, branches, defaultBranchId, countryFlagSettings,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -2289,6 +2316,9 @@ function CaseFormDialog({
   onSubmit: (data: Partial<CaseForm>) => void;
   isPending: boolean;
   otherCases?: FuneralCase[];
+  branches: any[];
+  defaultBranchId: string;
+  countryFlagSettings?: CountryFlagSettings;
 }) {
   const [form, setForm] = useState<CaseForm>(() => {
     if (initial) {
@@ -2329,9 +2359,12 @@ function CaseFormDialog({
         policyId: initial.policyId ?? "",
         claimId: initial.claimId ?? "",
         quotationId: "",
+        branchId: (initial as any).branchId ?? "",
+        isCrossBorderFlag: (initial as any).isCrossBorderFlag ?? false,
+        crossBorderReference: (initial as any).crossBorderReference ?? "",
       };
     }
-    return { ...BLANK_FORM };
+    return { ...BLANK_FORM, branchId: defaultBranchId };
   });
 
   const { toast } = useToast();
@@ -2339,6 +2372,14 @@ function CaseFormDialog({
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const setSel = (k: keyof CaseForm) => (v: string) =>
     setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
+
+  // Branch list/head-office flag load async after this dialog mounts — backfill the default
+  // once available rather than only at initial mount (create dialog only, never overwrite an edit).
+  useEffect(() => {
+    if (!initial && defaultBranchId) {
+      setForm((f) => (f.branchId ? f : { ...f, branchId: defaultBranchId }));
+    }
+  }, [initial, defaultBranchId]);
 
   // Policy claim lookup state
   const [policySearch, setPolicySearch] = useState(initial?.policyId ? "linked" : "");
@@ -2843,6 +2884,31 @@ function CaseFormDialog({
                     </Field>
                   </div>
                 </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Branch */}
+            <AccordionItem value="branch">
+              <AccordionTrigger>Branch{countryFlagSettings?.isEnabled ? " & Country Flag" : ""}</AccordionTrigger>
+              <AccordionContent className="space-y-3">
+                <Field label="Branch">
+                  <Select value={form.branchId} onValueChange={setSel("branchId")}>
+                    <SelectTrigger data-testid="select-case-branch"><SelectValue placeholder="Select branch" /></SelectTrigger>
+                    <SelectContent>
+                      {branches.map((b: any) => (
+                        <SelectItem key={b.id} value={b.id}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <CountryFlagFields
+                  settings={countryFlagSettings}
+                  idPrefix={initial ? "edit-funeral-case" : "create-funeral-case"}
+                  checked={form.isCrossBorderFlag}
+                  reference={form.crossBorderReference}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, isCrossBorderFlag: v }))}
+                  onReferenceChange={(v) => setForm((f) => ({ ...f, crossBorderReference: v }))}
+                />
               </AccordionContent>
             </AccordionItem>
 

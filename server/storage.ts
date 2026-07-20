@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, count, sum, max, gte, lte, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, sql, count, sum, max, gte, lte, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
@@ -136,6 +136,8 @@ import {
   type ReceiptAdvert, type InsertReceiptAdvert,
   memberCardSettings,
   type MemberCardSettings, type InsertMemberCardSettings,
+  countryFlagSettings,
+  type CountryFlagSettings, type InsertCountryFlagSettings,
   type UserNotification, type InsertUserNotification,
   type UserDeviceToken,
 } from "@shared/schema";
@@ -290,6 +292,10 @@ export interface IStorage {
   getBranch(id: string, organizationId: string): Promise<Branch | undefined>;
   getBranchesByOrg(organizationId: string): Promise<Branch[]>;
   createBranch(branch: InsertBranch): Promise<Branch>;
+  updateBranch(id: string, organizationId: string, data: Partial<InsertBranch>): Promise<Branch | undefined>;
+  getHeadOfficeBranch(organizationId: string): Promise<Branch | undefined>;
+  getCountryFlagSettings(orgId: string): Promise<CountryFlagSettings>;
+  upsertCountryFlagSettings(orgId: string, data: Partial<InsertCountryFlagSettings>): Promise<CountryFlagSettings>;
   getUser(id: string, organizationId?: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
@@ -763,6 +769,62 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(branch.organizationId);
     const [created] = await tdb.insert(branches).values(branch).returning();
     return created;
+  }
+  async updateBranch(id: string, organizationId: string, data: Partial<InsertBranch>): Promise<Branch | undefined> {
+    if (data.isHeadOffice === true) {
+      return withOrgTransaction(organizationId, async (tx) => {
+        await tx.update(branches).set({ isHeadOffice: false })
+          .where(and(eq(branches.organizationId, organizationId), eq(branches.isHeadOffice, true)));
+        const [updated] = await tx.update(branches).set(data)
+          .where(and(eq(branches.id, id), eq(branches.organizationId, organizationId)))
+          .returning();
+        return updated;
+      });
+    }
+    const tdb = await getDbForOrg(organizationId);
+    const [updated] = await tdb.update(branches).set(data)
+      .where(and(eq(branches.id, id), eq(branches.organizationId, organizationId)))
+      .returning();
+    return updated;
+  }
+  async getHeadOfficeBranch(organizationId: string): Promise<Branch | undefined> {
+    const tdb = await getDbForOrg(organizationId);
+    // Require isActive too — a branch can be flagged isHeadOffice and later deactivated
+    // without clearing the flag; treat that as "no head office" rather than silently
+    // defaulting new records onto a branch nobody can pick from an active-branch dropdown.
+    const [headOffice] = await tdb.select().from(branches)
+      .where(and(eq(branches.organizationId, organizationId), eq(branches.isHeadOffice, true), eq(branches.isActive, true)));
+    if (headOffice) return headOffice;
+    // No (active) branch flagged — fall back to the org's oldest active branch.
+    const [fallback] = await tdb.select().from(branches)
+      .where(and(eq(branches.organizationId, organizationId), eq(branches.isActive, true)))
+      .orderBy(asc(branches.createdAt))
+      .limit(1);
+    return fallback;
+  }
+  async getCountryFlagSettings(orgId: string): Promise<CountryFlagSettings> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(countryFlagSettings).where(eq(countryFlagSettings.organizationId, orgId));
+    if (row) return row;
+    // Not configured — feature defaults to off, matching the column defaults in schema.ts.
+    return {
+      organizationId: orgId,
+      isEnabled: false,
+      flagLabel: "South Africa",
+      homeLabel: "Zimbabwe",
+      updatedAt: new Date(),
+    };
+  }
+  async upsertCountryFlagSettings(orgId: string, data: Partial<InsertCountryFlagSettings>): Promise<CountryFlagSettings> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.insert(countryFlagSettings)
+      .values({ ...data, organizationId: orgId, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: countryFlagSettings.organizationId,
+        set: { ...data, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
   }
   async getUser(id: string, organizationId?: string): Promise<User | undefined> {
     if (organizationId) {

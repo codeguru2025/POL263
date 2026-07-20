@@ -56,10 +56,36 @@ export const branches = pgTable(
     address: text("address"),
     phone: text("phone"),
     isActive: boolean("is_active").default(true).notNull(),
+    // The org-wide default branch — policies/funeral cases/mortuary intakes fall
+    // back to this branch when none is explicitly selected. At most one per org
+    // (enforced by the partial unique index below).
+    isHeadOffice: boolean("is_head_office").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (t) => [index("branches_org_idx").on(t.organizationId)]
+  (t) => [
+    index("branches_org_idx").on(t.organizationId),
+    uniqueIndex("branches_one_head_office_per_org")
+      .on(t.organizationId)
+      .where(sql`is_head_office = true`),
+  ]
 );
+
+/** Tenant-configurable geographic/country flagging (one row per org). Generalizes
+ *  Falakhe's original hardcoded "South Africa" flag on policies — other tenants
+ *  can enable this with their own labels, or leave it off entirely. See
+ *  docs memory "project_multi_country_tenants" for background. */
+export const countryFlagSettings = pgTable("country_flag_settings", {
+  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  isEnabled: boolean("is_enabled").default(false).notNull(),
+  /** Label for the flagged/cross-border case, e.g. "South Africa". */
+  flagLabel: text("flag_label").default("South Africa").notNull(),
+  /** Label for the default/home case, e.g. "Zimbabwe". */
+  homeLabel: text("home_label").default("Zimbabwe").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertCountryFlagSettingsSchema = createInsertSchema(countryFlagSettings).omit({ updatedAt: true });
+export type CountryFlagSettings = typeof countryFlagSettings.$inferSelect;
+export type InsertCountryFlagSettings = z.infer<typeof insertCountryFlagSettingsSchema>;
 
 /** Org-wide membership-card template settings (one row per org) — used to render the
  *  printable member card PDF for a policyholder. */
@@ -1315,6 +1341,10 @@ export const funeralCases = pgTable(
     notes: text("notes"),
     slaDeadline: timestamp("sla_deadline"),
     completedAt: timestamp("completed_at"),
+    // Tenant-configurable cross-border flag (see countryFlagSettings) — only
+    // rendered/editable when the org has the feature enabled.
+    isCrossBorderFlag: boolean("is_cross_border_flag").default(false).notNull(),
+    crossBorderReference: text("cross_border_reference"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [

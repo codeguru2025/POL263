@@ -85,6 +85,7 @@ export async function seedDatabase() {
     defaultBranch = await storage.createBranch({
       organizationId: defaultOrg.id,
       name: "Head Office",
+      isHeadOffice: true,
     });
     structuredLog("info", `Created default branch: ${defaultBranch.name}`);
   }

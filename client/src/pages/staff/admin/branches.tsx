@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Building, Plus, Loader2, MapPin } from "lucide-react";
+import { Building, Plus, Loader2, MapPin, Star } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -44,6 +44,18 @@ export default function BranchAdmin() {
     onError: (err: Error) => toast({ title: "Could not create branch", description: err.message, variant: "destructive" }),
   });
 
+  const setHeadOfficeMutation = useMutation({
+    mutationFn: async (branchId: string) => {
+      const res = await apiRequest("PATCH", `/api/branches/${branchId}`, { isHeadOffice: true });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/branches"] });
+      toast({ title: "Head Office updated" });
+    },
+    onError: (err: Error) => toast({ title: "Could not update Head Office", description: err.message, variant: "destructive" }),
+  });
+
   const activeCount = branches.filter((b: any) => b.isActive).length;
 
   const columns: EdtColumn<any>[] = [
@@ -66,6 +78,28 @@ export default function BranchAdmin() {
       header: "Created",
       accessor: (b) => (b.createdAt ? new Date(b.createdAt).getTime() : 0),
       cell: (b) => <span className="text-sm text-muted-foreground">{b.createdAt ? new Date(b.createdAt).toLocaleDateString() : "—"}</span>,
+    },
+    {
+      id: "headOffice",
+      header: "Head Office",
+      accessor: (b) => (b.isHeadOffice ? 1 : 0),
+      cell: (b) =>
+        b.isHeadOffice ? (
+          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 gap-1">
+            <Star className="h-3 w-3 fill-current" /> Head Office
+          </Badge>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs text-muted-foreground"
+            disabled={setHeadOfficeMutation.isPending}
+            onClick={() => setHeadOfficeMutation.mutate(b.id)}
+            data-testid={`btn-set-head-office-${b.id}`}
+          >
+            Set as Head Office
+          </Button>
+        ),
     },
   ];
 
