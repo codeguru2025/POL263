@@ -865,6 +865,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
     const resolvedCurrency = typeof currency === "string" && currency ? currency : "USD";
     const resolvedSchedule = typeof paymentSchedule === "string" && paymentSchedule ? paymentSchedule : "monthly";
+    // computePolicyPremium's dependant-surcharge logic (age-band rates, flat additional-member
+    // rate, and legacy underwriter rates alike) is driven entirely by dependentDateOfBirths.length,
+    // not by a raw member count — passing memberCount alone here would silently price every quote
+    // as if only the policyholder were covered. The vCard's quick "how many people?" estimator has
+    // no real birthdates yet, so when the caller doesn't supply dependentDateOfBirths, synthesize
+    // (memberCount - 1) unknown-age entries — ageAt(null) resolves to null, which the surcharge
+    // logic already treats as an adult, matching this feature's "instant estimate" framing (real
+    // ages are collected and re-priced for real at actual registration).
+    let resolvedDobs: (string | null)[] | undefined = Array.isArray(dependentDateOfBirths) ? dependentDateOfBirths : undefined;
+    if (!resolvedDobs && typeof memberCount === "number" && memberCount > 1) {
+      resolvedDobs = Array(Math.min(memberCount - 1, 50)).fill(null);
+    }
     const premium = await computePolicyPremium(
       agent.organizationId,
       productVersionId,
@@ -873,7 +885,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       Array.isArray(addOnIds) ? addOnIds : [],
       undefined,
       typeof memberCount === "number" ? memberCount : undefined,
-      Array.isArray(dependentDateOfBirths) ? dependentDateOfBirths : undefined,
+      resolvedDobs,
     );
     return res.json({ premium, currency: resolvedCurrency, paymentSchedule: resolvedSchedule });
   });
@@ -4355,7 +4367,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   async function loadPublicPaymentLink(token: string) {
     const orgId = await storage.resolveOrgIdForPaymentLinkToken(token);
     if (!orgId) return { link: null, orgId: null };
-    const link = await storage.getPaymentLinkByToken(token, orgId);
+    let link = await storage.getPaymentLinkByToken(token, orgId);
+    // The Paynow result webhook (handlePaynowResult) is the actual authoritative path that
+    // marks a payment_intent "paid" — it runs independently of this link's own client-driven
+    // /poll route. If the client closed the page before their poll loop caught the confirmation
+    // (or never polled at all), the link would otherwise sit at "active" forever even though the
+    // payment already went through. Opportunistically re-sync "paid" here so a returning visitor
+    // sees the correct state. Deliberately does NOT mirror failed/cancelled/expired intent
+    // statuses onto the link — a single fumbled PIN attempt should leave the link retriable
+    // (see /initiate below, which starts a fresh intent once the previous one is terminal), not
+    // brick it for the rest of its 48h window.
+    if (link && link.status === "active" && link.paymentIntentId) {
+      const intent = await storage.getPaymentIntentById(link.paymentIntentId, orgId);
+      if (intent?.status === "paid") {
+        link = (await storage.updatePaymentLink(link.id, { status: "paid" }, orgId)) ?? link;
+      }
+    }
     return { link, orgId };
   }
 
@@ -4391,6 +4418,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (link.status !== "active") return res.status(410).json({ message: "This payment link is no longer usable." });
     try {
       let intentId = link.paymentIntentId;
+      // If a prior attempt on this link ended terminally (client cancelled the PIN prompt,
+      // wrong OTP, gateway declined, etc.), reusing the same intent would just hit
+      // initiatePaynowPayment's own "Intent is failed/cancelled/expired" guard forever —
+      // bricking the link for the rest of its 48h window after a single fumbled attempt. Retry
+      // with a fresh, attempt-scoped idempotency key in that case only.
+      let isRetryAfterFailure = false;
+      if (intentId) {
+        const existing = await storage.getPaymentIntentById(intentId, orgId);
+        if (existing && ["failed", "cancelled", "expired"].includes(existing.status)) {
+          intentId = null;
+          isRetryAfterFailure = true;
+        }
+      }
       if (!intentId) {
         const intentResult = await createPaymentIntent({
           organizationId: orgId,
@@ -4399,7 +4439,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           amount: link.amount,
           currency: link.currency,
           purpose: "premium",
-          idempotencyKey: `paylink-${link.id}`,
+          // Fixed key on the very first attempt so two near-simultaneous clicks on "Pay Now"
+          // (e.g. an impatient double-tap) collapse onto the same intent via createPaymentIntent's
+          // own idempotency, rather than racing into two separate intents. A retry after a
+          // terminal failure is a deliberate new attempt, not a race, so it gets its own key.
+          idempotencyKey: isRetryAfterFailure ? `paylink-${link.id}-retry-${Date.now()}` : `paylink-${link.id}`,
         });
         if (intentResult.error || !intentResult.intent) return res.status(400).json({ message: intentResult.error || "Could not start payment." });
         intentId = intentResult.intent.id;

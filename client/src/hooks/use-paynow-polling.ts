@@ -129,8 +129,16 @@ export function usePaynowPolling({
       return;
     }
     if (pollData.status === "failed") {
+      // Return to "idle" (rather than leaving the caller stuck showing the waiting/InnBucks/OTP
+      // UI forever) so the Pay Now button reappears — the backend supports retrying a payment
+      // link with a fresh intent once the previous attempt is terminal, but only if the frontend
+      // actually gives the client a way to trigger that retry.
       setPolling(false);
-      setFailed("The payment was declined or cancelled.");
+      setPhase("idle");
+      setInnbucksCode("");
+      setInnbucksExpiry("");
+      setNeedsOtp(false);
+      setFailed("The payment was declined or cancelled. You can try again.");
       return;
     }
     if (pollData.error) setPollError(pollData.error);
