@@ -3806,6 +3806,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getPaymentsByOrg(user.organizationId, limit, offset, filters, agentId));
   });
 
+  // True totals for the Finance page KPI tiles — GET /api/payments is paginated (default
+  // limit 100), so `.length` on that response silently undercounts past the first page.
+  app.get("/api/payments/summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
+    const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    const isAgent = isAgentScoped(userRoles);
+    const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
+    return res.json(await storage.getPaymentsSummary(user.organizationId, filters, agentId));
+  });
+
   app.get("/api/policies/:id/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const policyId = req.params.id as string;

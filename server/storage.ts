@@ -430,6 +430,8 @@ export interface IStorage {
   createPaymentTransaction(tx: InsertPaymentTransaction): Promise<PaymentTransaction>;
   getPaymentsByPolicy(policyId: string, orgId: string): Promise<PaymentTransaction[]>;
   getPaymentsByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters, agentId?: string): Promise<(PaymentTransaction & { policyNumber: string | null })[]>;
+  /** True totals for the Finance page KPI tiles — unlike getPaymentsByOrg, not capped by page size, and cleared totals are grouped per currency rather than blindly summed together. */
+  getPaymentsSummary(orgId: string, filters?: ReportFilters, agentId?: string): Promise<{ totalCount: number; clearedByCurrency: { currency: string; count: number; total: string }[] }>;
   getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined>;
   /** True if a platform receivable already exists for this payment transaction (idempotent outbox retries). */
   hasPlatformReceivableForTransaction(orgId: string, transactionId: string): Promise<boolean>;
@@ -2726,6 +2728,34 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(policies, eq(policies.id, paymentTransactions.policyId))
       .where(and(...conditions))
       .orderBy(desc(paymentTransactions.receivedAt)).limit(limit).offset(offset);
+  }
+  async getPaymentsSummary(orgId: string, filters?: ReportFilters, agentId?: string): Promise<{ totalCount: number; clearedByCurrency: { currency: string; count: number; total: string }[] }> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions: SQL[] = [eq(paymentTransactions.organizationId, orgId)];
+    const dateCol = paymentTransactions.receivedAt;
+    if (filters?.fromDate) conditions.push(gte(dateCol, new Date(filters.fromDate + "T00:00:00.000Z")));
+    if (filters?.toDate) conditions.push(lte(dateCol, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (agentId) {
+      conditions.push(
+        exists(
+          tdb.select({ id: policies.id }).from(policies)
+            .where(and(eq(policies.id, paymentTransactions.policyId), eq(policies.agentId, agentId)))
+        )
+      );
+    }
+    const [{ value: totalCount }] = await tdb
+      .select({ value: count() })
+      .from(paymentTransactions)
+      .where(and(...conditions));
+    const clearedRows = await tdb
+      .select({ currency: paymentTransactions.currency, value: count(), total: sum(paymentTransactions.amount) })
+      .from(paymentTransactions)
+      .where(and(...conditions, eq(paymentTransactions.status, "cleared")))
+      .groupBy(paymentTransactions.currency);
+    return {
+      totalCount: Number(totalCount),
+      clearedByCurrency: clearedRows.map((r) => ({ currency: r.currency, count: Number(r.value), total: r.total ?? "0.00" })),
+    };
   }
   async getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined> {
     const tdb = await getDbForOrg(orgId);

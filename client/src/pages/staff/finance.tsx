@@ -1838,11 +1838,21 @@ export default function StaffFinance() {
     }).slice(0, 8);
   }, [cashReceiptPolicySearch, policies, clientMap]);
 
-  const totalCleared = useMemo(() => {
-    return payments
-      .filter((p: any) => p.status === "cleared")
-      .reduce((sum: number, p: any) => sum + parseFloat(p.amount || "0"), 0);
-  }, [payments]);
+  // True totals for the KPI tiles below — `payments` above is capped at the API's default
+  // page size (100), so `.length` / a currency-blind sum over it silently under-reports once
+  // an org has more than 100 payments, and mixes currencies together if it has more than one.
+  const { data: paymentsSummary } = useQuery<{ totalCount: number; clearedByCurrency: { currency: string; count: number; total: string }[] }>({
+    queryKey: ["/api/payments/summary"],
+  });
+  const totalClearedLabel = useMemo(() => {
+    const rows = paymentsSummary?.clearedByCurrency ?? [];
+    if (rows.length === 0) return "0.00";
+    return rows
+      .slice()
+      .sort((a, b) => a.currency.localeCompare(b.currency))
+      .map((r) => `${r.currency} ${parseFloat(r.total).toFixed(2)}`)
+      .join("  ·  ");
+  }, [paymentsSummary]);
 
   const createPaymentMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -2258,8 +2268,8 @@ export default function StaffFinance() {
 
         {!commissionOnly && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <KpiStatCard label="Total Payments" value={<span data-testid="text-payment-count">{payments.length}</span>} icon={DollarSign} />
-          <KpiStatCard label="Total Receipted" value={<span data-testid="text-total-cleared">{paymentCurrency} {totalCleared.toFixed(2)}</span>} icon={CheckCircle2} />
+          <KpiStatCard label="Total Payments" value={<span data-testid="text-payment-count">{paymentsSummary?.totalCount ?? payments.length}</span>} icon={DollarSign} />
+          <KpiStatCard label="Total Receipted" value={<span data-testid="text-total-cleared" className="text-lg">{totalClearedLabel}</span>} icon={CheckCircle2} />
           <KpiStatCard label="Commission Configs" value={commissionConfigs.length} icon={TrendingUp} />
           {!isAgent && <KpiStatCard label="Expenditures" value={expenditures.length} icon={Wallet} />}
         </div>
