@@ -863,6 +863,78 @@ export async function buildExecutiveSummary(orgId: string, params: ExecutiveSumm
       ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
   `);
 
+  // Tenant-configurable cross-border breakdown (see country_flag_settings) — off for
+  // every org except the ones that opted in, so skip the extra queries entirely when unused.
+  const countryFlagSettings = await storage.getCountryFlagSettings(orgId);
+  let countryFlag: {
+    flagLabel: string;
+    homeLabel: string;
+    revenueByCountry: { flagged: boolean; currency: string; income: number; policyCount: number }[];
+    serviceCount: number;
+    costByCurrency: { currency: string; cost: number; requisitionCount: number }[];
+  } | null = null;
+  if (countryFlagSettings.isEnabled) {
+    const countryRevenueRows = await tdb.execute(sql`
+      SELECT
+        p.is_south_africa                     AS flagged,
+        pr.currency,
+        COALESCE(SUM(pr.amount::numeric), 0)  AS income,
+        COUNT(DISTINCT pr.policy_id)          AS policy_count
+      FROM payment_receipts pr
+      JOIN policies p ON p.id = pr.policy_id
+      WHERE pr.organization_id = ${orgId}
+        AND pr.status = 'issued'
+        AND pr.issued_at >= ${from + "T00:00:00.000Z"}
+        AND pr.issued_at <= ${to + "T23:59:59.999Z"}
+      GROUP BY p.is_south_africa, pr.currency
+    `);
+    const crossBorderCaseCount = await tdb.execute(sql`
+      SELECT COUNT(*) AS count
+      FROM funeral_cases
+      WHERE organization_id = ${orgId}
+        AND is_cross_border_flag = true
+        AND created_at >= ${from + "T00:00:00.000Z"}
+        AND created_at <= ${to + "T23:59:59.999Z"}
+    `);
+    // Cost = actual cash paid (requisitions.status = 'paid'), matching the cash-basis
+    // approach used everywhere else in this file — not budgeted/unpaid cost-sheet lines.
+    // Counted if either the linked case is flagged, or the requisition itself carries the
+    // pre-existing 'SOUTH_AFRICA' cost_flag convention (a requisition need not be tied to
+    // a flagged case to represent real cross-border spend, e.g. a standalone SA expense).
+    const crossBorderCostRows = await tdb.execute(sql`
+      SELECT
+        r.currency,
+        COALESCE(SUM(r.amount_paid::numeric), 0) AS cost,
+        COUNT(*)                                 AS requisition_count
+      FROM requisitions r
+      LEFT JOIN funeral_cases fc ON fc.id = r.funeral_case_id
+      WHERE r.organization_id = ${orgId}
+        AND r.status = 'paid'
+        AND r.paid_date >= ${from}
+        AND r.paid_date <= ${to}
+        AND (COALESCE(fc.is_cross_border_flag, false) = true OR r.cost_flag = 'SOUTH_AFRICA')
+      GROUP BY r.currency
+    `);
+    countryFlag = {
+      flagLabel: countryFlagSettings.flagLabel,
+      homeLabel: countryFlagSettings.homeLabel,
+      revenueByCountry: ((countryRevenueRows as any).rows ?? (countryRevenueRows as unknown as any[])).map((r: any) => ({
+        flagged: r.flagged === true,
+        currency: r.currency,
+        income: parseFloat(r.income),
+        policyCount: parseInt(r.policy_count),
+      })),
+      serviceCount: parseInt(
+        (((crossBorderCaseCount as any).rows ?? (crossBorderCaseCount as unknown as any[]))[0] as any)?.count ?? 0,
+      ),
+      costByCurrency: ((crossBorderCostRows as any).rows ?? (crossBorderCostRows as unknown as any[])).map((r: any) => ({
+        currency: r.currency,
+        cost: parseFloat(r.cost),
+        requisitionCount: parseInt(r.requisition_count),
+      })),
+    };
+  }
+
   return {
     period: { from, to },
     income: {
@@ -898,5 +970,6 @@ export async function buildExecutiveSummary(orgId: string, params: ExecutiveSumm
     newPoliciesCount: parseInt(
       (((newPolicies as any).rows ?? (newPolicies as unknown as any[]))[0] as any)?.count ?? 0,
     ),
+    countryFlag,
   };
 }

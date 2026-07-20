@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { format, startOfWeek, startOfMonth, startOfYear } from "date-fns";
+import { format, subDays, startOfWeek, startOfMonth, startOfYear } from "date-fns";
 import { Calendar as CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -7,7 +7,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { DateRange } from "react-day-picker";
 
-export type PeriodPreset = "today" | "week" | "mtd" | "ytd" | "custom";
+export type PeriodPreset = "today" | "yesterday" | "week" | "mtd" | "ytd" | "custom";
 
 export interface Period {
   preset: PeriodPreset;
@@ -22,6 +22,10 @@ export function periodForPreset(preset: PeriodPreset, custom?: { from: string; t
   const today = new Date();
   const todayStr = fmt(today);
   switch (preset) {
+    case "yesterday": {
+      const y = fmt(subDays(today, 1));
+      return { preset, from: y, to: y };
+    }
     case "week":
       return { preset, from: fmt(startOfWeek(today, { weekStartsOn: 1 })), to: todayStr };
     case "mtd":
@@ -38,6 +42,7 @@ export function periodForPreset(preset: PeriodPreset, custom?: { from: string; t
 
 const PRESET_LABELS: Record<PeriodPreset, string> = {
   today: "Today",
+  yesterday: "Yesterday",
   week: "This week",
   mtd: "Month to date",
   ytd: "Year to date",

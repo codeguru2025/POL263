@@ -31,6 +31,7 @@ import {
   ShieldCheck,
   Database,
   RefreshCw,
+  Globe,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -279,6 +280,50 @@ function ExecutiveSummarySection({ execSummary, execLoading, branchesList, perio
             </div>
           )}
         </CardSection>
+
+        {/* ── Cross-border breakdown (tenant-configurable — hidden unless enabled) ── */}
+        {ex.countryFlag && (
+          <CardSection
+            title={`${ex.countryFlag.flagLabel} vs ${ex.countryFlag.homeLabel}`}
+            icon={Globe}
+            description="Revenue, services, and cost spend split by the country flag."
+            className="lg:col-span-2"
+          >
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                {[true, false].map((flagged) => {
+                  const rows = (ex.countryFlag.revenueByCountry || []).filter((r: any) => r.flagged === flagged);
+                  const label = flagged ? ex.countryFlag.flagLabel : ex.countryFlag.homeLabel;
+                  const incomeMap: Record<string, number> = {};
+                  let policyCount = 0;
+                  for (const r of rows) {
+                    incomeMap[r.currency] = (incomeMap[r.currency] || 0) + r.income;
+                    policyCount += r.policyCount;
+                  }
+                  return (
+                    <div key={String(flagged)} className="rounded-md border p-3">
+                      <p className="text-xs text-muted-foreground">{label} revenue</p>
+                      <p className="font-semibold tabular-nums text-sm text-emerald-700">{fmtCur(incomeMap)}</p>
+                      <p className="text-[11px] text-muted-foreground">{policyCount} policies receipted</p>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md bg-muted/30 p-3 text-center">
+                  <p className="text-xs text-muted-foreground">{ex.countryFlag.flagLabel} services done</p>
+                  <p className="text-2xl font-bold tabular-nums">{ex.countryFlag.serviceCount}</p>
+                </div>
+                <div className="rounded-md bg-muted/30 p-3 text-center">
+                  <p className="text-xs text-muted-foreground">{ex.countryFlag.flagLabel} cost spend</p>
+                  <p className="text-lg font-bold tabular-nums text-destructive">
+                    {fmtCur(Object.fromEntries((ex.countryFlag.costByCurrency || []).map((c: any) => [c.currency, c.cost])))}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardSection>
+        )}
       </div>
     </div>
   );

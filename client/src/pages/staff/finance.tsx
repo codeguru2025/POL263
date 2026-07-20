@@ -1844,15 +1844,26 @@ export default function StaffFinance() {
   const { data: paymentsSummary } = useQuery<{ totalCount: number; clearedByCurrency: { currency: string; count: number; total: string }[] }>({
     queryKey: ["/api/payments/summary"],
   });
+  // "Total Receipted" specifically is period-filterable (today/yesterday/MTD/YTD/custom) —
+  // a separate call from the all-time `paymentsSummary` above so "Total Payments" stays all-time.
+  const [receiptedPeriod, setReceiptedPeriod] = useState<Period>(() => periodForPreset("mtd"));
+  const { data: paymentsSummaryForPeriod, isLoading: loadingReceiptedPeriod } = useQuery<{ totalCount: number; clearedByCurrency: { currency: string; count: number; total: string }[] }>({
+    queryKey: ["/api/payments/summary", receiptedPeriod.from, receiptedPeriod.to],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/payments/summary?fromDate=${receiptedPeriod.from}&toDate=${receiptedPeriod.to}`, { credentials: "include" });
+      if (!res.ok) return { totalCount: 0, clearedByCurrency: [] };
+      return res.json();
+    },
+  });
   const totalClearedLabel = useMemo(() => {
-    const rows = paymentsSummary?.clearedByCurrency ?? [];
+    const rows = paymentsSummaryForPeriod?.clearedByCurrency ?? [];
     if (rows.length === 0) return "0.00";
     return rows
       .slice()
       .sort((a, b) => a.currency.localeCompare(b.currency))
       .map((r) => `${r.currency} ${parseFloat(r.total).toFixed(2)}`)
       .join("  ·  ");
-  }, [paymentsSummary]);
+  }, [paymentsSummaryForPeriod]);
 
   const createPaymentMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -2267,12 +2278,22 @@ export default function StaffFinance() {
         />
 
         {!commissionOnly && (
+        <>
+        <div className="flex items-center justify-end gap-2">
+          <span className="text-xs text-muted-foreground">Total Receipted period:</span>
+          <PeriodSelector value={receiptedPeriod} onChange={setReceiptedPeriod} />
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <KpiStatCard label="Total Payments" value={<span data-testid="text-payment-count">{paymentsSummary?.totalCount ?? payments.length}</span>} icon={DollarSign} />
-          <KpiStatCard label="Total Receipted" value={<span data-testid="text-total-cleared" className="text-lg">{totalClearedLabel}</span>} icon={CheckCircle2} />
+          <KpiStatCard
+            label="Total Receipted"
+            value={<span data-testid="text-total-cleared" className="text-lg">{loadingReceiptedPeriod ? <Loader2 className="h-4 w-4 animate-spin" /> : totalClearedLabel}</span>}
+            icon={CheckCircle2}
+          />
           <KpiStatCard label="Commission Configs" value={commissionConfigs.length} icon={TrendingUp} />
           {!isAgent && <KpiStatCard label="Expenditures" value={expenditures.length} icon={Wallet} />}
         </div>
+        </>
         )}
 
         {!isAgent && !commissionOnly && (
