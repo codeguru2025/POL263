@@ -1256,6 +1256,11 @@ export class DatabaseStorage implements IStorage {
     const [client] = await tdb.select().from(clients).where(and(eq(clients.id, id), eq(clients.organizationId, orgId)));
     return client;
   }
+  async getClientsByIds(ids: string[], orgId: string): Promise<Client[]> {
+    if (!ids?.length) return [];
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(clients).where(and(inArray(clients.id, ids), eq(clients.organizationId, orgId)));
+  }
   async getClientByActivationCode(code: string, orgId: string): Promise<Client | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [client] = await tdb.select().from(clients)
@@ -1398,6 +1403,18 @@ export class DatabaseStorage implements IStorage {
   async getDependentsByClient(clientId: string, orgId: string): Promise<Dependent[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(dependents).where(and(eq(dependents.clientId, clientId), eq(dependents.organizationId, orgId))).orderBy(dependents.createdAt);
+  }
+  async getDependentsByClientsBatch(clientIds: string[], orgId: string): Promise<Record<string, Dependent[]>> {
+    if (clientIds.length === 0) return {};
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(dependents).where(and(inArray(dependents.clientId, clientIds), eq(dependents.organizationId, orgId))).orderBy(dependents.createdAt);
+    const result: Record<string, Dependent[]> = {};
+    for (const cid of clientIds) result[cid] = [];
+    for (const r of rows) {
+      if (!result[r.clientId]) result[r.clientId] = [];
+      result[r.clientId].push(r);
+    }
+    return result;
   }
   async getDependent(id: string, orgId: string): Promise<Dependent | undefined> {
     const tdb = await getDbForOrg(orgId);
@@ -2672,6 +2689,18 @@ export class DatabaseStorage implements IStorage {
   async getPolicyAddOns(policyId: string, orgId: string): Promise<PolicyAddOn[]> {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(policyAddOns).where(eq(policyAddOns.policyId, policyId));
+  }
+  async getPolicyAddOnsBatch(policyIds: string[], orgId: string): Promise<Record<string, PolicyAddOn[]>> {
+    if (policyIds.length === 0) return {};
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(policyAddOns).where(inArray(policyAddOns.policyId, policyIds));
+    const result: Record<string, PolicyAddOn[]> = {};
+    for (const pid of policyIds) result[pid] = [];
+    for (const r of rows) {
+      if (!result[r.policyId]) result[r.policyId] = [];
+      result[r.policyId].push(r);
+    }
+    return result;
   }
   async setMemberAddOns(policyId: string, policyMemberId: string | null, addOnIds: string[], orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
@@ -5071,7 +5100,8 @@ export class DatabaseStorage implements IStorage {
     if (filters?.toDate) conds.push(sql`${paymentDisbursements.paidDate} <= ${filters.toDate}`);
     return tdb.select().from(paymentDisbursements)
       .where(and(...conds))
-      .orderBy(desc(paymentDisbursements.paidDate));
+      .orderBy(desc(paymentDisbursements.paidDate))
+      .limit(1000);
   }
 
   async getPaymentDisbursementsByEntity(entityType: string, entityId: string, orgId: string): Promise<PaymentDisbursement[]> {

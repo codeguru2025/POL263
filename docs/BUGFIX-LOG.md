@@ -10,6 +10,57 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — N+1 query storms on the Policies list, reports, and finance pages (Phase 4 of the systems audit)
+
+- **Context:** Phase 4 of the audit — performance findings, not correctness bugs. Several
+  list/report endpoints issued one (or several) extra DB round-trips *per row* instead of
+  batching, so cost scaled with result-set size rather than staying constant.
+- **1. `GET /api/policies` recomputed every policy's premium serially, one full internal
+  fetch-chain per row** (`recalculatePolicyPremiumIfNeeded` calling `computePolicyPremium`,
+  which itself did 2-3 more internal lookups) — up to ~3,000 queries for a full page load.
+  Fixed by adding a `batchRecalculatePolicyPremiums` path (`server/routes.ts`) that
+  pre-fetches all products, product versions, add-ons, policy members, and dependents for the
+  whole page in ~6 batched queries, then passes them into a new optional `preloaded` parameter
+  on `computePolicyPremium` (`server/route-helpers.ts`) so the pricing math itself didn't need
+  duplicating — call sites that still need single-policy recalculation (~7 of them) are
+  untouched.
+- **2. Three missing indexes** meant `claims` lookups by client, the finance pending-approvals
+  queue, and the funeral-case date-sorted list all fell back to sequential/partial-index scans
+  as those tables grew: `claims_client_idx`, `pr_org_pending_idx` (partial, `WHERE
+  approval_status = 'pending'`), `fc_org_created_idx` (composite, matching the existing
+  `policies_org_status_created_idx` pattern). Added in `shared/schema.ts` and
+  `migrations/0080_performance_indexes.sql`.
+- **3. Four more per-row N+1 loops**, same shape as #1 — a query inside `.map()`/`Promise.all`
+  instead of one batched query up front:
+  - `/api/reports/policy-details` (both the live JSON route and the duplicate CSV-export code
+    path) fetched a client's dependents one client at a time — up to 15,000 queries at the
+    report's row cap. Replaced both with the already-built `storage.getDependentsByClientsBatch`
+    (added in Phase 4's first fix, for `batchRecalculatePolicyPremiums`, and previously unused
+    elsewhere — same helper now serves three call sites).
+  - `GET /api/payment-disbursements` looked up `paidByUserId`/`receivedByUserId` per
+    disbursement; also had no `.limit()` at all (`server/storage.ts`, `getPaymentDisbursements`)
+    despite every real caller filtering to a single requisition/expenditure — added a `.limit(1000)`
+    safety cap regardless, since the route itself has no filter requirement.
+  - `GET /api/payment-receipts/pending-approvals` looked up the policy and client per receipt.
+    Added a `getClientsByIds` batch method (`server/storage.ts`, mirroring the existing
+    `getPoliciesByIds`) and switched both lookups to one batched query each before the map.
+- **Files:** `server/routes.ts`, `server/storage.ts`, `server/route-helpers.ts`,
+  `shared/schema.ts`, `migrations/0080_performance_indexes.sql`.
+- **Verification:** typecheck clean, full test suite green (209/209, unchanged — these are
+  performance-only changes with no behavior difference, so no new tests were needed). Live-
+  verified against real Falakhe data: for 200 real policy-report rows, the batched dependents
+  lookup returned byte-for-byte the same dependent ID sets as the old per-client loop (0
+  mismatches); for 50 real policies/clients, `getPoliciesByIds`/`getClientsByIds` matched the
+  single-row `getPolicy`/`getClient` lookups exactly (0 mismatches); applied both migrations to
+  main, Falakhe (isolated tenant DB), and the Supabase backup, confirmed all three indexes exist
+  via `pg_indexes`.
+- **Lesson for next time:** batch storage helpers pay for themselves fast — the same
+  `getDependentsByClientsBatch` built for one call site (the Policies list premium recalc) ended
+  up replacing three separate N+1 loops elsewhere in the same phase once it existed. When adding
+  a batch method, grep for the singular version's call sites (`getDependentsByClient(` etc.)
+  before considering the task done — the other N+1 loops calling it are usually sitting right
+  there, not hidden.
+
 ## 2026-07-21 — Premium calculation correctness: age-band pooling, negative discounts, silent under-charging, and a dead reinstatement setting (Phase 3 of the systems audit)
 
 - **1. Age-band pricing let extra adults "borrow" unused child slots.** The flat-rate pricing

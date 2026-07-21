@@ -1314,6 +1314,7 @@ export const claims = pgTable(
     index("claims_org_idx").on(t.organizationId),
     index("claims_policy_idx").on(t.policyId),
     index("claims_status_idx").on(t.status),
+    index("claims_client_idx").on(t.clientId),
     uniqueIndex("claim_number_org_idx").on(t.claimNumber, t.organizationId),
   ]
 );
@@ -1426,6 +1427,7 @@ export const funeralCases = pgTable(
     index("fc_policy_idx").on(t.policyId),
     index("fc_status_idx").on(t.status),
     index("fc_assigned_idx").on(t.assignedTo),
+    index("fc_org_created_idx").on(t.organizationId, t.createdAt),
   ]
 );
 

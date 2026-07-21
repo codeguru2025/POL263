@@ -118,10 +118,15 @@ export async function computePolicyPremium(
   memberAddOns?: { memberRef: string; addOnId: string }[],
   memberCount?: number,
   dependentDateOfBirths?: (string | null | undefined)[],
+  // Escape hatch for bulk callers (e.g. GET /api/policies recomputing an entire page) that have
+  // already fetched product versions/products/add-ons for every row in one batched query each —
+  // passing them in here skips the 3 DB round-trips this function would otherwise make PER POLICY,
+  // without duplicating the pricing math itself for a "batch" variant of this function.
+  preloaded?: { productVersion?: any; product?: any; orgAddOns?: any[] },
 ): Promise<string> {
-  const pv = await storage.getProductVersion(productVersionId, orgId);
+  const pv = preloaded?.productVersion ?? await storage.getProductVersion(productVersionId, orgId);
   if (!pv) return "0";
-  const product = await storage.getProduct(pv.productId, orgId);
+  const product = preloaded?.product !== undefined ? preloaded.product : await storage.getProduct(pv.productId, orgId);
   let base = 0;
   if (paymentSchedule === "monthly") {
     base = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
@@ -138,7 +143,7 @@ export async function computePolicyPremium(
   }
 
   let addOnTotal = 0;
-  const orgAddOns = await storage.getAddOns(orgId);
+  const orgAddOns = preloaded?.orgAddOns ?? await storage.getAddOns(orgId);
 
   if (memberAddOns && memberAddOns.length > 0) {
     for (const ma of memberAddOns) {

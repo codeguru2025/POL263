@@ -189,6 +189,73 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return policy;
   }
 
+  /**
+   * Same recalculation as recalculatePolicyPremiumIfNeeded, but for a whole page of policies at
+   * once — GET /api/policies was calling the per-policy version inside Promise.all, which still
+   * issued 6 sequential queries PER POLICY (members, dependents, add-ons, product version,
+   * product, org add-ons) — up to ~3,000 queries for a full 500-row page, on every load and every
+   * 30s cache refresh. This does the same 6 lookups but batched ONCE across the whole page —
+   * policyMembers/policyAddOns via inArray(policyId, ...), dependents via
+   * inArray(clientId, ...), and products/productVersions/orgAddOns fetched org-wide (already
+   * cheap single queries, identical for every row) — then computes each policy's premium
+   * in-memory using computePolicyPremium's `preloaded` escape hatch instead of letting it re-fetch
+   * per call. Only policies that actually drift still issue a write, same as before.
+   */
+  async function batchRecalculatePolicyPremiums(list: any[], orgId: string): Promise<any[]> {
+    const candidates = list.filter((p) => p?.id && p?.productVersionId && !(p.premiumOverride != null && String(p.premiumOverride).trim() !== ""));
+    if (candidates.length === 0) return list;
+
+    const policyIds = candidates.map((p) => p.id);
+    const clientIds = Array.from(new Set(candidates.map((p) => p.clientId).filter(Boolean)));
+
+    const [membersByPolicy, addOnsByPolicy, dependentsByClient, orgAddOns, allProducts, allProductVersions] = await Promise.all([
+      storage.getPolicyMembersBatch(policyIds, orgId),
+      storage.getPolicyAddOnsBatch(policyIds, orgId),
+      storage.getDependentsByClientsBatch(clientIds, orgId),
+      storage.getAddOns(orgId),
+      storage.getProductsByOrg(orgId),
+      storage.getAllProductVersions(orgId),
+    ]);
+    const productById = new Map(allProducts.map((p: any) => [p.id, p]));
+    const productVersionById = new Map(allProductVersions.map((pv: any) => [pv.id, pv]));
+
+    const updated = new Map<string, any>();
+    await Promise.all(candidates.map(async (policy) => {
+      const pv = productVersionById.get(policy.productVersionId);
+      if (!pv) return; // matches computePolicyPremium's own "no such version -> 0" guard being moot here — leave untouched rather than zero a real policy out from bad data
+      const product = pv.productId ? productById.get(pv.productId) : undefined;
+
+      const members = membersByPolicy[policy.id] || [];
+      const activeDependentIds = members.filter((m: any) => m?.isActive !== false && !!m?.dependentId).map((m: any) => String(m.dependentId));
+      const depById = new Map((dependentsByClient[policy.clientId] || []).map((d: any) => [d.id, d]));
+      const dependentDateOfBirths = activeDependentIds.filter((id) => depById.has(id)).map((id) => depById.get(id)?.dateOfBirth ?? null);
+
+      const rawAddOns = addOnsByPolicy[policy.id] || [];
+      const memberAddOns = rawAddOns.filter((a: any) => a.addOnId).map((a: any) => ({ memberRef: a.policyMemberId ?? "holder", addOnId: a.addOnId }));
+
+      const recomputedPremium = await computePolicyPremium(
+        orgId,
+        policy.productVersionId,
+        policy.currency || "USD",
+        policy.paymentSchedule || "monthly",
+        [],
+        memberAddOns.length > 0 ? memberAddOns : undefined,
+        undefined,
+        dependentDateOfBirths,
+        { productVersion: pv, product: product ?? null, orgAddOns },
+      );
+
+      const current = parseFloat(String(policy.premiumAmount ?? "0"));
+      const next = parseFloat(String(recomputedPremium ?? "0"));
+      if (Number.isFinite(current) && Number.isFinite(next) && Math.abs(current - next) >= 0.01) {
+        const row = await storage.updatePolicy(policy.id, { premiumAmount: recomputedPremium }, orgId);
+        updated.set(policy.id, row || { ...policy, premiumAmount: recomputedPremium });
+      }
+    }));
+
+    return list.map((p) => updated.get(p.id) ?? p);
+  }
+
   // Fix 5: Derive a stable uint32 advisory lock key from an orgId UUID so that
   // multiple processes don't run premium backfill for the same org concurrently.
   const BACKFILL_LOCK_CLASS = 900263002; // distinct namespace from payment automation (9002630001)
@@ -2668,7 +2735,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     else if (agentIdParam) filters.agentId = agentIdParam;
     const hasFilter = Object.keys(filters).length > 0;
     let list = await storage.getPoliciesByOrg(user.organizationId, limit, offset, hasFilter ? filters : undefined);
-    list = await Promise.all(list.map((p: any) => recalculatePolicyPremiumIfNeeded(p, user.organizationId)));
+    list = await batchRecalculatePolicyPremiums(list, user.organizationId);
     return res.json(list);
   });
 
@@ -5037,11 +5104,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .from(paymentReceipts)
         .where(and(eq(paymentReceipts.organizationId, user.organizationId), eq(paymentReceipts.approvalStatus, "pending")))
         .orderBy(paymentReceipts.createdAt);
-      const enriched = await Promise.all(rows.map(async (r: any) => {
-        const policy = await storage.getPolicy(r.policyId, user.organizationId);
-        const client = r.clientId ? await storage.getClient(r.clientId, user.organizationId) : null;
+      const policyIds = Array.from(new Set(rows.map((r: any) => r.policyId).filter(Boolean)));
+      const clientIds = Array.from(new Set(rows.map((r: any) => r.clientId).filter(Boolean)));
+      const [policyRows, clientRows] = await Promise.all([
+        storage.getPoliciesByIds(policyIds, user.organizationId),
+        storage.getClientsByIds(clientIds, user.organizationId),
+      ]);
+      const policiesById = new Map(policyRows.map((p: any) => [p.id, p]));
+      const clientsById = new Map(clientRows.map((c: any) => [c.id, c]));
+      const enriched = rows.map((r: any) => {
+        const policy = policiesById.get(r.policyId);
+        const client = r.clientId ? clientsById.get(r.clientId) : null;
         return { ...r, policyNumber: policy?.policyNumber, clientName: client ? `${client.firstName} ${client.lastName}` : null };
-      }));
+      });
       return res.json(enriched);
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
@@ -7768,18 +7843,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       branchId: typeof req.query.branchId === "string" ? req.query.branchId : undefined,
     };
     const disbursements = await storage.getPaymentDisbursements(user.organizationId, filters);
-    const enriched = await Promise.all(disbursements.map(async (d) => {
-      const userIds = [d.paidByUserId, d.receivedByUserId].filter(Boolean) as string[];
-      const usersMap = userIds.length > 0 ? await storage.getUsersByIds(userIds, user.organizationId) : [];
-      const findUser = (id: string | null | undefined) => usersMap.find((u: any) => u.id === id) || null;
-      const paidByUser = d.paidByUserId ? findUser(d.paidByUserId) : null;
-      const receivedByUser = d.receivedByUserId ? findUser(d.receivedByUserId) : null;
+    const allUserIds = Array.from(new Set(disbursements.flatMap((d) => [d.paidByUserId, d.receivedByUserId]).filter(Boolean) as string[]));
+    const usersMap = allUserIds.length > 0 ? await storage.getUsersByIds(allUserIds, user.organizationId) : [];
+    const usersById = new Map(usersMap.map((u: any) => [u.id, u]));
+    const enriched = disbursements.map((d) => {
+      const paidByUser = d.paidByUserId ? usersById.get(d.paidByUserId) : null;
+      const receivedByUser = d.receivedByUserId ? usersById.get(d.receivedByUserId) : null;
       return {
         ...d,
         paidByName: paidByUser?.displayName || paidByUser?.email || null,
         receivedByName: d.receivedBy || receivedByUser?.displayName || receivedByUser?.email || null,
       };
-    }));
+    });
     return res.json(enriched);
   });
 
@@ -10622,11 +10697,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const offset = parseInt(String(req.query.offset)) || 0;
     const rows = await storage.getPolicyReportByOrg(user.organizationId, limit, offset, filters);
     const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter(Boolean)));
+    const depsByClientRaw = await storage.getDependentsByClientsBatch(clientIds, user.organizationId);
     const depsByClient: Record<string, { firstName: string; lastName: string; nationalId: string | null; dateOfBirth: string | null; gender: string | null; relationship: string }[]> = {};
-    await Promise.all(clientIds.map(async (cid) => {
-      const deps = await storage.getDependentsByClient(cid, user.organizationId);
-      depsByClient[cid] = deps.map((d: any) => ({ firstName: d.firstName, lastName: d.lastName, nationalId: d.nationalId ?? null, dateOfBirth: d.dateOfBirth ?? null, gender: d.gender ?? null, relationship: d.relationship }));
-    }));
+    for (const cid of clientIds) {
+      depsByClient[cid] = (depsByClientRaw[cid] || []).map((d: any) => ({ firstName: d.firstName, lastName: d.lastName, nationalId: d.nationalId ?? null, dateOfBirth: d.dateOfBirth ?? null, gender: d.gender ?? null, relationship: d.relationship }));
+    }
     const enriched = rows.map((r) => ({ ...r, dependents: depsByClient[r.clientId] || [] }));
     return res.json(enriched);
   });
@@ -10991,11 +11066,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "policy-details": {
           const reportRows = await storage.getPolicyReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           const clientIds = Array.from(new Set(reportRows.map((r) => r.clientId).filter(Boolean)));
-          const depsByClient: Record<string, any[]> = {};
-          await Promise.all(clientIds.map(async (cid) => {
-            const deps = await storage.getDependentsByClient(cid, user.organizationId);
-            depsByClient[cid] = deps;
-          }));
+          const depsByClient = await storage.getDependentsByClientsBatch(clientIds, user.organizationId);
           const maxDeps = Math.max(1, ...Object.values(depsByClient).map((d) => d.length));
           const depHeaders: string[] = [];
           for (let i = 1; i <= maxDeps; i++) {
