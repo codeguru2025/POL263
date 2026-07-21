@@ -848,7 +848,7 @@ export default function StaffFunerals() {
                           {p.phone && <div className="text-xs text-muted-foreground">{p.phone}</div>}
                         </div>
                         {canWriteFuneralOps && (
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={(e) => { e.stopPropagation(); setEditingParlour(p); setParlourForm({ name: p.name || "", contactPerson: p.contactPerson || "", phone: p.phone || "", email: p.email || "", address: p.address || "" }); setShowParlourDialog(true); }}>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" aria-label={`Edit ${p.name}`} onClick={(e) => { e.stopPropagation(); setEditingParlour(p); setParlourForm({ name: p.name || "", contactPerson: p.contactPerson || "", phone: p.phone || "", email: p.email || "", address: p.address || "" }); setShowParlourDialog(true); }}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         )}
@@ -895,10 +895,10 @@ export default function StaffFunerals() {
                             {canWriteFuneralOps && (
                               <TableCell>
                                 <div className="flex gap-1">
-                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingPersonnel(p); setPersonnelForm({ name: p.name || "", role: p.role || "", phone: p.phone || "", email: p.email || "" }); setShowPersonnelDialog(true); }}>
+                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" aria-label={`Edit ${p.name}`} onClick={() => { setEditingPersonnel(p); setPersonnelForm({ name: p.name || "", role: p.role || "", phone: p.phone || "", email: p.email || "" }); setShowPersonnelDialog(true); }}>
                                     <Pencil className="h-3.5 w-3.5" />
                                   </Button>
-                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => deletePersonnelMutation.mutate(p.id)}>
+                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" aria-label={`Delete ${p.name}`} onClick={() => deletePersonnelMutation.mutate(p.id)}>
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
                                 </div>
@@ -967,7 +967,7 @@ export default function StaffFunerals() {
                           </TableCell>
                           {canWriteFuneralOps && (
                             <TableCell className="text-right pr-6">
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingRate(r); setShowRateDialog(true); }}>
+                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" aria-label={`Edit ${r.name}`} onClick={() => { setEditingRate(r); setShowRateDialog(true); }}>
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
                             </TableCell>
@@ -1005,7 +1005,7 @@ export default function StaffFunerals() {
                         {c.address && <div className="text-xs text-muted-foreground">{c.address}</div>}
                       </div>
                       {canWriteFuneralOps && (
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => { setEditingCemetery(c); setCemeteryForm({ name: c.name || "", address: c.address || "", notes: c.notes || "" }); setShowCemeteryDialog(true); }}>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" aria-label={`Edit ${c.name}`} onClick={() => { setEditingCemetery(c); setCemeteryForm({ name: c.name || "", address: c.address || "", notes: c.notes || "" }); setShowCemeteryDialog(true); }}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                       )}
@@ -1054,7 +1054,7 @@ export default function StaffFunerals() {
                           </TableCell>
                           {canWriteFuneralOps && (
                             <TableCell>
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingEquipment(e); setEquipmentForm({ name: e.name || "", equipmentType: e.equipmentType || "tent", status: e.status || "available", notes: e.notes || "" }); setShowEquipmentDialog(true); }}>
+                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" aria-label={`Edit ${e.name}`} onClick={() => { setEditingEquipment(e); setEquipmentForm({ name: e.name || "", equipmentType: e.equipmentType || "tent", status: e.status || "available", notes: e.notes || "" }); setShowEquipmentDialog(true); }}>
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
                             </TableCell>
@@ -1339,9 +1339,12 @@ export default function StaffFunerals() {
               </Select>
             </div>
           </div>
+          {!paymentForm.amount || parseFloat(paymentForm.amount) <= 0 ? (
+            <p className="text-xs text-amber-600" data-testid="text-payment-hint">To continue, provide: an amount greater than zero.</p>
+          ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPaymentDialog(false)}>Cancel</Button>
-            <Button onClick={() => addServiceReceiptMutation.mutate(paymentForm)} disabled={addServiceReceiptMutation.isPending || !paymentForm.amount} data-testid="button-submit-payment">
+            <Button onClick={() => addServiceReceiptMutation.mutate(paymentForm)} disabled={addServiceReceiptMutation.isPending || !paymentForm.amount || parseFloat(paymentForm.amount) <= 0} data-testid="button-submit-payment">
               {addServiceReceiptMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Record
             </Button>
           </DialogFooter>
@@ -1815,7 +1818,7 @@ function CaseDetailView({
                               <div className="flex gap-1 justify-end">
                                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setPayingChargeId(c.id); setPayingChargeBy(""); }}>Record payment</Button>
                                 {onDeleteServiceCharge && (
-                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => onDeleteServiceCharge(c.id)}>
+                                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" aria-label={`Delete ${c.name}`} onClick={() => onDeleteServiceCharge(c.id)}>
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
                                 )}
@@ -1843,6 +1846,9 @@ function CaseDetailView({
               <Label className="text-xs">Received From (Name) *</Label>
               <Input value={payingChargeBy} onChange={(e) => setPayingChargeBy(e.target.value)} placeholder="Name of person who paid" />
             </div>
+            {!payingChargeBy.trim() && (
+              <p className="text-xs text-amber-600">To continue, provide: the name of who paid.</p>
+            )}
             <DialogFooter>
               <Button variant="outline" onClick={() => setPayingChargeId(null)}>Cancel</Button>
               <Button

@@ -1502,6 +1502,9 @@ function RecordPaymentDialog({ open, onOpenChange, feeAmount, onSubmit, isPendin
             <Label className="text-xs">Date & Time</Label>
             <Input type="datetime-local" value={form.paidAt} onChange={(e) => setForm((f) => ({ ...f, paidAt: e.target.value }))} />
           </div>
+          {!form.paidBy && (
+            <p className="text-xs text-amber-600">To continue, provide: the name of who paid.</p>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={isPending || !form.paidBy}>

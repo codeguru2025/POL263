@@ -10,6 +10,75 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — UX/accessibility gaps: a real $0-submittable payment, unlabeled icon buttons, an orphaned nav path, and a keyboard-inaccessible search field (Phase 5 of the systems audit)
+
+- **Context:** Phase 5 of the audit — UX/accessibility findings. Two items in the original
+  roadmap (an app-wide `Label`/`htmlFor` sweep, and full consolidation of four
+  domain-different "Record Payment" dialogs into one shared component) were assessed and
+  deliberately **not** attempted in this pass: both have very large blast radius (700+ label
+  instances across 161 files; five payment dialogs spanning policies/finance/groups/mortuary/
+  funerals with genuinely different fields and flows) and no way to visually verify the result
+  without a browser. Rather than risk a mechanical edit at that scale, this phase fixed the
+  concrete, verifiable defects instead — including the specific bug the consolidation item was
+  named after.
+- **1. The funeral cash-service "Record Payment" dialog's submit button was only guarded by
+  `!paymentForm.amount`** — a non-empty string check, so typing `"0"` left the button enabled;
+  the request would round-trip to the server and get rejected (the server already validated
+  `amount > 0`), a confusing dead-end for the person at the till rather than a same-screen
+  explanation. Fixed the client-side guard to `!paymentForm.amount || parseFloat(paymentForm.amount) <= 0`
+  (`client/src/pages/staff/funerals.tsx`) — audited every other "Record Payment"/pay dialog in
+  the app for the same pattern; all others already guarded correctly.
+- **2. Seven icon-only buttons in `funerals.tsx`** (edit/delete on partner parlours,
+  personnel, transport rates, cemeteries, equipment, and service charges) had no accessible
+  name — a screen reader announced them only as "button." Added `aria-label` to each, using the
+  row's own name/label so the announcement is specific (e.g. "Edit St. Mary's Parlour", not
+  just "Edit").
+- **3. The new job-based nav IA (`newNavSections`, behind the `newNav` flag) was missing 10
+  routes** that the legacy nav still exposed — Society/Tombstone Transactions, Tombstones
+  Admin, Client Feedback, Dynamic Reports (Generic), Statistics, Statistical Graphs, Reminders,
+  Help Centre, and Fax. The comment directly above `newNavSections`
+  (`client/src/components/layout/staff-layout.tsx`) states the new IA is meant to "preserve
+  every route/permission; reorganize access paths only" — these 10 pages still exist and still
+  work if you type the URL directly, but a tenant on the new-nav flag had no menu path to
+  reach them at all. Added each to its closest semantic bucket (Clients, Finance, Reports, or
+  Setup) and verified programmatically that both nav trees now expose the identical 73-route
+  set.
+- **4. The global policy search box (`PolicySearchInput`) was a hand-rolled dropdown with zero
+  ARIA semantics or keyboard support** — no `role="combobox"`/`listbox`/`option`, no arrow-key
+  navigation, no `aria-activedescendant`; a keyboard-only or screen-reader user could type a
+  query but had no way to select a result without a mouse. Rather than swap to the existing
+  `SearchableSelect`/cmdk component (built for a pre-loaded option list, not this component's
+  server-side type-ahead search — and its popover-oriented styling would have visually diverged
+  from the plain bordered input used everywhere else, a regression this session had no browser
+  to catch), added real combobox semantics and arrow/Enter/Escape keyboard handling directly
+  onto the existing markup, leaving the visual layout and all four call sites' props unchanged.
+- **5. Applied the policy-wizard's "live missing-fields hint" pattern** (an inline
+  `To continue, provide: X, Y.` message next to a disabled submit button, instead of a
+  silently-disabled button with no explanation) to the three payment-confirmation dialogs
+  touched by fix #1: the funeral cash-service payment dialog, the funeral service-charge
+  payment-confirmation dialog, and the mortuary storage-fee payment dialog
+  (`client/src/pages/staff/funerals.tsx`, `client/src/pages/staff/mortuary.tsx`).
+- **Files:** `client/src/pages/staff/funerals.tsx`, `client/src/pages/staff/mortuary.tsx`,
+  `client/src/components/layout/staff-layout.tsx`, `client/src/components/policy-search-input.tsx`.
+- **Verification:** typecheck clean, full test suite green (209/209, unchanged — these are
+  frontend UI/accessibility changes with no unit-test surface). Verified nav-tree parity
+  programmatically (a script diffing every `href:` between the legacy and new-IA nav
+  definitions — 73/73 routes now match both ways, zero orphans either direction). Could not
+  visually exercise the browser in this session — flagged explicitly per the "for UI changes,
+  verify in a browser" rule, rather than claiming a look-and-feel guarantee this pass can't back
+  up. The two deferred items (app-wide label association, full payment-dialog consolidation)
+  remain open and are better suited to a dedicated pass with browser-based visual QA.
+- **Lesson for next time:** when an audit item says "app-wide" or "consolidate N things," check
+  the actual blast radius before starting (a five-minute grep) — some of these turn out to be a
+  handful of files (the nav-tree fix, the search-box fix) and some turn out to be hundreds of
+  call sites with no mechanical way to verify correctness (labels, dialog consolidation). Fixing
+  the former well and explicitly deferring the latter with reasoning beats a rushed, unverifiable
+  attempt at all of it. Also: "two systems marked as duplicates of each other" (old nav vs new
+  nav here) is worth diffing programmatically rather than eyeballing — a script found all 10 gaps
+  in seconds; the comment stating the new IA's intent ("preserve every route") had clearly
+  drifted from what the code actually did, the same class of drift already seen twice this
+  session (Phase 3's dead settings field, Phase 2's near-no-op waiting-period check).
+
 ## 2026-07-21 — N+1 query storms on the Policies list, reports, and finance pages (Phase 4 of the systems audit)
 
 - **Context:** Phase 4 of the audit — performance findings, not correctness bugs. Several
