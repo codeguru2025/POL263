@@ -74,6 +74,41 @@ export default function StaffClaims() {
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState("");
 
+  // Optional funeral-case link — if a case already exists for the same death, blank-fill
+  // deceased details from it instead of asking again (mirrors funerals.tsx's quotation lookup).
+  const [caseSearch, setCaseSearch] = useState("");
+  const [caseLookupLoading, setCaseLookupLoading] = useState(false);
+  const [foundCase, setFoundCase] = useState<any>(null);
+  const [caseLookupError, setCaseLookupError] = useState("");
+
+  const lookupFuneralCase = async (search: string) => {
+    if (!search.trim()) return;
+    setCaseLookupLoading(true);
+    setCaseLookupError("");
+    setFoundCase(null);
+    try {
+      const res = await fetch(getApiBase() + `/api/funeral-cases?q=${encodeURIComponent(search.trim())}&limit=5`, { credentials: "include" });
+      const data = await res.json();
+      const cases: any[] = Array.isArray(data) ? data : [];
+      const exact = cases.find((c: any) => c.caseNumber?.toLowerCase() === search.trim().toLowerCase()) || cases[0];
+      if (!exact) { setCaseLookupError("No funeral case found with that number."); return; }
+      if (exact.claimId) { setCaseLookupError("This funeral case already has a claim linked."); return; }
+      setFoundCase(exact);
+      const isBlank = (v: any) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+      setNewClaim((p) => ({
+        ...p,
+        deceasedName: isBlank(p.deceasedName) && !isBlank(exact.deceasedName) ? exact.deceasedName : p.deceasedName,
+        deceasedRelationship: isBlank(p.deceasedRelationship) && !isBlank(exact.deceasedRelationship) ? exact.deceasedRelationship : p.deceasedRelationship,
+        dateOfDeath: isBlank(p.dateOfDeath) && !isBlank(exact.dateOfDeath) ? exact.dateOfDeath : p.dateOfDeath,
+        causeOfDeath: isBlank(p.causeOfDeath) && !isBlank(exact.causeOfDeath) ? exact.causeOfDeath : p.causeOfDeath,
+      }));
+    } catch {
+      setCaseLookupError("Failed to look up funeral case.");
+    } finally {
+      setCaseLookupLoading(false);
+    }
+  };
+
   const handlePolicySelect = (id: string, policy: any) => {
     setNewClaim((p) => ({ ...p, policyId: id, clientId: policy?.clientId || "" }));
     setSelectedPolicy(policy || null);
@@ -94,6 +129,9 @@ export default function StaffClaims() {
     setSelectedPolicy(null);
     setPolicyMembers([]);
     setSelectedMemberId("");
+    setCaseSearch("");
+    setFoundCase(null);
+    setCaseLookupError("");
   };
 
   const { data: claims = [], isLoading, isError: claimsError, error: claimsErrorObj, refetch: refetchClaims } = useQuery<ClaimWithFuneralCase[]>({
@@ -182,6 +220,7 @@ export default function StaffClaims() {
     createMutation.mutate({
       policyId: newClaim.policyId,
       clientId: newClaim.clientId || undefined,
+      funeralCaseId: foundCase?.id || undefined,
       claimType: newClaim.claimType,
       deceasedName: newClaim.deceasedName || undefined,
       deceasedRelationship: newClaim.deceasedRelationship || undefined,
@@ -452,6 +491,32 @@ export default function StaffClaims() {
                 )}
               </div>
             )}
+
+            {/* Optional: link an existing funeral case handling the same death */}
+            <div className="space-y-2">
+              <Label htmlFor="claim-case-search">Link Funeral Case (optional)</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="claim-case-search"
+                  placeholder="Case number, e.g. FNC-000048"
+                  value={caseSearch}
+                  onChange={(e) => setCaseSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookupFuneralCase(caseSearch); } }}
+                  className="flex-1"
+                  data-testid="input-claim-case-search"
+                />
+                <Button type="button" size="sm" variant="outline" onClick={() => lookupFuneralCase(caseSearch)} disabled={caseLookupLoading || !caseSearch.trim()}>
+                  {caseLookupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
+                </Button>
+              </div>
+              {caseLookupError && <p className="text-xs text-destructive">{caseLookupError}</p>}
+              {foundCase && (
+                <p className="text-xs text-muted-foreground">
+                  Linked: <strong className="text-foreground">{foundCase.caseNumber}</strong>
+                  {foundCase.deceasedName ? ` · ${foundCase.deceasedName}` : ""} — deceased/date/cause of death filled in below.
+                </p>
+              )}
+            </div>
 
             {/* Claim type */}
             <div className="space-y-2">

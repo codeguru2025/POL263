@@ -2146,6 +2146,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!isLegacyDependentCapture && !dateOfBirth) return res.status(400).json({ message: "Date of birth is required for dependants." });
     if (!isLegacyDependentCapture && !gender) return res.status(400).json({ message: "Gender is required for dependants." });
     if (nationalIdDep && !isValidNationalId(nationalIdDep)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+
+    // Soft duplicate check — dependents frequently have no national ID (the strong signal
+    // POST /api/clients uses), so match on name + DOB instead. Same "surface, don't block"
+    // pattern as the EXISTING_CLIENT response above: returns the existing dependent for the
+    // caller to reuse/link instead of silently creating a near-duplicate record.
+    const existingDeps = await storage.getDependentsByClient(req.params.clientId as string, user.organizationId);
+    const duplicateDep = existingDeps.find((d) =>
+      d.firstName?.toUpperCase() === depFirstName &&
+      d.lastName?.toUpperCase() === depLastName &&
+      (nationalIdDep ? d.nationalId === nationalIdDep : dateOfBirth ? d.dateOfBirth === dateOfBirth : false)
+    );
+    if (duplicateDep) {
+      return res.status(200).json({
+        message: "A matching dependent already exists on this client",
+        code: "EXISTING_DEPENDENT",
+        existingDependent: duplicateDep,
+      });
+    }
+
     const { policyId: _pid, legacyGroupId: _lgid, legacyProductVersionId: _lpvid, ...bodyWithoutLegacyFlags } = body;
     const parsed = insertDependentSchema.parse({
       ...bodyWithoutLegacyFlags,
@@ -5417,8 +5436,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
       const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      // If this claim is linked to a funeral case handling the same death, blank-fill deceased
+      // details from the case instead of requiring them to be retyped — same "blanks-only" rule
+      // used elsewhere (quoteToCaseBlankFillPatch etc.), so an explicitly-typed value always wins.
+      // Reuses the existing funeralCases.claimId FK (already read by storage.getClaimsByOrg's
+      // left-join, but never set by any UI until now) rather than adding a second, redundant link.
+      let caseFillPatch: Record<string, any> = {};
+      let linkedCase: any = null;
+      if (req.body.funeralCaseId) {
+        linkedCase = await storage.getFuneralCase(req.body.funeralCaseId, user.organizationId);
+        if (linkedCase?.claimId) {
+          return res.status(409).json({ message: "This funeral case already has a claim linked." });
+        }
+        if (linkedCase) {
+          const isBlank = (v: any) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+          if (isBlank(req.body.deceasedName) && !isBlank(linkedCase.deceasedName)) caseFillPatch.deceasedName = linkedCase.deceasedName;
+          if (isBlank(req.body.deceasedRelationship) && !isBlank(linkedCase.deceasedRelationship)) caseFillPatch.deceasedRelationship = linkedCase.deceasedRelationship;
+          if (isBlank(req.body.dateOfDeath) && !isBlank(linkedCase.dateOfDeath)) caseFillPatch.dateOfDeath = linkedCase.dateOfDeath;
+          if (isBlank(req.body.causeOfDeath) && !isBlank(linkedCase.causeOfDeath)) caseFillPatch.causeOfDeath = linkedCase.causeOfDeath;
+        }
+      }
       const parsed = insertClaimSchema.parse({
         ...req.body,
+        ...caseFillPatch,
         organizationId: user.organizationId,
         claimNumber: "PENDING",
         status: "submitted",
@@ -5444,6 +5484,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return created;
       });
       await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
+      if (linkedCase) {
+        try {
+          await storage.updateFuneralCase(linkedCase.id, { claimId: claim.id }, user.organizationId);
+        } catch (linkErr: any) {
+          structuredLog("error", "Failed to link claim to funeral case", { claimId: claim.id, funeralCaseId: linkedCase.id, error: linkErr?.message });
+        }
+      }
       // Auto-create approval request — all claims require manager approval
       try {
         const approvalReq = await storage.createApprovalRequest({
@@ -5557,6 +5604,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
 
   /**
+   * Reverse direction of quoteToCaseBlankFillPatch — when linking a standalone quote to a case
+   * that already has deceased/informant details (e.g. captured on the "Policy Claim" case-creation
+   * path), backfill the quote's own blanks from the case. Same blanks-only rule: never overwrites
+   * anything the quote already has.
+   */
+  function caseToQuoteBlankFillPatch(fc: any, target: Record<string, any>): Record<string, any> {
+    const isBlank = (v: any) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+    const patch: Record<string, any> = {};
+    if (isBlank(target.deceasedName) && !isBlank(fc.deceasedName)) patch.deceasedName = fc.deceasedName;
+    if (isBlank(target.deceasedSex) && !isBlank(fc.deceasedGender)) patch.deceasedSex = fc.deceasedGender;
+    if (isBlank(target.informantFullNames) && !isBlank(fc.informantName)) patch.informantFullNames = fc.informantName;
+    if (isBlank(target.informantPhone) && !isBlank(fc.informantPhone)) patch.informantPhone = fc.informantPhone;
+    return patch;
+  }
+
+  /**
    * Fields a mortuary intake can auto-fill from its linked funeral case — same blanks-only rule.
    * Since quote fields already flow into the case (quoteToCaseBlankFillPatch), linking an intake
    * to a case transitively carries over anything the case itself pulled from a quote.
@@ -5596,7 +5659,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
-    const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
+    const q = typeof req.query.q === "string" && req.query.q ? req.query.q : undefined;
+    const filters = (fromDate || toDate || q) ? { fromDate, toDate, q } : undefined;
     return res.json(await storage.getFuneralCasesByOrg(user.organizationId, limit, offset, filters));
   });
 
@@ -8360,7 +8424,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (existingQuoteForCase && existingQuoteForCase.id !== req.params.id) {
         return res.status(409).json({ message: `This case already has a quotation linked (${existingQuoteForCase.quotationNumber}). Unlink it first, or link a different case.` });
       }
-      const updated = await storage.linkQuotationToCase(req.params.id as string, funeralCaseId, user.organizationId);
+      const quoteBeforeLink = await storage.getQuotationById(req.params.id as string, user.organizationId);
+      if (!quoteBeforeLink) return res.status(404).json({ message: "Quotation not found" });
+      const reverseFillPatch = caseToQuoteBlankFillPatch(existingCase, quoteBeforeLink);
+      const updated = await storage.linkQuotationToCase(req.params.id as string, funeralCaseId, user.organizationId, reverseFillPatch);
       if (!updated) return res.status(404).json({ message: "Quotation not found" });
       const fillPatch = quoteToCaseBlankFillPatch(updated, existingCase);
       const updatedCase = Object.keys(fillPatch).length > 0

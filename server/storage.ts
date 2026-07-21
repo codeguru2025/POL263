@@ -3439,11 +3439,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── Funeral Cases ─────────────────────────────────────────
-  async getFuneralCasesByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters): Promise<FuneralCase[]> {
+  async getFuneralCasesByOrg(orgId: string, limit = 50, offset = 0, filters?: ReportFilters & { q?: string }): Promise<FuneralCase[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions = [eq(funeralCases.organizationId, orgId)];
     if (filters?.fromDate) conditions.push(gte(funeralCases.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
     if (filters?.toDate) conditions.push(lte(funeralCases.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    if (filters?.q) {
+      const term = `%${filters.q}%`;
+      conditions.push(or(ilike(funeralCases.caseNumber, term), ilike(funeralCases.deceasedName, term))!);
+    }
     return tdb.select().from(funeralCases).where(and(...conditions))
       .orderBy(desc(funeralCases.createdAt)).limit(limit).offset(offset);
   }
@@ -5495,10 +5499,10 @@ export class DatabaseStorage implements IStorage {
       return updated;
     });
   }
-  async linkQuotationToCase(quotationId: string, funeralCaseId: string, orgId: string): Promise<FuneralQuotation | undefined> {
+  async linkQuotationToCase(quotationId: string, funeralCaseId: string, orgId: string, blankFillPatch?: Record<string, any>): Promise<FuneralQuotation | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(funeralQuotations)
-      .set({ funeralCaseId })
+      .set({ funeralCaseId, ...(blankFillPatch || {}) })
       .where(and(eq(funeralQuotations.id, quotationId), eq(funeralQuotations.organizationId, orgId)))
       .returning();
     return updated;

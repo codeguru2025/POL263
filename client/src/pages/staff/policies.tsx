@@ -377,19 +377,49 @@ export default function StaffPolicies() {
 
   const [detailAddDepOpen, setDetailAddDepOpen] = useState(false);
   const [detailDepForm, setDetailDepForm] = useState({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
+  const [detailShowNewDepForm, setDetailShowNewDepForm] = useState(false);
   const [membersAgeFilter, setMembersAgeFilter] = useState<"all" | "adult" | "child">("all");
   const detailAddDepMutation = useMutation({
     mutationFn: async (data: typeof detailDepForm) => {
       if (!selectedPolicy) throw new Error("No policy selected");
       const res = await apiRequest("POST", `/api/clients/${selectedPolicy.clientId}/dependents`, { ...data, policyId: selectedPolicy.id });
-      const dep = await res.json();
+      const body = await res.json();
+      // A matching dependent already exists on this client — reuse it instead of the response
+      // being treated as a freshly-created one (server returns 200 + code, not 201, for this case).
+      const dep = body.code === "EXISTING_DEPENDENT" ? body.existingDependent : body;
       await apiRequest("POST", `/api/policies/${selectedPolicy.id}/members`, { dependentId: dep.id, role: "dependent" });
       return dep;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "members"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedPolicy?.clientId, "dependents"] });
       setDetailAddDepOpen(false);
       toast({ title: "Dependent added to policy" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+  // Existing dependents on the same client, not yet linked to this policy — offered as an
+  // alternative to retyping identity details already captured elsewhere on this client.
+  const { data: clientDependentsForDetail } = useQuery<any[]>({
+    queryKey: ["/api/clients", selectedPolicy?.clientId, "dependents"],
+    enabled: !!selectedPolicy?.clientId && detailAddDepOpen,
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/clients/${selectedPolicy.clientId}/dependents`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const linkExistingDepMutation = useMutation({
+    mutationFn: async (dependentId: string) => {
+      if (!selectedPolicy) throw new Error("No policy selected");
+      await apiRequest("POST", `/api/policies/${selectedPolicy.id}/members`, { dependentId, role: "dependent" });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "members"] });
+      setDetailAddDepOpen(false);
+      toast({ title: "Dependent linked to policy" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -418,11 +448,11 @@ export default function StaffPolicies() {
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients", createForm.clientId, "dependents"] });
       setShowAddDep(false);
       setNewDep({ firstName: "", lastName: "", relationship: "", nationalId: "", dateOfBirth: "", gender: "" });
-      toast({ title: "Dependent added" });
+      toast({ title: data.code === "EXISTING_DEPENDENT" ? "Matching dependent already on file — reused it" : "Dependent added" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -593,6 +623,8 @@ export default function StaffPolicies() {
       return Array.isArray(data) ? data : [];
     },
   });
+  const linkedDependentIds = new Set((policyMembers || []).map((m: any) => m.dependentId).filter(Boolean));
+  const unlinkedClientDependents = (clientDependentsForDetail || []).filter((d: any) => !linkedDependentIds.has(d.id));
 
   const { data: policyMemberAddOns = [], refetch: refetchMemberAddOns } = useQuery<any[]>({
     queryKey: ["/api/policies", selectedPolicy?.id, "add-ons"],
@@ -3201,62 +3233,101 @@ export default function StaffPolicies() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={detailAddDepOpen} onOpenChange={setDetailAddDepOpen}>
+        <Dialog open={detailAddDepOpen} onOpenChange={(open) => { setDetailAddDepOpen(open); if (!open) setDetailShowNewDepForm(false); }}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>Add Dependent to Policy</DialogTitle>
-              <DialogDescription>This dependent will be added to the client record and linked to this policy.</DialogDescription>
+              <DialogDescription>
+                {unlinkedClientDependents.length > 0 && !detailShowNewDepForm
+                  ? "This client already has other dependents on file — pick one to link, or add a genuinely new one."
+                  : "This dependent will be added to the client record and linked to this policy."}
+              </DialogDescription>
             </DialogHeader>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label className="text-xs">First Name *</Label>
-                <Input value={detailDepForm.firstName} onChange={(e) => setDetailDepForm({ ...detailDepForm, firstName: e.target.value })} placeholder="First name" />
-              </div>
-              <div>
-                <Label className="text-xs">Last Name *</Label>
-                <Input value={detailDepForm.lastName} onChange={(e) => setDetailDepForm({ ...detailDepForm, lastName: e.target.value })} placeholder="Last name" />
-              </div>
-              <div>
-                <Label className="text-xs">Relationship *</Label>
-                <Select value={detailDepForm.relationship} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, relationship: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
-                  <SelectContent>
-                    {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
-                      <SelectItem key={r} value={r}>{r}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs">National ID</Label>
-                <Input value={detailDepForm.nationalId} onChange={(e) => setDetailDepForm({ ...detailDepForm, nationalId: e.target.value })} placeholder="ID number" />
-              </div>
-              <div>
-                <Label className="text-xs">Date of Birth</Label>
-                <Input type="date" value={detailDepForm.dateOfBirth} onChange={(e) => setDetailDepForm({ ...detailDepForm, dateOfBirth: e.target.value })} />
-              </div>
-              <div>
-                <Label className="text-xs">Gender</Label>
-                <Select value={detailDepForm.gender} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, gender: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="male">Male</SelectItem>
-                    <SelectItem value="female">Female</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDetailAddDepOpen(false)}>Cancel</Button>
-              <Button
-                onClick={() => detailAddDepMutation.mutate(detailDepForm)}
-                disabled={!detailDepForm.firstName || !detailDepForm.lastName || !detailDepForm.relationship || detailAddDepMutation.isPending}
-              >
-                {detailAddDepMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Add Dependent
-              </Button>
-            </DialogFooter>
+
+            {unlinkedClientDependents.length > 0 && !detailShowNewDepForm ? (
+              <>
+                <div className="border rounded-md divide-y max-h-56 overflow-y-auto">
+                  {unlinkedClientDependents.map((d: any) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 flex items-center justify-between gap-2 disabled:opacity-50"
+                      disabled={linkExistingDepMutation.isPending}
+                      onClick={() => linkExistingDepMutation.mutate(d.id)}
+                    >
+                      <span>{d.firstName} {d.lastName}{d.relationship ? ` (${d.relationship})` : ""}</span>
+                      {linkExistingDepMutation.isPending && linkExistingDepMutation.variables === d.id
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <span className="text-xs text-muted-foreground">Link</span>}
+                    </button>
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDetailAddDepOpen(false)}>Cancel</Button>
+                  <Button variant="secondary" onClick={() => setDetailShowNewDepForm(true)}>
+                    <UserPlus className="h-3.5 w-3.5 mr-1.5" /> Add a New Dependent Instead
+                  </Button>
+                </DialogFooter>
+              </>
+            ) : (
+              <>
+                {unlinkedClientDependents.length > 0 && (
+                  <Button type="button" variant="ghost" size="sm" className="-mt-2 self-start" onClick={() => setDetailShowNewDepForm(false)}>
+                    ← Back to existing dependents
+                  </Button>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs">First Name *</Label>
+                    <Input value={detailDepForm.firstName} onChange={(e) => setDetailDepForm({ ...detailDepForm, firstName: e.target.value })} placeholder="First name" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Last Name *</Label>
+                    <Input value={detailDepForm.lastName} onChange={(e) => setDetailDepForm({ ...detailDepForm, lastName: e.target.value })} placeholder="Last name" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Relationship *</Label>
+                    <Select value={detailDepForm.relationship} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, relationship: v })}>
+                      <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectContent>
+                        {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
+                          <SelectItem key={r} value={r}>{r}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">National ID</Label>
+                    <Input value={detailDepForm.nationalId} onChange={(e) => setDetailDepForm({ ...detailDepForm, nationalId: e.target.value })} placeholder="ID number" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Date of Birth</Label>
+                    <Input type="date" value={detailDepForm.dateOfBirth} onChange={(e) => setDetailDepForm({ ...detailDepForm, dateOfBirth: e.target.value })} />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Gender</Label>
+                    <Select value={detailDepForm.gender} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, gender: v })}>
+                      <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="male">Male</SelectItem>
+                        <SelectItem value="female">Female</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDetailAddDepOpen(false)}>Cancel</Button>
+                  <Button
+                    onClick={() => detailAddDepMutation.mutate(detailDepForm)}
+                    disabled={!detailDepForm.firstName || !detailDepForm.lastName || !detailDepForm.relationship || detailAddDepMutation.isPending}
+                  >
+                    {detailAddDepMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Add Dependent
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
           </DialogContent>
         </Dialog>
 

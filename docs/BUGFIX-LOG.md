@@ -10,6 +10,67 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — Six instances of re-asking for data the app already had, across funeral cases/claims/quotations/policies
+
+- **Symptom reported:** recording a mortuary dispatch on a case that already had a payment
+  recorded on the same file prompted for the deceased's name again. A full audit was requested
+  ("if a document needs details found in a related file, it should auto-populate instead of
+  asking me to retype them").
+- **The literal reported bug didn't reproduce** — the dispatch form has no deceased-name field at
+  all; it's pure read-only display sourced from the linked mortuary intake. The actual bug is one
+  screen over, in the **exact same shape**: creating a funeral case by linking an existing cash
+  service quotation. The quote's deceased name is fetched and shown on screen
+  (`"Deceased: **John Doe**"`) but the "Deceased Full Name" input directly below it starts blank
+  and is HTML `required` — blocking submission until retyped, even though the backend
+  (`quoteToCaseBlankFillPatch`, `server/routes.ts`) was already fully built to auto-fill it. The
+  client simply never called it. **Fix:** `lookupQuotation` in `client/src/pages/staff/funerals.tsx`
+  now merges the quote's blanks into form state immediately (mirroring the sibling
+  policy-claim path's `selectMember`, which already did this correctly).
+- **Five more instances of the same pattern found during the audit**, all fixed:
+  1. **Case→quote linking was one-directional.** `POST /api/quotations/:id/link-case` only
+     backfilled the *case* from the quote, never the reverse. Added
+     `caseToQuoteBlankFillPatch` (`server/routes.ts`) and a `blankFillPatch` param on
+     `storage.linkQuotationToCase` so linking a case-with-data to a blank-ish quote now fills the
+     quote too.
+  2. **Claims never referenced an existing funeral case.** `funeralCases.claimId` was already a
+     real FK — read by `storage.getClaimsByOrg`'s left-join and even whitelisted for case editing
+     — but nothing in the UI ever set it. Added a "Link Funeral Case (optional)" lookup to the
+     claim-creation dialog (`client/src/pages/staff/claims.tsx`); `POST /api/claims` now
+     blank-fills `deceasedName`/`deceasedRelationship`/`dateOfDeath`/`causeOfDeath` from the
+     linked case and sets `funeralCases.claimId` back onto the case afterward (409s if the case
+     already has a different claim linked, mirroring the existing quote-link 409).
+  3. **Funeral case "Informant" fields never pulled from the linked policy's beneficiary**, even
+     though the Policy Claim path already fetches the full policy record. `lookupPolicy`
+     (`funerals.tsx`) now blanks-only-fills `informantName`/`informantPhone` from
+     `policy.beneficiaryFirstName/LastName/Phone`.
+  4. **"Add Dependent to Policy" was a pure blank form**, unlike the policy-creation wizard's
+     dependent step, which already lets staff pick from the client's existing dependents. Now
+     shows the client's not-yet-linked dependents first (link with one click via
+     `POST /api/policies/:id/members`), with "Add a New Dependent Instead" as a fallback.
+  5. **Adding a dependent had no duplicate-record safety net** (client creation already has one,
+     by national ID). `POST /api/clients/:clientId/dependents` now soft-matches on
+     name + (national ID or date of birth) and returns the existing dependent (`code:
+     "EXISTING_DEPENDENT"`) instead of silently creating a near-duplicate; both callers
+     (`policies.tsx`) handle that response.
+  6. **Group batch receipts made staff hand-total N policies' premiums.** Each policy's premium
+     is already shown per-row; `groups.tsx` now auto-sums `totalAmount` as an editable default
+     (never overwrites a value staff typed themselves — only updates while the field still holds
+     the app's own last auto-sum).
+- **Files:** `client/src/pages/staff/funerals.tsx`, `client/src/pages/staff/claims.tsx`,
+  `client/src/pages/staff/policies.tsx`, `client/src/pages/staff/groups.tsx`, `server/routes.ts`,
+  `server/storage.ts`.
+- **Verification:** typecheck clean, full test suite green (202/202). Live-verified against real
+  Falakhe data: `getFuneralCasesByOrg`'s new `q` filter correctly resolves an exact case number,
+  `linkQuotationToCase`'s new signature is live, dependents lookup works.
+- **Lesson for next time:** the codebase already had the right pattern in two places
+  (`quoteToCaseBlankFillPatch`, `caseToIntakeBlankFillPatch`) before this fix — the bug wasn't
+  architectural, it was that new linked-record flows kept getting added without checking whether
+  a sibling flow already solved the same "pull from the linked record" problem. When a user
+  reports "the app makes me retype X," grep for the entity's blank-fill patch function (if one
+  exists) first — the fix is almost always "wire up the direction that was never called," not new
+  logic. When none exists yet, check whether a *sibling* creation/link path already solved the
+  identical case (e.g. `selectMember` for the claims path) before writing fresh merge logic.
+
 ## 2026-07-21 — "Delete Receipt" claimed success and permanent removal, but never deleted anything
 
 - **Symptom:** user deleted a duplicate receipt from a policy, got a green "Receipt deleted /

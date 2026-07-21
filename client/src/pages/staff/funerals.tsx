@@ -2408,7 +2408,18 @@ function CaseFormDialog({
       if (!exact) { setQuotLookupError("No quotation found with that number."); return; }
       if (exact.funeralCaseId) { setQuotLookupError("This quotation is already linked to another funeral case."); return; }
       setFoundQuot(exact);
-      setForm((f) => ({ ...f, quotationId: exact.id }));
+      // Blanks-only auto-fill from the quote, mirroring the server's own quoteToCaseBlankFillPatch
+      // (server/routes.ts) so the two never disagree — without this, "Deceased Full Name" stays
+      // empty-but-required and blocks submission even though the name is shown right above it.
+      const isBlank = (v: any) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+      setForm((f) => ({
+        ...f,
+        quotationId: exact.id,
+        deceasedName: isBlank(f.deceasedName) && !isBlank(exact.deceasedName) ? exact.deceasedName : f.deceasedName,
+        deceasedGender: isBlank(f.deceasedGender) && !isBlank(exact.deceasedSex) ? String(exact.deceasedSex).toLowerCase() : f.deceasedGender,
+        informantName: isBlank(f.informantName) && !isBlank(exact.informantFullNames) ? exact.informantFullNames : f.informantName,
+        informantPhone: isBlank(f.informantPhone) && !isBlank(exact.informantPhone) ? exact.informantPhone : f.informantPhone,
+      }));
     } catch {
       setQuotLookupError("Failed to look up quotation.");
     } finally {
@@ -2434,7 +2445,16 @@ function CaseFormDialog({
         return;
       }
       setFoundPolicy(exact);
-      setForm((f) => ({ ...f, policyId: exact.id }));
+      // Blanks-only auto-fill of the informant from the policy's beneficiary — usually the same
+      // person reporting the death, and already on file, so don't make staff retype it.
+      const isBlank = (v: any) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+      const beneficiaryName = [exact.beneficiaryFirstName, exact.beneficiaryLastName].filter((v) => !isBlank(v)).join(" ").trim();
+      setForm((f) => ({
+        ...f,
+        policyId: exact.id,
+        informantName: isBlank(f.informantName) && beneficiaryName ? beneficiaryName : f.informantName,
+        informantPhone: isBlank(f.informantPhone) && !isBlank(exact.beneficiaryPhone) ? exact.beneficiaryPhone : f.informantPhone,
+      }));
       // Fetch members
       const mRes = await fetch(`${getApiBase()}/api/policies/${exact.id}/members`, { credentials: "include" });
       if (mRes.ok) {

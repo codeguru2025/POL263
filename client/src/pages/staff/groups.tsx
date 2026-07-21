@@ -284,6 +284,20 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
   const mixedCurrencies = selectedCurrencies.length > 1;
   const receiptCurrency = selectedCurrencies[0] || "USD";
 
+  // Auto-sum the total from selected policies' own premiums (already shown per-row) instead of
+  // making staff add them up by hand — still a plain editable field, never overwrites a value
+  // staff typed themselves (only updates while the field still holds our own last auto-sum).
+  const selectedPremiumsSum = groupPolicies
+    .filter((p: any) => policyIds.has(p.id))
+    .reduce((sum: number, p: any) => sum + (parseFloat(p.premiumOverride ?? p.premiumAmount) || 0), 0);
+  const lastAutoAmountRef = useRef("");
+  useEffect(() => {
+    const computed = selectedPremiumsSum > 0 ? selectedPremiumsSum.toFixed(2) : "";
+    if (totalAmount === lastAutoAmountRef.current) setTotalAmount(computed);
+    lastAutoAmountRef.current = computed;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPremiumsSum]);
+
   const mutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/group-receipt", {
@@ -300,6 +314,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
     onSuccess: (data) => {
       setPolicyIds(new Set());
       setTotalAmount("");
+      lastAutoAmountRef.current = "";
       setReceiptDate(today);
       setNotes("");
       setSubmitterNote("");
@@ -350,7 +365,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
   useEffect(() => {
     if (!polling || !pollQuery.data) return;
     if (pollQuery.data.paid) {
-      setPolling(false); setPaynowIntentId(null); setPolicyIds(new Set()); setTotalAmount("");
+      setPolling(false); setPaynowIntentId(null); setPolicyIds(new Set()); setTotalAmount(""); lastAutoAmountRef.current = "";
       toast({ title: "Group PayNow payment received" });
       onSuccess([]);
     } else if (pollQuery.data.status === "failed") {
@@ -399,6 +414,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
             <div>
               <Label>Total amount</Label>
               <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total collected" />
+              <p className="text-[10px] text-muted-foreground mt-0.5">Auto-summed from the selected policies' premiums — edit if the amount actually collected differs.</p>
             </div>
             <div>
               <Label>Receipt date</Label>
