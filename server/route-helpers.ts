@@ -73,8 +73,25 @@ function monthlyToScheduleFactor(paymentSchedule: string): number {
  * version's own dependentMaxAge cutoff; the rest split into 21-65 / 66-84 / 85+.
  */
 function ageBandRate(pv: any, currency: string, age: number | null, childThresholdAge: number): number {
-  const pick = (usdField: string, zarField: string) =>
-    parseFloat(String((currency === "ZAR" ? pv[zarField] : pv[usdField]) ?? 0));
+  // A product version with age-band pricing configured only in one currency previously priced
+  // every extra member in the OTHER currency at a silent $0 — no error, no warning, just an
+  // unexplained revenue gap that only shows up as a shortfall weeks later. Deliberately NOT
+  // falling back to the other currency's raw number here — USD and ZAR rates aren't
+  // interchangeable 1:1 (no FX conversion happens in this function), so guessing a substitute
+  // value would trade an obviously-wrong $0 for a plausible-looking but still wrong charge,
+  // which is harder to notice, not easier. Surfacing it loudly is the fix; the real fix is an
+  // admin filling in the missing rate.
+  const pick = (usdField: string, zarField: string) => {
+    const field = currency === "ZAR" ? zarField : usdField;
+    const raw = pv[field];
+    if (raw == null || String(raw).trim() === "") {
+      structuredLog("warn", "Age-band rate unconfigured for this currency — pricing this member at $0", {
+        productVersionId: pv.id, currency, field,
+      });
+      return 0;
+    }
+    return parseFloat(String(raw));
+  };
   if (age !== null && age < childThresholdAge) {
     return pick("additionalMemberRateChildUsd", "additionalMemberRateChildZar");
   }
@@ -174,12 +191,35 @@ export async function computePolicyPremium(
       // Members are covered for free in the order they were added (policy holder first);
       // whichever were added last are the ones counted as "additional" once the included
       // count is exceeded.
-      const totalIncluded = includedAdults + includedChildren + includedExtended;
-      const ages: (number | null)[] = [null, ...((dependentDateOfBirths || []).map((dob) => ageAt(dob ?? null)))];
-      const extraCount = Math.max(0, ages.length - totalIncluded);
-      if (extraCount > 0) {
-        const chargeableAges = ages.slice(ages.length - extraCount);
-        const perMemberTotal = chargeableAges.reduce((sum: number, age) => sum + ageBandRate(pv, currency, age, childThresholdAge), 0);
+      //
+      // Adults and children are capped against their OWN limits separately — same reason the
+      // flat-rate branch two lines below does this: pooling everyone into one totalIncluded
+      // count let extra adults "borrow" unused child slots (e.g. maxAdults=2/maxChildren=4 with
+      // 6 adults and 0 children pooled to 6-6=0 chargeable, silently undercharging 4 adults'
+      // worth). maxExtendedMembers is the one genuinely shared bonus pool — it isn't tied to
+      // either cap, so it's applied afterward to whichever otherwise-chargeable member joined
+      // earliest, not pooled into the per-type caps themselves.
+      const members: { age: number | null; isChild: boolean; index: number }[] = [
+        { age: null, isChild: false, index: 0 },
+        ...((dependentDateOfBirths || []).map((dob, i) => {
+          const age = ageAt(dob ?? null);
+          return { age, isChild: age !== null && age < childThresholdAge, index: i + 1 };
+        })),
+      ];
+      const adultMembers = members.filter((m) => !m.isChild);
+      const childMembers = members.filter((m) => m.isChild);
+      const extraAdultCount = Math.max(0, adultMembers.length - includedAdults);
+      const extraChildCount = Math.max(0, childMembers.length - includedChildren);
+      let chargeable = [
+        ...adultMembers.slice(adultMembers.length - extraAdultCount),
+        ...childMembers.slice(childMembers.length - extraChildCount),
+      ];
+      if (includedExtended > 0 && chargeable.length > 0) {
+        // Bonus slots free up whichever otherwise-chargeable member joined earliest.
+        chargeable = chargeable.sort((a, b) => a.index - b.index).slice(includedExtended);
+      }
+      if (chargeable.length > 0) {
+        const perMemberTotal = chargeable.reduce((sum: number, m) => sum + ageBandRate(pv, currency, m.age, childThresholdAge), 0);
         dependantSurcharge = perMemberTotal * monthlyToScheduleFactor(paymentSchedule);
       }
     } else if (additionalRate > 0) {
@@ -202,9 +242,43 @@ export async function computePolicyPremium(
     }
   }
 
-  const totalRaw = base + addOnTotal + dependantSurcharge;
+  // Add-ons can legitimately carry a negative price as a discount, but a misconfigured value
+  // large enough to exceed the premium shouldn't zero out the ENTIRE policy — only the add-on
+  // portion is clamped (a discount can reduce the base premium to zero, never below), so a
+  // dependant surcharge is never silently wiped out by an unrelated bad add-on price.
+  const clampedAddOnTotal = Math.max(addOnTotal, -base);
+  const totalRaw = base + clampedAddOnTotal + dependantSurcharge;
   const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? totalRaw : 0;
   return total.toFixed(2);
+}
+
+/**
+ * The one correct way to answer "when does this policy's waiting period end." The
+ * `policies.waitingPeriodEndDate` DB column is NOT populated at policy creation — it stays NULL
+ * for almost every real policy and is only ever explicitly written by waiver approval or a
+ * manual staff override (see `PATCH /api/policies/:id`'s editable-fields allowlist). Everywhere
+ * else in the app that needs this value derives it on the fly from
+ * `inceptionDate/effectiveDate + productVersion.waitingPeriodDays` instead (see the single-policy
+ * GET route and the policy-members route) — this is that same derivation, extracted so it can be
+ * reused by anything that needs to actually ENFORCE the waiting period, not just display it.
+ * Returns null when there's no restriction to enforce (legacy-waived, or no inception date yet).
+ */
+export async function resolvePolicyWaitingPeriodEndDate(policy: any, orgId: string): Promise<string | null> {
+  if (!policy || policy.isLegacy) return null;
+  // An explicit stored value (waiver approval sets it to "today"; a manual override can set any
+  // date) always wins over the derived formula — same precedence used elsewhere.
+  if (policy.waitingPeriodEndDate) return String(policy.waitingPeriodEndDate);
+  const inception = policy.inceptionDate || policy.effectiveDate;
+  if (!inception) return null;
+  let waitingPeriodDays = 90;
+  if (policy.productVersionId) {
+    const pv = await storage.getProductVersion(policy.productVersionId, orgId);
+    if (pv?.waitingPeriodDays != null) waitingPeriodDays = Number(pv.waitingPeriodDays);
+  }
+  const d = new Date(inception);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + waitingPeriodDays);
+  return d.toISOString().split("T")[0];
 }
 
 // ─── Billing / arrears helpers ──────────────────────────────────────────────

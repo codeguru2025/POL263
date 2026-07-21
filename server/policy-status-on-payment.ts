@@ -156,16 +156,43 @@ export async function applyPolicyStatusForClearedPayment(
   }
 
   if (fromStatus === "lapsed") {
+    // "Restart waiting period on reinstatement" — configurable per product version, defaults to
+    // true (the anti-selection-safe default: someone who let a policy lapse and only pays again
+    // right before a claim shouldn't get instant cover back). This was a schema column with a
+    // full admin UI in both product forms and ZERO server code reading it — reinstatement always
+    // silently kept the policy's original, already-expired waiting period regardless of the
+    // setting. Wiring it up here: a fresh waiting period, anchored to today's reinstatement date,
+    // stored as an explicit override (the same mechanism waiver approval and manual staff edits
+    // already use — see resolvePolicyWaitingPeriodEndDate in route-helpers.ts for why this has
+    // to be an explicit stored value rather than left to be re-derived from the ORIGINAL
+    // inception date, which would just reproduce the already-expired one).
+    let newWaitingPeriodEndDate: string | null = null;
+    if (!policy.isLegacy && policy.productVersionId) {
+      const [pv] = await (db as any).select({
+        waitingPeriodDays: productVersions.waitingPeriodDays,
+        reinstatementNewWaitingPeriod: productVersions.reinstatementNewWaitingPeriod,
+      }).from(productVersions).where(eq(productVersions.id, policy.productVersionId)).limit(1);
+      if (pv && pv.reinstatementNewWaitingPeriod !== false) {
+        const waitingPeriodDays = pv.waitingPeriodDays ?? 90;
+        const d = new Date(today + "T00:00:00");
+        d.setDate(d.getDate() + waitingPeriodDays);
+        newWaitingPeriodEndDate = d.toISOString().split("T")[0];
+      }
+    }
+
     await db.update(policies).set({
       status: "active",
       graceEndDate: null,
+      ...(newWaitingPeriodEndDate ? { waitingPeriodEndDate: newWaitingPeriodEndDate } : {}),
       version: sql`version + 1`,
     }).where(eq(policies.id, policyId));
     await db.insert(policyStatusHistory).values({
       policyId,
       fromStatus: "lapsed",
       toStatus: "active",
-      reason: `Reinstatement — payment received${reasonSuffix}`,
+      reason: newWaitingPeriodEndDate
+        ? `Reinstatement — payment received${reasonSuffix} (new waiting period until ${newWaitingPeriodEndDate})`
+        : `Reinstatement — payment received${reasonSuffix}`,
       changedBy: changedBy ?? undefined,
     });
     return true;

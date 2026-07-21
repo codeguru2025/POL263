@@ -10,6 +10,70 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — Premium calculation correctness: age-band pooling, negative discounts, silent under-charging, and a dead reinstatement setting (Phase 3 of the systems audit)
+
+- **1. Age-band pricing let extra adults "borrow" unused child slots.** The flat-rate pricing
+  branch in `computePolicyPremium` (`server/route-helpers.ts`) already caps adults and children
+  against their own limits *separately*, with a comment explicitly warning why pooling them would
+  undercharge (a product with maxAdults=2/maxChildren=4 would let a 3rd adult ride free by
+  borrowing an unused child slot). The newer, more precise age-band branch pooled them anyway:
+  `totalIncluded = includedAdults + includedChildren + includedExtended`. A real scenario —
+  policy holder + 5 adult dependents (6 adults, 0 children) against a 2-adult/4-child product —
+  computed `6 - 6 = 0` chargeable extras instead of the correct 4. Fixed by building separate
+  ordered adult/child member lists, capping each against its own limit, and treating
+  `maxExtendedMembers` as what it's actually meant to be — a genuinely shared bonus pool applied
+  *after* the two caps (freeing whichever otherwise-chargeable member joined earliest), not pooled
+  into the caps themselves.
+- **2. A misconfigured negative add-on price could zero out the entire premium**, not just the
+  add-on. `total = base + addOnTotal + dependantSurcharge`, floored at 0 as one combined sum — a
+  large negative `addOnTotal` (intended as a discount) could wipe out a legitimate dependent
+  surcharge along with the base premium it was actually attached to. Fixed by clamping only the
+  add-on component (`Math.max(addOnTotal, -base)` — a discount can zero the base premium, never
+  push the total negative or erase an unrelated surcharge).
+- **3. An age-band rate left unconfigured for one currency silently priced every extra member at
+  $0** for policies in that currency — no error, no warning, just an unexplained revenue gap that
+  only shows up as a shortfall report weeks later. Fixed by logging a warning identifying the
+  exact product version and missing field whenever this happens, so it's visible in ops instead of
+  silent. Deliberately did NOT fall back to the other currency's raw number — USD and ZAR rates
+  aren't 1:1 interchangeable and no FX conversion happens in this function, so guessing a
+  substitute would trade an obviously-wrong $0 for a plausible-but-still-wrong charge, which is
+  *harder* to notice, not easier.
+- **4. "Restart waiting period on reinstatement" was a fully-built, admin-configurable setting
+  (two product admin forms) that zero server code ever read.** A lapsed policy that got
+  reinstated always kept its original, already-expired waiting period regardless of the toggle —
+  a real anti-selection control that silently did nothing. Root cause of the whole class: the
+  actual, enforceable waiting-period end date is NOT stored on `policies.waitingPeriodEndDate` at
+  issuance — that column stays NULL for almost every real policy and is only ever explicitly
+  written by waiver approval or a manual staff override. Everywhere else that needs this value
+  (the single-policy GET route, the policy-members route) derives it on the fly from
+  `inceptionDate + productVersion.waitingPeriodDays` instead. Extracted that derivation into a
+  shared `resolvePolicyWaitingPeriodEndDate` (`server/route-helpers.ts`) and used it in two places:
+  wired the reinstatement setting into `applyPolicyStatusForClearedPayment`'s lapsed→active branch
+  (`server/policy-status-on-payment.ts`) — a fresh waiting period anchored to the reinstatement
+  date, stored as an explicit override, when the setting is on (default) — and **corrected the
+  Phase 2 claim waiting-period check to use the same shared resolver**, since it was built reading
+  the raw (usually-empty) column directly and would have been a near-total no-op in production
+  despite passing its own tests, which only exercised the explicit-override path.
+- **Files:** `server/route-helpers.ts`, `server/policy-status-on-payment.ts`, `server/routes.ts`,
+  `tests/unit/premium-calculation.test.ts` (7 new tests — age-band separate-capping, the extended-
+  members bonus pool, currency-fallback safety, and negative add-on clamping; none of this had
+  test coverage before).
+- **Verification:** typecheck clean, full test suite green (209/209, up from 202 — added real
+  coverage for a pricing branch that had none). Live-verified against real Falakhe data: recomputed
+  a live policy's premium and it matched the stored value exactly; confirmed
+  `resolvePolicyWaitingPeriodEndDate` correctly returns null for legacy-waived and not-yet-active
+  policies and correctly derives a real date for ordinary active ones, all against real rows.
+- **Lesson for next time:** a settings column with a full admin UI and zero server-side readers is
+  not a rare occurrence in this codebase — this is the second one found this session
+  (`reinstatementNewWaitingPeriod` here, `fraudFlags` reused for the waiting-period flag in Phase
+  2). When investigating "is X actually enforced," grep for the field name across `server/` before
+  trusting that a UI control does anything. And when fixing a bug found by an audit, re-verify
+  fixes from an *earlier* phase of the same audit if they touch overlapping data — Phase 2's
+  waiting-period check and this phase's reinstatement fix both needed the same underlying value,
+  and Phase 2 had gotten how to derive it wrong in a way its own scenario-based reasoning didn't
+  surface until this phase's research went one level deeper into how the column is actually
+  populated.
+
 ## 2026-07-21 — Policies could sit "active" forever past due, and claims had zero waiting-period enforcement (Phase 2 of the systems audit)
 
 - **Context:** Phase 2 of the audit from the previous entry — the two "systemic absence" findings,

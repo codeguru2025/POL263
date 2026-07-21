@@ -15,7 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween } from "./route-helpers";
+import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
 import { todayInHarare, harareLocalToUtcDate } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, fxMapFor } from "./financial-statements";
@@ -5487,11 +5487,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * waitingPeriodEndDate and isLegacy were only ever displayed on screen, never enforced. Legacy
    * policies (isLegacy) have the waiting period waived by design, same exemption used everywhere
    * else waiting-period eligibility is computed (see computePolicyOutstanding's callers).
+   *
+   * Uses resolvePolicyWaitingPeriodEndDate (route-helpers.ts) rather than reading
+   * policy.waitingPeriodEndDate directly — that DB column is NULL for almost every real policy
+   * (only waiver-approval/manual-override ever write it); the real value has to be derived from
+   * inceptionDate + the product version's waitingPeriodDays, same as everywhere else in the app
+   * that displays this. Reading the raw column directly here would have made this check a no-op
+   * for the vast majority of policies.
    */
-  function checkWaitingPeriodViolation(policy: any, dateOfDeath: string | null | undefined): { violated: boolean; waitingPeriodEndDate: string | null } {
-    if (!policy || policy.isLegacy || !policy.waitingPeriodEndDate) return { violated: false, waitingPeriodEndDate: null };
+  async function checkWaitingPeriodViolation(policy: any, orgId: string, dateOfDeath: string | null | undefined): Promise<{ violated: boolean; waitingPeriodEndDate: string | null }> {
+    const waitingPeriodEndDate = await resolvePolicyWaitingPeriodEndDate(policy, orgId);
+    if (!waitingPeriodEndDate) return { violated: false, waitingPeriodEndDate: null };
     const asOf = dateOfDeath || new Date().toISOString().split("T")[0];
-    const waitingPeriodEndDate = String(policy.waitingPeriodEndDate);
     return { violated: asOf < waitingPeriodEndDate, waitingPeriodEndDate };
   }
 
@@ -5527,7 +5534,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let fraudFlags: Record<string, any> | undefined;
       if (req.body.policyId) {
         const claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
-        const wp = checkWaitingPeriodViolation(claimPolicy, caseFillPatch.dateOfDeath ?? req.body.dateOfDeath);
+        const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, caseFillPatch.dateOfDeath ?? req.body.dateOfDeath);
         if (wp.violated) {
           fraudFlags = { waitingPeriod: { violated: true, waitingPeriodEndDate: wp.waitingPeriodEndDate, checkedAt: new Date().toISOString() } };
         }
@@ -5631,7 +5638,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let waitingPeriodOverride: { waitingPeriodEndDate: string; reason: string } | undefined;
     if (toStatus === "approved" && claim.policyId) {
       const claimPolicy = await storage.getPolicy(claim.policyId, user.organizationId);
-      const wp = checkWaitingPeriodViolation(claimPolicy, claim.dateOfDeath);
+      const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, claim.dateOfDeath);
       if (wp.violated) {
         const overrideReason = typeof req.body.waitingPeriodOverrideReason === "string" ? req.body.waitingPeriodOverrideReason.trim() : "";
         if (!overrideReason) {
