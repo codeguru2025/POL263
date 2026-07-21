@@ -10,6 +10,38 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — "Delete Receipt" claimed success and permanent removal, but never deleted anything
+
+- **Symptom:** user deleted a duplicate receipt from a policy, got a green "Receipt deleted /
+  Receipt permanently removed" toast, but the receipt was still there afterward.
+- **Root cause:** `DELETE /api/receipts/:id` (`server/routes.ts:3565`) never deletes a receipt
+  directly — by design, it always creates a pending `delete_receipt` approval request
+  (maker-checker: a different staff member with `approve:requests` must approve it on the
+  Approvals page before the receipt and its linked payment transaction are actually removed) and
+  returns HTTP 202 with `"Deletion request submitted for management approval"`. The frontend
+  mutation (`client/src/pages/staff/policies.tsx`, `deleteReceiptMutation`) ignored that response
+  entirely and unconditionally showed "Receipt deleted — Receipt permanently removed" on any
+  2xx — so the UI actively lied about what had happened on literally every use of this button,
+  not just an edge case.
+- **Fix:** the confirm dialog now says "Request Receipt Deletion?" and explains it queues an
+  approval rather than deleting immediately; the button reads "Submit for Approval" instead of
+  "Delete"; the success toast reads "Deletion request submitted" with a pointer to the Approvals
+  page, instead of claiming permanent removal. The backend approval-resolution logic itself
+  (`POST /api/approvals/:id/resolve`, `requestType === "delete_receipt"`) was already correct —
+  it properly deletes the receipt + linked transaction and recomputes the policy's cover cycle
+  once actually approved; this was purely a frontend messaging bug, nothing server-side changed.
+- **Files:** `client/src/pages/staff/policies.tsx`.
+- **Verification:** typecheck clean. Not independently re-verified live (pure copy/messaging
+  change, no logic touched) — if you have a real pending deletion request, confirm it now shows
+  correctly as "submitted" rather than "deleted", and that it still requires a second person to
+  approve it in Approvals before the receipt disappears.
+- **Lesson for next time:** when a mutation's `onSuccess` toast is generic copy that doesn't
+  branch on the actual response body/status code, check whether the endpoint always does what
+  the toast claims — an async/approval-queued write returning 2xx is easy to mistake for "the
+  thing happened" if the frontend never reads the response. Grep the mutation's `onSuccess` for
+  hardcoded success copy whenever a "delete succeeded but nothing changed" report comes in before
+  assuming the delete logic itself is broken.
+
 ## 2026-07-21 — Receipt "Issued By" printed blank/dash: two bugs, one config gap and one widespread lookup bug
 
 - **Symptom:** user printed a payment receipt and the "Issued By" line was missing entirely

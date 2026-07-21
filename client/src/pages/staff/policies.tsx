@@ -1246,10 +1246,12 @@ export default function StaffPolicies() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy?.id, "receipts"] });
       setConfirmDeleteReceipt(null);
-      toast({ title: "Receipt deleted", description: "Receipt permanently removed." });
+      // The backend never deletes immediately — it always queues an approval request
+      // (maker-checker) — so the toast must reflect that, not claim the receipt is gone.
+      toast({ title: "Deletion request submitted", description: "The receipt is not removed yet — it needs approval from another staff member on the Approvals page." });
     },
     onError: (err: Error) => {
-      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+      toast({ title: "Delete request failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -3703,9 +3705,11 @@ export default function StaffPolicies() {
         <AlertDialog open={!!confirmDeleteReceipt} onOpenChange={(open) => { if (!open) setConfirmDeleteReceipt(null); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete Receipt?</AlertDialogTitle>
+              <AlertDialogTitle>Request Receipt Deletion?</AlertDialogTitle>
               <AlertDialogDescription>
-                This will permanently delete this receipt. This action cannot be undone.
+                This submits a deletion request — it does not delete the receipt immediately. A
+                different staff member with approval rights must approve it (you can't approve
+                your own request) before the receipt and its linked payment are actually removed.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -3716,7 +3720,7 @@ export default function StaffPolicies() {
                 disabled={deleteReceiptMutation.isPending}
               >
                 {deleteReceiptMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Delete
+                Submit for Approval
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
