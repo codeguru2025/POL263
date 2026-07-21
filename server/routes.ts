@@ -4896,7 +4896,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/group-receipt", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     try {
-    const { groupId, policyIds, totalAmount, currency, receiptDate, submitterNote, notes } = req.body;
+    const { groupId, policyIds, totalAmount, currency, receiptDate, submitterNote, notes, idempotencyKey } = req.body;
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
     }
@@ -4915,6 +4915,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
     // Stable lock order avoids deadlocks when multiple group receipts overlap.
     const sortedPolicies = [...valid].sort((a, b) => a.id.localeCompare(b.id));
+
+    // Idempotency: this route posts one transaction per policy in a single call, so a double
+    // submission of the same batch (double-click, retry after a timeout) would otherwise
+    // duplicate a transaction for every policy at once. Each transaction's own key is derived
+    // from the batch key + policy id; checking just the first policy's key is enough to detect
+    // a repeat of this exact batch, since the whole loop commits atomically or not at all.
+    if (!isBackdated && idempotencyKey) {
+      const firstKey = `group-${idempotencyKey}-${sortedPolicies[0].id}`;
+      const existing = await storage.getPaymentTransactionByIdempotencyKey(firstKey, user.organizationId);
+      if (existing) {
+        return res.status(200).json({ receipted: 0, results: [], pendingApproval: false, groupRef: (existing.reference as string) || groupRef, duplicate: true });
+      }
+    }
+
     await withOrgTransaction(user.organizationId, async (txDb) => {
       await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
       const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
@@ -4954,6 +4968,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             paymentMethod: "cash",
             status: "cleared",
             reference: groupRef,
+            idempotencyKey: idempotencyKey ? `group-${idempotencyKey}-${policy.id}` : undefined,
             receivedAt: new Date(),
             postedDate: today,
             valueDate: today,
@@ -4998,6 +5013,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     return res.status(201).json({ receipted: results.length, results, pendingApproval: isBackdated, groupRef });
     } catch (err: any) {
+      const dupConstraint = String((err as { constraint?: string })?.constraint || "");
+      const dupDetail = String((err as { detail?: string })?.detail || "");
+      const isIdempotencyDup = err?.code === "23505" && (dupConstraint.toLowerCase().includes("idempotency") || dupDetail.includes("idempotency_key"));
+      if (isIdempotencyDup) {
+        return res.status(409).json({
+          code: "duplicate_payment_request",
+          message: "This group receipt was already submitted. It was not processed twice. Check payments or receipts for the existing entries before resubmitting.",
+        });
+      }
       structuredLog("error", "POST /api/group-receipt failed", { error: err?.message || String(err), stack: err?.stack });
       return res.status(500).json({ message: safeError(err) });
     }
@@ -5055,6 +5079,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const recordedBy = actorRow?.id ?? null;
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
 
+        // Re-check under lock — the pre-transaction "is this still pending" read above is not
+        // atomic with the write below, so two concurrent "Approve" clicks could otherwise both
+        // pass it and both post a payment. Lock the receipt row and re-read its status before
+        // doing anything else; a second approver loses this race and gets a clean 409 instead of
+        // a silently duplicated transaction.
+        const lockResult = await txDb.execute(sql`SELECT approval_status FROM payment_receipts WHERE id = ${receiptId} FOR UPDATE`);
+        const lockedReceipt = (lockResult as unknown as { rows?: { approval_status: string }[] }).rows?.[0];
+        if (!lockedReceipt || lockedReceipt.approval_status !== "pending") {
+          throw new Error("RECEIPT_ALREADY_RESOLVED");
+        }
+
         // Advance the cover period the number of months this receipt was for — previously this
         // route recorded the payment but never called advancePolicyCycle, so an approved
         // override never actually extended the policy's paid-through date (see BUGFIX-LOG.md).
@@ -5080,6 +5115,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           paymentMethod: "cash",
           status: "cleared",
           reference: `APPROVED-${receipt.receiptNumber}`,
+          // Deterministic per receipt — a receipt can only ever be approved once, so this also
+          // gives the unique idempotencyKey column a real second line of defense against the
+          // same race, independent of the row lock above.
+          idempotencyKey: `approve-receipt-${receiptId}`,
           receivedAt: new Date(),
           postedDate: effectiveDate,
           valueDate: effectiveDate,
@@ -5116,6 +5155,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
       return res.json({ message: "Receipt approved and applied." });
     } catch (err: any) {
+      if (err?.message === "RECEIPT_ALREADY_RESOLVED") {
+        return res.status(409).json({ message: "This receipt was already approved or rejected — refresh and check its current status." });
+      }
       structuredLog("error", "POST /api/payment-receipts/:id/approve failed", { error: err?.message, receiptId });
       return res.status(500).json({ message: safeError(err) });
     }
@@ -5140,14 +5182,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(403).json({ message: "You cannot reject a receipt you issued yourself." });
       }
       const resolvedRejectUserId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
-      await tdb.update(paymentReceipts)
+      // Guard against racing the approve route above — without this, a reject that lands after a
+      // concurrent approve already posted money would silently flip an approved (money-moved)
+      // receipt's status back to "rejected", leaving the ledger and the receipt's own status
+      // disagreeing with each other.
+      const [rejected] = await tdb.update(paymentReceipts)
         .set({
           approvalStatus: "rejected",
           approvedByUserId: resolvedRejectUserId ?? undefined,
           approvedAt: new Date(),
           approvalNote: String(approvalNote).trim(),
         } as any)
-        .where(eq(paymentReceipts.id, receiptId));
+        .where(and(eq(paymentReceipts.id, receiptId), eq(paymentReceipts.approvalStatus, "pending")))
+        .returning();
+      if (!rejected) {
+        return res.status(409).json({ message: "This receipt was already approved or rejected — refresh and check its current status." });
+      }
       await auditLog(req, "REJECT_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "rejected", approvalNote: String(approvalNote).trim() });
       return res.json({ message: "Receipt rejected." });
     } catch (err: any) {
@@ -7705,13 +7755,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
     const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : new Date().toISOString().split("T")[0];
-    const alreadyPaid = Number(existing.amountPaid ?? 0);
-    const remaining = Number(existing.amount) - alreadyPaid;
-    if (amount > remaining + 0.001) {
-      return res.status(400).json({ message: `Payment of ${existing.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}` });
-    }
-    const newAmountPaid = alreadyPaid + amount;
-    const fullyPaid = newAmountPaid >= Number(existing.amount) - 0.001;
     let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
     try {
       payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
@@ -7723,7 +7766,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // a crash between the two calls leaves either an orphaned disbursement (money recorded as
       // spent with no matching requisition status) or a "paid" requisition with no disbursement
       // backing it (exactly the drift a historical backfill script had to patch for Falakhe).
-      const { disbursement, updated } = await withOrgTransaction(user.organizationId, async (txDb) => {
+      const { disbursement, updated, fullyPaid } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        // Lock the requisition row and re-read its current amountPaid before validating the
+        // "within outstanding balance" check — otherwise two concurrent partial payments both
+        // read the same stale balance, both pass the check, and the second UPDATE clobbers the
+        // first (over-disbursement + lost update). Re-checking under the lock closes that race.
+        await txDb.execute(sql`SELECT id FROM requisitions WHERE id = ${reqId} FOR UPDATE`);
+        const [locked] = await txDb.select().from(requisitions).where(eq(requisitions.id, reqId)).limit(1);
+        if (!locked) throw new Error("REQUISITION_NOT_FOUND");
+        const alreadyPaid = Number(locked.amountPaid ?? 0);
+        const remaining = Number(locked.amount) - alreadyPaid;
+        if (amount > remaining + 0.001) {
+          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}`);
+        }
+        const newAmountPaid = alreadyPaid + amount;
+        const fullyPaid = newAmountPaid >= Number(locked.amount) - 0.001;
         const voucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
           organizationId: user.organizationId,
@@ -7758,7 +7815,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const [updated] = await txDb.update(requisitions).set(patch)
           .where(and(eq(requisitions.id, reqId), eq(requisitions.organizationId, user.organizationId)))
           .returning();
-        return { disbursement, updated };
+        return { disbursement, updated, fullyPaid };
       });
       await auditLog(req, fullyPaid ? "PAY_REQUISITION" : "PARTIAL_PAY_REQUISITION", "Requisition", existing.id, existing, updated);
       if (fullyPaid) {
@@ -7771,6 +7828,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       return res.status(201).json({ disbursement, requisition: updated, fullyPaid });
     } catch (err: any) {
+      if (err?.message === "REQUISITION_NOT_FOUND") {
+        return res.status(404).json({ message: "Requisition not found" });
+      }
+      if (typeof err?.message === "string" && err.message.startsWith("PAYMENT_EXCEEDS_BALANCE:")) {
+        return res.status(400).json({ message: err.message.slice("PAYMENT_EXCEEDS_BALANCE:".length) });
+      }
       structuredLog("error", "POST /api/requisitions/:id/payments failed", { error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
@@ -7785,14 +7848,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
     const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : new Date().toISOString().split("T")[0];
-    const alreadyPaid = Number(existing.amountPaid ?? 0);
-    const totalAmt = Number(existing.amount);
-    const remaining = totalAmt - alreadyPaid;
-    if (amount > remaining + 0.001) {
-      return res.status(400).json({ message: `Payment of ${existing.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}` });
-    }
-    const newAmountPaid = alreadyPaid + amount;
-    const fullyPaid = newAmountPaid >= totalAmt - 0.001;
     let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
     try {
       payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
@@ -7803,7 +7858,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Same atomicity concern as the requisitions payment endpoint above — disbursement and
       // expenditure status/amountPaid must commit or roll back together.
       const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-      const { disbursement, updatedExp } = await withOrgTransaction(user.organizationId, async (txDb) => {
+      const { disbursement, updatedExp, fullyPaid } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        // Lock + re-read under the lock — same over-disbursement race as requisitions above.
+        await txDb.execute(sql`SELECT id FROM expenditures WHERE id = ${expId} FOR UPDATE`);
+        const [locked] = await txDb.select().from(expenditures).where(eq(expenditures.id, expId)).limit(1);
+        if (!locked) throw new Error("EXPENDITURE_NOT_FOUND");
+        const alreadyPaid = Number(locked.amountPaid ?? 0);
+        const totalAmt = Number(locked.amount);
+        const remaining = totalAmt - alreadyPaid;
+        if (amount > remaining + 0.001) {
+          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}`);
+        }
+        const newAmountPaid = alreadyPaid + amount;
+        const fullyPaid = newAmountPaid >= totalAmt - 0.001;
         const expVoucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
           organizationId: user.organizationId,
@@ -7837,11 +7904,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const [updatedExp] = await txDb.update(expenditures).set(patch)
           .where(and(eq(expenditures.id, expId), eq(expenditures.organizationId, user.organizationId)))
           .returning();
-        return { disbursement, updatedExp };
+        return { disbursement, updatedExp, fullyPaid };
       });
       await auditLog(req, fullyPaid ? "PAY_EXPENDITURE" : "PARTIAL_PAY_EXPENDITURE", "Expenditure", existing.id, existing, updatedExp);
       return res.status(201).json({ disbursement, expenditure: updatedExp, fullyPaid });
     } catch (err: any) {
+      if (err?.message === "EXPENDITURE_NOT_FOUND") {
+        return res.status(404).json({ message: "Expenditure not found" });
+      }
+      if (typeof err?.message === "string" && err.message.startsWith("PAYMENT_EXCEEDS_BALANCE:")) {
+        return res.status(400).json({ message: err.message.slice("PAYMENT_EXCEEDS_BALANCE:".length) });
+      }
       structuredLog("error", "POST /api/expenditures/:id/payments failed", { error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }

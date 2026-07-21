@@ -258,6 +258,9 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
   const [submitterNote, setSubmitterNote] = useState("");
   const [polling, setPolling] = useState(false);
   const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
+  // Stable per submission attempt — collapses a double-click or retried submit onto one batch
+  // instead of posting a duplicate transaction for every selected policy.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const today = new Date().toISOString().slice(0, 10);
   const isBackdated = receiptDate < today;
@@ -308,6 +311,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
         receiptDate,
         notes: notes.trim() || undefined,
         submitterNote: isBackdated ? submitterNote.trim() : undefined,
+        idempotencyKey,
       });
       return res.json() as Promise<{ receipted: number; results: any[]; pendingApproval?: boolean; groupRef?: string }>;
     },
@@ -318,6 +322,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
       setReceiptDate(today);
       setNotes("");
       setSubmitterNote("");
+      setIdempotencyKey(crypto.randomUUID());
       if (data.pendingApproval) {
         toast({ title: "Submitted for approval", description: "Backdated receipt queued for manager review." });
       } else {

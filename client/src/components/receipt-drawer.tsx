@@ -142,6 +142,9 @@ function PayStep({
   const [method, setMethod] = useState<PayMethod>("cash");
   const [phone, setPhone] = useState(policy.clientPhone || "");
   const [reference, setReference] = useState("");
+  // Stable for the lifetime of this step (one policy, one attempt) so a retried/double-submitted
+  // request collapses onto the same payment instead of posting twice.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
 
   const isMobile = MOBILE_METHODS.includes(method);
   const clientName = [policy.clientFirstName, policy.clientLastName].filter(Boolean).join(" ") || "—";
@@ -161,6 +164,7 @@ function PayStep({
           paymentMethod: method,
           status: "cleared",
           reference: reference || undefined,
+          idempotencyKey,
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || "Payment failed");

@@ -122,6 +122,7 @@ export default function StaffPolicies() {
   const [transitionTarget, setTransitionTarget] = useState("");
   const [transitionReason, setTransitionReason] = useState("");
   const [showInPolicyReceiptDialog, setShowInPolicyReceiptDialog] = useState(false);
+  const [inPolicyReceiptIdempotencyKey, setInPolicyReceiptIdempotencyKey] = useState(() => crypto.randomUUID());
   const [inPolicyReceiptMethod, setInPolicyReceiptMethod] = useState("cash");
   const [inPolicyReceiptCurrency, setInPolicyReceiptCurrency] = useState("USD");
   const [inPolicyReceiptRef, setInPolicyReceiptRef] = useState("");
@@ -1293,6 +1294,7 @@ export default function StaffPolicies() {
     setPnNeedsOtp(false); setPnOtpRef(""); setPnOtp(""); setPnPhase("select");
     setInPolicyReceiptMethod("cash"); setInPolicyReceiptRef(""); setInPolicyReceiptNotes(""); setInPolicyReceiptMonths(1);
     setInPolicyReceiptAmountOverride(null); setInPolicyReceiptSubmitterNote("");
+    setInPolicyReceiptIdempotencyKey(crypto.randomUUID());
   };
 
   const inPolicyReceiptMutation = useMutation({
@@ -1560,6 +1562,10 @@ export default function StaffPolicies() {
                       setInPolicyReceiptCurrency(displayPolicy.currency || "USD");
                       setInPolicyReceiptRef(principalPhone);
                       setInPolicyReceiptNotes("");
+                      // Fresh per attempt — a stable key for this one dialog session so a
+                      // double-click or a retried request collapses onto the same payment
+                      // instead of posting twice (server enforces this via a unique constraint).
+                      setInPolicyReceiptIdempotencyKey(crypto.randomUUID());
                       setShowInPolicyReceiptDialog(true);
                     }}
                     data-testid="btn-receipt-policy"
@@ -3526,6 +3532,7 @@ export default function StaffPolicies() {
                         reference: inPolicyReceiptRef || undefined,
                         notes: inPolicyReceiptNotes || undefined,
                         submitterNote: inPolicyReceiptSubmitterNote.trim() || undefined,
+                        idempotencyKey: inPolicyReceiptIdempotencyKey,
                       });
                     } else if (paynowMethods.includes(inPolicyReceiptMethod)) {
                       if (!inPolicyReceiptRef || inPolicyReceiptRef.trim().length < 5) {

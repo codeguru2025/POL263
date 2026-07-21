@@ -328,6 +328,9 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   const [submitterNote, setSubmitterNote] = useState("");
   const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
+  // Stable per submission attempt — collapses a double-click or retried submit onto one batch
+  // instead of posting a duplicate transaction for every selected policy.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const { data: groups = [] } = useQuery<any[]>({ queryKey: ["/api/groups"] });
   const { data: paynowConfig } = useQuery<{ enabled: boolean }>({ queryKey: ["/api/paynow-config"], retry: false });
   const { data: groupPolicies = [] } = useQuery<any[]>({
@@ -351,6 +354,7 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
         receiptDate,
         notes: notes.trim() || undefined,
         submitterNote: submitterNote.trim() || undefined,
+        idempotencyKey,
       });
       return res.json() as Promise<{ receipted: number; pendingApproval?: boolean }>;
     },
@@ -360,6 +364,7 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
       setReceiptDate(today);
       setNotes("");
       setSubmitterNote("");
+      setIdempotencyKey(crypto.randomUUID());
       if (data.pendingApproval) {
         toast({ title: "Receipt submitted for approval", description: "A backdated receipt has been queued for manager approval before being applied." });
       } else {
@@ -1487,6 +1492,7 @@ export default function StaffFinance() {
     setLocation(value === (commissionOnly ? "commissions" : "payments") ? "/staff/finance" : `/staff/finance?tab=${value}`);
   };
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(() => crypto.randomUUID());
   const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
   const [policySearch, setPolicySearch] = useState("");
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
@@ -2006,6 +2012,9 @@ export default function StaffFinance() {
     setPaynowOtpRef("");
     setPaynowOtp("");
     setPaynowPhase("select");
+    // Fresh per attempt — collapses a double-click or retried request onto one payment
+    // instead of posting it twice (server enforces this via a unique constraint).
+    setPaymentIdempotencyKey(crypto.randomUUID());
   };
 
   // All of these are keyed by currency — platform_receivables holds USD, ZAR, and ZIG
@@ -2220,6 +2229,7 @@ export default function StaffFinance() {
         status: "cleared",
         reference: paymentReference || undefined,
         notes: paymentNotes || undefined,
+        idempotencyKey: paymentIdempotencyKey,
       });
     } else {
       if (!paymentReference || paymentReference.trim().length < 5) {

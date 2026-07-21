@@ -67,6 +67,12 @@ export default function ClientPayments() {
   }, [returnedFromPaynow]);
 
   const [selectedPolicyId, setSelectedPolicyId] = useState(policyIdParam || "");
+  // Stable per policy selection — must NOT regenerate on every mutate() call, or a retry after a
+  // stalled/failed request (network timeout, closing and reopening the Paynow prompt) creates a
+  // brand-new payment intent instead of resuming the same one, risking a double charge if the
+  // client ends up authorizing more than one. Changing the selected policy starts a new attempt.
+  const [intentAttemptKey, setIntentAttemptKey] = useState(() => crypto.randomUUID());
+  useEffect(() => { setIntentAttemptKey(crypto.randomUUID()); }, [selectedPolicyId]);
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("ecocash");
   const [payerPhone, setPayerPhone] = useState("");
@@ -94,7 +100,7 @@ export default function ClientPayments() {
 
   const createIntentMutation = useMutation({
     mutationFn: async () => {
-      const idempotencyKey = `client-${me?.client?.id}-${selectedPolicyId}-${Date.now()}`;
+      const idempotencyKey = `client-${me?.client?.id}-${selectedPolicyId}-${intentAttemptKey}`;
       const res = await apiRequest("POST", "/api/client-auth/payment-intents", {
         policyId: selectedPolicyId,
         amount: amount || (policies?.find((p) => p.id === selectedPolicyId)?.premiumAmount ?? "0"),
@@ -216,6 +222,9 @@ export default function ClientPayments() {
       qc.invalidateQueries({ queryKey: ["/api/client-auth/policies"] });
       qc.invalidateQueries({ queryKey: ["/api/client-auth/receipts"] });
       toast({ title: "Payment successful", description: "You can download your receipt below." });
+      // Start a fresh attempt key so a follow-up payment for the same policy (e.g. paying again
+      // right away) gets its own intent instead of resolving back to this now-completed one.
+      setIntentAttemptKey(crypto.randomUUID());
     }
     if (d.status === "failed") setPolling(false);
   }, [paymentStatusData, qc, toast]);

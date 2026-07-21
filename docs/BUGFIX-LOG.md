@@ -10,6 +10,71 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — Six critical money-duplication races closed (Phase 1 of a full systems audit)
+
+- **Context:** a senior-architect-style audit (data integrity, N+1/performance, DoS resilience,
+  core business-logic edge cases, UX) found 7 critical, 11 high, and 17 medium findings. This
+  entry covers the 7 critical ones — all money-duplication or lost-update races with no database
+  backstop, and one missing constraint. None required new architecture: every fix mirrors a
+  pattern already proven correct elsewhere in the codebase.
+- **1. Receipt approval could be double-applied.** `POST /api/payment-receipts/:id/approve`
+  checked `approvalStatus === "pending"` before the transaction, but never re-checked it *inside*
+  the transaction under a lock — two concurrent "Approve" clicks both passed the check and both
+  posted a full payment transaction, double-advancing the policy's cover cycle. Fixed by locking
+  and re-reading the receipt row (`SELECT ... FOR UPDATE`) as the first thing inside the
+  transaction, throwing a `RECEIPT_ALREADY_RESOLVED` error mapped to a clean 409 if it lost the
+  race, plus a deterministic `idempotencyKey` (`approve-receipt-${receiptId}`) on the transaction
+  insert as a second line of defense. The sibling `/reject` route had the same gap in the other
+  direction — a reject landing after a concurrent approve already posted money would silently
+  flip the receipt's status back to "rejected" with no error to either caller. Fixed by making
+  the reject `UPDATE` conditional on `approvalStatus = 'pending'` and checking the returned row.
+- **2/3. The two main staff receipting routes, `POST /api/payments` and `POST /api/group-receipt`,
+  never checked an idempotency key at all** — the unique DB column existed and `POST /api/payments`
+  even had 23505-to-409 error mapping already written, but no frontend caller ever sent a key, so
+  none of it ever engaged. A double-click, a retried request after a stalled network call, or two
+  staff members receipting the same policy at once posted duplicate money. Fixed by generating a
+  stable per-attempt key client-side (a `crypto.randomUUID()` seeded once per dialog-open/attempt,
+  regenerated only on close or success — never on every mutation call) in all five call sites
+  (`policies.tsx`, `finance.tsx` ×2, `receipt-drawer.tsx`, `groups.tsx`) and wiring the same
+  `group-${key}-${policyId}` composite key + pre-check + 409 mapping into `/api/group-receipt`,
+  which had no idempotency machinery at all.
+- **4. The client portal's own idempotency key defeated itself** — it embedded `Date.now()`, so
+  it was different on every single call by construction, meaning a retry after a stalled Paynow
+  request could never be recognized as the same attempt and could double-charge a client. Fixed
+  by replacing the timestamp with a key that's stable for the lifetime of one payment attempt
+  (regenerated only when the selected policy changes or a payment completes), in
+  `client/src/pages/client/payments.tsx`.
+- **5. Requisition and expenditure payouts could exceed their approved amount.** Both routes read
+  `amountPaid`/remaining balance before opening a transaction, then wrote unconditionally with no
+  lock and no optimistic check — two concurrent partial payments both read the same stale balance,
+  both passed the "within remaining balance" check, and the second `UPDATE` silently overwrote the
+  first's running total (lost update + over-disbursement). Fixed by moving the balance read and
+  validation *inside* the transaction, after `SELECT ... FOR UPDATE` on the requisition/expenditure
+  row — mirrors the atomic-check pattern `credit-apply.ts` already used correctly for credit
+  balances.
+- **6. Linking a claim to a funeral case had no database constraint behind it** — two concurrent
+  claim submissions for the same case both passed the "not already linked" pre-check, and the
+  later `updateFuneralCase` call silently won, orphaning the other claim's case link with no error
+  to either caller. Added `fc_org_claim_partial_idx` (`CREATE UNIQUE INDEX ... WHERE claim_id IS
+  NOT NULL`) on `funeral_cases`, the exact pattern `fq_org_case_partial_idx` already uses correctly
+  for quotation-to-case linking — `migrations/0079_funeral_case_claim_unique.sql`.
+- **Files:** `server/routes.ts`, `client/src/pages/staff/policies.tsx`,
+  `client/src/pages/staff/finance.tsx`, `client/src/pages/staff/groups.tsx`,
+  `client/src/components/receipt-drawer.tsx`, `client/src/pages/client/payments.tsx`,
+  `migrations/0079_funeral_case_claim_unique.sql`.
+- **Verification:** typecheck clean, full test suite green (202/202). Live-verified against real
+  Falakhe data inside a transaction that was always rolled back (no test data persisted): a second
+  insert with a duplicate `idempotencyKey` was confirmed rejected by the real unique constraint
+  (`23505 payment_transactions_idempotency_key_unique`), and the new `fc_org_claim_partial_idx`
+  was confirmed present and correctly defined via `pg_indexes`. Migration applied to main +
+  Falakhe + Supabase backup.
+- **Lesson for next time:** an idempotency-key column and its error-mapping can be fully correct
+  and still do nothing, if no caller ever populates the column — always check the frontend actually
+  *sends* the key, not just that the backend *would* handle one. And a `SELECT` before
+  `withOrgTransaction` is not the same as a `SELECT ... FOR UPDATE` inside it — the gap between
+  those two lines is exactly where every race in this batch lived; the fix is almost always "move
+  the read inside the transaction and lock the row," not new logic.
+
 ## 2026-07-21 — Six instances of re-asking for data the app already had, across funeral cases/claims/quotations/policies
 
 - **Symptom reported:** recording a mortuary dispatch on a case that already had a payment
