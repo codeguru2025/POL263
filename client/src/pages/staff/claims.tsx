@@ -65,6 +65,7 @@ export default function StaffClaims() {
   const [selectedClaim, setSelectedClaim] = useState<ClaimWithFuneralCase | null>(null);
   const [transitionTarget, setTransitionTarget] = useState("");
   const [transitionReason, setTransitionReason] = useState("");
+  const [waitingPeriodOverrideReason, setWaitingPeriodOverrideReason] = useState("");
 
   const [newClaim, setNewClaim] = useState({ ...BLANK_CLAIM });
 
@@ -167,8 +168,8 @@ export default function StaffClaims() {
   });
 
   const transitionMutation = useMutation({
-    mutationFn: async ({ id, toStatus, reason }: { id: string; toStatus: string; reason: string }) => {
-      const res = await apiRequest("POST", `/api/claims/${id}/transition`, { toStatus, reason });
+    mutationFn: async ({ id, toStatus, reason, waitingPeriodOverrideReason }: { id: string; toStatus: string; reason: string; waitingPeriodOverrideReason?: string }) => {
+      const res = await apiRequest("POST", `/api/claims/${id}/transition`, { toStatus, reason, waitingPeriodOverrideReason: waitingPeriodOverrideReason || undefined });
       return res.json();
     },
     onSuccess: () => {
@@ -177,6 +178,7 @@ export default function StaffClaims() {
       setSelectedClaim(null);
       setTransitionTarget("");
       setTransitionReason("");
+      setWaitingPeriodOverrideReason("");
       toast({ title: "Status updated", description: "Claim status has been transitioned." });
     },
     onError: (err: Error) => {
@@ -199,6 +201,7 @@ export default function StaffClaims() {
     const nextStates = CLAIM_TRANSITIONS[claim.status] || [];
     setTransitionTarget(nextStates[0] || "");
     setTransitionReason("");
+    setWaitingPeriodOverrideReason("");
     setShowTransitionDialog(true);
   };
 
@@ -234,7 +237,7 @@ export default function StaffClaims() {
 
   const handleTransition = () => {
     if (!selectedClaim || !transitionTarget) return;
-    transitionMutation.mutate({ id: selectedClaim.id, toStatus: transitionTarget, reason: transitionReason });
+    transitionMutation.mutate({ id: selectedClaim.id, toStatus: transitionTarget, reason: transitionReason, waitingPeriodOverrideReason });
   };
 
   const formatDate = (d: string | null | undefined) => {
@@ -688,6 +691,17 @@ export default function StaffClaims() {
                   data-testid="input-transition-reason"
                 />
               </div>
+              {transitionTarget === "approved" && (
+                <div className="space-y-2">
+                  <Label>Waiting Period Override (only if this death occurred before the policy's waiting period ended)</Label>
+                  <Textarea
+                    value={waitingPeriodOverrideReason}
+                    onChange={(e) => setWaitingPeriodOverrideReason(e.target.value)}
+                    placeholder="Leave blank unless approval is rejected for a waiting-period violation — then explain why it should be approved anyway…"
+                    data-testid="input-waiting-period-override"
+                  />
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>

@@ -299,6 +299,10 @@ if (enableCsrf) {
       // billingSettings.moduleEnforcementEnabled — so this can run safely before that's on.
       import("./tenant-billing-sweep").then(({ startTenantBillingSweepScheduler }) => startTenantBillingSweepScheduler()).catch(() => {});
 
+      // Start the daily policy lapse sweep (active→grace→lapsed) — nothing else in the app
+      // ever moves a policy this direction on its own.
+      import("./policy-lapse-sweep").then(({ startPolicyLapseSweepScheduler }) => startPolicyLapseSweepScheduler()).catch(() => {});
+
       // Ensure all orgs have every role defined in ROLE_PERMISSION_MAP (e.g. newly added roles like "driver")
       import("./seed").then(async ({ seedPermissions, seedOrgRoles }) => {
         const { storage } = await import("./storage");
@@ -331,6 +335,7 @@ if (enableCsrf) {
     httpServer.close();
     import("./backup-sync").then(({ stopBackupScheduler }) => stopBackupScheduler()).catch(() => {});
     import("./tenant-billing-sweep").then(({ stopTenantBillingSweepScheduler }) => stopTenantBillingSweepScheduler()).catch(() => {});
+    import("./policy-lapse-sweep").then(({ stopPolicyLapseSweepScheduler }) => stopPolicyLapseSweepScheduler()).catch(() => {});
     await drainActiveJobs(30_000);
     structuredLog("info", "Graceful shutdown complete");
     process.exit(0);

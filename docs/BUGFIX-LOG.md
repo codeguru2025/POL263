@@ -10,6 +10,58 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — Policies could sit "active" forever past due, and claims had zero waiting-period enforcement (Phase 2 of the systems audit)
+
+- **Context:** Phase 2 of the audit from the previous entry — the two "systemic absence" findings,
+  where the gap wasn't a bug in existing logic but logic that never existed at all.
+- **1. Nothing ever moved a policy from active → grace → lapsed on its own.** Every place that
+  changes policy status is reactive — a payment clears and `applyPolicyStatusForClearedPayment`
+  moves the policy forward. Nothing moved it the other way: a policy that simply stopped being
+  paid stayed `"active"` indefinitely, with an expired grace period and mounting arrears, until a
+  staff member happened to notice and manually transition it. Every downstream process that
+  filters on status — commission clawback triggers, lapse-rate dashboards, portfolio health —
+  never saw it. Added `server/policy-lapse-sweep.ts`, a daily sweep (04:00 UTC, staggered from
+  the existing tenant-billing sweep at 06:00 and backup at 22:00) that finds active policies past
+  their due date and moves them to `grace` (computing a fresh `graceEndDate` from the product
+  version's grace period, same formula `advancePolicyCycle` already uses), and grace policies
+  past their `graceEndDate` and moves them to `lapsed` (recording clawback and notifying the
+  client, same side effects the manual transition route already produces). A severely-neglected
+  policy that's already past both due date and grace deadline moves through both states in one
+  pass, since `active → lapsed` isn't a valid direct transition — it always goes through `grace`
+  first, immediately. Same self-rescheduling/advisory-lock shape as `tenant-billing-sweep.ts`, plus
+  a per-org manual-trigger route (`POST /api/admin/run-policy-lapse-sweep`) for ops testing.
+- **2. Claim submission and approval never checked the policy's waiting period at all** —
+  `waitingPeriodEndDate` and the legacy-waiver flag were only ever displayed on screen, never read
+  by any route. A claim submitted and approved before the waiting period ended was fully payable,
+  with no system backstop — a direct anti-selection/fraud exposure. Fixed in two layers: claim
+  *submission* now computes the violation and stamps it (non-blocking) onto the claim's existing,
+  previously-unused `fraudFlags` column, so it's visible to whoever reviews it — every claim
+  already requires manager approval, so this doesn't need to block creation. The *approval*
+  transition (`POST /api/claims/:id/transition`, `toStatus === "approved"`) is where the hard stop
+  lives, since that's the moment the payout actually gets committed: it now requires an explicit
+  `waitingPeriodOverrideReason` to proceed if the claim's date of death is before the policy's
+  waiting period ends and the policy isn't legacy-waived — same "let it through with a logged note,
+  never silently" pattern already used for premium overrides in `POST /api/payments`. The override
+  reason gets recorded on both `fraudFlags` and the claim's status-history reason, so it's visible
+  through the app's existing history view with no new UI needed beyond the override input itself
+  (added to the transition dialog in `claims.tsx`, shown only when transitioning to "approved").
+- **Files:** `server/policy-lapse-sweep.ts` (new), `server/routes.ts`, `server/index.ts`,
+  `client/src/pages/staff/claims.tsx`.
+- **Verification:** typecheck clean, full test suite green (202/202). Live-verified against real
+  Falakhe data: a read-only dry run confirmed zero policies currently match the overdue criteria
+  across all 7 orgs (so activating this sweep causes no surprise mass-reclassification on first
+  run), then the actual sweep function was run for real against Falakhe (safe no-op, confirmed —
+  `{ orgsScanned: 1, movedToGrace: 0, movedToLapsed: 0, errors: [] }`), and real policy rows
+  confirmed both the `isLegacy` short-circuit and null-`waitingPeriodEndDate` handling in the new
+  waiting-period check behave correctly.
+- **Lesson for next time:** when a report says "X is never enforced," check whether the underlying
+  data the check would need (`fraudFlags`, `waitingPeriodEndDate`, `isLegacy`) already exists on
+  the schema and is just unused — it usually is, which turns "design a new mechanism" into "wire
+  up what's already there." And before activating any automated status-changing sweep for the
+  first time, always run a read-only dry count against real production data first — a systemic gap
+  that's been open a while can mean a large one-time batch of changes on first activation, and
+  that's worth knowing about before it happens, not after.
+
 ## 2026-07-21 — Six critical money-duplication races closed (Phase 1 of a full systems audit)
 
 - **Context:** a senior-architect-style audit (data integrity, N+1/performance, DoS resilience,

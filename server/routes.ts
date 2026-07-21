@@ -5481,6 +5481,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(claim);
   });
 
+  /**
+   * A death claim submitted or approved before the policy's own waiting period ends is a direct
+   * anti-selection/fraud exposure — until now nothing in the app checked this at all;
+   * waitingPeriodEndDate and isLegacy were only ever displayed on screen, never enforced. Legacy
+   * policies (isLegacy) have the waiting period waived by design, same exemption used everywhere
+   * else waiting-period eligibility is computed (see computePolicyOutstanding's callers).
+   */
+  function checkWaitingPeriodViolation(policy: any, dateOfDeath: string | null | undefined): { violated: boolean; waitingPeriodEndDate: string | null } {
+    if (!policy || policy.isLegacy || !policy.waitingPeriodEndDate) return { violated: false, waitingPeriodEndDate: null };
+    const asOf = dateOfDeath || new Date().toISOString().split("T")[0];
+    const waitingPeriodEndDate = String(policy.waitingPeriodEndDate);
+    return { violated: asOf < waitingPeriodEndDate, waitingPeriodEndDate };
+  }
+
   app.post("/api/claims", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
     const user = req.user as any;
     try {
@@ -5506,6 +5520,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (isBlank(req.body.causeOfDeath) && !isBlank(linkedCase.causeOfDeath)) caseFillPatch.causeOfDeath = linkedCase.causeOfDeath;
         }
       }
+      // Flag (don't block) a claim submitted before the policy's waiting period ends — every
+      // claim already requires manager approval below, so this is surfaced for that reviewer
+      // rather than rejected outright here. The hard stop is at the approve transition instead
+      // (POST /api/claims/:id/transition), which is the actual moment money gets committed.
+      let fraudFlags: Record<string, any> | undefined;
+      if (req.body.policyId) {
+        const claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
+        const wp = checkWaitingPeriodViolation(claimPolicy, caseFillPatch.dateOfDeath ?? req.body.dateOfDeath);
+        if (wp.violated) {
+          fraudFlags = { waitingPeriod: { violated: true, waitingPeriodEndDate: wp.waitingPeriodEndDate, checkedAt: new Date().toISOString() } };
+        }
+      }
       const parsed = insertClaimSchema.parse({
         ...req.body,
         ...caseFillPatch,
@@ -5513,6 +5539,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         claimNumber: "PENDING",
         status: "submitted",
         submittedBy: effectiveUserId,
+        ...(fraudFlags ? { fraudFlags } : {}),
       });
       const claim = await withOrgTransaction(user.organizationId, async (txDb) => {
         // Everything below must use txDb directly, not storage.* helpers — those open their
@@ -5596,10 +5623,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    // Hard stop — this is the moment the payout actually gets committed, so a waiting-period
+    // violation is enforced here rather than only flagged at submission. Requires an explicit,
+    // logged override reason to proceed (same "let it through with a note, but never silently"
+    // pattern as premium overrides in POST /api/payments), not a permission check — the intent
+    // is to force a deliberate decision, not to gate who's allowed to make it.
+    let waitingPeriodOverride: { waitingPeriodEndDate: string; reason: string } | undefined;
+    if (toStatus === "approved" && claim.policyId) {
+      const claimPolicy = await storage.getPolicy(claim.policyId, user.organizationId);
+      const wp = checkWaitingPeriodViolation(claimPolicy, claim.dateOfDeath);
+      if (wp.violated) {
+        const overrideReason = typeof req.body.waitingPeriodOverrideReason === "string" ? req.body.waitingPeriodOverrideReason.trim() : "";
+        if (!overrideReason) {
+          return res.status(400).json({
+            code: "waiting_period_violation",
+            message: `This claim's date of death is before the policy's waiting period ends (${wp.waitingPeriodEndDate}). Provide waitingPeriodOverrideReason to approve anyway.`,
+            waitingPeriodEndDate: wp.waitingPeriodEndDate,
+          });
+        }
+        waitingPeriodOverride = { waitingPeriodEndDate: wp.waitingPeriodEndDate!, reason: overrideReason };
+      }
+    }
+
     const before = { ...claim };
     const updateData: any = { status: toStatus };
     if (toStatus === "verified") updateData.verifiedBy = effectiveUserId;
     if (toStatus === "approved") updateData.approvedBy = effectiveUserId;
+    if (waitingPeriodOverride) {
+      updateData.fraudFlags = {
+        ...(claim.fraudFlags as any || {}),
+        waitingPeriod: { violated: true, waitingPeriodEndDate: waitingPeriodOverride.waitingPeriodEndDate, overriddenBy: effectiveUserId, overrideReason: waitingPeriodOverride.reason, overriddenAt: new Date().toISOString() },
+      };
+    }
 
     // Status update + history row must commit together — a crash between the two would leave
     // an approved/rejected claim with no record of who/when/why in its status history.
@@ -5607,8 +5662,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [row] = await txDb.update(claims).set(updateData)
         .where(and(eq(claims.id, claim.id), eq(claims.organizationId, claim.organizationId)))
         .returning();
+      const historyReason = waitingPeriodOverride
+        ? `${reason ? `${reason} — ` : ""}Waiting period override: ${waitingPeriodOverride.reason}`
+        : reason;
       await txDb.insert(claimStatusHistory).values({
-        claimId: claim.id, fromStatus: claim.status, toStatus, reason, changedBy: effectiveUserId,
+        claimId: claim.id, fromStatus: claim.status, toStatus, reason: historyReason, changedBy: effectiveUserId,
       });
       return row;
     });
@@ -7161,6 +7219,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const result = await runPaymentAutomationForOrg(user.organizationId);
     await auditLog(req, "RUN_PAYMENT_AUTOMATION", "PaymentAutomation", undefined, null, result);
+    return res.json(result);
+  });
+
+  // Manual trigger for the daily active→grace→lapsed sweep (server/policy-lapse-sweep.ts) —
+  // scoped to this org only, for ops visibility/testing without touching other tenants.
+  app.post("/api/admin/run-policy-lapse-sweep", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const { runPolicyLapseSweep } = await import("./policy-lapse-sweep");
+    const result = await runPolicyLapseSweep("manual", user.organizationId);
+    await auditLog(req, "RUN_POLICY_LAPSE_SWEEP", "Policy", undefined, null, result);
     return res.json(result);
   });
 
