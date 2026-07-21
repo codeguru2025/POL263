@@ -111,7 +111,7 @@ export async function streamDailyScheduleToResponse(
   const vehiclesMap: Record<string, { registrationNumber: string | null; make: string | null; model: string | null }> = {};
   await Promise.all([
     ...Array.from(userIdSet).map(async (id) => {
-      const u = await storage.getUser(id);
+      const u = await storage.getUser(id, orgId);
       if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone ?? null, email: u.email ?? null };
     }),
     ...Array.from(vehicleIdSet).map(async (id) => {

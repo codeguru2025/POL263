@@ -64,7 +64,7 @@ export async function streamDriverChecklistPDF(
   const uniqueIds = Array.from(new Set(userIds));
   const usersMap: Record<string, { displayName: string | null; phone: string | null; email: string | null; address: string | null; nextOfKinName: string | null; nextOfKinPhone: string | null }> = {};
   await Promise.all(uniqueIds.map(async (id) => {
-    const u = await storage.getUser(id);
+    const u = await storage.getUser(id, orgId);
     if (u) usersMap[id] = {
       displayName: u.displayName,
       phone: u.phone ?? null,

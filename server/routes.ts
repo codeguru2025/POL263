@@ -5248,7 +5248,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const result = await runApplyCreditBalances(user.organizationId);
+    const result = await runApplyCreditBalances(user.organizationId, user.id);
     return res.json(result);
   });
 

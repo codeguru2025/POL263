@@ -94,7 +94,7 @@ async function loadReceiptContext(receipt: any, orgId: string) {
   }
   let issuedByName: string | null = null;
   if (receipt.issuedByUserId) {
-    const u = await storage.getUser(receipt.issuedByUserId);
+    const u = await storage.getUser(receipt.issuedByUserId, orgId);
     if (u) issuedByName = u.displayName || u.email || null;
   }
   let advertImageData: Buffer | null = null;

@@ -70,7 +70,7 @@ export async function streamFuneralDocumentToResponse(
   const usersMap: Record<string, StaffUser> = {};
   await Promise.all(
     uniqueUserIds.map(async (id) => {
-      const u = await storage.getUser(id);
+      const u = await storage.getUser(id, orgId);
       if (u) usersMap[id] = {
         displayName: u.displayName,
         phone: u.phone ?? null,

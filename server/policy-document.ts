@@ -192,7 +192,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
   // ── Agent ──────────────────────────────────────────────────────
   const agentId = (policy as any).agentId;
   if (agentId) {
-    const agent = await storage.getUser(agentId);
+    const agent = await storage.getUser(agentId, orgId);
     if (agent) {
       if (y > 680) { doc.addPage(); y = 50; }
       y = drawSectionHeader(doc, "Servicing Agent", y);

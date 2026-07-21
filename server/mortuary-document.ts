@@ -121,7 +121,7 @@ export async function streamMortuaryReceiptPDF(
   const usersMap: Record<string, { displayName: string | null; phone: string | null }> = {};
   const userIds = [intake.removalDriverId, intake.receivedByUserId].filter((id): id is string => !!id);
   await Promise.all(Array.from(new Set(userIds)).map(async (id) => {
-    const u = await storage.getUser(id);
+    const u = await storage.getUser(id, orgId);
     if (u) usersMap[id] = { displayName: u.displayName, phone: u.phone };
   }));
   const removalDriver = intake.removalDriverId ? usersMap[intake.removalDriverId] : null;
@@ -210,7 +210,7 @@ export async function streamMortuaryDispatchPDF(
 
   const dispatch = await storage.getMortuaryDispatch(intakeId, orgId);
 
-  const dispatchedByUser = dispatch?.dispatchedByUserId ? await storage.getUser(dispatch.dispatchedByUserId) : null;
+  const dispatchedByUser = dispatch?.dispatchedByUserId ? await storage.getUser(dispatch.dispatchedByUserId, orgId) : null;
 
   const filename = `Mortuary-Dispatch-${intake.intakeNumber}.pdf`;
   if (opts?.attachment) {
@@ -686,11 +686,18 @@ export async function streamFuneralCaseWorksheetPDF(
   const org = await storage.getOrganization(orgId);
   if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
 
-  const userIds = [fc.removalDriverId, fc.burialDriverId, fc.attendingAgentId, fc.assignedTo]
+  // Mortuary register entries for the deceased linked to this case — most recent first,
+  // shown alongside the case's own logistics/identification data (they're recorded
+  // separately: this table is the receipt-into-mortuary/storage record, funeralCases
+  // holds the case-level logistics).
+  const mortuaryIntakesForCase = await storage.getMortuaryIntakesByOrg(orgId, { funeralCaseId: fc.id });
+  const primaryIntake = mortuaryIntakesForCase[0];
+
+  const userIds = [fc.removalDriverId, fc.burialDriverId, fc.attendingAgentId, fc.assignedTo, primaryIntake?.receivedByUserId]
     .filter((id): id is string => !!id);
   const usersMap: Record<string, string> = {};
   await Promise.all(Array.from(new Set(userIds)).map(async (id) => {
-    const u = await storage.getUser(id);
+    const u = await storage.getUser(id, orgId);
     if (u) usersMap[id] = u.displayName || u.email;
   }));
   const vehicleIds = [fc.removalVehicleId, fc.burialVehicleId].filter((id): id is string => !!id);
@@ -755,13 +762,31 @@ export async function streamFuneralCaseWorksheetPDF(
   y = infoRow(doc, "Identifier ID Number:", fmt(fc.bodyIdentifierIdNumber), y);
   y += 8;
 
-  y = sectionHeader(doc, "6. References", y);
+  y = sectionHeader(doc, "6. Mortuary Register", y);
+  if (primaryIntake) {
+    y = infoRow(doc, "Intake No:", fmt(primaryIntake.intakeNumber), y);
+    y = infoRow(doc, "Status:", primaryIntake.status === "in_storage" ? "In Storage" : "Dispatched", y);
+    y = infoRow(doc, "Service Scope:", fmt(primaryIntake.serviceScope?.replace(/_/g, " ")), y);
+    y = infoRow(doc, "Received By:", primaryIntake.receivedByUserId ? usersMap[primaryIntake.receivedByUserId] ?? "—" : "—", y);
+    y = infoRow(doc, "Received At:", fmtDateTime(primaryIntake.receivedAt), y);
+    if (primaryIntake.storageCategory) {
+      y = infoRow(doc, "Storage Category:", fmt(primaryIntake.storageCategory), y);
+      y = infoRow(doc, "Storage Fee:", primaryIntake.storageFeeAmount
+        ? `${primaryIntake.storageFeeCurrency} ${parseFloat(String(primaryIntake.storageFeeAmount)).toFixed(2)} (${fmt(primaryIntake.storageFeeStatus?.replace(/_/g, " "))})`
+        : "—", y);
+    }
+  } else {
+    y = infoRow(doc, "Mortuary Register:", "No intake recorded for this case", y);
+  }
+  y += 8;
+
+  y = sectionHeader(doc, "7. References", y);
   if ((fc as any).policyId) y = infoRow(doc, "Policy #:", fmt((fc as any).policyId), y);
   if ((fc as any).claimId) y = infoRow(doc, "Claim #:", fmt((fc as any).claimId), y);
   if (fc.notes) y = infoRow(doc, "Notes:", fmt(fc.notes), y);
   y += 16;
 
-  y = sectionHeader(doc, "7. Sign-Off", y);
+  y = sectionHeader(doc, "8. Sign-Off", y);
   y += 8;
   const half = COL / 2 - 8;
   sigBlock(doc, "Case Officer Signature", MARGIN, half, y);
@@ -841,7 +866,7 @@ export async function streamFuneralTaskSheetPDF(
   const userIds = tasks.map((t) => t.assignedTo).filter((id): id is string => !!id);
   const usersMap: Record<string, string> = {};
   await Promise.all(Array.from(new Set(userIds)).map(async (id) => {
-    const u = await storage.getUser(id);
+    const u = await storage.getUser(id, orgId);
     if (u) usersMap[id] = u.displayName || u.email;
   }));
 
@@ -1096,8 +1121,21 @@ export async function streamServiceReceiptPDF(
   const [fc, quote, issuedByUser] = await Promise.all([
     receipt.funeralCaseId ? storage.getFuneralCase(receipt.funeralCaseId, orgId) : Promise.resolve(undefined),
     receipt.quotationId ? storage.getQuotationById(receipt.quotationId, orgId) : Promise.resolve(undefined),
-    receipt.issuedByUserId ? storage.getUser(receipt.issuedByUserId) : Promise.resolve(undefined),
+    receipt.issuedByUserId ? storage.getUser(receipt.issuedByUserId, orgId) : Promise.resolve(undefined),
   ]);
+
+  // Running balance owing against the quotation — sum every issued service receipt for the
+  // same case (same lookup quotation-pdf.ts uses for its own "Payment History" balance), not
+  // just this one payment, so a part-payment receipt shows what's still outstanding overall.
+  let quoteOutstanding: number | null = null;
+  if (quote && (quote.grandTotal || quote.total)) {
+    const caseIdForBalance = receipt.funeralCaseId || quote.funeralCaseId;
+    const caseReceipts = caseIdForBalance ? await storage.getServiceReceipts(orgId, { funeralCaseId: caseIdForBalance }) : [];
+    const relevantReceipts = caseReceipts.filter((r) => r.quotationId === quote.id);
+    const totalPaid = relevantReceipts.filter((r) => r.status === "issued").reduce((sum, r) => sum + parseFloat(String(r.amount)), 0);
+    const grandTotalNum = parseFloat(String(quote.grandTotal || quote.total || "0"));
+    quoteOutstanding = Math.max(0, grandTotalNum - totalPaid);
+  }
 
   const deceasedName = fc?.deceasedName || quote?.deceasedName || "—";
   const informantName = fc?.informantName || quote?.informantFullNames || "—";
@@ -1129,6 +1167,32 @@ export async function streamServiceReceiptPDF(
   if (quote?.quotationNumber) y = infoRow(doc, "Quotation No:", fmt(quote.quotationNumber), y);
   y += 8;
 
+  if (quote && quote.items.length > 0) {
+    y = sectionHeader(doc, "Quoted Services", y);
+    const c0 = MARGIN + 8, c1 = MARGIN + 280, c2 = MARGIN + 350, c3 = MARGIN + COL - 8;
+    doc.rect(MARGIN, y, COL, 16).fill(C_LIGHT_BG);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(C_TEXT);
+    doc.text("Description", c0, y + 3, { width: 260 });
+    doc.text("Qty", c1, y + 3, { width: 60, align: "center" });
+    doc.text("Unit Price", c2, y + 3, { width: 70, align: "right" });
+    doc.text("Amount", c3 - 60, y + 3, { width: 60, align: "right" });
+    y += 18;
+    doc.font("Helvetica").fontSize(8).fillColor(C_TEXT);
+    let rowIdx = 0;
+    for (const item of quote.items) {
+      if (rowIdx % 2 === 0) doc.rect(MARGIN, y, COL, 14).fill("#f8fafc");
+      doc.fillColor(C_TEXT);
+      doc.text(item.description || "—", c0, y + 2, { width: 260 });
+      doc.text(fmt(item.quantity), c1, y + 2, { width: 60, align: "center" });
+      doc.text(`${quote.currency} ${parseFloat(String(item.unitPrice)).toFixed(2)}`, c2, y + 2, { width: 70, align: "right" });
+      doc.text(`${quote.currency} ${parseFloat(String(item.lineTotal)).toFixed(2)}`, c3 - 60, y + 2, { width: 60, align: "right" });
+      y += 14;
+      rowIdx++;
+    }
+    doc.moveTo(MARGIN, y).lineTo(MARGIN + COL, y).lineWidth(0.5).strokeColor(C_BORDER).stroke();
+    y += 10;
+  }
+
   y = sectionHeader(doc, "Payment Details", y);
   y += 6;
   const amtStr = `${receipt.currency} ${parseFloat(String(receipt.amount)).toFixed(2)}`;
@@ -1143,6 +1207,13 @@ export async function streamServiceReceiptPDF(
   y = infoRow(doc, "Issued By:", issuedByUser ? fmt(issuedByUser.displayName || issuedByUser.email) : "—", y);
   if (quote?.grandTotal) {
     y = infoRow(doc, "Quotation Total:", `${quote.currency} ${parseFloat(String(quote.grandTotal)).toFixed(2)}`, y);
+  }
+  if (quoteOutstanding != null) {
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_MUTED).text("Balance Owing:", MARGIN + 8, y, { width: 160 });
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(quoteOutstanding > 0 ? "#dc2626" : C_PRIMARY)
+      .text(`${quote!.currency} ${quoteOutstanding.toFixed(2)}`, MARGIN + 168, y, { width: COL - 176 });
+    doc.fillColor(C_TEXT);
+    y += 14;
   }
   if (receipt.notes) y = infoRow(doc, "Notes:", fmt(receipt.notes), y);
   y += 16;

@@ -57,7 +57,7 @@ export async function streamQuotationPDF(
   const issuerIds = Array.from(new Set(receipts.map(r => r.issuedByUserId).filter((id): id is string => !!id)));
   const issuersMap: Record<string, string> = {};
   await Promise.all(issuerIds.map(async (id) => {
-    const u = await storage.getUser(id);
+    const u = await storage.getUser(id, orgId);
     if (u) issuersMap[id] = u.displayName || u.email || id;
   }));
 

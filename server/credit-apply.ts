@@ -7,12 +7,12 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { computePlatformFee } from "./platform-fee";
-import { withOrgTransaction } from "./tenant-db";
+import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from "./tenant-db";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
-import { paymentTransactions, paymentReceipts, policyCreditBalances } from "@shared/schema";
+import { paymentTransactions, paymentReceipts, policyCreditBalances, users } from "@shared/schema";
 import { sql, eq, and } from "drizzle-orm";
 
-export async function runApplyCreditBalances(orgId: string): Promise<{ applied: number; errors: string[] }> {
+export async function runApplyCreditBalances(orgId: string, actorUserId: string | null = null): Promise<{ applied: number; errors: string[] }> {
   const rows = await storage.getPolicyCreditBalancesWithPositiveBalance(orgId);
   const today = new Date().toISOString().split("T")[0];
   const errors: string[] = [];
@@ -31,7 +31,7 @@ export async function runApplyCreditBalances(orgId: string): Promise<{ applied: 
     if (!isDue && !isPendingOrGrace) continue;
 
     try {
-      const result = await applyCreditBalanceToPolicy(orgId, row.policyId);
+      const result = await applyCreditBalanceToPolicy(orgId, row.policyId, actorUserId);
       if (result.ok) applied++;
       else if (result.error) errors.push(result.error);
     } catch (e) {
@@ -44,7 +44,8 @@ export async function runApplyCreditBalances(orgId: string): Promise<{ applied: 
 
 export async function applyCreditBalanceToPolicy(
   orgId: string,
-  policyId: string
+  policyId: string,
+  actorUserId: string | null = null
 ): Promise<{ ok: boolean; error?: string }> {
   const policy = await storage.getPolicy(policyId, orgId);
   if (!policy) return { ok: false, error: "Policy not found" };
@@ -60,6 +61,16 @@ export async function applyCreditBalanceToPolicy(
 
   try {
     receiptNumberForNotify = await withOrgTransaction(orgId, async (txDb) => {
+      // Resolve the acting user's tenant-DB id the same way every other receipt-creating
+      // path does (routes.ts) — mirroring is skipped if this email already exists under a
+      // different id in the tenant DB, so re-check existence rather than trusting actorUserId blindly.
+      let recordedByForLedger: string | null = null;
+      if (actorUserId) {
+        await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, orgId, actorUserId);
+        const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, actorUserId)).limit(1);
+        recordedByForLedger = actorRow?.id ?? null;
+      }
+
       // Atomically deduct credit balance; fails if balance is insufficient
       const deductResult = await txDb.execute(sql`
         UPDATE policy_credit_balances
@@ -91,6 +102,7 @@ export async function applyCreditBalanceToPolicy(
         postedDate: today,
         valueDate: today,
         notes: "Auto-applied from policy credit balance",
+        recordedBy: recordedByForLedger ?? undefined,
       }).returning();
 
       // Create receipt
@@ -104,11 +116,12 @@ export async function applyCreditBalanceToPolicy(
         currency,
         paymentChannel: "credit_balance",
         status: "issued",
+        issuedByUserId: recordedByForLedger ?? undefined,
         metadataJson: { transactionId: tx.id, source: "credit_balance_auto_apply" },
       });
 
       // Update policy status within the same transaction
-      await applyPolicyStatusForClearedPayment(txDb, policyId, policy, today, " (credit balance)", undefined);
+      await applyPolicyStatusForClearedPayment(txDb, policyId, policy, today, " (credit balance)", recordedByForLedger);
       return receiptNumber;
     });
   } catch (err: any) {

@@ -10,6 +10,53 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-21 — Receipt "Issued By" printed blank/dash: two bugs, one config gap and one widespread lookup bug
+
+- **Symptom:** user printed a payment receipt and the "Issued By" line was missing entirely
+  (shows as a dash in the surrounding layout, since the row is simply omitted when the name
+  can't be resolved).
+- **Root cause 1 (the actual trigger here):** `applyCreditBalanceToPolicy`/`runApplyCreditBalances`
+  (`server/credit-apply.ts`) — the "Apply Credit Balances" staff action — never accepted or
+  recorded an acting user at all. Every other receipt-creating code path (`POST /api/payments`,
+  cash receipts, month-end batch, group receipts, PayNow apply) resolves the acting user's
+  tenant-DB id and stamps it onto both `paymentTransactions.recordedBy` and
+  `paymentReceipts.issuedByUserId`; credit-balance auto-apply set neither, so any receipt
+  generated that way had `issued_by_user_id = NULL` in the database — not a lookup failure,
+  a genuine attribution gap (also missing from the audit log and commission ledger).
+- **Root cause 2 (a separate, much wider bug found while fixing #1):** `storage.getUser(id)` is
+  `getUser(id, organizationId?)` — when `organizationId` is omitted it *only* queries the
+  central registry DB, skipping the tenant DB entirely. For isolated-tenant orgs (e.g. Falakhe,
+  which has its own dedicated database) this silently fails to resolve a user that exists in the
+  tenant DB but not (or under a different id) in the central registry. Confirmed live: the same
+  user id resolved to "NOT FOUND" via `storage.getUser(id)` and to the correct display name via
+  `storage.getUser(id, orgId)`, against a real Falakhe receipt. This exact unscoped-call pattern
+  was duplicated across **every PDF-generation file that resolves a staff name**:
+  `receipt-pdf.ts`, `quotation-pdf.ts`, `mortuary-document.ts` (four separate call sites),
+  `driver-checklist-pdf.ts`, `funeral-document.ts`, `policy-document.ts`, `schedule-pdf.ts` — all
+  silently degrade to a blank name for isolated-tenant orgs instead of erroring, which is exactly
+  why this went unnoticed until someone actually looked at a printed document.
+- **Fix:** `credit-apply.ts` now takes an `actorUserId` parameter threaded from
+  `POST /api/apply-credit-balances` (`req.user.id`), resolves it inside the transaction the same
+  way `routes.ts` already does elsewhere (`ensureRegistryUserMirroredToOrgDataDbInTx` + a
+  tenant-DB `users` select, falling back to `null` if the mirror was skipped), and sets
+  `recordedBy`/`issuedByUserId`/the `applyPolicyStatusForClearedPayment` actor from it. The
+  automation-tick call site (`server/routes.ts`, the timer-driven sweep) intentionally still
+  passes no actor — that one is correctly system-driven. Every `storage.getUser(id)` call site
+  listed above now passes `orgId` as the second argument.
+- **Files:** `server/credit-apply.ts`, `server/routes.ts` (`POST /api/apply-credit-balances`),
+  `server/receipt-pdf.ts`, `server/quotation-pdf.ts`, `server/mortuary-document.ts`,
+  `server/driver-checklist-pdf.ts`, `server/funeral-document.ts`, `server/policy-document.ts`,
+  `server/schedule-pdf.ts`.
+- **Verification:** typecheck clean, full test suite green (202/202). Live-verified against real
+  Falakhe data: streamed the service-receipt, quotation, and funeral-case-worksheet PDFs
+  end-to-end with no errors, and directly confirmed the orgId-scoped `getUser` fix resolves a
+  real receipt's issuer name that the unscoped call returned "NOT FOUND" for.
+- **Lesson for next time:** `storage.getUser(id)` has an *optional* `organizationId` — every
+  call site that omits it is a latent isolated-tenant bug that won't show up against the shared
+  DB in testing, only against a dedicated tenant DB like Falakhe's. When touching any function
+  that resolves a user id to a display name for a document/PDF, grep `storage.getUser(` in the
+  file and confirm `orgId` is actually passed, don't assume it is.
+
 ## 2026-07-16 — Self-approval (maker-checker) was silently unenforced in 3 of 6 approval flows
 
 - **Symptom:** none reported directly — surfaced by an audit requested after the user asked
