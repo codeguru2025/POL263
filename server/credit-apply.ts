@@ -6,6 +6,7 @@
 
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
+import { computePlatformFee } from "./platform-fee";
 import { withOrgTransaction } from "./tenant-db";
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { paymentTransactions, paymentReceipts, policyCreditBalances } from "@shared/schema";
@@ -118,14 +119,16 @@ export async function applyCreditBalanceToPolicy(
     return { ok: false, error: err?.message || "Failed to apply credit balance" };
   }
 
-  // 2.5% platform fee on cleared credit-balance premium
-  storage.createPlatformReceivable({
-    organizationId: orgId,
-    amount: (premium * 0.025).toFixed(2),
-    currency,
-    description: `2.5% on credit-balance receipt ${receiptNumberForNotify ?? "—"} (policy ${policy.policyNumber})`,
-    isSettled: false,
-  }).catch((err: Error) => structuredLog("error", "Platform fee failed (credit-balance)", { policyId, error: err.message }));
+  // Platform fee on cleared credit-balance premium
+  computePlatformFee(orgId, premium).then((feeAmount) =>
+    storage.createPlatformReceivable({
+      organizationId: orgId,
+      amount: feeAmount,
+      currency,
+      description: `Platform fee on credit-balance receipt ${receiptNumberForNotify ?? "—"} (policy ${policy.policyNumber})`,
+      isSettled: false,
+    })
+  ).catch((err: Error) => structuredLog("error", "Platform fee failed (credit-balance)", { policyId, error: err.message }));
 
   // Post-transaction best-effort side effects
   if (policy.status === "lapsed" && policy.agentId) {

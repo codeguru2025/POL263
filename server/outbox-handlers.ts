@@ -5,6 +5,7 @@
 
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
+import { computePlatformFee } from "./platform-fee";
 import { recordAgentCommission } from "./route-helpers";
 import { notifyUser } from "./user-notifications";
 import { pushToClient } from "./push";
@@ -65,13 +66,13 @@ async function runPaymentStaffFollowup(orgId: string, payload: StaffPayload): Pr
   if (txSnapshot.status === "cleared") {
     const hasPr = await storage.hasPlatformReceivableForTransaction(orgId, txSnapshot.id);
     if (!hasPr) {
-      const chibAmount = (parseFloat(String(txSnapshot.amount)) * 0.025).toFixed(2);
+      const feeAmount = await computePlatformFee(orgId, txSnapshot.amount);
       await storage.createPlatformReceivable({
         organizationId: orgId,
         sourceTransactionId: txSnapshot.id,
-        amount: chibAmount,
+        amount: feeAmount,
         currency: txSnapshot.currency,
-        description: `2.5% on payment ${txSnapshot.id}`,
+        description: `Platform fee on payment ${txSnapshot.id}`,
         isSettled: false,
       });
     }
@@ -128,13 +129,13 @@ async function runCashReceiptFollowup(orgId: string, payload: CashPayload): Prom
 
   const hasPr = await storage.hasPlatformReceivableForTransaction(orgId, txRow.id);
   if (!hasPr) {
-    const chibAmount = (parseFloat(String(txRow.amount)) * 0.025).toFixed(2);
+    const feeAmount = await computePlatformFee(orgId, txRow.amount);
     await storage.createPlatformReceivable({
       organizationId: orgId,
       sourceTransactionId: txRow.id,
-      amount: chibAmount,
+      amount: feeAmount,
       currency: txRow.currency,
-      description: `2.5% on cash payment ${txRow.id}`,
+      description: `Platform fee on cash payment ${txRow.id}`,
       isSettled: false,
     });
   }
@@ -183,13 +184,13 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
 
   const hasPr = await storage.hasPlatformReceivableForTransaction(orgId, transaction.id);
   if (!hasPr) {
-    const chibAmount = (parseFloat(String(transaction.amount)) * 0.025).toFixed(2);
+    const feeAmount = await computePlatformFee(orgId, transaction.amount);
     await storage.createPlatformReceivable({
       organizationId: orgId,
       sourceTransactionId: transaction.id,
-      amount: chibAmount,
+      amount: feeAmount,
       currency: transaction.currency,
-      description: `2.5% on Paynow payment ${transaction.id}`,
+      description: `Platform fee on Paynow payment ${transaction.id}`,
       isSettled: false,
     });
   }
@@ -265,13 +266,13 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
 async function runServiceReceiptFollowup(orgId: string, payload: ServiceReceiptPayload): Promise<void> {
   const hasPr = await storage.hasPlatformReceivableForServiceReceipt(orgId, payload.serviceReceiptId);
   if (!hasPr) {
-    const fee = (parseFloat(payload.amount) * 0.025).toFixed(2);
+    const feeAmount = await computePlatformFee(orgId, payload.amount);
     await storage.createPlatformReceivable({
       organizationId: orgId,
       sourceServiceReceiptId: payload.serviceReceiptId,
-      amount: fee,
+      amount: feeAmount,
       currency: payload.currency,
-      description: `2.5% on service receipt ${payload.receiptNumber} (${payload.serviceReceiptId})`,
+      description: `Platform fee on service receipt ${payload.receiptNumber} (${payload.serviceReceiptId})`,
       isSettled: false,
     });
   }

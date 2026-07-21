@@ -3,6 +3,7 @@ import type { Server } from "http";
 import argon2 from "argon2";
 import crypto from "crypto";
 import { storage, findPaymentReceiptById, type ReportFilters } from "./storage";
+import { computePlatformFee } from "./platform-fee";
 import {
   withOrgTransaction,
   getDbForOrg,
@@ -1197,6 +1198,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     );
 
     return res.json({ summary, tenants: perTenant });
+  });
+
+  app.get("/api/platform/tenant-health", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    const canManageTenants = user.isPlatformOwner || perms.includes("create:tenant") || perms.includes("delete:tenant");
+    if (!canManageTenants) {
+      return res.status(403).json({ message: "Platform owner access required" });
+    }
+    const { buildTenantHealth } = await import("./platform-tenant-health");
+    return res.json(await buildTenantHealth());
   });
 
   // ─── Organization / Tenant ──────────────────────────────────
@@ -4787,14 +4799,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         });
         receipted++;
-        // 2.5% platform fee on month-end cleared receipt
-        storage.createPlatformReceivable({
-          organizationId: user.organizationId,
-          amount: (premium * 0.025).toFixed(2),
-          currency: policy.currency || "USD",
-          description: `2.5% on month-end receipt (policy ${policyNumber})`,
-          isSettled: false,
-        }).catch((err: Error) => structuredLog("error", "Platform fee failed (month-end)", { policyId: policy.id, error: err.message }));
+        // Platform fee on month-end cleared receipt
+        computePlatformFee(user.organizationId, premium).then((feeAmount) =>
+          storage.createPlatformReceivable({
+            organizationId: user.organizationId,
+            amount: feeAmount,
+            currency: policy.currency || "USD",
+            description: `Platform fee on month-end receipt (policy ${policyNumber})`,
+            isSettled: false,
+          })
+        ).catch((err: Error) => structuredLog("error", "Platform fee failed (month-end)", { policyId: policy.id, error: err.message }));
         // Post-transaction best-effort side effects
         if (policy.status === "lapsed") {
           if (policy.clientId) {
@@ -4950,15 +4964,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     });
     if (!isBackdated) {
-      // 2.5% platform fee on each cleared group receipt (not on pending approvals)
+      // Platform fee on each cleared group receipt (not on pending approvals)
       for (const r of results) {
-        storage.createPlatformReceivable({
-          organizationId: user.organizationId,
-          amount: (parseFloat(r.amount) * 0.025).toFixed(2),
-          currency: r.currency,
-          description: `2.5% on group receipt ${r.receiptNumber} (policy ${r.policyNumber})`,
-          isSettled: false,
-        }).catch((err: Error) => structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err.message }));
+        computePlatformFee(user.organizationId, r.amount).then((feeAmount) =>
+          storage.createPlatformReceivable({
+            organizationId: user.organizationId,
+            amount: feeAmount,
+            currency: r.currency,
+            description: `Platform fee on group receipt ${r.receiptNumber} (policy ${r.policyNumber})`,
+            isSettled: false,
+          })
+        ).catch((err: Error) => structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err.message }));
       }
     }
     return res.status(201).json({ receipted: results.length, results, pendingApproval: isBackdated, groupRef });
@@ -5067,15 +5083,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await rollbackClawbacksInTx(txDb, user.organizationId, policy);
         }
       });
-      storage.createPlatformReceivable({
-        organizationId: user.organizationId,
-        amount: (parseFloat(String(receipt.amount)) * 0.025).toFixed(2),
-        currency: receipt.currency,
-        description: isPremiumOverride
-          ? `2.5% on approved premium-override receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`
-          : `2.5% on approved backdated receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`,
-        isSettled: false,
-      }).catch((err: Error) => structuredLog("error", "Platform fee failed (approved receipt)", { receiptId, error: err.message }));
+      computePlatformFee(user.organizationId, receipt.amount).then((feeAmount) =>
+        storage.createPlatformReceivable({
+          organizationId: user.organizationId,
+          amount: feeAmount,
+          currency: receipt.currency,
+          description: isPremiumOverride
+            ? `Platform fee on approved premium-override receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`
+            : `Platform fee on approved backdated receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`,
+          isSettled: false,
+        })
+      ).catch((err: Error) => structuredLog("error", "Platform fee failed (approved receipt)", { receiptId, error: err.message }));
       await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
       return res.json({ message: "Receipt approved and applied." });
     } catch (err: any) {
@@ -9890,17 +9908,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const created = (rows.rows ?? rows)[0];
       await auditLog(req, "create", "legacy_group_receipt", created.id as string, null, created);
 
-      // 2.5% platform fee on each legacy group receipt, same as regular group receipts.
+      // Platform fee on each legacy group receipt, same as regular group receipts.
       // Stamped with the receipt's own payment date (not "now") so backdated legacy
       // entries land in the correct month on date-filtered platform-fee reports.
-      storage.createPlatformReceivable({
-        organizationId: user.organizationId,
-        amount: (parseFloat(String(amount)) * 0.025).toFixed(2),
-        currency: String(currency).toUpperCase(),
-        description: `2.5% on legacy group receipt ${receiptNumber} (group ${group.name})`,
-        isSettled: false,
-        createdAt: new Date(`${paymentDate}T12:00:00.000Z`),
-      }).catch((err: Error) => structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err.message }));
+      computePlatformFee(user.organizationId, String(amount)).then((feeAmount) =>
+        storage.createPlatformReceivable({
+          organizationId: user.organizationId,
+          amount: feeAmount,
+          currency: String(currency).toUpperCase(),
+          description: `Platform fee on legacy group receipt ${receiptNumber} (group ${group.name})`,
+          isSettled: false,
+          createdAt: new Date(`${paymentDate}T12:00:00.000Z`),
+        })
+      ).catch((err: Error) => structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err.message }));
 
       return res.status(201).json(created);
     } catch (err: any) {

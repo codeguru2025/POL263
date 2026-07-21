@@ -33,11 +33,11 @@ export function registerPlatformBillingRoutes(app: Express): void {
   // ── Global settings ─────────────────────────────────────────────
   app.get("/api/platform/billing/settings", requireAuth, requirePlatformOwner, async (_req, res) => {
     const [row] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
-    return res.json(row || { id: "global", trialDays: 14, graceDays: 7, reminderLeadDays: 3, moduleEnforcementEnabled: false, updatedAt: null });
+    return res.json(row || { id: "global", trialDays: 14, graceDays: 7, reminderLeadDays: 3, moduleEnforcementEnabled: false, platformFeeRatePercent: "2.50", updatedAt: null });
   });
 
   app.put("/api/platform/billing/settings", requireAuth, requirePlatformOwner, async (req, res) => {
-    const { trialDays, graceDays, reminderLeadDays, moduleEnforcementEnabled } = req.body;
+    const { trialDays, graceDays, reminderLeadDays, moduleEnforcementEnabled, platformFeeRatePercent } = req.body;
     if (trialDays !== undefined && (!Number.isInteger(trialDays) || trialDays < 0)) {
       return res.status(400).json({ message: "trialDays must be a non-negative integer" });
     }
@@ -50,6 +50,13 @@ export function registerPlatformBillingRoutes(app: Express): void {
     if (moduleEnforcementEnabled !== undefined && typeof moduleEnforcementEnabled !== "boolean") {
       return res.status(400).json({ message: "moduleEnforcementEnabled must be a boolean" });
     }
+    let feeRate: number | undefined;
+    if (platformFeeRatePercent !== undefined) {
+      feeRate = parseFloat(platformFeeRatePercent);
+      if (!Number.isFinite(feeRate) || feeRate < 0 || feeRate > 100) {
+        return res.status(400).json({ message: "platformFeeRatePercent must be a number between 0 and 100" });
+      }
+    }
 
     const [existing] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
     const patch: Record<string, any> = { updatedAt: new Date() };
@@ -57,6 +64,7 @@ export function registerPlatformBillingRoutes(app: Express): void {
     if (graceDays !== undefined) patch.graceDays = graceDays;
     if (reminderLeadDays !== undefined) patch.reminderLeadDays = reminderLeadDays;
     if (moduleEnforcementEnabled !== undefined) patch.moduleEnforcementEnabled = moduleEnforcementEnabled;
+    if (feeRate !== undefined) patch.platformFeeRatePercent = feeRate.toFixed(2);
 
     if (existing) {
       await cpDb.update(billingSettings).set(patch).where(eq(billingSettings.id, "global"));
@@ -175,7 +183,7 @@ export function registerPlatformBillingRoutes(app: Express): void {
   app.put("/api/platform/tenants/:id/subscription", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
     if (!(await requireTenant(id, res))) return;
-    const { planId, graceDaysOverride, status } = req.body;
+    const { planId, graceDaysOverride, platformFeeRateOverride, status } = req.body;
 
     const [existing] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, id)).limit(1);
     if (!existing) return res.status(404).json({ message: "No subscription exists for this tenant yet" });
@@ -191,6 +199,17 @@ export function registerPlatformBillingRoutes(app: Express): void {
         return res.status(400).json({ message: "graceDaysOverride must be a non-negative integer or null" });
       }
       patch.graceDaysOverride = graceDaysOverride;
+    }
+    if (platformFeeRateOverride !== undefined) {
+      if (platformFeeRateOverride !== null) {
+        const rate = parseFloat(platformFeeRateOverride);
+        if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+          return res.status(400).json({ message: "platformFeeRateOverride must be a number between 0 and 100, or null" });
+        }
+        patch.platformFeeRateOverride = rate.toFixed(2);
+      } else {
+        patch.platformFeeRateOverride = null;
+      }
     }
     if (status !== undefined) {
       const VALID = new Set(["trialing", "active", "past_due", "suspended", "cancelled"]);

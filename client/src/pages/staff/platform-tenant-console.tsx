@@ -800,6 +800,7 @@ interface BillingSubscriptionRow {
   id: string; planId: string; status: string;
   trialEndsAt: string | null; currentPeriodStart: string; currentPeriodEnd: string;
   graceDaysOverride: number | null;
+  platformFeeRateOverride: string | null;
 }
 interface BillingPlanRow { id: string; key: string; name: string; priceMonthlyUsd: string; modules: string[]; isActive: boolean }
 interface BillingInvoiceRow {
@@ -815,6 +816,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [graceDaysOverride, setGraceDaysOverride] = useState("");
+  const [platformFeeRateOverride, setPlatformFeeRateOverride] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [markPaidInvoice, setMarkPaidInvoice] = useState<BillingInvoiceRow | null>(null);
   const [markPaidReason, setMarkPaidReason] = useState("");
@@ -827,6 +829,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   useEffect(() => {
     if (subData?.subscription) {
       setGraceDaysOverride(subData.subscription.graceDaysOverride == null ? "" : String(subData.subscription.graceDaysOverride));
+      setPlatformFeeRateOverride(subData.subscription.platformFeeRateOverride == null ? "" : String(subData.subscription.platformFeeRateOverride));
       setSelectedPlanId(subData.subscription.planId);
     }
   }, [subData]);
@@ -914,6 +917,17 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                       onChange={(e) => setGraceDaysOverride(e.target.value)} placeholder="Inherit global default" />
                     <Button variant="outline" disabled={updateSubMutation.isPending}
                       onClick={() => updateSubMutation.mutate({ graceDaysOverride: graceDaysOverride === "" ? null : parseInt(graceDaysOverride, 10) })}>
+                      Save
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pt-billing-fee-rate">Platform fee rate override (%)</Label>
+                  <div className="flex items-center gap-2">
+                    <Input id="pt-billing-fee-rate" type="number" min={0} max={100} step="0.01" value={platformFeeRateOverride}
+                      onChange={(e) => setPlatformFeeRateOverride(e.target.value)} placeholder="Inherit global default" />
+                    <Button variant="outline" disabled={updateSubMutation.isPending}
+                      onClick={() => updateSubMutation.mutate({ platformFeeRateOverride: platformFeeRateOverride === "" ? null : parseFloat(platformFeeRateOverride) })}>
                       Save
                     </Button>
                   </div>

@@ -4,6 +4,7 @@
  */
 
 import { storage, findPaymentIntentById } from "./storage";
+import { computePlatformFee } from "./platform-fee";
 import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from "./tenant-db";
 import { rollbackClawbacks } from "./route-helpers";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
@@ -945,14 +946,16 @@ export async function applyGroupPaymentToPolicies(
 
       successCount++;
 
-      // 2.5% platform fee on cleared group PayNow receipt
-      storage.createPlatformReceivable({
-        organizationId: orgId,
-        amount: (parseFloat(amount) * 0.025).toFixed(2),
-        currency,
-        description: `2.5% on group PayNow receipt ${receiptNumber} (policy ${policy.policyNumber})`,
-        isSettled: false,
-      }).catch((err: Error) => structuredLog("error", "Platform fee failed (group PayNow)", { policyId: policy.id, error: err.message }));
+      // Platform fee on cleared group PayNow receipt
+      computePlatformFee(orgId, amount).then((feeAmount) =>
+        storage.createPlatformReceivable({
+          organizationId: orgId,
+          amount: feeAmount,
+          currency,
+          description: `Platform fee on group PayNow receipt ${receiptNumber} (policy ${policy.policyNumber})`,
+          isSettled: false,
+        })
+      ).catch((err: Error) => structuredLog("error", "Platform fee failed (group PayNow)", { policyId: policy.id, error: err.message }));
 
       // Post-transaction best-effort side effects
       if (policy.status === "lapsed") {

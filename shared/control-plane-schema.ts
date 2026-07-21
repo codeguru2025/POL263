@@ -252,6 +252,8 @@ export const tenantSubscriptions = pgTable(
     currentPeriodEnd: timestamp("current_period_end").notNull(),
     /** null = inherit billingSettings.graceDays (global default) */
     graceDaysOverride: integer("grace_days_override"),
+    /** null = inherit billingSettings.platformFeeRatePercent (global default) */
+    platformFeeRateOverride: numeric("platform_fee_rate_override", { precision: 5, scale: 2 }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -317,6 +319,8 @@ export const billingSettings = pgTable("billing_settings", {
   reminderLeadDays: integer("reminder_lead_days").default(3).notNull(),
   /** Kill switch for module-gate enforcement — default off, see server/module-gate.ts */
   moduleEnforcementEnabled: boolean("module_enforcement_enabled").default(false).notNull(),
+  /** Default platform revenue-share rate applied to cleared receipts, e.g. "2.50" = 2.5%. Per-tenant override: tenantSubscriptions.platformFeeRateOverride */
+  platformFeeRatePercent: numeric("platform_fee_rate_percent", { precision: 5, scale: 2 }).default("2.50").notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

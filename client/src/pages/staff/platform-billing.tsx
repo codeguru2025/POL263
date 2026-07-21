@@ -20,6 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 
 interface BillingSettingsData {
   trialDays: number; graceDays: number; reminderLeadDays: number; moduleEnforcementEnabled: boolean;
+  platformFeeRatePercent: string;
 }
 interface BillingPlanRow {
   id: string; key: string; name: string; description: string | null;
@@ -48,6 +49,7 @@ function SettingsCard() {
   const [graceDays, setGraceDays] = useState("7");
   const [reminderLeadDays, setReminderLeadDays] = useState("3");
   const [moduleEnforcementEnabled, setModuleEnforcementEnabled] = useState(false);
+  const [platformFeeRatePercent, setPlatformFeeRatePercent] = useState("2.50");
 
   useEffect(() => {
     if (data) {
@@ -55,6 +57,7 @@ function SettingsCard() {
       setGraceDays(String(data.graceDays));
       setReminderLeadDays(String(data.reminderLeadDays));
       setModuleEnforcementEnabled(data.moduleEnforcementEnabled);
+      setPlatformFeeRatePercent(String(data.platformFeeRatePercent));
     }
   }, [data]);
 
@@ -84,6 +87,11 @@ function SettingsCard() {
             <Label htmlFor="pb-reminder">Reminder lead time (days)</Label>
             <Input id="pb-reminder" type="number" min={0} value={reminderLeadDays} onChange={(e) => setReminderLeadDays(e.target.value)} />
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="pb-fee-rate">Platform fee rate (%)</Label>
+            <Input id="pb-fee-rate" type="number" min={0} max={100} step="0.01" value={platformFeeRatePercent} onChange={(e) => setPlatformFeeRatePercent(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Applied to every tenant's cleared receipts unless overridden on their subscription.</p>
+          </div>
         </div>
         <div className="flex items-center justify-between rounded-lg border p-4">
           <div className="space-y-0.5">
@@ -101,6 +109,7 @@ function SettingsCard() {
             graceDays: parseInt(graceDays, 10) || 0,
             reminderLeadDays: parseInt(reminderLeadDays, 10) || 0,
             moduleEnforcementEnabled,
+            platformFeeRatePercent,
           })}
           disabled={saveMutation.isPending}
         >

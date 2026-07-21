@@ -59,6 +59,7 @@ const PayPolicyLink = lazy(() => retryLazy(() => import("@/pages/public/pay-poli
 const AgentCardPage = lazy(() => retryLazy(() => import("@/pages/public/agent-card")));
 const PlatformTenantConsole = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-console")));
 const PlatformBilling = lazy(() => retryLazy(() => import("@/pages/staff/platform-billing")));
+const PlatformTenantHealth = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-health")));
 const ProductBuilder = lazy(() => retryLazy(() => import("@/pages/staff/products")));
 const StaffPolicies = lazy(() => retryLazy(() => import("@/pages/staff/policies")));
 const StaffClients = lazy(() => retryLazy(() => import("@/pages/staff/clients")));
@@ -211,6 +212,7 @@ function Router() {
       <SafeRoute path="/staff/users" component={StaffUsers} />
       <SafeRoute path="/staff/platform/tenants/:id" component={PlatformTenantConsole} />
       <SafeRoute path="/staff/platform/billing" component={PlatformBilling} />
+      <SafeRoute path="/staff/platform/health" component={PlatformTenantHealth} />
       <SafeRoute path="/staff/help" component={StaffHelpCenter} />
       <SafeRoute path="/staff/reminders" component={StaffReminders} />
       <SafeRoute path="/staff/order-services" component={StaffOrderServices} />

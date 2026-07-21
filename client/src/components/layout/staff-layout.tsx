@@ -550,6 +550,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     ? filterNav([
         { href: "/staff/settings", label: "Settings", icon: Settings },
         { href: "/staff/platform/billing", label: "Billing Plans", icon: CreditCard },
+        { href: "/staff/platform/health", label: "Tenant Health", icon: Stethoscope },
       ])
     : [];
 
