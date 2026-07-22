@@ -69,6 +69,7 @@ import {
 } from "recharts";
 import { isAgentScoped } from "@shared/roles";
 import { useFlag } from "@/lib/flags";
+import { useTenantCapabilities, hasCapabilityModule } from "@/hooks/use-tenant-capabilities";
 import { CommandCenter } from "@/components/command-center";
 
 interface DashboardStats {
@@ -438,6 +439,9 @@ export default function StaffDashboard() {
   const canReadClaims = permissions.includes("read:claim");
   const canReadFuneralOps = permissions.includes("read:funeral_ops");
   const canReadLead = permissions.includes("read:lead");
+  const { data: tenantCapabilities } = useTenantCapabilities(!isControlPlaneMode);
+  const hasClaimsCapability = hasCapabilityModule(tenantCapabilities, "claims");
+  const hasFuneralOpsCapability = hasCapabilityModule(tenantCapabilities, "funeral_ops");
 
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -667,7 +671,7 @@ export default function StaffDashboard() {
       icon: FileText,
       color: "text-amber-600",
       bgColor: "bg-amber-50",
-      show: canReadClaims,
+      show: canReadClaims && hasClaimsCapability,
     },
     {
       title: "Funeral Cases",
@@ -676,7 +680,7 @@ export default function StaffDashboard() {
       icon: Box,
       color: "text-purple-600",
       bgColor: "bg-purple-50",
-      show: canReadFuneralOps,
+      show: canReadFuneralOps && hasFuneralOpsCapability,
     },
     {
       title: "Lead Conversion",
