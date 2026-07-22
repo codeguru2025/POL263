@@ -164,6 +164,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // recomputing from the product's own pricing table would silently discard it (this exact
     // bug zeroed out several Legacy Individual policies' premiumAmount on their first list view).
     if (policy.premiumOverride != null && String(policy.premiumOverride).trim() !== "") return policy;
+    // Guard against a policy whose productVersionId no longer resolves (e.g. a deleted/orphaned
+    // version) — computePolicyPremium returns "0" for a missing version, which would otherwise
+    // flow straight into the update below and silently zero this policy's real premium. Bail out
+    // and leave it untouched instead, matching batchRecalculatePolicyPremiums' behavior for the
+    // same case (below).
+    const pv = await storage.getProductVersion(policy.productVersionId, orgId);
+    if (!pv) return policy;
     const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, orgId);
     const rawAddOns = await storage.getPolicyAddOns(policy.id, orgId);
     const memberAddOns = rawAddOns
@@ -178,6 +185,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       memberAddOns.length > 0 ? memberAddOns : undefined,
       undefined,
       dependentDateOfBirths,
+      { productVersion: pv },
     );
 
     const current = parseFloat(String(policy.premiumAmount ?? "0"));

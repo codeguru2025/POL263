@@ -10,6 +10,36 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-22 — `recalculatePolicyPremiumIfNeeded` could silently zero a policy's premium if its product version was orphaned
+
+- **Symptom:** none observed in production (Falakhe has zero policies with an orphaned
+  `productVersionId` as of this fix — this was caught by an adversarial recheck of the Phase 4
+  batching work, not by a real incident). But the code path was real and live on ~7 call sites.
+- **Root cause:** `computePolicyPremium` (`server/route-helpers.ts:127-128`) returns `"0"` when
+  the product version it's asked to price against doesn't resolve (deleted/orphaned
+  `productVersionId`). `recalculatePolicyPremiumIfNeeded` (`server/routes.ts`, used by the
+  ~7 single-policy call sites that touch a policy after this audit's Phase 4 introduced the
+  separate batched `batchRecalculatePolicyPremiums` for the Policies list) called it with no
+  guard: if the recomputed "0" differed from the policy's real stored premium by ≥ 0.01 (which a
+  real premium always would), it flowed straight into `storage.updatePolicy(policy.id, {
+  premiumAmount: recomputedPremium }, orgId)` — silently overwriting a real premium with 0 the
+  next time any of those 7 routes touched that policy.
+- **Fix:** added a guard — fetch the product version first; if it doesn't resolve, return the
+  policy untouched instead of proceeding to a zero-premium update. Matches the batch path's
+  existing behavior for the same case (`batchRecalculatePolicyPremiums` already skips a policy
+  when `productVersionById.get(policy.productVersionId)` misses). Passes the already-fetched
+  version through `computePolicyPremium`'s `preloaded` parameter to avoid a redundant second
+  lookup.
+- **Files:** `server/routes.ts`.
+- **Verification:** typecheck clean, full test suite green (209/209). Live-verified against real
+  Falakhe data: zero policies currently have an orphaned `productVersionId`, confirming this is a
+  safety-net fix for a latent bug, not a fix for an active data-corruption incident.
+- **Lesson for next time:** when adding a batched variant of an existing function (Phase 4's
+  `batchRecalculatePolicyPremiums` next to the pre-existing `recalculatePolicyPremiumIfNeeded`),
+  diff their edge-case handling against each other, not just their happy-path output — an
+  adversarial recheck caught this exact divergence after the fact; checking it at the time the
+  batch function was written would have caught it for free.
+
 ## 2026-07-22 — Resilience & cleanup: unbounded login fan-out, oversized tenant pools, midnight-window date bugs, and currencies silently blended into one number (Phase 6, final phase of the systems audit)
 
 - **1. `/api/agent-auth/login`'s "scan every isolated tenant DB" fallback had no budget of
