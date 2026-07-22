@@ -1069,6 +1069,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // What this tenant is/sells, for nav/report/dashboard sections that should only show up
+  // when relevant — see server/org-capabilities.ts. Works with no tenant scope too (platform
+  // owner in control-plane mode), fails open the same way the resolver itself does.
+  app.get("/api/tenant-capabilities", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    const session = req.session as any;
+    const effectiveOrgId: string | undefined = user?.isPlatformOwner
+      ? (session?.activeTenantId ?? user.organizationId ?? undefined)
+      : (user?.organizationId ?? undefined);
+    const { getTenantCapabilities } = await import("./org-capabilities");
+    const caps = await getTenantCapabilities(effectiveOrgId);
+    return res.json({
+      isProfiled: caps.isProfiled,
+      orgType: caps.orgType,
+      productTypes: caps.productTypes,
+      modules: Array.from(caps.modules),
+      hasRiskProducts: caps.hasRiskProducts,
+      hasAccumulationProducts: caps.hasAccumulationProducts,
+    });
+  });
+
   app.get("/api/platform/app-releases", requireAuth, async (req, res) => {
     const user = req.user as any;
     if (!user.isPlatformOwner) return res.status(403).json({ message: "Platform owner access required" });

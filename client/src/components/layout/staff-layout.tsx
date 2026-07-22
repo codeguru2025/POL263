@@ -97,6 +97,10 @@ type StaffNavItem = {
   badge?: number;
   agentHidden?: boolean;
   agentOnly?: boolean;
+  /** Only relevant to tenants whose module set includes this — see server/org-capabilities.ts.
+   *  Unprofiled tenants (capabilities.isProfiled === false) always pass, same fail-open rule as
+   *  the resolver itself. */
+  capabilityModule?: "funeral_ops" | "fleet" | "payroll" | "claims";
 };
 
 
@@ -196,6 +200,15 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const { data: appInfo } = useQuery<any>({ queryKey: ["/api/app-info"], staleTime: 5 * 60 * 1000 });
+  const { data: tenantCapabilities } = useQuery<{ isProfiled: boolean; modules: string[] }>({
+    queryKey: ["/api/tenant-capabilities"],
+    enabled: isAuthenticated,
+    staleTime: 5 * 60 * 1000,
+  });
+  // Fail open exactly like the resolver: while loading, or for an unprofiled tenant, every
+  // capability-gated nav item stays visible rather than flashing/hiding.
+  const hasCapabilityModule = (moduleKey?: string) =>
+    !moduleKey || !tenantCapabilities || !tenantCapabilities.isProfiled || tenantCapabilities.modules.includes(moduleKey);
   const canApproveAnything = permissions.includes("approve:requests") || permissions.includes("approve:waivers")
     || permissions.includes("approve:settlements") || permissions.includes("approve:finance");
   const { data: approvalsSummary } = useQuery<{ totalCount: number }>({
@@ -301,6 +314,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     items.filter((item) => {
       if (isAgent && item.agentHidden) return false;
       if (!isAgent && item.agentOnly) return false;
+      if (!hasCapabilityModule(item.capabilityModule)) return false;
       const perms = item.permissions ?? (item.permission ? [item.permission] : []);
       return hasAny(perms);
     });
@@ -310,11 +324,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     ? []
     : filterNav([
         { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy", agentOnly: true },
-        { href: "/staff/funerals", label: "Funeral Files", icon: Truck, permission: "read:funeral_ops" },
-        { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops" },
-        { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops" },
-        { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops" },
-        { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"] },
+        { href: "/staff/funerals", label: "Funeral Files", icon: Truck, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+        { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+        { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+        { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+        { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet" },
         { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
         { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
         { href: "/staff/leads", label: "Quotations", icon: Target, permission: "read:lead" },
@@ -341,8 +355,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard, agentHidden: true },
         // People & periodic
         { href: "/staff/finance?tab=commissions", label: "Commissions", icon: TrendingUp, permission: "read:commission" },
-        { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
-        { href: "/staff/attendance", label: "Attendance", icon: ClipboardList },
+        { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll", capabilityModule: "payroll" },
+        { href: "/staff/attendance", label: "Attendance", icon: ClipboardList, capabilityModule: "payroll" },
         { href: "/staff/finance?tab=month-end", label: "Month-End Close", icon: CalendarDays, permission: "write:finance", agentHidden: true },
         { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
         { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
@@ -371,7 +385,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     : filterNav([
         // Core records & products
         { href: "/staff/policies", label: "Policy Admin", icon: FileStack, permission: "read:policy", agentHidden: true },
-        { href: "/staff/claims", label: "Claims Admin", icon: FileText, permission: "read:claim" },
+        { href: "/staff/claims", label: "Claims Admin", icon: FileText, permission: "read:claim", capabilityModule: "claims" },
         { href: "/staff/admin/society", label: "Society Admin", icon: Building2, agentHidden: true },
         { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone, agentHidden: true },
         { href: "/staff/products", label: "Product Admin", icon: Box, permission: "write:product" },
@@ -468,18 +482,18 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         {
           title: "Claims",
           items: filterNav([
-            { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim" },
+            { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim", capabilityModule: "claims" },
             { href: "/staff/tools/claims-form", label: "Online Claims Form", icon: ClipboardList, agentHidden: true },
           ]),
         },
         {
           title: "Funerals",
           items: filterNav([
-            { href: "/staff/funerals", label: "Funeral Cases", icon: Truck, permission: "read:funeral_ops" },
-            { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops" },
-        { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops" },
-            { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops" },
-            { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"] },
+            { href: "/staff/funerals", label: "Funeral Cases", icon: Truck, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+            { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+        { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+            { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
+            { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet" },
             { href: "/staff/pricebook", label: "Funeral Pricing", icon: BookOpen, permission: "write:product" },
             { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck, agentHidden: true },
           ]),
@@ -490,8 +504,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/finance?tab=requisitions", label: "Requisitions", icon: ClipboardList, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=expenditures", label: "Expenses", icon: FileMinus, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=commissions", label: "Commissions", icon: TrendingUp, permission: "read:commission" },
-            { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll" },
-            { href: "/staff/attendance", label: "Attendance", icon: ClipboardList },
+            { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll", capabilityModule: "payroll" },
+            { href: "/staff/attendance", label: "Attendance", icon: ClipboardList, capabilityModule: "payroll" },
             { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
             { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=approvals", label: "Receipt Approvals", icon: ShieldCheck, permission: "approve:finance", agentHidden: true },
