@@ -1080,6 +1080,7 @@ export const paymentReceipts = pgTable(
     index("pr_policy_idx").on(t.policyId),
     uniqueIndex("pr_receipt_org_idx").on(t.receiptNumber, t.organizationId),
     index("payment_receipts_policy_status_issued_idx").on(t.policyId, t.status, t.issuedAt),
+    index("pr_org_pending_idx").on(t.organizationId).where(sql`${t.approvalStatus} = 'pending'`),
   ]
 );
 
