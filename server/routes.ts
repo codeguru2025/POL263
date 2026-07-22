@@ -1847,6 +1847,54 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ count: agentPolicies.length, policies: agentPolicies.map(p => ({ id: p.id, policyNumber: p.policyNumber, status: p.status })) });
   });
 
+  // Per-user permission overrides — grant or deny a specific permission for one person,
+  // layered on top of whatever their role(s) already grant. Same gate as the role-permission
+  // matrix (write:role) since this is equally sensitive: it changes what someone can access.
+  app.get("/api/users/:id/permission-overrides", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
+    const user = req.user as any;
+    const target = await storage.getUser(req.params.id as string, user.organizationId);
+    if (!target || target.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const [overrides, effectivePermissions] = await Promise.all([
+      storage.getUserPermissionOverrides(target.id),
+      storage.getUserEffectivePermissions(target.id, user.organizationId),
+    ]);
+    return res.json({ overrides, effectivePermissions });
+  });
+
+  app.put("/api/users/:id/permission-overrides/:permissionName", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
+    const user = req.user as any;
+    const target = await storage.getUser(req.params.id as string, user.organizationId);
+    if (!target || target.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const { isGranted } = req.body;
+    if (typeof isGranted !== "boolean") {
+      return res.status(400).json({ message: "isGranted (boolean) is required" });
+    }
+    const permissionName = req.params.permissionName as string;
+    try {
+      await storage.setUserPermissionOverride(target.id, permissionName, isGranted);
+    } catch (err: any) {
+      return res.status(400).json({ message: safeError(err) });
+    }
+    await auditLog(req, "SET_USER_PERMISSION_OVERRIDE", "User", target.id, null, { permissionName, isGranted });
+    return res.json({ ok: true });
+  });
+
+  app.delete("/api/users/:id/permission-overrides/:permissionName", requireAuth, requireTenantScope, requirePermission("write:role"), async (req, res) => {
+    const user = req.user as any;
+    const target = await storage.getUser(req.params.id as string, user.organizationId);
+    if (!target || target.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const permissionName = req.params.permissionName as string;
+    await storage.removeUserPermissionOverride(target.id, permissionName);
+    await auditLog(req, "REMOVE_USER_PERMISSION_OVERRIDE", "User", target.id, { permissionName }, null);
+    return res.json({ ok: true });
+  });
+
   app.post("/api/users/:id/reassign-policies", requireAuth, requireTenantScope, requirePermission("delete:user"), async (req, res) => {
     const user = req.user as any;
     const { toAgentId } = req.body;

@@ -326,7 +326,8 @@ export interface IStorage {
   removeUserRole(userId: string, roleId: string): Promise<void>;
   clearUserRoles(userId: string, organizationId?: string): Promise<void>;
   getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]>;
-  addUserPermissionOverride(userId: string, permissionId: string, isGranted: boolean): Promise<void>;
+  setUserPermissionOverride(userId: string, permissionName: string, isGranted: boolean): Promise<void>;
+  removeUserPermissionOverride(userId: string, permissionName: string): Promise<void>;
   getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]>;
   getAuditLogs(organizationId: string, limit?: number, offset?: number, filters?: { search?: string; action?: string; from?: string; to?: string }): Promise<{ rows: AuditLog[]; total: number }>;
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
@@ -1050,8 +1051,18 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userPermissionOverrides.userId, userId));
     return rows;
   }
-  async addUserPermissionOverride(userId: string, permissionId: string, isGranted: boolean): Promise<void> {
-    await db.insert(userPermissionOverrides).values({ userId, permissionId, isGranted });
+  async setUserPermissionOverride(userId: string, permissionName: string, isGranted: boolean): Promise<void> {
+    const [perm] = await db.select({ id: permissions.id }).from(permissions).where(eq(permissions.name, permissionName)).limit(1);
+    if (!perm) throw new Error(`Unknown permission: ${permissionName}`);
+    // No unique constraint on (userId, permissionId) — delete any existing override for this
+    // permission first so re-toggling doesn't accumulate duplicate rows.
+    await db.delete(userPermissionOverrides).where(and(eq(userPermissionOverrides.userId, userId), eq(userPermissionOverrides.permissionId, perm.id)));
+    await db.insert(userPermissionOverrides).values({ userId, permissionId: perm.id, isGranted });
+  }
+  async removeUserPermissionOverride(userId: string, permissionName: string): Promise<void> {
+    const [perm] = await db.select({ id: permissions.id }).from(permissions).where(eq(permissions.name, permissionName)).limit(1);
+    if (!perm) return;
+    await db.delete(userPermissionOverrides).where(and(eq(userPermissionOverrides.userId, userId), eq(userPermissionOverrides.permissionId, perm.id)));
   }
   async getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]> {
     const lookupDb = orgId ? await getDbForOrg(orgId) : db;

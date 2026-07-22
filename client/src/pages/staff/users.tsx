@@ -22,6 +22,7 @@ export default function StaffUsers() {
   const queryClient = useQueryClient();
   const canEditUsers = permissions.includes("write:user");
   const canDeleteUsers = permissions.includes("delete:user");
+  const canManageOverrides = permissions.includes("write:role");
   const isSuperuser = permissions.includes("create:tenant");
   const [searchTerm, setSearchTerm] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -73,6 +74,41 @@ export default function StaffUsers() {
     },
     onError: (err: any) => {
       toast({ title: "Error", description: err.message || "Failed to update user", variant: "destructive" });
+    },
+  });
+
+  const { data: overrideData } = useQuery<{ overrides: { permissionName: string; isGranted: boolean }[]; effectivePermissions: string[] }>({
+    queryKey: [`/api/users/${editingUser?.id}/permission-overrides`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/users/${editingUser.id}/permission-overrides`);
+      return res.json();
+    },
+    enabled: !!editingUser?.id && canManageOverrides,
+  });
+
+  const setOverrideMutation = useMutation({
+    mutationFn: async ({ userId, permissionName, isGranted }: { userId: string; permissionName: string; isGranted: boolean }) => {
+      await apiRequest("PUT", `/api/users/${userId}/permission-overrides/${permissionName}`, { isGranted });
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/users/${variables.userId}/permission-overrides`] });
+      toast({ title: "Access updated" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to update access", variant: "destructive" });
+    },
+  });
+
+  const clearOverrideMutation = useMutation({
+    mutationFn: async ({ userId, permissionName }: { userId: string; permissionName: string }) => {
+      await apiRequest("DELETE", `/api/users/${userId}/permission-overrides/${permissionName}`);
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/users/${variables.userId}/permission-overrides`] });
+      toast({ title: "Access updated" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to update access", variant: "destructive" });
     },
   });
 
@@ -457,6 +493,38 @@ export default function StaffUsers() {
                     })}
                   </div>
                 </div>
+                {canManageOverrides && (
+                  <div className="space-y-2">
+                    <Label>Product Builder &amp; Terms &amp; Conditions access</Label>
+                    {(() => {
+                      const override = overrideData?.overrides?.find((o) => o.permissionName === "write:product");
+                      const value = override ? (override.isGranted ? "allow" : "deny") : "default";
+                      const effectiveHasIt = overrideData?.effectivePermissions?.includes("write:product");
+                      return (
+                        <>
+                          <Select
+                            value={value}
+                            onValueChange={(v) => {
+                              if (v === "default") clearOverrideMutation.mutate({ userId: editingUser.id, permissionName: "write:product" });
+                              else setOverrideMutation.mutate({ userId: editingUser.id, permissionName: "write:product", isGranted: v === "allow" });
+                            }}
+                            disabled={setOverrideMutation.isPending || clearOverrideMutation.isPending}
+                          >
+                            <SelectTrigger data-testid="select-edit-user-product-override"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="default">Default (follows their role)</SelectItem>
+                              <SelectItem value="allow">Always allow, regardless of role</SelectItem>
+                              <SelectItem value="deny">Always deny, regardless of role</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            Controls both the Product Builder and Terms &amp; Conditions editor (same underlying permission). Currently: {effectiveHasIt ? "can" : "cannot"} access{override ? " (explicit override)" : " (from role)"}.
+                          </p>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
                 <div className="border-t pt-4 mt-2">
                   <h4 className="text-sm font-semibold mb-3">Personal Details</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
