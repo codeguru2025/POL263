@@ -80,6 +80,29 @@ export function invalidateEnforcementCache() {
   enforcementEnabledCache = null;
 }
 
+/**
+ * Raw "what does this tenant actually do" module set — for UI relevance (nav, reports,
+ * dashboards), not access control. Deliberately ignores the global moduleEnforcementEnabled
+ * kill switch (hasModule() consults that; this doesn't) — whether a tenant is *paying* for a
+ * module is a billing-enforcement question, but whether their nav should *show* it at all is a
+ * business-relevance question, and those shouldn't be conflated: a lapsed trial shouldn't make
+ * "Funeral Files" vanish from the sidebar, it should still be visible (maybe with an upgrade
+ * prompt once that's built) since it's still what the tenant's business does.
+ */
+export async function getTenantModuleSet(orgId: string | undefined): Promise<Set<string>> {
+  if (!orgId) return new Set(ALL_KNOWN_MODULES);
+  const [overrides, { modules, isTrialing, hasSubscription }] = await Promise.all([
+    cpDb.select().from(tenantFeatureFlags).where(eq(tenantFeatureFlags.tenantId, orgId)),
+    getTenantModules(orgId),
+  ]);
+  const result = (isTrialing || !hasSubscription) ? new Set<string>(ALL_KNOWN_MODULES) : new Set(modules);
+  for (const o of overrides) {
+    if (o.enabled) result.add(o.flag);
+    else result.delete(o.flag);
+  }
+  return result;
+}
+
 export async function hasModule(orgId: string | undefined, moduleKey: string): Promise<boolean> {
   if (!orgId) return true; // no tenant scope (control-plane mode) — nothing to gate
   if (!(await isEnforcementEnabled())) return true; // global kill switch

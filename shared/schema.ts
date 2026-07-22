@@ -15,6 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { OrgType, ProductType, DistributionChannel } from "./org-profile";
 
 // ─── MULTI-TENANCY ──────────────────────────────────────────
 
@@ -43,6 +44,26 @@ export const organizations = pgTable("organizations", {
   paynowReturnUrl: text("paynow_return_url"),
   paynowResultUrl: text("paynow_result_url"),
   paynowMode: text("paynow_mode").$type<"test" | "live">(),
+  /**
+   * Business-profile fields captured at onboarding — drive which product builder(s), claims
+   * workflow, nav items, and report sections a tenant sees. Additive/nullable by design: existing
+   * tenants (created before this existed) have null here until explicitly backfilled — the
+   * capability resolver (server/org-capabilities.ts) must never silently default an unprofiled
+   * tenant to "show nothing," only ever to "show everything" (fail open), same convention as
+   * hasModule()'s "no subscription row" case.
+   */
+  orgType: text("org_type").$type<OrgType>(),
+  /** Which product types this tenant actually sells — drives which builder(s) activate. Distinct
+   *  from orgType: a funeral services company and a funeral assurer can both sell funeral_cash_plan. */
+  productTypes: jsonb("product_types").$type<ProductType[]>().notNull().default([]),
+  distributionChannels: jsonb("distribution_channels").$type<DistributionChannel[]>().notNull().default([]),
+  bookStatus: text("book_status").$type<"existing" | "new">(),
+  /** Active policy/member count as of onboarding, for an existing book. */
+  bookSizeCurrent: integer("book_size_current"),
+  /** Projected policy/member count at 12 months, for a new book. */
+  bookSizeProjected12mo: integer("book_size_projected_12mo"),
+  staffComplement: integer("staff_complement"),
+  onboardingProfileCompletedAt: timestamp("onboarding_profile_completed_at"),
 });
 
 /** Central-DB-only routing pointer: the public /pay/:token page has no session, so it can't

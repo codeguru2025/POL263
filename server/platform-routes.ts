@@ -29,6 +29,7 @@ import { encryptSecret } from "./tenant-config-crypto";
 import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
 import { auditLog } from "./route-helpers";
+import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
 
 const KNOWN_FEATURE_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications"];
 
@@ -134,6 +135,69 @@ export function registerPlatformRoutes(app: Express): void {
             hasSecretAccessKey: !!storageIntegration[0]?.config,
           }
         : { prefix: `tenants/${id}/`, bucket: null, region: null, endpoint: null, accessKeyId: null, hasSecretAccessKey: false },
+      profile: {
+        orgType: org.orgType,
+        productTypes: org.productTypes,
+        distributionChannels: org.distributionChannels,
+        bookStatus: org.bookStatus,
+        bookSizeCurrent: org.bookSizeCurrent,
+        bookSizeProjected12mo: org.bookSizeProjected12mo,
+        staffComplement: org.staffComplement,
+        onboardingProfileCompletedAt: org.onboardingProfileCompletedAt,
+      },
+    });
+  });
+
+  // ── Business profile (org type, product types, book size, staff, channels) ────────
+  app.put("/api/platform/tenants/:id/profile", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const before = await storage.getOrganization(id);
+    if (!before) return res.status(404).json({ message: "Tenant not found" });
+
+    const { orgType, productTypes, distributionChannels, bookStatus, bookSizeCurrent, bookSizeProjected12mo, staffComplement } = req.body;
+    const patch: Record<string, any> = {};
+
+    if (orgType !== undefined) {
+      if (orgType !== null && !(ORG_TYPES as readonly string[]).includes(orgType)) {
+        return res.status(400).json({ message: `orgType must be one of: ${ORG_TYPES.join(", ")}` });
+      }
+      patch.orgType = orgType;
+    }
+    if (productTypes !== undefined) {
+      const list = Array.isArray(productTypes) ? productTypes : [];
+      const unknown = list.filter((t: any) => !(PRODUCT_TYPES as readonly string[]).includes(t));
+      if (unknown.length > 0) return res.status(400).json({ message: `Unknown product type(s): ${unknown.join(", ")}` });
+      patch.productTypes = list;
+    }
+    if (distributionChannels !== undefined) {
+      const list = Array.isArray(distributionChannels) ? distributionChannels : [];
+      const unknown = list.filter((c: any) => !(DISTRIBUTION_CHANNELS as readonly string[]).includes(c));
+      if (unknown.length > 0) return res.status(400).json({ message: `Unknown distribution channel(s): ${unknown.join(", ")}` });
+      patch.distributionChannels = list;
+    }
+    if (bookStatus !== undefined) {
+      if (bookStatus !== null && bookStatus !== "existing" && bookStatus !== "new") {
+        return res.status(400).json({ message: "bookStatus must be 'existing', 'new', or null" });
+      }
+      patch.bookStatus = bookStatus;
+    }
+    if (bookSizeCurrent !== undefined) patch.bookSizeCurrent = bookSizeCurrent === null ? null : parseInt(bookSizeCurrent, 10);
+    if (bookSizeProjected12mo !== undefined) patch.bookSizeProjected12mo = bookSizeProjected12mo === null ? null : parseInt(bookSizeProjected12mo, 10);
+    if (staffComplement !== undefined) patch.staffComplement = staffComplement === null ? null : parseInt(staffComplement, 10);
+
+    // Stamp completion once orgType is set and hasn't been stamped yet — marks the tenant as
+    // having gone through (or been backfilled with) the onboarding profile at least once.
+    if (patch.orgType && !before.onboardingProfileCompletedAt) {
+      patch.onboardingProfileCompletedAt = new Date();
+    }
+
+    const updated = await storage.updateOrganization(id, patch);
+    await auditLog(req, "UPDATE_TENANT_PROFILE", "Organization", id, before, updated, id);
+    return res.json({
+      orgType: updated?.orgType, productTypes: updated?.productTypes, distributionChannels: updated?.distributionChannels,
+      bookStatus: updated?.bookStatus, bookSizeCurrent: updated?.bookSizeCurrent, bookSizeProjected12mo: updated?.bookSizeProjected12mo,
+      staffComplement: updated?.staffComplement, onboardingProfileCompletedAt: updated?.onboardingProfileCompletedAt,
     });
   });
 

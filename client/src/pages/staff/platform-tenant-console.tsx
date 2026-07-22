@@ -27,6 +27,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken, getApiBase } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { resolveAssetUrl, getDefaultLogoUrl } from "@/lib/assetUrl";
+import {
+  ORG_TYPES, ORG_TYPE_LABELS, PRODUCT_TYPES, PRODUCT_TYPE_LABELS,
+  DISTRIBUTION_CHANNELS, DISTRIBUTION_CHANNEL_LABELS,
+} from "@shared/org-profile";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const SWATCHES = ["#0d9488","#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"];
 const KNOWN_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications"];
@@ -52,6 +57,11 @@ interface TenantConfig {
   domains: { id: string; domain: string; isPrimary: boolean; isVerified: boolean }[];
   database: { databaseUrl: string | null; hasDatabaseUrl: boolean; migrationState: string; schemaVersion: string | null; lastMigratedAt: string | null };
   storage: { prefix: string | null; bucket: string | null; region: string | null; endpoint: string | null; accessKeyId: string | null; hasSecretAccessKey: boolean };
+  profile: {
+    orgType: string | null; productTypes: string[]; distributionChannels: string[];
+    bookStatus: "existing" | "new" | null; bookSizeCurrent: number | null; bookSizeProjected12mo: number | null;
+    staffComplement: number | null; onboardingProfileCompletedAt: string | null;
+  };
 }
 
 export default function PlatformTenantConsole() {
@@ -103,8 +113,9 @@ export default function PlatformTenantConsole() {
         )}
 
         {config && (
-          <Tabs defaultValue="branding" className="w-full">
+          <Tabs defaultValue="profile" className="w-full">
             <TabsList className="flex flex-wrap h-auto">
+              <TabsTrigger value="profile">Profile</TabsTrigger>
               <TabsTrigger value="branding">Branding</TabsTrigger>
               <TabsTrigger value="payments">Payments</TabsTrigger>
               <TabsTrigger value="flags">Feature Flags</TabsTrigger>
@@ -116,6 +127,9 @@ export default function PlatformTenantConsole() {
               <TabsTrigger value="danger">Danger Zone</TabsTrigger>
             </TabsList>
 
+            <TabsContent value="profile" className="mt-6">
+              <ProfileTab tenantId={id} profile={config.profile} onSaved={invalidate} />
+            </TabsContent>
             <TabsContent value="branding" className="mt-6">
               <BrandingTab tenantId={id} branding={config.branding} onSaved={invalidate} />
             </TabsContent>
@@ -147,6 +161,144 @@ export default function PlatformTenantConsole() {
         )}
       </PageShell>
     </StaffLayout>
+  );
+}
+
+// ── Business Profile ──────────────────────────────────────────────
+function ProfileTab({ tenantId, profile, onSaved }: { tenantId: string; profile: TenantConfig["profile"]; onSaved: () => void }) {
+  const { toast } = useToast();
+  const [orgType, setOrgType] = useState(profile.orgType || "");
+  const [productTypes, setProductTypes] = useState<string[]>(profile.productTypes || []);
+  const [distributionChannels, setDistributionChannels] = useState<string[]>(profile.distributionChannels || []);
+  const [bookStatus, setBookStatus] = useState(profile.bookStatus || "");
+  const [bookSizeCurrent, setBookSizeCurrent] = useState(profile.bookSizeCurrent != null ? String(profile.bookSizeCurrent) : "");
+  const [bookSizeProjected12mo, setBookSizeProjected12mo] = useState(profile.bookSizeProjected12mo != null ? String(profile.bookSizeProjected12mo) : "");
+  const [staffComplement, setStaffComplement] = useState(profile.staffComplement != null ? String(profile.staffComplement) : "");
+
+  useEffect(() => {
+    setOrgType(profile.orgType || "");
+    setProductTypes(profile.productTypes || []);
+    setDistributionChannels(profile.distributionChannels || []);
+    setBookStatus(profile.bookStatus || "");
+    setBookSizeCurrent(profile.bookSizeCurrent != null ? String(profile.bookSizeCurrent) : "");
+    setBookSizeProjected12mo(profile.bookSizeProjected12mo != null ? String(profile.bookSizeProjected12mo) : "");
+    setStaffComplement(profile.staffComplement != null ? String(profile.staffComplement) : "");
+  }, [profile]);
+
+  const toggle = (list: string[], value: string) => list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PUT", `/api/platform/tenants/${tenantId}/profile`, {
+        orgType: orgType || null,
+        productTypes,
+        distributionChannels,
+        bookStatus: bookStatus || null,
+        bookSizeCurrent: bookSizeCurrent === "" ? null : parseInt(bookSizeCurrent, 10),
+        bookSizeProjected12mo: bookSizeProjected12mo === "" ? null : parseInt(bookSizeProjected12mo, 10),
+        staffComplement: staffComplement === "" ? null : parseInt(staffComplement, 10),
+      });
+    },
+    onSuccess: () => { onSaved(); toast({ title: "Business profile saved" }); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <CardSection
+      title="Business Profile"
+      description="Who this tenant is and what they sell — drives which product builder(s), claims workflow, nav items, and report sections they see."
+      icon={SettingsIcon}
+      headerRight={
+        <div className="flex items-center gap-2">
+          {profile.onboardingProfileCompletedAt ? (
+            <Badge variant="outline">Profiled</Badge>
+          ) : (
+            <Badge variant="secondary">Not yet profiled — nav/reports fail open to "show everything"</Badge>
+          )}
+          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
+            Save
+          </Button>
+        </div>
+      }
+    >
+      <div className="p-6 space-y-6">
+        <div className="space-y-2">
+          <Label htmlFor="pt-org-type">Organisation type</Label>
+          <Select value={orgType} onValueChange={setOrgType}>
+            <SelectTrigger id="pt-org-type"><SelectValue placeholder="Select organisation type…" /></SelectTrigger>
+            <SelectContent>
+              {ORG_TYPES.map((t) => <SelectItem key={t} value={t}>{ORG_TYPE_LABELS[t]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">Who they are — drives defaults and compliance framing.</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Product types sold</Label>
+          <div className="flex flex-wrap gap-2">
+            {PRODUCT_TYPES.map((t) => {
+              const selected = productTypes.includes(t);
+              return (
+                <Badge key={t} variant={selected ? "default" : "outline"}
+                  className={`cursor-pointer select-none ${selected ? "" : "opacity-60 hover:opacity-100"}`}
+                  onClick={() => setProductTypes((p) => toggle(p, t))}>
+                  {selected ? <Check className="mr-1 h-3 w-3" /> : null}
+                  {PRODUCT_TYPE_LABELS[t]}
+                </Badge>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">What they actually sell — drives which product builder(s) activate.</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Distribution channels</Label>
+          <div className="flex flex-wrap gap-2">
+            {DISTRIBUTION_CHANNELS.map((c) => {
+              const selected = distributionChannels.includes(c);
+              return (
+                <Badge key={c} variant={selected ? "default" : "outline"}
+                  className={`cursor-pointer select-none ${selected ? "" : "opacity-60 hover:opacity-100"}`}
+                  onClick={() => setDistributionChannels((p) => toggle(p, c))}>
+                  {selected ? <Check className="mr-1 h-3 w-3" /> : null}
+                  {DISTRIBUTION_CHANNEL_LABELS[c]}
+                </Badge>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="pt-book-status">Book status</Label>
+            <Select value={bookStatus} onValueChange={setBookStatus}>
+              <SelectTrigger id="pt-book-status"><SelectValue placeholder="Existing or new business?" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="existing">Existing book</SelectItem>
+                <SelectItem value="new">New business</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="pt-staff">Staff complement</Label>
+            <Input id="pt-staff" type="number" min={0} value={staffComplement} onChange={(e) => setStaffComplement(e.target.value)} placeholder="Rough headcount" />
+          </div>
+          {bookStatus === "existing" && (
+            <div className="space-y-2">
+              <Label htmlFor="pt-book-current">Current active policies/members</Label>
+              <Input id="pt-book-current" type="number" min={0} value={bookSizeCurrent} onChange={(e) => setBookSizeCurrent(e.target.value)} />
+            </div>
+          )}
+          {bookStatus === "new" && (
+            <div className="space-y-2">
+              <Label htmlFor="pt-book-projected">Projected book size (12 months)</Label>
+              <Input id="pt-book-projected" type="number" min={0} value={bookSizeProjected12mo} onChange={(e) => setBookSizeProjected12mo(e.target.value)} />
+            </div>
+          )}
+        </div>
+      </div>
+    </CardSection>
   );
 }
 
