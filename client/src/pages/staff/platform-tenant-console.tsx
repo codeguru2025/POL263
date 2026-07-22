@@ -818,6 +818,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const [graceDaysOverride, setGraceDaysOverride] = useState("");
   const [platformFeeRateOverride, setPlatformFeeRateOverride] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
+  const [startPlanId, setStartPlanId] = useState("");
   const [markPaidInvoice, setMarkPaidInvoice] = useState<BillingInvoiceRow | null>(null);
   const [markPaidReason, setMarkPaidReason] = useState("");
 
@@ -842,6 +843,12 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const updateSubMutation = useMutation({
     mutationFn: async (body: Record<string, any>) => { await apiRequest("PUT", `/api/platform/tenants/${tenantId}/subscription`, body); },
     onSuccess: () => { invalidate(); toast({ title: "Subscription updated" }); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const createSubMutation = useMutation({
+    mutationFn: async () => { await apiRequest("POST", `/api/platform/tenants/${tenantId}/subscription`, { planId: startPlanId, status: "active" }); },
+    onSuccess: () => { invalidate(); toast({ title: "Subscription started" }); },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
@@ -872,7 +879,24 @@ function BillingTab({ tenantId }: { tenantId: string }) {
       <CardSection title="Subscription" description="Plan, status, and grace period for this tenant." icon={Receipt}>
         <div className="p-6 space-y-5">
           {!subscription ? (
-            <EmptyState title="No subscription yet" description="This tenant was created before billing was set up, or no plan has been assigned." />
+            <div className="space-y-4">
+              <EmptyState title="No subscription yet" description="This tenant was created before billing was set up, or no plan has been assigned." />
+              {plansData && plansData.plans.filter((p) => p.isActive).length > 0 && (
+                <div className="flex items-center gap-2 max-w-md mx-auto">
+                  <select value={startPlanId} onChange={(e) => setStartPlanId(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                    <option value="">Choose a plan…</option>
+                    {plansData.plans.filter((p) => p.isActive).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} — ${p.priceMonthlyUsd}/mo</option>
+                    ))}
+                  </select>
+                  <Button disabled={!startPlanId || createSubMutation.isPending} onClick={() => createSubMutation.mutate()}>
+                    {createSubMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    Start subscription
+                  </Button>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-3">

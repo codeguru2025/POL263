@@ -180,6 +180,44 @@ export function registerPlatformBillingRoutes(app: Express): void {
     return res.json({ subscription, plan: plan || null });
   });
 
+  // Tenants created before billing existed (or whose auto-trial insert failed soft
+  // because no plan had been seeded yet — see the CREATE_ORGANIZATION handler) have no
+  // subscription row at all, and PUT below requires one to already exist. This is the
+  // only way to give such a tenant its first subscription.
+  app.post("/api/platform/tenants/:id/subscription", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const { planId, status } = req.body;
+
+    const [existing] = await cpDb.select({ id: tenantSubscriptions.id }).from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, id)).limit(1);
+    if (existing) return res.status(409).json({ message: "This tenant already has a subscription — use PUT to change it." });
+
+    const [plan] = await cpDb.select({ id: billingPlans.id }).from(billingPlans).where(eq(billingPlans.id, planId)).limit(1);
+    if (!plan) return res.status(400).json({ message: "Plan not found" });
+
+    const VALID_STATUS = new Set(["trialing", "active", "past_due", "suspended", "cancelled"]);
+    const initialStatus = status !== undefined && VALID_STATUS.has(status) ? status : "active";
+
+    const [settings] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
+    const now = new Date();
+    const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const trialEndsAt = initialStatus === "trialing"
+      ? new Date(now.getTime() + (settings?.trialDays ?? 14) * 24 * 60 * 60 * 1000)
+      : null;
+
+    const [created] = await cpDb.insert(tenantSubscriptions).values({
+      tenantId: id,
+      planId,
+      status: initialStatus,
+      trialEndsAt,
+      currentPeriodStart: now,
+      currentPeriodEnd: trialEndsAt ?? periodEnd,
+    }).returning();
+    invalidateTenantModuleCache(id);
+    await auditLog(req, "CREATE_TENANT_SUBSCRIPTION", "TenantSubscription", created.id, null, created, id);
+    return res.status(201).json(created);
+  });
+
   app.put("/api/platform/tenants/:id/subscription", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
     if (!(await requireTenant(id, res))) return;
