@@ -3,6 +3,7 @@ import type { Response } from "express";
 import { storage } from "./storage";
 import { resolveImage } from "./object-storage";
 import { buildVerifyUrl, buildVerifyQrBuffer, drawDocumentFooter, A4_W, A4_H, MARGIN, COL, C_PRIMARY, C_TEXT, C_MUTED, C_BORDER } from "./pdf-utils";
+import { todayInHarare } from "./date-utils";
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -124,7 +125,7 @@ export async function streamAttendanceLogPDF(
   } as any);
 
   const doc = new PDFDocument({ size: "A4", margin: 0, autoFirstPage: true });
-  const filename = `attendance-log-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const filename = `attendance-log-${todayInHarare()}.pdf`;
   res.setHeader("Content-Type", "application/pdf");
   if (opts?.attachment) res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   doc.pipe(res);

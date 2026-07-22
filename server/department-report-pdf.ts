@@ -405,18 +405,27 @@ export async function streamDepartmentReportToResponse(
     const byStatus: Record<string, number> = {};
     for (const p of allPolicies) byStatus[p.status] = (byStatus[p.status] ?? 0) + 1;
 
-    const totalPremium = allPolicies.reduce((s, p) => s + parseFloat(String(p.premiumAmount) || "0"), 0);
+    // Never blend currencies into one "Total Premium" figure — a mix of USD and ZAR
+    // policies summed raw produces a number with no real-world meaning.
+    const premiumByCurrency: Record<string, number> = {};
+    for (const p of allPolicies) {
+      const c = (p.currency || "USD").toUpperCase();
+      premiumByCurrency[c] = (premiumByCurrency[c] ?? 0) + (parseFloat(String(p.premiumAmount) || "0"));
+    }
 
     sectionBand("Sales Summary");
     statRow([
       { label: "Policies Issued", value: String(allPolicies.length) },
       { label: "Active", value: String(byStatus["active"] ?? 0) },
       { label: "Lapsed / Cancelled", value: String((byStatus["lapsed"] ?? 0) + (byStatus["cancelled"] ?? 0)) },
-      { label: "Total Monthly Premium", value: fmtMoney(totalPremium) },
     ]);
 
     sectionBand("Policies by Status");
     for (const [s, n] of Object.entries(byStatus)) kv(s.replace(/_/g, " "), String(n));
+    y += 8;
+
+    sectionBand("Total Monthly Premium by Currency");
+    for (const [c, amt] of Object.entries(premiumByCurrency)) kv(c, fmtMoney(amt, c));
     y += 8;
 
     sectionBand("Policy Register (Period)");
@@ -440,8 +449,13 @@ export async function streamDepartmentReportToResponse(
     const byStatus: Record<string, number> = {};
     for (const c of allClaims) byStatus[c.status] = (byStatus[c.status] ?? 0) + 1;
 
-    const totalCashInLieu = allClaims
-      .reduce((s, c) => s + parseFloat(String(c.cashInLieuAmount) || "0"), 0);
+    const cashInLieuByCurrency: Record<string, number> = {};
+    for (const c of allClaims) {
+      const amt = parseFloat(String(c.cashInLieuAmount) || "0");
+      if (!amt) continue;
+      const cur = (c.currency || "USD").toUpperCase();
+      cashInLieuByCurrency[cur] = (cashInLieuByCurrency[cur] ?? 0) + amt;
+    }
 
     sectionBand("Claims Summary");
     statRow([
@@ -453,7 +467,8 @@ export async function streamDepartmentReportToResponse(
 
     sectionBand("Claims by Status");
     for (const [s, n] of Object.entries(byStatus)) kv(s.replace(/_/g, " "), String(n));
-    if (totalCashInLieu > 0) kv("Total Cash in Lieu Amount", fmtMoney(totalCashInLieu));
+    // Never blend currencies into one "Total Cash in Lieu" figure — same rule as premium above.
+    for (const [cur, amt] of Object.entries(cashInLieuByCurrency)) kv(`Total Cash in Lieu (${cur})`, fmtMoney(amt, cur));
     y += 8;
 
     sectionBand("Claims Register (Period)");

@@ -79,7 +79,7 @@ import {
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, claimStatusHistory, policyStatusHistory, leads, branches, appReleases, waitingPeriodWaivers,
   groupPaymentIntents, groupPaymentAllocations,
-  paymentDisbursements, requisitions, expenditures,
+  paymentDisbursements, requisitions, expenditures, outboxMessages,
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
 import { pool, db } from "./db";
@@ -409,7 +409,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             metadata: null,
           } as any);
         } else {
-          const idempotencyKey = `auto-${policy.id}-${now.toISOString().slice(0, 10)}`;
+          const idempotencyKey = `auto-${policy.id}-${todayInHarare()}`;
           const intentResult = await createPaymentIntent({
             organizationId: orgId,
             clientId: policy.clientId,
@@ -2748,7 +2748,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent && (policy as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayInHarare();
     const statusOk = policy.status === "active" || policy.status === "grace";
 
     let productName = "";
@@ -3055,7 +3055,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     // Legacy/backfilled policies: auto-activate and waive waiting period immediately.
     if ((policyInsert as any).isLegacy) {
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayInHarare();
       await withOrgTransaction(user.organizationId, async (txDb) => {
         await txDb.update(policies).set({
           status: "active",
@@ -3221,7 +3221,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         rejectionReason: rejectionReason || null,
       }).where(eq(waitingPeriodWaivers.id, waiver.id)).returning();
       if (action === "approve") {
-        const today = new Date().toISOString().split("T")[0];
+        const today = todayInHarare();
         await txDb.update(policies).set({ waitingPeriodEndDate: today }).where(eq(policies.id, waiver.policyId));
         const [policy] = await txDb.select().from(policies).where(eq(policies.id, waiver.policyId)).limit(1);
         if (policy?.status === "inactive") {
@@ -3256,7 +3256,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const rawPremium = body.premiumAmount;
     const premiumEffectiveDate = typeof body.premiumEffectiveDate === "string" && body.premiumEffectiveDate.trim()
       ? body.premiumEffectiveDate.trim()
-      : new Date().toISOString().split("T")[0];
+      : todayInHarare();
     const premiumChangeReason = typeof body.premiumChangeReason === "string" ? body.premiumChangeReason : null;
     delete body.premiumAmount;
     delete body.premiumEffectiveDate;
@@ -3366,7 +3366,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     if (isLegacyRequest) {
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayInHarare();
       const legacyEffectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       updated = await withOrgTransaction(user.organizationId, async (txDb) => {
         const [row] = await txDb.update(policies).set({
@@ -3467,7 +3467,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // change the policy's inception (effectiveDate). Defaults to today.
       const reconcileFrom = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : new Date().toISOString().split("T")[0];
+        : todayInHarare();
 
       const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
       const newPremium = parseFloat(String(premiumAmount));
@@ -3685,7 +3685,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const policy = accessCheck.policy;
     const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayInHarare();
     const todayDate = new Date();
     const policyStatusOk = policy.status === "active" || policy.status === "grace";
 
@@ -3835,7 +3835,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (Math.abs(newPremium - oldPremium) >= 0.01) {
       const effDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : new Date().toISOString().split("T")[0];
+        : todayInHarare();
       reconciliation = await reconcilePremiumChange({
         orgId: user.organizationId,
         policy: recalced,
@@ -3887,7 +3887,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (Math.abs(newPremium - oldPremium) >= 0.01) {
       const effDate = typeof req.body?.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : new Date().toISOString().split("T")[0];
+        : todayInHarare();
       reconciliation = await reconcilePremiumChange({
         orgId: user.organizationId,
         policy: recalced,
@@ -3933,7 +3933,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const effectiveDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
       ? req.body.effectiveDate.trim()
-      : new Date().toISOString().split("T")[0];
+      : todayInHarare();
     const periods = periodsBetween(effectiveDate, new Date(), paymentSchedule);
     const reconciliation = Number(((newPremium - oldPremium) * periods).toFixed(2));
     const direction = reconciliation > 0 ? "arrears" : reconciliation < 0 ? "credit" : "none";
@@ -4136,7 +4136,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
       const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
       const recordedByForLedger = actorRow?.id ?? null;
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayInHarare();
       const parsed = insertPaymentTransactionSchema.parse({
         ...req.body,
         organizationId: user.organizationId,
@@ -4225,7 +4225,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reason: string;
       } | null = null;
       if (tx.status === "cleared" && tx.policyId && policy) {
-        const todayDate = new Date().toISOString().split("T")[0];
+        const todayDate = todayInHarare();
         const updated = await applyPolicyStatusForClearedPayment(txDb, tx.policyId, policy, todayDate, " (recorded)", recordedByForLedger ?? undefined);
         policyStatusChange = updated
           ? { from: policy.status, to: "active" as const, reason: policy.status === "inactive" ? "First premium paid — conversion" : policy.status === "grace" ? "Payment received" : "Reinstatement — payment received" }
@@ -4698,7 +4698,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Lock the policy row to prevent concurrent modifications
       await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
 
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayInHarare();
       const [tx] = await txDb.insert(paymentTransactions).values({
         organizationId: user.organizationId,
         policyId,
@@ -4828,7 +4828,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const rows = lines.slice(1);
     let receipted = 0;
     let creditNotes = 0;
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayInHarare();
     for (const line of rows) {
       const parts = line.split(",").map((p) => p.trim());
       if (parts.length < 2) continue;
@@ -4967,7 +4967,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
       return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
     }
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayInHarare();
     const effectiveDate = receiptDate ? String(receiptDate).trim() : today;
     const isBackdated = effectiveDate < today;
     if (isBackdated && (!submitterNote || !String(submitterNote).trim())) {
@@ -5143,7 +5143,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const policy = await storage.getPolicy(receipt.policyId, user.organizationId);
       if (!policy) return res.status(404).json({ message: "Policy not found." });
-      const effectiveDate = receipt.backdatedDate || new Date().toISOString().split("T")[0];
+      const effectiveDate = receipt.backdatedDate || todayInHarare();
       const isPremiumOverride = !!(receipt.metadataJson as any)?.premiumOverride;
       const approvedNoteText = isPremiumOverride
         ? `Premium override approved — receipted ${receipt.amount} vs system premium ${(receipt.metadataJson as any)?.systemPremium ?? "?"}`
@@ -5573,7 +5573,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   async function checkWaitingPeriodViolation(policy: any, orgId: string, dateOfDeath: string | null | undefined): Promise<{ violated: boolean; waitingPeriodEndDate: string | null }> {
     const waitingPeriodEndDate = await resolvePolicyWaitingPeriodEndDate(policy, orgId);
     if (!waitingPeriodEndDate) return { violated: false, waitingPeriodEndDate: null };
-    const asOf = dateOfDeath || new Date().toISOString().split("T")[0];
+    const asOf = dateOfDeath || todayInHarare();
     return { violated: asOf < waitingPeriodEndDate, waitingPeriodEndDate };
   }
 
@@ -6110,7 +6110,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         vehicleId,
         driverId: typeof req.body.driverId === "string" && req.body.driverId ? req.body.driverId : null,
         funeralCaseId: caseId,
-        tripDate: req.body.tripDate || new Date().toISOString().slice(0, 10),
+        tripDate: req.body.tripDate || todayInHarare(),
         purpose: typeof req.body.purpose === "string" ? req.body.purpose : null,
         startLocation: typeof req.body.startLocation === "string" ? req.body.startLocation : null,
         destination: typeof req.body.destination === "string" ? req.body.destination : null,
@@ -6159,9 +6159,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/schedule/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    // Default to tomorrow
-    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-    const defaultDate = tomorrow.toISOString().slice(0, 10);
+    // Default to tomorrow (in Harare — the sweep this drives runs on Harare calendar days)
+    const [hY, hM, hD] = todayInHarare().split("-").map(Number);
+    const defaultDate = new Date(Date.UTC(hY, hM - 1, hD + 1)).toISOString().slice(0, 10);
     const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
       ? req.query.date : defaultDate;
     const { streamDailyScheduleToResponse } = await import("./schedule-pdf");
@@ -6176,7 +6176,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const dept = req.query.dept as string;
     if (!validDepts.includes(dept as any)) return res.status(400).json({ message: `dept must be one of: ${validDepts.join(", ")}` });
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayInHarare();
     const firstOfMonth = today.slice(0, 8) + "01";
     const from = typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : firstOfMonth;
     const to = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : today;
@@ -7466,7 +7466,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         amount,
         organizationId: user.organizationId,
         requisitionNumber,
-        raisedDate: req.body.raisedDate || new Date().toISOString().slice(0, 10),
+        raisedDate: req.body.raisedDate || todayInHarare(),
         requestedBy,
         funeralCaseId,
         status: submit ? "submitted" : "draft",
@@ -7509,7 +7509,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const action = String(req.body.action || "");
     const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canApprove = !!user.isPlatformOwner || effPerms.includes("approve:finance");
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayInHarare();
     const patch: Record<string, any> = {};
     let updated: typeof existing | undefined;
     // approvedBy/paidBy reference the tenant DB's users table — resolve the same way
@@ -7904,7 +7904,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
-    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : new Date().toISOString().split("T")[0];
+    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : todayInHarare();
     let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
     try {
       payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
@@ -7997,7 +7997,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (existing.status === "paid") return res.status(400).json({ message: "Expenditure is already fully paid" });
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
-    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : new Date().toISOString().split("T")[0];
+    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : todayInHarare();
     let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
     try {
       payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
@@ -8556,7 +8556,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
       deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
       deceasedSex: req.body.deceasedSex, casketType: req.body.casketType,
-      quotationDate: req.body.quotationDate || new Date().toISOString().split("T")[0],
+      quotationDate: req.body.quotationDate || todayInHarare(),
       vatRate: req.body.vatRate != null && req.body.vatRate !== "" ? parseFloat(req.body.vatRate) : 0,
       discountAmount: req.body.discountAmount ? parseFloat(req.body.discountAmount) : 0,
       paymentType: req.body.paymentType,
@@ -9875,7 +9875,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         clientId: client.id, productVersionId: pv.id, agentId: agentId || null,
         status: "inactive", premiumAmount: premium, currency: currency || "USD",
         paymentSchedule: paymentSchedule || "monthly",
-        effectiveDate: new Date().toISOString().split("T")[0],
+        effectiveDate: todayInHarare(),
         beneficiaryFirstName: ben?.firstName ? String(ben.firstName).trim() : null,
         beneficiaryLastName: ben?.lastName ? String(ben.lastName).trim() : null,
         beneficiaryRelationship: ben?.relationship ? String(ben.relationship).trim() : null,
@@ -10274,8 +10274,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Receipting activity by staff member and branch, for a given period.
   app.get("/api/reports/receipting-by-user", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : new Date().toISOString().slice(0, 10);
-    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : new Date().toISOString().slice(0, 10);
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : todayInHarare();
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : todayInHarare();
     return res.json(await storage.getReceiptingByUserAndBranch(user.organizationId, fromDate, toDate));
   });
 
@@ -10830,9 +10830,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   const defaultStatementRange = () => {
-    const to = new Date();
-    const from = new Date(to.getFullYear(), to.getMonth(), 1);
-    return { from: from.toISOString().split("T")[0], to: to.toISOString().split("T")[0] };
+    const to = todayInHarare();
+    const from = `${to.slice(0, 7)}-01`;
+    return { from, to };
   };
   app.get("/api/reports/income-statement", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
@@ -10884,20 +10884,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/daily", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : new Date().toISOString().slice(0, 10);
+    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : todayInHarare();
     return res.json(await buildDailyReport(user.organizationId, date));
   });
 
   app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : new Date().toISOString().slice(0, 10);
+    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : todayInHarare();
     const { streamDailyReportPdf } = await import("./financial-statement-pdf");
     await streamDailyReportPdf(user.organizationId, date, res, { attachment: req.query.download === "1" });
   });
 
   app.post("/api/reports/daily/notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : new Date().toISOString().slice(0, 10);
+    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : todayInHarare();
     const note = typeof req.body.note === "string" ? req.body.note.trim() : "";
     if (!note) return res.status(400).json({ message: "Note text is required" });
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
@@ -10917,7 +10917,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(403).json({ message: "Missing permission: read:finance" });
     }
     const draftText = typeof req.body.draftText === "string" ? req.body.draftText : "";
-    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : new Date().toISOString().slice(0, 10);
+    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : todayInHarare();
     const contextSummary = await buildNoteEnhanceContext(user.organizationId, date);
     const result = await enhanceNote({ draftText, contextSummary });
     if (!result.ok) return res.status(422).json({ message: result.error });
@@ -10950,7 +10950,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/balance-sheet", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : new Date().toISOString().slice(0, 10);
+    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : todayInHarare();
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
     return res.json(await buildBalanceSheet(user.organizationId, { asOf, branchId }));
   });
@@ -11792,17 +11792,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "branch-report": {
           const brRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          const brMap: Record<string, { name: string; active: number; lapsed: number; grace: number; premium: number }> = {};
+          const brMap: Record<string, { name: string; active: number; lapsed: number; grace: number; premiumByCurrency: Record<string, number> }> = {};
+          currencyTotals = { "Total Premium": {} };
           for (const r of brRaw) {
             const key = (r as any).branchId || "no-branch";
-            if (!brMap[key]) brMap[key] = { name: key, active: 0, lapsed: 0, grace: 0, premium: 0 };
+            if (!brMap[key]) brMap[key] = { name: key, active: 0, lapsed: 0, grace: 0, premiumByCurrency: {} };
             if ((r as any).status === "active") brMap[key].active++;
             else if ((r as any).status === "lapsed") brMap[key].lapsed++;
             else if ((r as any).status === "grace") brMap[key].grace++;
-            brMap[key].premium += parseFloat(String((r as any).premiumAmount ?? 0)) || 0;
+            const c = ((r as any).currency || "USD").toUpperCase();
+            const amt = parseFloat(String((r as any).premiumAmount ?? 0)) || 0;
+            brMap[key].premiumByCurrency[c] = (brMap[key].premiumByCurrency[c] || 0) + amt;
+            currencyTotals!["Total Premium"][c] = (currencyTotals!["Total Premium"][c] || 0) + amt;
           }
-          headers = ["Branch ID", "Active Policies", "Lapsed Policies", "Grace Policies", "Total Premium"];
-          rows = Object.values(brMap).map((b) => [b.name, b.active, b.lapsed, b.grace, b.premium.toFixed(2)]);
+          // Never blend currencies into one "Total Premium" number — a branch report mixing
+          // USD and ZAR policies previously summed them raw into a figure with no real meaning.
+          headers = ["Branch ID", "Active Policies", "Lapsed Policies", "Grace Policies", ...currencyHeaders("Total Premium")];
+          rows = Object.values(brMap).map((b) => [
+            b.name, b.active, b.lapsed, b.grace,
+            ...CURRENCIES.map((c) => (b.premiumByCurrency[c] ? b.premiumByCurrency[c].toFixed(2) : "")),
+          ]);
           break;
         }
         default:
@@ -11897,6 +11906,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         recipientType: r.recipient_type, failureReason: r.failure_reason,
         attempts: r.attempts, createdAt: r.created_at,
       }));
+      return res.json(rows);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.get("/api/diagnostics/outbox-failures", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      // outboxMessages lives in the org's own data DB when isolated (see outbox.ts), unlike
+      // notification_logs above which is only ever on the shared registry DB — use the
+      // tenant-aware connection so this returns real results for isolated tenants too.
+      const tdb = await getDbForOrg(user.organizationId);
+      const rows = await tdb
+        .select({
+          id: outboxMessages.id,
+          type: outboxMessages.type,
+          attempts: outboxMessages.attempts,
+          lastError: outboxMessages.lastError,
+          createdAt: outboxMessages.createdAt,
+          processedAt: outboxMessages.processedAt,
+        })
+        .from(outboxMessages)
+        .where(and(eq(outboxMessages.organizationId, user.organizationId), eq(outboxMessages.status, "failed")))
+        .orderBy(desc(outboxMessages.processedAt))
+        .limit(50);
       return res.json(rows);
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });

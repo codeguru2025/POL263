@@ -205,6 +205,34 @@ if (enableCsrf) {
     })
   );
 
+  // Unauthenticated public endpoints — no session/permission check gates these, so they're
+  // open to enumeration/scraping without a dedicated limit. The blanket /api limiter (200/min)
+  // is too generous for endpoints anyone on the internet can hit anonymously.
+  const publicLimiter = rateLimit({
+    ...limiterOpts,
+    store: getRedisStore?.("public"),
+    windowMs: 60 * 1000,
+    max: 30,
+    message: { message: "Too many requests, please slow down" },
+  });
+  app.use("/api/public/agent-card", publicLimiter);
+  app.use("/api/public/quote", publicLimiter);
+  app.use("/api/public/verify", publicLimiter);
+  app.use("/api/public/tenant-context", publicLimiter);
+
+  // Platform-owner dashboards that loop every active tenant's isolated DB in batches — each
+  // hit is a fan-out across every tenant, not a single-org query, so it needs a tighter budget
+  // than ordinary authenticated report traffic.
+  const platformDashboardLimiter = rateLimit({
+    ...limiterOpts,
+    store: getRedisStore?.("platform-dash"),
+    windowMs: 5 * 60 * 1000,
+    max: 20,
+    message: { message: "Too many platform dashboard requests, please try again shortly" },
+  });
+  app.use("/api/platform/dashboard", platformDashboardLimiter);
+  app.use("/api/platform/tenant-health", platformDashboardLimiter);
+
   app.get("/api/health", async (_req, res) => {
     try {
       const result = await pool.query("SELECT 1");

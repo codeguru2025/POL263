@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import { requireAuth } from "./auth";
+import { todayInHarare } from "./date-utils";
 
 const SUPPORTED_LANGUAGES: Record<string, string> = {
   en: "English", sn: "Shona", nd: "Ndebele", zu: "Zulu", xh: "Xhosa",
@@ -79,7 +80,7 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     }
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayInHarare();
   const policyStatusOk = policy.status === "active" || policy.status === "grace";
 
   interface EnrichedMember {
@@ -480,7 +481,7 @@ export function registerPolicyDocumentRoute(app: Express) {
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     res.setHeader("Content-Type", "application/pdf");
-    const statementDate = new Date().toISOString().slice(0, 10);
+    const statementDate = todayInHarare();
     const attachment =
       req.query.download === "1" ||
       req.query.download === "true" ||

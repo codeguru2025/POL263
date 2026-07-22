@@ -611,7 +611,7 @@ function CreatePriceBookItemDialog({
               <p className="text-xs text-muted-foreground">Will be saved as: <strong>Type of Coffin — {casketType}</strong></p>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Unit *</Label>
               <Select value={unit} onValueChange={setUnit}>
@@ -813,7 +813,7 @@ function AddLineItemDialog({
             <Label>Description *</Label>
             <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Item description" data-testid="input-lineitem-description" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Quantity</Label>
               <Input type="number" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} data-testid="input-lineitem-quantity" />
@@ -904,7 +904,7 @@ function EditPriceBookItemDialog({
               <p className="text-xs text-muted-foreground">Will be saved as: <strong>Type of Coffin — {casketType}</strong></p>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Unit *</Label>
               <Select value={unit} onValueChange={setUnit}>

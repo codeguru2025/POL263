@@ -559,7 +559,7 @@ export default function StaffClaims() {
                 data-testid="input-claim-relationship"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="claim-dod">Date of Death</Label>
                 <Input
@@ -726,7 +726,7 @@ export default function StaffClaims() {
             const { assessment, recommendation } = parseApprovalNotes(selectedClaim.approvalNotes);
             return (
               <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                   <div>
                     <p className="text-muted-foreground">Claim Number</p>
                     <p className="font-medium" data-testid="text-detail-claim-number">{selectedClaim.claimNumber}</p>

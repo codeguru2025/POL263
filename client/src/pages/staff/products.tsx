@@ -864,7 +864,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
           <DialogTitle>Create New Product</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Product Name *</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Family Plan Standard" data-testid="input-product-name" />
@@ -883,7 +883,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Member Limits</h3>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5" />Max Adults</Label>
               <Input type="number" min="1" max="10" value={maxAdults} onChange={(e) => setMaxAdults(e.target.value)} data-testid="input-max-adults" />
@@ -905,7 +905,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Cover & Casket</h3>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Cover Amount</Label>
               <Input type="number" step="0.01" min="0" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} placeholder="e.g. 15000" data-testid="input-cover-amount" />
@@ -1038,7 +1038,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Member Limits</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2"><Label>Max Adults</Label><Input type="number" min="1" max="10" value={maxAdults} onChange={(e) => setMaxAdults(e.target.value)} /></div>
             <div className="space-y-2"><Label>Max Children</Label><Input type="number" min="0" max="20" value={maxChildren} onChange={(e) => setMaxChildren(e.target.value)} /></div>
             <div className="space-y-2"><Label>Max Extended</Label><Input type="number" min="0" max="20" value={maxExtended} onChange={(e) => setMaxExtended(e.target.value)} /></div>
@@ -1050,7 +1050,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Cover & Casket</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Cover Amount</Label><Input type="number" step="0.01" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} /></div>
             <div className="space-y-2">
               <Label>Cover Currency</Label>
@@ -1328,7 +1328,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Premium Pricing</h3>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Monthly Premium (USD)</Label>
               <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
@@ -1340,7 +1340,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Weekly Premium (USD)</Label>
               <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
@@ -1366,7 +1366,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Waiting & Grace Periods</h3>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Natural Death (days)</Label>
               <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
@@ -1419,7 +1419,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Age Eligibility</h3>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Min Age (main member)</Label>
               <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
@@ -1440,7 +1440,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Cash in Lieu (optional)</h3>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Adult Cash in Lieu</Label>
               <Input type="number" step="0.01" value={cashInLieuAdult} onChange={(e) => setCashInLieuAdult(e.target.value)} placeholder="e.g. 5000.00" data-testid="input-version-cash-adult" />
@@ -1454,7 +1454,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Agent Commission</h3>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Initial Months Count</Label>
               <Input type="number" value={commFirstMonths} onChange={(e) => setCommFirstMonths(e.target.value)} placeholder="e.g. 2" data-testid="input-version-comm-first-months" />
@@ -1464,7 +1464,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Input type="number" step="0.01" value={commFirstRate} onChange={(e) => setCommFirstRate(e.target.value)} placeholder="e.g. 50" data-testid="input-version-comm-first-rate" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Recurring Start Month</Label>
               <Input type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-version-comm-recurring-start" />
@@ -1474,7 +1474,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Input type="number" step="0.01" value={commRecurringRate} onChange={(e) => setCommRecurringRate(e.target.value)} placeholder="e.g. 10" data-testid="input-version-comm-recurring-rate" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Clawback Threshold (payments)</Label>
               <Input type="number" value={commClawback} onChange={(e) => setCommClawback(e.target.value)} placeholder="e.g. 4" data-testid="input-version-comm-clawback" />
@@ -1488,7 +1488,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (optional)</h3>
           <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if this product has no underwriter.</p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Amount per adult (per month)</Label>
               <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-version-underwriter-adult" />
@@ -1514,7 +1514,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             Per-member premium charged for each member beyond the product's included count (max adults + max children + max extended).
             Leave blank if no extra charge applies.
           </p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Per additional member / month (USD)</Label>
               <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-version-additional-member-usd" />
@@ -1529,7 +1529,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             Optional: price additional members by age band instead of one flat rate above. Leave all blank to keep the flat rate.
             "Child" uses the dependent age cutoff set above; this does not affect any existing policy on this version until you fill these in.
           </p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Child / month (USD)</Label>
               <Input type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-version-ageband-child-usd" />
@@ -1682,7 +1682,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
         <DialogHeader><DialogTitle>Edit Version v{version.version}</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
           <VersionFormErrorSummary errors={fieldErrors} />
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Effective From *</Label>
               <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-edit-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
@@ -1697,7 +1697,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Premium Pricing</h3>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Monthly Premium (USD)</Label>
               <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-edit-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
@@ -1709,7 +1709,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Weekly Premium (USD)</Label>
               <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-edit-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
@@ -1735,7 +1735,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Waiting & Grace Periods</h3>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Natural Death (days)</Label>
               <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-edit-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
@@ -1760,7 +1760,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Reinstatement Rules</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="flex items-center gap-2">
               <Checkbox id="edit-reinstatement-arrears" checked={reinstatementRequiresArrears} onCheckedChange={(v) => setReinstatementRequiresArrears(v === true)} data-testid="checkbox-edit-reinstatement-arrears" />
               <Label htmlFor="edit-reinstatement-arrears" className="text-sm font-normal cursor-pointer">Requires arrears payment</Label>
@@ -1774,7 +1774,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Age Eligibility</h3>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Min Age (main member)</Label>
               <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-edit-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
@@ -1795,7 +1795,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Cash in Lieu (optional)</h3>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Adult Cash in Lieu</Label>
               <Input type="number" step="0.01" value={cashInLieuAdult} onChange={(e) => setCashInLieuAdult(e.target.value)} placeholder="e.g. 5000.00" data-testid="input-edit-version-cash-adult" />
@@ -1809,7 +1809,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Agent Commission</h3>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Initial Months Count</Label>
               <Input type="number" value={commFirstMonths} onChange={(e) => setCommFirstMonths(e.target.value)} placeholder="e.g. 2" data-testid="input-edit-version-comm-first-months" />
@@ -1819,7 +1819,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Input type="number" step="0.01" value={commFirstRate} onChange={(e) => setCommFirstRate(e.target.value)} placeholder="e.g. 50" data-testid="input-edit-version-comm-first-rate" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Recurring Start Month</Label>
               <Input type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-edit-version-comm-recurring-start" />
@@ -1829,7 +1829,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Input type="number" step="0.01" value={commRecurringRate} onChange={(e) => setCommRecurringRate(e.target.value)} placeholder="e.g. 10" data-testid="input-edit-version-comm-recurring-rate" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Clawback Threshold (payments)</Label>
               <Input type="number" value={commClawback} onChange={(e) => setCommClawback(e.target.value)} placeholder="e.g. 4" data-testid="input-edit-version-comm-clawback" />
@@ -1843,7 +1843,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Underwriter (optional)</h3>
           <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if no underwriter.</p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Amount per adult (per month)</Label>
               <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-edit-version-underwriter-adult" />
@@ -1868,7 +1868,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
             Per-member premium charged for each member beyond the product's included count (max adults + max children + max extended).
             Leave blank if no extra charge applies.
           </p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Per additional member / month (USD)</Label>
               <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-edit-version-additional-member-usd" />
@@ -1883,7 +1883,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
             Optional: price additional members by age band instead of one flat rate above. Leave all blank to keep the flat rate.
             "Child" uses the dependent age cutoff set above; existing policies on this version are unaffected until you fill these in.
           </p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Child / month (USD)</Label>
               <Input type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-edit-version-ageband-child-usd" />
@@ -2026,7 +2026,7 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
           ) : (
             <>
               <p className="text-xs text-muted-foreground">Set the price for each billing frequency, just like the main product.</p>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-2">
                   <Label className="text-xs">Monthly ($)</Label>
                   <Input type="number" step="0.01" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} placeholder="e.g. 10.00" data-testid="input-addon-price-monthly" />
@@ -2072,7 +2072,7 @@ function CreateAgeBandDialog({ open, onClose, onSubmit, isPending }: {
           onSubmit({ name, minAge: min, maxAge: max, effectiveFrom: effectiveFrom || undefined });
         }} className="space-y-4">
           <div className="space-y-2"><Label>Band Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Child (0-17)" data-testid="input-ageband-name" /></div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Min Age</Label><Input type="number" min="0" value={minAge} onChange={(e) => setMinAge(e.target.value)} data-testid="input-ageband-min" /></div>
             <div className="space-y-2"><Label>Max Age</Label><Input type="number" min="0" value={maxAge} onChange={(e) => setMaxAge(e.target.value)} data-testid="input-ageband-max" /></div>
           </div>
@@ -2135,7 +2135,7 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
               <Input type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} />
             </div>
           ) : (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="space-y-2">
                 <Label className="text-xs">Monthly ($)</Label>
                 <Input type="number" step="0.01" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} />
@@ -2236,7 +2236,7 @@ function EditAgeBandDialog({ ageBand, open, onClose, onSubmit, isPending }: {
         <DialogHeader><DialogTitle>Edit Age Band</DialogTitle></DialogHeader>
         <form onSubmit={(e) => { e.preventDefault(); onSubmit({ name, minAge: parseInt(minAge), maxAge: parseInt(maxAge), isActive }); }} className="space-y-4">
           <div className="space-y-2"><Label>Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required /></div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Min Age</Label><Input type="number" value={minAge} onChange={(e) => setMinAge(e.target.value)} /></div>
             <div className="space-y-2"><Label>Max Age</Label><Input type="number" value={maxAge} onChange={(e) => setMaxAge(e.target.value)} /></div>
           </div>
@@ -2283,7 +2283,7 @@ function CreateTermDialog({ open, onClose, onSubmit, isPending, productVersions 
           </div>
           <div className="space-y-2"><Label>Title *</Label><Input value={title} onChange={(e) => setTitle(e.target.value)} required placeholder="e.g. Waiting Period Clause" /></div>
           <div className="space-y-2"><Label>Content *</Label><Textarea value={content} onChange={(e) => setContent(e.target.value)} required rows={5} placeholder="Full clause text in English — auto-translated when downloading in other languages" /></div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Category</Label>
               <Select value={category} onValueChange={setCategory}>
@@ -2340,7 +2340,7 @@ function EditTermDialog({ term, open, onClose, onSubmit, isPending, productVersi
           </div>
           <div className="space-y-2"><Label>Title *</Label><Input value={title} onChange={(e) => setTitle(e.target.value)} required /></div>
           <div className="space-y-2"><Label>Content *</Label><Textarea value={content} onChange={(e) => setContent(e.target.value)} required rows={5} /></div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Category</Label>
               <Select value={category} onValueChange={setCategory}>

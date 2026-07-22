@@ -10,6 +10,103 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-22 — Resilience & cleanup: unbounded login fan-out, oversized tenant pools, midnight-window date bugs, and currencies silently blended into one number (Phase 6, final phase of the systems audit)
+
+- **1. `/api/agent-auth/login`'s "scan every isolated tenant DB" fallback had no budget of
+  its own.** When a login's email isn't found in the registry or the resolved tenant, the
+  handler falls back to opening a connection to *every* isolated-DB tenant and querying each
+  one — a legitimate need for users migrated before the registry mirror existed, but the
+  existing per-email lockout (`agentLockRemaining`) doesn't stop an attacker who sends a
+  different bogus email on every request; the existing IP-based `authLimiter` only bounds
+  requests per IP, not per email, and the tenant-scan fallback runs on *every* email-not-found
+  request regardless of which email was tried. Added a shared, email/IP-independent budget
+  (`TENANT_SCAN_FALLBACK_LIMIT_PER_MINUTE = 10`, `server/auth.ts`) so the DB connection
+  fan-out this path causes can't be forced unboundedly just by varying the login email.
+- **2. Every isolated tenant pool reused the shared registry pool's `max` (25 connections)**,
+  so `MAX_TENANT_POOLS` (50) × 25 could in theory open up to 1,250 connections against tenant
+  DBs that are typically much smaller managed-Postgres plans than the registry DB — this is
+  the same class of problem behind the "remaining connection slots reserved for SUPERUSER"
+  errors hit against Falakhe's DB during migrations earlier in this audit (see the Phase 1 and
+  Phase 4 entries below). Gave tenant pools their own, separate, much smaller default
+  (`TENANT_DB_POOL_MAX`, default 10) instead of sharing `DB_POOL_MAX` with the registry pool
+  (`server/tenant-db.ts`).
+- **3. Six more raw-UTC "what day is it" computations**, on top of the ones already using
+  `todayInHarare()` elsewhere: two independent "month-to-date default range" helpers
+  (`defaultExecutiveSummaryRange` in `server/financial-statements.ts`, `defaultStatementRange`
+  in `server/routes.ts`) computed "today" and "1st of this month" from the server's raw UTC
+  clock; the auto-payment-automation idempotency key bucketed by raw-UTC date instead of
+  Harare date (`server/routes.ts`); the Daily Schedule PDF's "tomorrow" default did the same.
+  All of these mis-attribute the last ~2 hours of each Harare day (22:00–24:00 CAT, which is
+  already the next calendar day in Harare but not yet in UTC) to the wrong day — a
+  month-to-date report run in that window would silently exclude the day's own income; an
+  auto-payment attempt near midnight could double up or skip a day. Also swept five smaller
+  files (`credit-apply.ts`, `payment-service.ts`, `policy-document.ts`, `hr-fleet-document.ts`,
+  `ai-context.ts`, `storage.ts`) that had the same literal `new Date().toISOString().split("T")[0]`
+  pattern but weren't caught by earlier phases because those only touched files already
+  importing `todayInHarare` from prior fixes.
+- **4. Three currency-blind summation spots** — the exact bug class the "Unbanked cash (USD)"
+  dashboard tile's mislabeling pointed at: `buildExecutiveSummary`'s admin cash-position
+  totals (`server/financial-statements.ts`) summed every admin's on-hand/deposited cash across
+  *all* currencies into one raw number, mislabeled "(USD)" on the dashboard regardless of what
+  was actually in it — live-verified against real Falakhe data, which genuinely holds both USD
+  and ZAR cash positions, confirming this wasn't a hypothetical. The branch-report CSV export
+  did the same for per-branch premium totals, and the Sales/Claims department PDF did the same
+  for total monthly premium and total cash-in-lieu. Fixed all three by grouping sums per
+  currency (never adding a USD figure to a ZAR figure) and rendering each currency separately
+  — the dashboard tile via the existing `fmtCur` per-currency formatter (already used
+  elsewhere on the same page and never blends), the CSV via the same
+  `currencyHeaders`/`currencyTotals` per-currency-column convention every other report type in
+  that export function already follows, and the PDF via one `kv()` line per currency instead
+  of cramming a multi-currency string into a fixed-height stat tile.
+- **5. Two unauthenticated-endpoint classes had no dedicated rate limit** — `/api/public/quote`,
+  `/agent-card`, `/verify`, `/tenant-context` (open to anyone, no session) were only covered by
+  the blanket 200/min `/api` limiter, generous enough for enumeration/scraping; the
+  cross-tenant `/api/platform/dashboard` and `/api/platform/tenant-health` endpoints (which
+  fan out to every active tenant's DB per request) had no limit tighter than ordinary
+  authenticated traffic. Added a 30/min public-endpoint limiter and a 20/5min platform-dashboard
+  limiter (`server/index.ts`).
+- **6. 122 dialog form-field grids used a bare `grid-cols-2/3/4`** with no responsive
+  breakpoint, so multi-column field layouts stayed multi-column even in a narrow dialog on a
+  phone screen — cramped, sometimes-unusable fields. Fixed by adding `grid-cols-1` (or
+  `grid-cols-2` for 4-column grids) as the mobile default with the existing column count moved
+  behind `sm:`, matching the responsive convention the dashboard KPI row already used
+  elsewhere in the app (`grid-cols-2 sm:grid-cols-4`) — purely additive (desktop rendering is
+  unchanged; only sub-640px viewports are affected), applied via a scoped script that only
+  touched `className="grid grid-cols-N ..."` literals inside `<DialogContent>` blocks across
+  17 files.
+- **7. Outbox failures were invisible.** `outbox.ts` already marks a message `status: "failed"`
+  with `lastError` after `MAX_ATTEMPTS` (8), but nothing surfaced that anywhere — the only
+  trace was a `structuredLog("error", ...)` line in stdout. Added `GET
+  /api/diagnostics/outbox-failures` (tenant-DB-aware, unlike the sibling
+  `notification-failures`/`recent-errors` routes which only ever query the shared registry
+  pool — noted but not touched, since fixing that is a separate, pre-existing bug outside this
+  phase's scope) and a matching "Outbox" tab on the existing `/staff/diagnostics` page,
+  following the exact same table/KPI pattern already used for notification failures on the
+  same page.
+- **Files:** `server/auth.ts`, `server/tenant-db.ts`, `server/financial-statements.ts`,
+  `server/routes.ts`, `server/credit-apply.ts`, `server/payment-service.ts`,
+  `server/policy-document.ts`, `server/hr-fleet-document.ts`, `server/ai-context.ts`,
+  `server/storage.ts`, `server/department-report-pdf.ts`, `server/index.ts`, `.env.example`,
+  `client/src/pages/staff/dashboard.tsx`, `client/src/pages/staff/diagnostics.tsx`, and 17
+  files touched only by the dialog-grid responsive sweep.
+- **Verification:** typecheck clean, full test suite green (209/209, unchanged — these are
+  resilience/formatting changes with no behavior change in the currency-correct path). Live-
+  verified against real Falakhe data: the new outbox-failures query ran cleanly against the
+  isolated tenant DB (0 failures currently, as expected); the currency-grouped cash-position
+  fix was cross-checked against a from-scratch recomputation off the raw per-admin positions —
+  0 mismatches, and confirmed Falakhe genuinely holds both USD and ZAR cash, which the old
+  blind-sum code would have silently combined into one meaningless number today.
+- **Lesson for next time:** the `todayInHarare()` sweep in Phase 4 (see below) only caught the
+  literal `new Date().toISOString().split("T")[0]` pattern — it missed every case where `new
+  Date()` was first assigned to a variable (`const to = new Date()`) before being formatted,
+  because the call site doesn't textually match. When sweeping a "wrong pattern" bug class,
+  grep for the *effect* (`.toISOString().split("T")[0]` / `.slice(0, 10)` on any date, not just
+  a literal `new Date()`) and then manually separate "this is computing 'today'" from "this is
+  formatting an already-known historical date" — the former needs `todayInHarare()`, the
+  latter doesn't and fixing it wouldn't do anything. Also: this phase closes the 6-phase audit
+  from the earlier architecture review — see the Phase 1–5 entries below for the full arc from
+  critical money-duplication bugs through UX polish.
+
 ## 2026-07-21 — UX/accessibility gaps: a real $0-submittable payment, unlabeled icon buttons, an orphaned nav path, and a keyboard-inaccessible search field (Phase 5 of the systems audit)
 
 - **Context:** Phase 5 of the audit — UX/accessibility findings. Two items in the original

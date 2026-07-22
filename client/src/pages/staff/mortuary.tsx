@@ -962,7 +962,7 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Vehicle *</Label>
               <SearchableSelect options={vehicleOptions} value={form.vehicleId} onChange={setSel("vehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search…" />
@@ -972,7 +972,7 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
               <SearchableSelect options={userOptions} value={form.driverId} onChange={setSel("driverId")} placeholder="Select driver…" searchPlaceholder="Search…" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Purpose *</Label>
               <Select value={form.purpose} onValueChange={setSel("purpose")}>
@@ -996,7 +996,7 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
             <Label className="text-xs">Destination</Label>
             <Input value={form.destination} onChange={set("destination")} placeholder="Where the vehicle is going" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Fee Amount</Label>
               <Input type="number" step="0.01" min="0" value={form.feeAmount} onChange={set("feeAmount")} placeholder="0.00" />
@@ -1182,7 +1182,7 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
               <Input value={form.deceasedName} onChange={set("deceasedName")} required placeholder="Full name" />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Gender</Label>
                 <Select value={form.deceasedGender || "__none__"} onValueChange={setSel("deceasedGender")}>
@@ -1241,7 +1241,7 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label className="text-xs">Deceased Category *</Label>
                     <Select value={form.storageCategory} onValueChange={setSel("storageCategory")}>
@@ -1278,7 +1278,7 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
             )}
 
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Next of Kin / Informant</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Informant Name</Label>
                 <Input value={form.informantName} onChange={set("informantName")} />
@@ -1294,7 +1294,7 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
             </div>
 
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Removal Details</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="col-span-2 space-y-1.5">
                 <Label className="text-xs">Removal Location</Label>
                 <Input value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where body was collected from" />
@@ -1314,7 +1314,7 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
             </div>
 
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Mortuary Receipt</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Received By (Staff)</Label>
                 <SearchableSelect options={userOptions} value={form.receivedByUserId} onChange={setSel("receivedByUserId")} placeholder="Select staff member…" searchPlaceholder="Search…" />
@@ -1421,7 +1421,7 @@ function CreateParlourDialog({ open, onOpenChange, onCreated }: {
             <Label className="text-xs">Parlour Name *</Label>
             <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required placeholder="e.g. ABC Funerals" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Phone</Label>
               <Input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="+263…" />
@@ -1572,7 +1572,7 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
               <Label className="text-xs">Date & Time of Dispatch</Label>
               <Input type="datetime-local" value={form.dispatchedAt} onChange={(e) => setForm((f) => ({ ...f, dispatchedAt: e.target.value }))} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Collected By (Name) *</Label>
                 <Input value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} required placeholder="Person collecting" />
@@ -1656,7 +1656,7 @@ function SendForPostMortemDialog({ open, onOpenChange, onSubmit, isPending }: {
             <Label className="text-xs">Taken To (location)</Label>
             <Input value={form.takenToLocation} onChange={(e) => setForm((f) => ({ ...f, takenToLocation: e.target.value }))} placeholder="e.g. State Pathologist, hospital name" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Authorized By</Label>
               <Input value={form.authorizedBy} onChange={(e) => setForm((f) => ({ ...f, authorizedBy: e.target.value }))} placeholder="Doctor / police officer" />
@@ -1703,7 +1703,7 @@ function AddBelongingDialog({ open, onOpenChange, onSubmit, isPending }: {
             <Label className="text-xs">Item Description *</Label>
             <Input value={form.itemDescription} onChange={(e) => setForm((f) => ({ ...f, itemDescription: e.target.value }))} required placeholder="e.g. Watch, Wallet, Clothing" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Quantity</Label>
               <Input type="number" min="1" value={form.quantity} onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))} />
@@ -1798,7 +1798,7 @@ function BodyWashDialog({ open, onOpenChange, existing, onSubmit, isPending }: {
             <Label className="text-xs">Other Items</Label>
             <Textarea value={form.otherItems} onChange={(e) => setForm((f) => ({ ...f, otherItems: e.target.value }))} rows={2} placeholder="Any other items provided…" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Washed By (Name)</Label>
               <Input value={form.washedByName} onChange={(e) => setForm((f) => ({ ...f, washedByName: e.target.value }))} placeholder="Person who performed wash" />

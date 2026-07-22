@@ -777,7 +777,7 @@ export default function StaffPayroll() {
             {/* Personal & role */}
             <div>
               <p className="text-sm font-semibold mb-3">Personal Details</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5"><Label>First Name *</Label><Input value={empFirstName} onChange={(e) => setEmpFirstName(e.target.value)} /></div>
                 <div className="space-y-1.5"><Label>Last Name *</Label><Input value={empLastName} onChange={(e) => setEmpLastName(e.target.value)} /></div>
                 <div className="space-y-1.5"><Label>Position / Job Title</Label><Input value={empPosition} onChange={(e) => setEmpPosition(e.target.value)} /></div>
@@ -791,7 +791,7 @@ export default function StaffPayroll() {
             {/* Employment type & contract */}
             <div>
               <p className="text-sm font-semibold mb-3">Employment Details</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Employment Type</Label>
                   <Select value={empEmploymentType} onValueChange={setEmpEmploymentType}>
@@ -828,7 +828,7 @@ export default function StaffPayroll() {
             {/* Banking details */}
             <div>
               <p className="text-sm font-semibold mb-3">Banking Details</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5"><Label>Bank Name</Label><Input value={empBankName} onChange={(e) => setEmpBankName(e.target.value)} placeholder="e.g. CBZ Bank" /></div>
                 <div className="space-y-1.5"><Label>Branch Name</Label><Input value={empBankBranch} onChange={(e) => setEmpBankBranch(e.target.value)} placeholder="e.g. Harare Main" /></div>
                 <div className="space-y-1.5"><Label>Account Number</Label><Input value={empBankAccount} onChange={(e) => setEmpBankAccount(e.target.value)} placeholder="Account number" /></div>
@@ -853,7 +853,7 @@ export default function StaffPayroll() {
             {/* Earnings */}
             <div>
               <p className="text-sm font-semibold mb-3">Earnings (monthly defaults)</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5"><Label>Basic Salary</Label><Input type="number" step="0.01" min="0" value={empBaseSalary} onChange={(e) => setEmpBaseSalary(e.target.value)} placeholder="0.00" /></div>
                 <div className="space-y-1.5"><Label>Housing Allowance</Label><Input type="number" step="0.01" min="0" value={empHousing} onChange={(e) => setEmpHousing(e.target.value)} placeholder="0.00" /></div>
                 <div className="space-y-1.5"><Label>Transport Allowance</Label><Input type="number" step="0.01" min="0" value={empTransport} onChange={(e) => setEmpTransport(e.target.value)} placeholder="0.00" /></div>
@@ -869,7 +869,7 @@ export default function StaffPayroll() {
             {/* Deductions */}
             <div>
               <p className="text-sm font-semibold mb-3">Fixed Monthly Deductions</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5"><Label>Funeral Policy</Label><Input type="number" step="0.01" min="0" value={empFuneralPolicy} onChange={(e) => setEmpFuneralPolicy(e.target.value)} placeholder="0.00" /></div>
                 <div className="space-y-1.5"><Label>Other Insurance</Label><Input type="number" step="0.01" min="0" value={empOtherInsurance} onChange={(e) => setEmpOtherInsurance(e.target.value)} placeholder="0.00" /></div>
               </div>

@@ -1278,7 +1278,7 @@ function BankingPanel() {
                 {safes.length === 0 && <p className="text-xs text-muted-foreground">No safes yet — add one below first.</p>}
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Amount</Label>
                 <Input type="number" min="0.01" step="0.01" placeholder="0.00" value={depositForm.amount} onChange={e => setDepositForm(f => ({ ...f, amount: e.target.value }))} />
@@ -1342,7 +1342,7 @@ function BankingPanel() {
               <Label>Statement date</Label>
               <Input type="date" value={balForm.statementDate} onChange={e => setBalForm(f => ({ ...f, statementDate: e.target.value }))} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Closing balance</Label>
                 <Input type="number" min="0" step="0.01" placeholder="0.00" value={balForm.closingBalance} onChange={e => setBalForm(f => ({ ...f, closingBalance: e.target.value }))} />
@@ -2564,7 +2564,7 @@ export default function StaffFinance() {
                 <DialogHeader><DialogTitle>New cashup</DialogTitle></DialogHeader>
                 <p className="text-sm text-muted-foreground">Enter amounts you received by payment method for this date. Use &quot;Load from my receipts&quot; to prefill from your issued receipts.</p>
                 <div className="space-y-4 pt-2">
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <Label>Date *</Label>
                       <Input type="date" value={createCashupDate} onChange={(e) => setCreateCashupDate(e.target.value)} data-testid="input-cashup-date" />
@@ -2596,7 +2596,7 @@ export default function StaffFinance() {
                         if (data.currency) setCreateCashupCurrency(data.currency);
                       }} data-testid="button-load-from-receipts">Load from my receipts</Button>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div><Label className="text-xs">Cash</Label><Input type="number" step="0.01" value={createCashupAmounts.cash || ""} onChange={(e) => setCreateCashupAmounts({ ...createCashupAmounts, cash: e.target.value })} placeholder="0" /></div>
                       <div><Label className="text-xs">Mobile (EcoCash/OneMoney)</Label><Input type="number" step="0.01" value={createCashupAmounts.paynow_ecocash || ""} onChange={(e) => setCreateCashupAmounts({ ...createCashupAmounts, paynow_ecocash: e.target.value })} placeholder="0" /></div>
                       <div><Label className="text-xs">Card</Label><Input type="number" step="0.01" value={createCashupAmounts.paynow_card || ""} onChange={(e) => setCreateCashupAmounts({ ...createCashupAmounts, paynow_card: e.target.value })} placeholder="0" /></div>
@@ -3394,7 +3394,7 @@ export default function StaffFinance() {
 
             <Separator />
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label>Amount (auto from policy premium)</Label>
                 <Input
@@ -3616,7 +3616,7 @@ export default function StaffFinance() {
           </DialogHeader>
 
           {/* Header fields */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Requested By</Label>
               <Select value={reqHeader.requestedByUserId || (authUser?.id ?? "")}
@@ -3882,7 +3882,7 @@ export default function StaffFinance() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label>Amount paying now *</Label>
                     <Input type="number" step="0.01" min="0.01" max={outstanding}
@@ -3896,7 +3896,7 @@ export default function StaffFinance() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label>Payment method *</Label>
                     <Select value={payForm.paymentMethod} onValueChange={(v) => setPayForm({ ...payForm, paymentMethod: v })}>
@@ -3963,7 +3963,7 @@ export default function StaffFinance() {
                       return (from / to).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
                     };
                     return (
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-1">
                         <Label>Currency actually paid</Label>
                         <CurrencySelect value={payForm.paidCurrency} onValueChange={(v) => {

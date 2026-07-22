@@ -17,6 +17,7 @@ import {
   CreditCard,
   Bell,
   Server,
+  Mail,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -36,6 +37,15 @@ interface NotificationFailure {
   failureReason: string | null;
   attempts: number;
   createdAt: string;
+}
+
+interface OutboxFailure {
+  id: string;
+  type: string;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  processedAt: string | null;
 }
 
 interface UnallocatedPayment {
@@ -83,6 +93,11 @@ export default function StaffDiagnostics() {
     queryFn: () => apiRequest("GET", "/api/diagnostics/notification-failures").then(r => r.json()),
   });
 
+  const { data: outboxFailures, isLoading: outboxFailuresLoading } = useQuery<OutboxFailure[]>({
+    queryKey: ["/api/diagnostics/outbox-failures", refreshKey],
+    queryFn: () => apiRequest("GET", "/api/diagnostics/outbox-failures").then(r => r.json()),
+  });
+
   const { data: unallocated, isLoading: unallocatedLoading } = useQuery<UnallocatedPayment[]>({
     queryKey: ["/api/diagnostics/unallocated-payments", refreshKey],
     queryFn: () => apiRequest("GET", "/api/diagnostics/unallocated-payments").then(r => r.json()),
@@ -110,7 +125,7 @@ export default function StaffDiagnostics() {
           )}
         />
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
           <KpiStatCard
             label="Database"
             value={<span data-testid="text-db-status">{healthLoading ? "Checking..." : healthError ? "Error" : health?.dbConnected ? "Connected" : "Disconnected"}</span>}
@@ -131,6 +146,11 @@ export default function StaffDiagnostics() {
             value={<span data-testid="text-unallocated-count">{unallocatedLoading ? "..." : unallocated?.length ?? 0}</span>}
             icon={CreditCard}
           />
+          <KpiStatCard
+            label="Outbox Failures"
+            value={<span data-testid="text-outbox-failure-count">{outboxFailuresLoading ? "..." : outboxFailures?.length ?? 0}</span>}
+            icon={Mail}
+          />
         </div>
 
         <Tabs defaultValue="health" className="w-full">
@@ -146,6 +166,10 @@ export default function StaffDiagnostics() {
             <TabsTrigger value="payments" data-testid="tab-payments">
               <CreditCard className="mr-2 h-4 w-4" />
               Payments
+            </TabsTrigger>
+            <TabsTrigger value="outbox" data-testid="tab-outbox">
+              <Mail className="mr-2 h-4 w-4" />
+              Outbox
             </TabsTrigger>
             <TabsTrigger value="errors" data-testid="tab-errors">
               <AlertTriangle className="mr-2 h-4 w-4" />
@@ -293,6 +317,55 @@ export default function StaffDiagnostics() {
                 <EmptyState
                   title="No unallocated payments"
                   description="All received payments have been allocated to policies."
+                  className="border-0 rounded-none bg-transparent py-8"
+                />
+              )}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="outbox" className="mt-6">
+            <CardSection title="Outbox Failures" description="Background follow-up jobs (notifications, payment automation) that exhausted their retries." icon={Mail}>
+              {outboxFailuresLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : outboxFailures && outboxFailures.length > 0 ? (
+                <div className="border rounded-md overflow-x-auto">
+                  <Table>
+                    <TableHeader className="bg-muted/50">
+                      <TableRow>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Attempts</TableHead>
+                        <TableHead>Last Error</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead>Failed At</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {outboxFailures.map((o) => (
+                        <TableRow key={o.id} data-testid={`row-outbox-failure-${o.id}`}>
+                          <TableCell>
+                            <Badge variant="outline">{o.type}</Badge>
+                          </TableCell>
+                          <TableCell>{o.attempts}</TableCell>
+                          <TableCell className="max-w-[300px] truncate text-red-600 text-sm">
+                            {o.lastError || "—"}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(o.createdAt).toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {o.processedAt ? new Date(o.processedAt).toLocaleString() : "—"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <EmptyState
+                  title="No outbox failures"
+                  description="All background follow-up jobs are completing successfully."
                   className="border-0 rounded-none bg-transparent py-8"
                 />
               )}

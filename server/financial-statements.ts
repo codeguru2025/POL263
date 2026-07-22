@@ -13,6 +13,7 @@
 import { and, eq, gte, lte, sql, inArray, desc } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
+import { todayInHarare } from "./date-utils";
 import {
   paymentReceipts,
   serviceReceipts,
@@ -800,9 +801,9 @@ export interface ExecutiveSummaryParams {
 
 /** Default range for callers that don't have their own — month-to-date. */
 export function defaultExecutiveSummaryRange(): { from: string; to: string } {
-  const to = new Date();
-  const from = new Date(to.getFullYear(), to.getMonth(), 1);
-  return { from: from.toISOString().split("T")[0], to: to.toISOString().split("T")[0] };
+  const to = todayInHarare();
+  const from = `${to.slice(0, 7)}-01`;
+  return { from, to };
 }
 
 /** Extracted from GET /api/dashboard/executive-summary so it can also be called
@@ -819,8 +820,14 @@ export async function buildExecutiveSummary(orgId: string, params: ExecutiveSumm
   const posUserIds = positions.map((p) => p.userId);
   const posUsers = posUserIds.length ? await storage.getUsersByIds(posUserIds, orgId) : [];
   const findU = (id: string) => posUsers.find((u: any) => u.id === id);
-  const totalOnHand = positions.reduce((s, p) => s + Math.max(0, p.onHand), 0);
-  const totalDeposited = positions.reduce((s, p) => s + p.totalDeposited, 0);
+  // Never blend currencies into one number — an admin's ZAR float and USD float are not
+  // interchangeable, and summing them raw produces a total with no real-world meaning.
+  const totalOnHand: Record<string, number> = {};
+  const totalDeposited: Record<string, number> = {};
+  for (const p of positions) {
+    totalOnHand[p.currency] = (totalOnHand[p.currency] || 0) + Math.max(0, p.onHand);
+    totalDeposited[p.currency] = (totalDeposited[p.currency] || 0) + p.totalDeposited;
+  }
 
   const branchRows = await tdb.execute(sql`
     SELECT
@@ -947,8 +954,8 @@ export async function buildExecutiveSummary(orgId: string, params: ExecutiveSumm
     net: is.net,
     consolidatedUsd: is.consolidatedUsd,
     cashPosition: {
-      totalOnHand: parseFloat(totalOnHand.toFixed(2)),
-      totalDeposited: parseFloat(totalDeposited.toFixed(2)),
+      totalOnHand: Object.fromEntries(Object.entries(totalOnHand).map(([c, v]) => [c, parseFloat(v.toFixed(2))])),
+      totalDeposited: Object.fromEntries(Object.entries(totalDeposited).map(([c, v]) => [c, parseFloat(v.toFixed(2))])),
       admins: positions.map((p) => ({
         ...p,
         displayName: findU(p.userId)?.displayName || findU(p.userId)?.email || p.userId,

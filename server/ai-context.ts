@@ -13,6 +13,7 @@
  */
 import { storage } from "./storage";
 import { buildDailyReport } from "./daily-report";
+import { todayInHarare } from "./date-utils";
 import { buildExecutiveSummary, defaultExecutiveSummaryRange } from "./financial-statements";
 
 export type AiSurface = "daily_report" | "dashboard" | "finance" | "policies" | "claims";
@@ -141,7 +142,7 @@ export async function buildAiInsightContext(
 ): Promise<{ datasetLabel: string; dataJson: unknown }> {
   switch (surface) {
     case "daily_report":
-      return buildDailyReportContext(orgId, date || new Date().toISOString().slice(0, 10));
+      return buildDailyReportContext(orgId, date || todayInHarare());
     case "dashboard":
       return buildDashboardContext(orgId);
     case "finance":

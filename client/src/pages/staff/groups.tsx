@@ -772,7 +772,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">Enter the member's name. After capture you'll be taken to issue their policy (already linked to this group).</p>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>First Name *</Label>
                 <Input value={legacyFirst} onChange={(e) => setLegacyFirst(e.target.value)} placeholder="First name" autoFocus data-testid="input-legacy-first" />

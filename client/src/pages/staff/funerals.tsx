@@ -1081,7 +1081,7 @@ export default function StaffFunerals() {
               <Label className="text-xs">Name *</Label>
               <Input value={parlourForm.name} onChange={(e) => setParlourForm({ ...parlourForm, name: e.target.value })} placeholder="Parlour name" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Contact Person</Label>
                 <Input value={parlourForm.contactPerson} onChange={(e) => setParlourForm({ ...parlourForm, contactPerson: e.target.value })} placeholder="Main contact" />
@@ -1121,7 +1121,7 @@ export default function StaffFunerals() {
               <Label className="text-xs">Name *</Label>
               <Input value={personnelForm.name} onChange={(e) => setPersonnelForm({ ...personnelForm, name: e.target.value })} placeholder="Full name" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Role / Title</Label>
                 <Input value={personnelForm.role} onChange={(e) => setPersonnelForm({ ...personnelForm, role: e.target.value })} placeholder="e.g. Director" />
@@ -1189,7 +1189,7 @@ export default function StaffFunerals() {
               <Label className="text-xs">Name *</Label>
               <Input value={equipmentForm.name} onChange={(e) => setEquipmentForm({ ...equipmentForm, name: e.target.value })} placeholder="e.g. Tent #1" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Type</Label>
                 <Select value={equipmentForm.equipmentType} onValueChange={(v) => setEquipmentForm({ ...equipmentForm, equipmentType: v })}>
@@ -1309,7 +1309,7 @@ export default function StaffFunerals() {
             )}
           </DialogHeader>
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Amount *</Label>
                 <Input type="number" step="0.01" min="0" value={paymentForm.amount} onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })} data-testid="input-payment-amount" />
@@ -2118,7 +2118,7 @@ function ServiceRateFormDialog({ open, onOpenChange, rate, onSubmit, isPending }
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Body Wash" disabled={!!rate} />
             {!rate && <p className="text-[10px] text-muted-foreground mt-1">Key: {form.name ? slugify(form.name) : "—"}</p>}
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Client Type *</Label>
               <Select value={form.clientType} onValueChange={(v) => setForm({ ...form, clientType: v })} disabled={!!rate}>
@@ -2159,7 +2159,7 @@ function ServiceRateFormDialog({ open, onOpenChange, rate, onSubmit, isPending }
             </div>
           )}
           {form.pricingType === "per_km" && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Base Fee (USD) *</Label>
                 <Input type="number" step="0.01" min="0" value={form.baseAmount} onChange={(e) => setForm({ ...form, baseAmount: e.target.value })} placeholder="e.g. 40.00" />
@@ -2171,7 +2171,7 @@ function ServiceRateFormDialog({ open, onOpenChange, rate, onSubmit, isPending }
             </div>
           )}
           {form.pricingType === "tiered_group" && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Group Size *</Label>
                 <Input type="number" step="1" min="1" value={form.tierGroupSize} onChange={(e) => setForm({ ...form, tierGroupSize: e.target.value })} placeholder="e.g. 3" />
@@ -2582,7 +2582,7 @@ function CaseFormDialog({
           {/* Step 1 — service type drives the rest of the flow */}
           <div className="space-y-1.5">
             <Label className="text-xs">Service Type *</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {[
                 { v: "cash", label: "Cash Service", hint: "Private / walk-in funeral" },
                 { v: "claim", label: "Policy Claim", hint: "Against an existing policy" },
@@ -2710,7 +2710,7 @@ function CaseFormDialog({
             <AccordionItem value="deceased">
               <AccordionTrigger>Deceased Details</AccordionTrigger>
               <AccordionContent>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Date of Birth">
                     <Input type="date" value={form.deceasedDob} onChange={set("deceasedDob")} data-testid="input-deceased-dob" />
                   </Field>
@@ -2750,7 +2750,7 @@ function CaseFormDialog({
             <AccordionItem value="informant">
               <AccordionTrigger>Informant (Next of Kin)</AccordionTrigger>
               <AccordionContent>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Informant Name" required>
                     <Input value={form.informantName} onChange={set("informantName")} placeholder="Next of kin name" />
                   </Field>
@@ -2778,7 +2778,7 @@ function CaseFormDialog({
             <AccordionItem value="service">
               <AccordionTrigger>Service &amp; Burial</AccordionTrigger>
               <AccordionContent>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Date of Burial">
                     <Input type="date" value={form.funeralDate} onChange={set("funeralDate")} data-testid="input-funeral-date" />
                   </Field>
@@ -2806,7 +2806,7 @@ function CaseFormDialog({
                 <p className="text-xs text-muted-foreground mb-3">
                   Set any one time — the rest auto-fill. Each service is <strong>1 hr 30 min</strong> (body wash → memorial start → memorial end → burial departure, 30 min each). A 15-minute gap is required before the next family's service.
                 </p>
-                <div className="grid grid-cols-2 gap-3 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <Field label="Body Wash">
                     <Input type="datetime-local" value={form.bodyWashTime} onChange={(e) => autoFillTimes("bodyWashTime", e.target.value)} />
                   </Field>
@@ -2827,7 +2827,7 @@ function CaseFormDialog({
             <AccordionItem value="body-id">
               <AccordionTrigger>Body Identification</AccordionTrigger>
               <AccordionContent>
-                <div className="grid grid-cols-2 gap-3 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <Field label="Identifier Full Name">
                     <Input value={form.bodyIdentifierName} onChange={set("bodyIdentifierName")} placeholder="Person who identified the body" />
                   </Field>
@@ -2850,7 +2850,7 @@ function CaseFormDialog({
                   )}
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Body Removal</p>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="col-span-2">
                         <Field label="Removal Location">
                           <Input value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where the body is being collected from" />
@@ -2873,7 +2873,7 @@ function CaseFormDialog({
                       </Label>
                     </div>
                     {form.overnightUsed && (
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <Field label="Overnight Date">
                           <Input type="date" value={form.overnightDate} onChange={set("overnightDate")} />
                         </Field>
@@ -2893,7 +2893,7 @@ function CaseFormDialog({
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Burial Logistics</p>
                     <p className="text-xs text-muted-foreground mb-2">Can be the same or different vehicle/driver as removal.</p>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Field label="Burial Vehicle">
                         <SearchableSelect options={vehicleOptions} value={form.burialVehicleId} onChange={setSel("burialVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
                       </Field>
@@ -3078,7 +3078,7 @@ function DriverChecklistDialog({ open, onOpenChange, funeralCase, existing, user
           {/* Pre-departure items — 2×2 grid */}
           <div>
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-Departure Items</p>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 rounded-md border bg-muted/30 px-4 py-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5 rounded-md border bg-muted/30 px-4 py-3">
               {([
                 ["graveTent", "Grave Tent"],
                 ["loweringDevice", "Lowering Device"],
@@ -3139,7 +3139,7 @@ function DriverChecklistDialog({ open, onOpenChange, funeralCase, existing, user
           {/* Expenses & references */}
           <div>
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Expenses &amp; References</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Driver Allowance ($)</Label>
                 <Input type="number" step="0.01" min="0" value={form.driverAllowance} onChange={(e) => setForm((f) => ({ ...f, driverAllowance: e.target.value }))} placeholder="0.00" />
@@ -3154,7 +3154,7 @@ function DriverChecklistDialog({ open, onOpenChange, funeralCase, existing, user
           {/* Driver & schedule */}
           <div>
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Driver &amp; Schedule</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Driver Allocated</Label>
                 <SearchableSelect
@@ -3224,11 +3224,11 @@ function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }:
             <Label>Registration *</Label>
             <Input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })} required data-testid="input-edit-vehicle-registration" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Make</Label><Input value={form.make} onChange={(e) => setForm({ ...form, make: e.target.value })} data-testid="input-edit-vehicle-make" /></div>
             <div className="space-y-2"><Label>Model</Label><Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} data-testid="input-edit-vehicle-model" /></div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Year</Label><Input type="number" value={form.year} onChange={(e) => setForm({ ...form, year: e.target.value })} data-testid="input-edit-vehicle-year" /></div>
             <div className="space-y-2">
               <Label>Vehicle Type</Label>
@@ -3243,7 +3243,7 @@ function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }:
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Current Mileage (km)</Label><Input type="number" value={form.currentMileage} onChange={(e) => setForm({ ...form, currentMileage: e.target.value })} data-testid="input-edit-vehicle-mileage" /></div>
             <div className="space-y-2">
               <Label>Status</Label>
@@ -3289,11 +3289,11 @@ function CreateVehicleDialog({ open, onOpenChange, onSubmit, isPending }: {
             <Label>Registration *</Label>
             <Input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })} required data-testid="input-vehicle-registration" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Make</Label><Input value={form.make} onChange={(e) => setForm({ ...form, make: e.target.value })} data-testid="input-vehicle-make" /></div>
             <div className="space-y-2"><Label>Model</Label><Input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} data-testid="input-vehicle-model" /></div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Year</Label><Input type="number" value={form.year} onChange={(e) => setForm({ ...form, year: e.target.value })} data-testid="input-vehicle-year" /></div>
             <div className="space-y-2">
               <Label>Vehicle Type</Label>

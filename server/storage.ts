@@ -2171,7 +2171,7 @@ export class DatabaseStorage implements IStorage {
           }
         : undefined;
     const aggregates = await this.getReceiptAggregatesByPolicyIds(organizationId, policyIds, receiptOpts);
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayInHarare();
     return rows.map((r) => {
       const agg = aggregates.get(r.policyId) ?? { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" };
       const dueDate = r.currentCycleEnd ?? null;

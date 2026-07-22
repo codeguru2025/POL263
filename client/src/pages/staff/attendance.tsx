@@ -388,7 +388,7 @@ function QrKiosksPanel() {
               {locatingSelf ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <QrCode className="h-4 w-4 mr-2" />}
               Use my current location
             </Button>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Latitude</Label>
                 <Input value={geoLat} onChange={(e) => setGeoLat(e.target.value)} placeholder="e.g. -17.8252" />
@@ -982,7 +982,7 @@ export default function StaffAttendance() {
               Fix a missed or incorrect scan for {correctLog?.employee?.firstName} {correctLog?.employee?.lastName} on {correctLog ? fmtDate(correctLog.date) : ""}.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-3 py-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
             <div className="space-y-1.5">
               <Label>Clock In</Label>
               <Input type="time" value={correctClockIn} onChange={(e) => setCorrectClockIn(e.target.value)} />

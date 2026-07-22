@@ -42,6 +42,15 @@ const poolLastAccess = new Map<string, number>();
 const poolCreationInFlight = new Map<string, Promise<pg.Pool>>();
 
 const max = (process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10)) || 25;
+// Isolated tenant DBs are typically much smaller managed-Postgres plans than the shared
+// registry DB, with correspondingly small total connection caps (DigitalOcean's smallest
+// plans allow as few as ~22 total, shared with admin/monitoring connections). Reusing the
+// registry pool's `max` (25) per tenant pool means up to MAX_TENANT_POOLS × 25 connections
+// could be opened against tenant DBs that individually can't support anywhere near that from
+// this one app process — this is what caused the "remaining connection slots reserved for
+// SUPERUSER" errors seen against Falakhe's DB during migrations. Give tenant pools their own,
+// much smaller default budget.
+const tenantMax = (process.env.TENANT_DB_POOL_MAX && parseInt(process.env.TENANT_DB_POOL_MAX, 10)) || 10;
 const idleTimeoutMillis =
   (process.env.DB_IDLE_TIMEOUT_MS && parseInt(process.env.DB_IDLE_TIMEOUT_MS, 10)) || 30_000;
 const connectionTimeoutMillis =
@@ -84,7 +93,7 @@ function buildPoolConfig(connectionString: string, { forTenant = false } = {}): 
   }
   return {
     connectionString: url,
-    max,
+    max: forTenant ? tenantMax : max,
     idleTimeoutMillis,
     connectionTimeoutMillis,
     ...(sslConfig && { ssl: sslConfig }),

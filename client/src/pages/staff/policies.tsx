@@ -2824,7 +2824,7 @@ export default function StaffPolicies() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs">Currency</Label>
                   <CurrencySelect value={editForm.currency} onValueChange={(v) => setEditForm({ ...editForm, currency: v })} />
@@ -2896,7 +2896,7 @@ export default function StaffPolicies() {
 
               <div>
                 <h4 className="text-sm font-semibold mb-3">Beneficiary</h4>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Label className="text-xs">First Name</Label>
                     <Input value={editForm.beneficiaryFirstName} onChange={(e) => setEditForm({ ...editForm, beneficiaryFirstName: e.target.value })} placeholder="First name" />
@@ -2931,7 +2931,7 @@ export default function StaffPolicies() {
               {canEditPremium && (
                 <div>
                   <h4 className="text-sm font-semibold mb-3">Premium override</h4>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <Label className="text-xs">Premium amount ({editForm.currency || displayPolicy?.currency || "USD"})</Label>
                       <Input
@@ -3009,7 +3009,7 @@ export default function StaffPolicies() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-2">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label>Phone</Label>
                   <Input value={editClientForm.phone} onChange={(e) => setEditClientForm({ ...editClientForm, phone: e.target.value })} />
@@ -3056,7 +3056,7 @@ export default function StaffPolicies() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs">First Name</Label>
                   <Input value={editMemberForm.firstName} onChange={(e) => setEditMemberForm({ ...editMemberForm, firstName: e.target.value })} placeholder="First name" />
@@ -3282,7 +3282,7 @@ export default function StaffPolicies() {
                     ← Back to existing dependents
                   </Button>
                 )}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Label className="text-xs">First Name *</Label>
                     <Input value={detailDepForm.firstName} onChange={(e) => setDetailDepForm({ ...detailDepForm, firstName: e.target.value })} placeholder="First name" />
@@ -4133,7 +4133,7 @@ export default function StaffPolicies() {
                   ) : (
                     <div className="border rounded-md p-3 space-y-3 bg-muted/20">
                       <p className="text-xs text-muted-foreground">A client record will be auto-created when the policy is saved. All fields required except email. Text is stored in uppercase. National ID: digits + check letter + 2 digits (e.g. 08833089H38).</p>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <Label className="text-xs">First Name *</Label>
                           <Input
@@ -4323,7 +4323,7 @@ export default function StaffPolicies() {
                             ? "Name and relationship required. National ID, date of birth and gender are optional for Legacy Individual/Group policies."
                             : "All fields required except National ID."} Text stored in uppercase.
                         </p>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <Label className="text-xs">First Name *</Label>
                             <Input value={newDep.firstName} onChange={(e) => setNewDep({ ...newDep, firstName: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, firstName: toUpper(e.target.value) })} placeholder="First name" />
@@ -4412,7 +4412,7 @@ export default function StaffPolicies() {
                     {!createForm.beneficiaryId && (
                       <div className="border rounded-md p-3 mt-2 space-y-3 bg-muted/20">
                         <p className="text-xs text-muted-foreground">All beneficiary fields required. National ID: digits + check letter + 2 digits (e.g. 08833089H38).</p>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <Label className="text-xs">First Name *</Label>
                             <Input value={createForm.beneficiaryManual.firstName} onChange={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, firstName: e.target.value } })} onBlur={(e) => setCreateForm({ ...createForm, beneficiaryManual: { ...createForm.beneficiaryManual, firstName: toUpper(e.target.value) } })} placeholder="First name" />
@@ -4593,7 +4593,7 @@ export default function StaffPolicies() {
                   )}
                 </div>
                 {canEditPremium && (
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <Label>Override premium ({createForm.currency})</Label>
                       <Input
@@ -4609,13 +4609,13 @@ export default function StaffPolicies() {
                     </div>
                   </div>
                 )}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Label>Currency</Label>
                     <CurrencySelect value={createForm.currency} onValueChange={(v) => setCreateForm({ ...createForm, currency: v })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Label>Payment Schedule</Label>
                     <Select value={createForm.paymentSchedule} onValueChange={(v) => setCreateForm({ ...createForm, paymentSchedule: v })}>

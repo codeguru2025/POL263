@@ -230,7 +230,7 @@ export default function StaffLeads() {
                   <DialogTitle>Capture New Lead</DialogTitle>
                 </DialogHeader>
                 <form onSubmit={handleCreate} noValidate className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <Label>First Name *</Label>
                       <Input name="firstName" required data-testid="input-lead-first-name" />
@@ -420,7 +420,7 @@ export default function StaffLeads() {
               </DialogHeader>
               <div className="space-y-4">
                 {/* Contact info */}
-                <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                   {viewingLead.phone && (
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Phone className="h-4 w-4 shrink-0" />

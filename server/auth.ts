@@ -60,6 +60,17 @@ function clearAgentLoginFailures(email: string): void {
   agentLoginAttempts.delete(agentLockKey(email));
 }
 
+// Global budget on the "scan every isolated-DB tenant" login fallback below — that loop's cost
+// scales linearly with the number of isolated tenants, and unlike the per-email lockout above,
+// an attacker can trivially dodge a per-email limit by sending a different bogus email on every
+// request. This counter is shared across all emails/IPs so the DB connection fan-out this path
+// causes can't be forced unboundedly just by varying the login email. Legitimate use (a user who
+// only exists in a tenant DB from a pre-registry-mirror migration) is rare enough that a shared
+// budget this size doesn't meaningfully affect it.
+const TENANT_SCAN_FALLBACK_LIMIT_PER_MINUTE = 10;
+let tenantScanFallbackCount = 0;
+setInterval(() => { tenantScanFallbackCount = 0; }, 60_000).unref();
+
 function isPlatformOwnerEmail(email?: string | null) {
   if (!email) return false;
   return email.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
@@ -651,10 +662,13 @@ export function setupAuth(app: Express) {
         user = tenantUser ?? undefined;
         structuredLog("info", "Agent login tenant lookup", { found: !!user, tenantId });
       }
-      if (!user) {
+      if (!user && tenantScanFallbackCount >= TENANT_SCAN_FALLBACK_LIMIT_PER_MINUTE) {
+        structuredLog("warn", "Agent login: tenant DB scan fallback budget exhausted, skipping", { email: email.toLowerCase().trim() });
+      } else if (!user) {
         // Last resort: search all orgs with dedicated databases (e.g. user exists only in
         // tenant DB because they were migrated from Supabase or created before the registry
         // mirror was in place). Only runs when shared-DB lookup already returned nothing.
+        tenantScanFallbackCount++;
         const { db: registryDb } = await import("./db");
         const { organizations } = await import("@shared/schema");
         const { isNotNull } = await import("drizzle-orm");

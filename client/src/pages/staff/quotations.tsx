@@ -199,7 +199,7 @@ export function QuoteDialog({
                 <Label>Deceased Name <span className="text-destructive">*</span></Label>
                 <Input value={form.deceasedName} onChange={(e) => set("deceasedName", e.target.value)} />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label>Age</Label>
                   <Input type="number" min="0" value={form.deceasedAge} onChange={(e) => set("deceasedAge", e.target.value)} />
@@ -216,7 +216,7 @@ export function QuoteDialog({
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label>Casket Type</Label>
                   <Select value={form.casketType} onValueChange={(v) => set("casketType", v)}>
@@ -326,7 +326,7 @@ export function QuoteDialog({
           <AccordionItem value="payment" className="border rounded-lg px-4">
             <AccordionTrigger className="text-sm font-semibold">Payment &amp; Terms</AccordionTrigger>
             <AccordionContent className="space-y-3 pt-2">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label>Currency</Label>
                   <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
@@ -446,7 +446,7 @@ function CollateralDialog({ open, onClose, quoteId }: { open: boolean; onClose: 
             <Label>Item Description <span className="text-destructive">*</span></Label>
             <Input value={form.itemDescription} onChange={(e) => set("itemDescription", e.target.value)} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Condition</Label>
               <Select value={form.condition} onValueChange={(v) => set("condition", v)}>
@@ -463,7 +463,7 @@ function CollateralDialog({ open, onClose, quoteId }: { open: boolean; onClose: 
               <Input type="number" min="0" step="0.01" value={form.value} onChange={(e) => set("value", e.target.value)} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Due Date</Label>
               <Input type="date" value={form.dueDate} onChange={(e) => set("dueDate", e.target.value)} />

@@ -227,7 +227,7 @@ export default function StaffUsers() {
                 )}
                 <div className="border-t pt-4 mt-2">
                   <h4 className="text-sm font-semibold mb-3">Personal Details</h4>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <Label htmlFor="new-phone">Phone</Label>
                       <Input id="new-phone" placeholder="+263..." value={newUser.phone} onChange={e => setNewUser(p => ({ ...p, phone: e.target.value }))} />
@@ -459,7 +459,7 @@ export default function StaffUsers() {
                 </div>
                 <div className="border-t pt-4 mt-2">
                   <h4 className="text-sm font-semibold mb-3">Personal Details</h4>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <Label htmlFor="edit-phone">Phone</Label>
                       <Input id="edit-phone" placeholder="+263..." value={editingUser.phone || ""} onChange={e => setEditingUser((p: any) => ({ ...p, phone: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
@@ -666,7 +666,7 @@ export default function StaffUsers() {
             </div>
             {viewingUser && (
               <div className="space-y-4 px-6 py-2 overflow-y-auto min-h-0 flex-1">
-                <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                   <div className="space-y-0.5">
                     <p className="text-xs text-muted-foreground">Display Name</p>
                     <p className="font-medium">{viewingUser.displayName || "—"}</p>

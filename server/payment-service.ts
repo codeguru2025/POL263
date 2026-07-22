@@ -17,6 +17,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { structuredLog } from "./logger";
 import { insertOutboxMessageInTx, requestOutboxDrain, OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP } from "./outbox";
+import { todayInHarare } from "./date-utils";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
 const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
@@ -694,7 +695,7 @@ export async function applyPaymentToPolicy(
     return { ok: false, error: "Policy not found — payment intent marked failed. Contact support." };
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayInHarare();
   const effectiveUserId = eventActorId(actorType, actorId);
   const channelMap: Record<string, string> = {
     ecocash: "paynow_ecocash",
@@ -871,7 +872,7 @@ export async function applyGroupPaymentToPolicies(
   }
 
   try {
-    const today = new Date().toISOString().split("T")[0];
+    const today = todayInHarare();
     const refPrefix = groupIntent.merchantReference;
     const notifiedClients = new Set<string>();
     let successCount = 0;

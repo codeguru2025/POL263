@@ -239,7 +239,7 @@ function PlansCard() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>{form.id ? "Edit plan" : "New plan"}</DialogTitle></DialogHeader>
           <div className="space-y-4 pt-2">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="pb-plan-key">Key (stable, not shown to tenants)</Label>
                 <Input id="pb-plan-key" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} placeholder="starter" disabled={!!form.id} />
@@ -260,7 +260,7 @@ function PlansCard() {
             <div className="space-y-2">
               <Label>Modules included</Label>
               <p className="text-xs text-muted-foreground">Policies, clients, payments, and reports are always included in every plan.</p>
-              <div className="grid grid-cols-2 gap-2 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                 {knownModules.map((m) => (
                   <label key={m} className="flex items-center gap-2 text-sm">
                     <Checkbox checked={form.modules.includes(m)} onCheckedChange={() => toggleModule(m)} />

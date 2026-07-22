@@ -197,9 +197,9 @@ function ExecutiveSummarySection({ execSummary, execLoading, branchesList, perio
             <p className={`text-xl font-bold tabular-nums ${(cu.net || 0) >= 0 ? "text-emerald-600" : "text-destructive"}`}>{fmt(cu.net || 0)}</p>
           </div>
           <div className="rounded-md border p-3">
-            <p className="text-xs text-muted-foreground flex items-center gap-1"><Banknote className="h-3 w-3 text-amber-500" />Unbanked cash (USD)</p>
-            <p className="text-xl font-bold tabular-nums text-amber-600">{fmt(ex.cashPosition?.totalOnHand || 0)}</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">Banked: {fmt(ex.cashPosition?.totalDeposited || 0)}</p>
+            <p className="text-xs text-muted-foreground flex items-center gap-1"><Banknote className="h-3 w-3 text-amber-500" />Unbanked cash</p>
+            <p className="text-xl font-bold tabular-nums text-amber-600">{fmtCur(ex.cashPosition?.totalOnHand)}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">Banked: {fmtCur(ex.cashPosition?.totalDeposited)}</p>
           </div>
         </div>
 

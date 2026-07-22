@@ -282,7 +282,7 @@ function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged }: { ba
           </DialogHeader>
           <div className="space-y-4 py-2">
             {!editEntry && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Section</Label>
                   <Select value={form.section} onValueChange={v => setForm(f => ({ ...f, section: v, subsection: v === "equity" ? "" : "current" }))}>
@@ -312,7 +312,7 @@ function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged }: { ba
               <Label>Label</Label>
               <Input placeholder="e.g. Motor vehicle, Bank loan, Share capital" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Amount</Label>
                 <Input type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
