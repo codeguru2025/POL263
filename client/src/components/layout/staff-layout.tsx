@@ -87,6 +87,7 @@ import { GlobalCommandBar, QuickCreateMenu } from "@/components/global-command-b
 import { ReceiptDrawerProvider } from "@/components/receipt-drawer";
 import { AgentBottomNav } from "@/components/layout/agent-bottom-nav";
 import { isNativeMobile } from "@/lib/mobile-payment";
+import { useTenantCapabilities, hasCapabilityModule } from "@/hooks/use-tenant-capabilities";
 
 type StaffNavItem = {
   href: string;
@@ -200,15 +201,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const { data: appInfo } = useQuery<any>({ queryKey: ["/api/app-info"], staleTime: 5 * 60 * 1000 });
-  const { data: tenantCapabilities } = useQuery<{ isProfiled: boolean; modules: string[] }>({
-    queryKey: ["/api/tenant-capabilities"],
-    enabled: isAuthenticated,
-    staleTime: 5 * 60 * 1000,
-  });
-  // Fail open exactly like the resolver: while loading, or for an unprofiled tenant, every
-  // capability-gated nav item stays visible rather than flashing/hiding.
-  const hasCapabilityModule = (moduleKey?: string) =>
-    !moduleKey || !tenantCapabilities || !tenantCapabilities.isProfiled || tenantCapabilities.modules.includes(moduleKey);
+  const { data: tenantCapabilities } = useTenantCapabilities(isAuthenticated);
   const canApproveAnything = permissions.includes("approve:requests") || permissions.includes("approve:waivers")
     || permissions.includes("approve:settlements") || permissions.includes("approve:finance");
   const { data: approvalsSummary } = useQuery<{ totalCount: number }>({
@@ -314,7 +307,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     items.filter((item) => {
       if (isAgent && item.agentHidden) return false;
       if (!isAgent && item.agentOnly) return false;
-      if (!hasCapabilityModule(item.capabilityModule)) return false;
+      if (!hasCapabilityModule(tenantCapabilities, item.capabilityModule)) return false;
       const perms = item.permissions ?? (item.permission ? [item.permission] : []);
       return hasAny(perms);
     });

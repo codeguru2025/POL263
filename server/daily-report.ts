@@ -8,6 +8,7 @@ import { and, eq, gte, lte, desc } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { buildIncomeStatement, buildCashFlowStatement, buildTransactionLedger } from "./financial-statements";
+import { getTenantCapabilities } from "./org-capabilities";
 import {
   funeralCases,
   mortuaryIntakes,
@@ -23,6 +24,9 @@ function dayEnd(date: string) { return new Date(date + "T23:59:59.999Z"); }
 
 export async function buildDailyReport(orgId: string, date: string) {
   const tdb = await getDbForOrg(orgId);
+  const caps = await getTenantCapabilities(orgId);
+  const hasFuneralOps = !caps.isProfiled || caps.modules.has("funeral_ops");
+  const hasClaims = !caps.isProfiled || caps.modules.has("claims");
 
   const [incomeStatement, cashFlow, ledger] = await Promise.all([
     buildIncomeStatement(orgId, { from: date, to: date }),
@@ -30,7 +34,9 @@ export async function buildDailyReport(orgId: string, date: string) {
     buildTransactionLedger(orgId, { from: date, to: date, limit: 500 }),
   ]);
 
-  const funeralCasesOpened = await tdb
+  // Skip the query entirely (not just hide the section) for tenants whose profile says this
+  // operational area doesn't apply to them — see server/org-capabilities.ts.
+  const funeralCasesOpened = !hasFuneralOps ? [] : await tdb
     .select({
       id: funeralCases.id, caseNumber: funeralCases.caseNumber, deceasedName: funeralCases.deceasedName,
       status: funeralCases.status, serviceType: funeralCases.serviceType, funeralDate: funeralCases.funeralDate,
@@ -39,7 +45,7 @@ export async function buildDailyReport(orgId: string, date: string) {
     .where(and(eq(funeralCases.organizationId, orgId), gte(funeralCases.createdAt, dayStart(date)), lte(funeralCases.createdAt, dayEnd(date))))
     .orderBy(desc(funeralCases.createdAt));
 
-  const mortuaryIntakesToday = await tdb
+  const mortuaryIntakesToday = !hasFuneralOps ? [] : await tdb
     .select({
       id: mortuaryIntakes.id, intakeNumber: mortuaryIntakes.intakeNumber, deceasedName: mortuaryIntakes.deceasedName,
       serviceScope: mortuaryIntakes.serviceScope, status: mortuaryIntakes.status,
@@ -48,7 +54,7 @@ export async function buildDailyReport(orgId: string, date: string) {
     .where(and(eq(mortuaryIntakes.organizationId, orgId), gte(mortuaryIntakes.createdAt, dayStart(date)), lte(mortuaryIntakes.createdAt, dayEnd(date))))
     .orderBy(desc(mortuaryIntakes.createdAt));
 
-  const mortuaryDispatchesToday = await tdb
+  const mortuaryDispatchesToday = !hasFuneralOps ? [] : await tdb
     .select({
       id: mortuaryDispatches.id, destination: mortuaryDispatches.destination,
       collectedByName: mortuaryDispatches.collectedByName, dispatchedAt: mortuaryDispatches.dispatchedAt,
@@ -57,7 +63,7 @@ export async function buildDailyReport(orgId: string, date: string) {
     .where(and(eq(mortuaryDispatches.organizationId, orgId), gte(mortuaryDispatches.createdAt, dayStart(date)), lte(mortuaryDispatches.createdAt, dayEnd(date))))
     .orderBy(desc(mortuaryDispatches.createdAt));
 
-  const quotationsCreated = await tdb
+  const quotationsCreated = !hasFuneralOps ? [] : await tdb
     .select({
       id: funeralQuotations.id, quotationNumber: funeralQuotations.quotationNumber, deceasedName: funeralQuotations.deceasedName,
       grandTotal: funeralQuotations.grandTotal, currency: funeralQuotations.currency, status: funeralQuotations.status,
@@ -85,7 +91,7 @@ export async function buildDailyReport(orgId: string, date: string) {
     premiumAmount: p.premiumOverride ?? p.premiumAmount,
   }));
 
-  const claimsSubmitted = await tdb
+  const claimsSubmitted = !hasClaims ? [] : await tdb
     .select({
       id: claims.id, claimNumber: claims.claimNumber, claimType: claims.claimType,
       status: claims.status, deceasedName: claims.deceasedName,
@@ -107,6 +113,10 @@ export async function buildDailyReport(orgId: string, date: string) {
       policiesActivated,
       claimsSubmitted,
     },
+    // Which operations sections are relevant to this tenant — the client uses this to decide
+    // whether to render an (otherwise permanently-empty) section at all, not just to display a
+    // "(0)" count. See server/org-capabilities.ts.
+    capabilities: { hasFuneralOps, hasClaims },
     notes,
   };
 }

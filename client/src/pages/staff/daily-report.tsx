@@ -198,36 +198,42 @@ export default function DailyReport() {
             {/* Operations summary */}
             <CardSection title="Operations" description="Funeral, mortuary, and policy activity fetched automatically for the day.">
               <div className="grid gap-5 sm:grid-cols-2">
-                <OpsList title={`Funeral cases opened (${report.operations.funeralCasesOpened.length})`}>
-                  {report.operations.funeralCasesOpened.map((c: any) => (
-                    <li key={c.id}>{c.caseNumber} — {c.deceasedName} <span className="text-muted-foreground">({c.serviceType || "—"}, {c.status})</span></li>
-                  ))}
-                </OpsList>
-                <OpsList title={`Mortuary intakes (${report.operations.mortuaryIntakes.length})`}>
-                  {report.operations.mortuaryIntakes.map((m: any) => (
-                    <li key={m.id}>{m.intakeNumber} — {m.deceasedName} <span className="text-muted-foreground">({m.serviceScope})</span></li>
-                  ))}
-                </OpsList>
-                <OpsList title={`Mortuary dispatches (${report.operations.mortuaryDispatches.length})`}>
-                  {report.operations.mortuaryDispatches.map((d: any) => (
-                    <li key={d.id}>{d.destination || "—"} <span className="text-muted-foreground">collected by {d.collectedByName || "—"}</span></li>
-                  ))}
-                </OpsList>
-                <OpsList title={`Quotations created (${report.operations.quotationsCreated.length})`}>
-                  {report.operations.quotationsCreated.map((q: any) => (
-                    <li key={q.id}>{q.quotationNumber} — {q.deceasedName || "—"} <span className="text-muted-foreground">({q.currency} {money(q.grandTotal)}, {q.status})</span></li>
-                  ))}
-                </OpsList>
+                {(report.capabilities?.hasFuneralOps ?? true) && (
+                  <>
+                    <OpsList title={`Funeral cases opened (${report.operations.funeralCasesOpened.length})`}>
+                      {report.operations.funeralCasesOpened.map((c: any) => (
+                        <li key={c.id}>{c.caseNumber} — {c.deceasedName} <span className="text-muted-foreground">({c.serviceType || "—"}, {c.status})</span></li>
+                      ))}
+                    </OpsList>
+                    <OpsList title={`Mortuary intakes (${report.operations.mortuaryIntakes.length})`}>
+                      {report.operations.mortuaryIntakes.map((m: any) => (
+                        <li key={m.id}>{m.intakeNumber} — {m.deceasedName} <span className="text-muted-foreground">({m.serviceScope})</span></li>
+                      ))}
+                    </OpsList>
+                    <OpsList title={`Mortuary dispatches (${report.operations.mortuaryDispatches.length})`}>
+                      {report.operations.mortuaryDispatches.map((d: any) => (
+                        <li key={d.id}>{d.destination || "—"} <span className="text-muted-foreground">collected by {d.collectedByName || "—"}</span></li>
+                      ))}
+                    </OpsList>
+                    <OpsList title={`Quotations created (${report.operations.quotationsCreated.length})`}>
+                      {report.operations.quotationsCreated.map((q: any) => (
+                        <li key={q.id}>{q.quotationNumber} — {q.deceasedName || "—"} <span className="text-muted-foreground">({q.currency} {money(q.grandTotal)}, {q.status})</span></li>
+                      ))}
+                    </OpsList>
+                  </>
+                )}
                 <OpsList title={`Policies activated (${report.operations.policiesActivated.length})`}>
                   {report.operations.policiesActivated.map((p: any) => (
                     <li key={p.id}>{p.policyNumber} — {[p.clientFirstName, p.clientLastName].filter(Boolean).join(" ")} <span className="text-muted-foreground">({p.currency} {money(p.premiumAmount)}{p.isLegacy ? ", legacy" : ""})</span></li>
                   ))}
                 </OpsList>
-                <OpsList title={`Claims submitted (${report.operations.claimsSubmitted.length})`}>
-                  {report.operations.claimsSubmitted.map((c: any) => (
-                    <li key={c.id}>{c.claimNumber} — {c.deceasedName || c.claimType} <span className="text-muted-foreground">({c.status})</span></li>
-                  ))}
-                </OpsList>
+                {(report.capabilities?.hasClaims ?? true) && (
+                  <OpsList title={`Claims submitted (${report.operations.claimsSubmitted.length})`}>
+                    {report.operations.claimsSubmitted.map((c: any) => (
+                      <li key={c.id}>{c.claimNumber} — {c.deceasedName || c.claimType} <span className="text-muted-foreground">({c.status})</span></li>
+                    ))}
+                  </OpsList>
+                )}
               </div>
             </CardSection>
 

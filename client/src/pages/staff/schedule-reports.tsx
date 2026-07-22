@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection } from "@/components/ds";
 import { Button } from "@/components/ui/button";
@@ -9,14 +9,15 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { getApiBase } from "@/lib/queryClient";
 import { CalendarDays, Download, FileText, Building2, DollarSign, Users, Bed, BarChart3, ShieldCheck } from "lucide-react";
+import { useTenantCapabilities, hasCapabilityModule } from "@/hooks/use-tenant-capabilities";
 
 const DEPARTMENTS = [
-  { id: "funeral",  label: "Operations — Funeral Services", icon: FileText,    desc: "Active cases, upcoming services, status breakdown." },
+  { id: "funeral",  label: "Operations — Funeral Services", icon: FileText,    desc: "Active cases, upcoming services, status breakdown.", capabilityModule: "funeral_ops" },
   { id: "finance",  label: "Finance Department",            icon: DollarSign,   desc: "Receipts collected, payment totals by currency." },
-  { id: "hr",       label: "Human Resources & Payroll",     icon: Users,        desc: "Employee register, attendance summary for period." },
-  { id: "mortuary", label: "Mortuary Department",           icon: Bed,          desc: "Current occupants, full intake register." },
+  { id: "hr",       label: "Human Resources & Payroll",     icon: Users,        desc: "Employee register, attendance summary for period.", capabilityModule: "payroll" },
+  { id: "mortuary", label: "Mortuary Department",           icon: Bed,          desc: "Current occupants, full intake register.", capabilityModule: "funeral_ops" },
   { id: "sales",    label: "Sales & Policy Administration", icon: BarChart3,    desc: "Policies issued, status breakdown, premium totals." },
-  { id: "claims",   label: "Claims Department",             icon: ShieldCheck,  desc: "Claims filed, status breakdown, cash-in-lieu totals." },
+  { id: "claims",   label: "Claims Department",             icon: ShieldCheck,  desc: "Claims filed, status breakdown, cash-in-lieu totals.", capabilityModule: "claims" },
 ] as const;
 
 type DeptId = typeof DEPARTMENTS[number]["id"];
@@ -39,10 +40,21 @@ export default function StaffScheduleReports() {
   // Daily schedule state
   const [scheduleDate, setScheduleDate] = useState(tomorrowDate);
 
+  const { data: capabilities } = useTenantCapabilities();
+  const visibleDepartments = DEPARTMENTS.filter((d) => hasCapabilityModule(capabilities, (d as any).capabilityModule));
+
   // Department report state
   const [dept, setDept] = useState<DeptId>("funeral");
   const [fromDate, setFromDate] = useState(firstOfMonth);
   const [toDate, setToDate] = useState(todayDate);
+
+  // If the previously-selected department isn't relevant to this tenant (e.g. "funeral" for a
+  // tenant with no funeral_ops capability), fall back to the first one that is.
+  useEffect(() => {
+    if (visibleDepartments.length > 0 && !visibleDepartments.some((d) => d.id === dept)) {
+      setDept(visibleDepartments[0].id);
+    }
+  }, [visibleDepartments, dept]);
 
   const handleScheduleDownload = (inline = false) => {
     const params = new URLSearchParams({ date: scheduleDate });
@@ -129,7 +141,7 @@ export default function StaffScheduleReports() {
             <div className="md:col-span-3 space-y-2">
               <Label>Department</Label>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {DEPARTMENTS.map((d) => {
+                {visibleDepartments.map((d) => {
                   const Icon = d.icon;
                   const active = dept === d.id;
                   return (
