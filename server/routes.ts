@@ -2943,6 +2943,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    // Underwriting (server/underwriting.ts) — only relevant for product versions that opt in via
+    // requiresUnderwriting; every product today leaves it unset, so underwritingResult stays null
+    // and nothing below this block changes behavior.
+    let underwritingResult: import("./underwriting").UnderwritingEvaluationResult | null = null;
+    if (req.body.productVersionId) {
+      const pvForUnderwriting = await storage.getProductVersion(req.body.productVersionId, user.organizationId);
+      if ((pvForUnderwriting as any)?.requiresUnderwriting) {
+        const { evaluateUnderwriting } = await import("./underwriting");
+        underwritingResult = evaluateUnderwriting(
+          (pvForUnderwriting as any).underwritingQuestions || [],
+          req.body.underwritingAnswers || {},
+        );
+        if (underwritingResult.status === "declined") {
+          await auditLog(req, "decline", "policy_underwriting", "n/a", null, {
+            productVersionId: req.body.productVersionId,
+            clientId: req.body.clientId,
+            answers: req.body.underwritingAnswers || {},
+            triggeredQuestions: underwritingResult.triggeredQuestions,
+          });
+          structuredLog("info", "POST /api/policies underwriting declined", { productVersionId: req.body.productVersionId, userId: user?.id, orgId: user?.organizationId });
+          return res.status(400).json({
+            error: "Underwriting declined",
+            message: "Based on the answers provided, this application cannot be accepted for this product.",
+            triggeredQuestions: underwritingResult.triggeredQuestions,
+          });
+        }
+      }
+    }
+
     let premiumAmount = "0";
     if (req.body.productVersionId) {
       premiumAmount = await computePolicyPremium(
@@ -2954,6 +2983,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         memberAddOns,
         1 + members.length,
         dependentDateOfBirths,
+        undefined,
+        underwritingResult?.loadingPercent,
       );
     }
 
@@ -3023,6 +3054,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       beneficiaryNationalId: beneficiary?.nationalId || null,
       beneficiaryPhone: beneficiary?.phone || null,
       beneficiaryDependentId: beneficiary?.dependentId || null,
+      underwritingStatus: underwritingResult?.status ?? null,
+      underwritingAnswers: underwritingResult ? (req.body.underwritingAnswers || {}) : null,
+      underwritingLoadingPercent: underwritingResult?.status === "rated_up" ? underwritingResult.loadingPercent.toFixed(2) : null,
+      underwritingDecidedAt: underwritingResult ? new Date() : null,
     });
 
     const clientRow = await storage.getClient(parsed.clientId, user.organizationId);

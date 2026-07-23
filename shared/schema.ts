@@ -699,6 +699,14 @@ export const productVersions = pgTable(
     dailyBenefitRateZar: numeric("daily_benefit_rate_zar"),
     maxDaysPerClaim: integer("max_days_per_claim"),
     maxDaysPerYear: integer("max_days_per_year"),
+    /**
+     * Underwriting (server/underwriting.ts) — false/null for every product version today
+     * (funeral cash plans are guaranteed-acceptance), so this whole block is a no-op unless a
+     * product version explicitly opts in. underwritingQuestions is an array of
+     * { id, text, options: [{ value, label, outcome: 'accept'|'rate_up'|'decline', loadingPercent? }] }.
+     */
+    requiresUnderwriting: boolean("requires_underwriting").default(false).notNull(),
+    underwritingQuestions: jsonb("underwriting_questions"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -845,6 +853,16 @@ export const policies = pgTable(
     /** Manually set premium that overrides the system-calculated premiumAmount. When set, this is the effective premium. */
     premiumOverride: numeric("premium_override", { precision: 12, scale: 2 }),
     premiumOverrideNote: text("premium_override_note"),
+    /**
+     * Underwriting decision (server/underwriting.ts), recorded at policy creation when the
+     * product version has requiresUnderwriting set. Null for every policy on a product that
+     * doesn't require underwriting (the overwhelming majority today).
+     */
+    underwritingStatus: text("underwriting_status"), // null | 'accepted' | 'rated_up' | 'declined'
+    underwritingAnswers: jsonb("underwriting_answers"),
+    /** Extra premium loading applied on top of the base premium when underwritingStatus = 'rated_up'. */
+    underwritingLoadingPercent: numeric("underwriting_loading_percent", { precision: 5, scale: 2 }),
+    underwritingDecidedAt: timestamp("underwriting_decided_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deletedAt: timestamp("deleted_at"),
   },

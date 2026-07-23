@@ -123,6 +123,10 @@ export async function computePolicyPremium(
   // passing them in here skips the 3 DB round-trips this function would otherwise make PER POLICY,
   // without duplicating the pricing math itself for a "batch" variant of this function.
   preloaded?: { productVersion?: any; product?: any; orgAddOns?: any[] },
+  // Underwriting loading (server/underwriting.ts) — percentage added on top of the otherwise-
+  // computed premium. Undefined/0 for every product that doesn't require underwriting, which is
+  // every product today, so this is a no-op for all existing callers.
+  underwritingLoadingPercent?: number,
 ): Promise<string> {
   const pv = preloaded?.productVersion ?? await storage.getProductVersion(productVersionId, orgId);
   if (!pv) return "0";
@@ -254,7 +258,8 @@ export async function computePolicyPremium(
   const clampedAddOnTotal = Math.max(addOnTotal, -base);
   const totalRaw = base + clampedAddOnTotal + dependantSurcharge;
   const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? totalRaw : 0;
-  return total.toFixed(2);
+  const loaded = underwritingLoadingPercent ? total * (1 + underwritingLoadingPercent / 100) : total;
+  return loaded.toFixed(2);
 }
 
 /**
