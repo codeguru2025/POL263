@@ -5684,16 +5684,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // rather than rejected outright here. The hard stop is at the approve transition instead
       // (POST /api/claims/:id/transition), which is the actual moment money gets committed.
       let fraudFlags: Record<string, any> | undefined;
+      // Hospital cash claims (server/hospital-cash-claims.ts) compute their own payout from
+      // admission/discharge dates — days x daily rate, capped — rather than taking whatever
+      // figure was typed in, the way a death claim's cashInLieuAmount still does. Only kicks in
+      // when the policy's product is actually benefitTrigger:'hospitalization'; every other
+      // product (i.e. every real product today) is completely unaffected.
+      let hospitalCashPatch: Record<string, any> = {};
       if (req.body.policyId) {
         const claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
         const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, caseFillPatch.dateOfDeath ?? req.body.dateOfDeath);
         if (wp.violated) {
           fraudFlags = { waitingPeriod: { violated: true, waitingPeriodEndDate: wp.waitingPeriodEndDate, checkedAt: new Date().toISOString() } };
         }
+        if (claimPolicy?.productVersionId && req.body.admissionDate && req.body.dischargeDate) {
+          const pv = await storage.getProductVersion(claimPolicy.productVersionId, user.organizationId);
+          const product = pv?.productId ? await storage.getProduct(pv.productId, user.organizationId) : undefined;
+          if (product?.benefitTrigger === "hospitalization") {
+            const { computeHospitalCashPayout } = await import("./hospital-cash-claims");
+            const payout = await computeHospitalCashPayout(
+              user.organizationId, claimPolicy.productVersionId, req.body.currency || claimPolicy.currency || "USD",
+              req.body.admissionDate, req.body.dischargeDate, claimPolicy.id,
+            );
+            hospitalCashPatch.cashInLieuAmount = payout.amount;
+          }
+        }
       }
       const parsed = insertClaimSchema.parse({
         ...req.body,
         ...caseFillPatch,
+        ...hospitalCashPatch,
         organizationId: user.organizationId,
         claimNumber: "PENDING",
         status: "submitted",

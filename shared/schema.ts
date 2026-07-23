@@ -688,6 +688,17 @@ export const productVersions = pgTable(
     additionalMemberRate66To84Zar: numeric("additional_member_rate_66_84_zar"),
     additionalMemberRate85PlusUsd: numeric("additional_member_rate_85_plus_usd"),
     additionalMemberRate85PlusZar: numeric("additional_member_rate_85_plus_zar"),
+    /**
+     * Hospital cash benefit config (server/hospital-cash-claims.ts) — only relevant when the
+     * parent product's benefitTrigger is 'hospitalization'; null/unused for the funeral cash-
+     * plan shape every other product uses. Premium pricing above (premiumMonthlyUsd etc.) is
+     * shared/reused as-is — hospital cash charges the same way any other product does, only the
+     * claim payout math differs.
+     */
+    dailyBenefitRateUsd: numeric("daily_benefit_rate_usd"),
+    dailyBenefitRateZar: numeric("daily_benefit_rate_zar"),
+    maxDaysPerClaim: integer("max_days_per_claim"),
+    maxDaysPerYear: integer("max_days_per_year"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -1340,6 +1351,9 @@ export const claims = pgTable(
     deceasedRelationship: text("deceased_relationship"),
     dateOfDeath: date("date_of_death"),
     causeOfDeath: text("cause_of_death"),
+    /** Hospital cash claims only (server/hospital-cash-claims.ts) — null for death claims. */
+    admissionDate: date("admission_date"),
+    dischargeDate: date("discharge_date"),
     cashInLieuAmount: numeric("cash_in_lieu_amount"),
     currency: text("currency").default("USD").notNull(),
     isWaitingPeriodWaived: boolean("is_waiting_period_waived").default(false),
