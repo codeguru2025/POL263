@@ -601,6 +601,24 @@ export const products = pgTable(
     coverCurrency: text("cover_currency").default("USD"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    /**
+     * Generalizes the risk/protection engine beyond funeral cash plans (see
+     * shared/product-types.ts). Nullable/additive — existing products (funeral cash plans) are
+     * left null rather than force-backfilled, and every place that reads these must treat null
+     * the same as {benefitTrigger:"death", insuredEntityType:"person_household"} (today's only
+     * real behavior) so no existing product's premium/claim logic changes. maxAdults/maxChildren/
+     * casketType/etc. above stay exactly as-is — they're the person_household+death shape, not
+     * replaced by this.
+     */
+    // Plain text (not .$type<>()-branded) to match this schema's convention for enum-like
+    // columns (status, claimType, etc.) — drizzle-zod's auto-generated insert schema widens a
+    // branded text column back to string anyway, so branding here just fights the inferred
+    // InsertProduct type for no real safety gain. Validated against BENEFIT_TRIGGERS/
+    // INSURED_ENTITY_TYPES at the route layer instead; use resolveBenefitTrigger()/
+    // resolveInsuredEntityType() (shared/product-types.ts) to read these with the null-means-
+    // death/person_household default applied.
+    benefitTrigger: text("benefit_trigger"),
+    insuredEntityType: text("insured_entity_type"),
   },
   (t) => [
     index("products_org_idx").on(t.organizationId),
