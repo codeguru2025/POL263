@@ -76,8 +76,8 @@ function MonthEndRunUpload({ onSuccess }: { onSuccess: () => void }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-4">
       <div>
-        <Label>CSV file</Label>
-        <Input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="max-w-xs" />
+        <Label htmlFor="csv-file">CSV file</Label>
+        <Input id="csv-file" type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="max-w-xs" />
       </div>
       <Button onClick={() => mutation.mutate()} disabled={!file || mutation.isPending} data-testid="button-run-month-end">
         {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
@@ -290,8 +290,8 @@ function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }) {
               <p className="text-sm text-muted-foreground">Rejecting will leave the policy unchanged. The submitter should be notified separately.</p>
             )}
             <div className="space-y-1">
-              <Label>{actionType === "approve" ? "Approval note *" : "Rejection note *"}</Label>
-              <Textarea
+              <Label htmlFor="approval-note">{actionType === "approve" ? "Approval note *" : "Rejection note *"}</Label>
+              <Textarea id="approval-note"
                 value={approvalNote}
                 onChange={(e) => setApprovalNote(e.target.value)}
                 placeholder={actionType === "approve" ? "Note confirming the basis for approval..." : "Reason for rejection..."}
@@ -452,9 +452,9 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   return (
     <div className="space-y-4">
       <div>
-        <Label>Group</Label>
+        <Label htmlFor="group-id">Group</Label>
         <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setPaynowIntentId(null); setPolling(false); }}>
-          <SelectTrigger className="max-w-xs"><SelectValue placeholder="Select group" /></SelectTrigger>
+          <SelectTrigger id="group-id" className="max-w-xs"><SelectValue placeholder="Select group" /></SelectTrigger>
           <SelectContent>
             {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}{(g as any).isLegacy ? " (Legacy)" : ""}</SelectItem>)}
           </SelectContent>
@@ -468,13 +468,13 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
           </p>
           <div className="grid grid-cols-3 gap-4 max-w-md">
             <div>
-              <Label>Amount</Label>
-              <Input type="number" step="0.01" min="0" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="0.00" />
+              <Label htmlFor="total-amount">Amount</Label>
+              <Input id="total-amount" type="number" step="0.01" min="0" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="0.00" />
             </div>
             <div>
-              <Label>Currency</Label>
+              <Label htmlFor="legacy-currency">Currency</Label>
               <Select value={legacyCurrency} onValueChange={setLegacyCurrency}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="legacy-currency"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="USD">USD</SelectItem>
                   <SelectItem value="ZAR">ZAR</SelectItem>
@@ -483,13 +483,13 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
               </Select>
             </div>
             <div>
-              <Label>Receipt date</Label>
-              <Input type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
+              <Label htmlFor="receipt-date">Receipt date</Label>
+              <Input id="receipt-date" type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
             </div>
           </div>
           <div className="max-w-md">
-            <Label>Notes (optional)</Label>
-            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
+            <Label htmlFor="notes">Notes (optional)</Label>
+            <Input id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
           </div>
           <Button onClick={() => legacyMutation.mutate()} disabled={!totalAmount || parseFloat(totalAmount) <= 0 || legacyMutation.isPending}>
             {legacyMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
@@ -545,13 +545,13 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
               <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total to split" />
             </div>
             <div>
-              <Label>Receipt date</Label>
-              <Input type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
+              <Label htmlFor="receipt-date-2">Receipt date</Label>
+              <Input id="receipt-date-2" type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
             </div>
           </div>
           <div>
-            <Label>Receipt notes (optional)</Label>
-            <Textarea
+            <Label htmlFor="notes-2">Receipt notes (optional)</Label>
+            <Textarea id="notes-2"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Any notes about this receipt session — appear on individual member receipts..."
@@ -565,8 +565,8 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
               <p className="text-sm font-medium text-amber-800 dark:text-amber-400">Backdated receipt — approval required</p>
               <p className="text-xs text-amber-700 dark:text-amber-500">This receipt will be queued for manager approval before being applied to financial statements.</p>
               <div className="space-y-1">
-                <Label className="text-xs">Notes for approver *</Label>
-                <Textarea
+                <Label className="text-xs" htmlFor="submitter-note">Notes for approver *</Label>
+                <Textarea id="submitter-note"
                   value={submitterNote}
                   onChange={(e) => setSubmitterNote(e.target.value)}
                   placeholder="Explain why this receipt is being backdated..."
@@ -1119,21 +1119,21 @@ function BankingPanel() {
           <DialogHeader><DialogTitle>Add bank account</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label>Account name</Label>
-              <Input placeholder="e.g. FBC Main USD Account" value={accountForm.accountName} onChange={e => setAccountForm(f => ({ ...f, accountName: e.target.value }))} />
+              <Label htmlFor="account-form-account-name">Account name</Label>
+              <Input id="account-form-account-name" placeholder="e.g. FBC Main USD Account" value={accountForm.accountName} onChange={e => setAccountForm(f => ({ ...f, accountName: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Bank</Label>
-              <Input placeholder="e.g. FBC Bank" value={accountForm.bankName} onChange={e => setAccountForm(f => ({ ...f, bankName: e.target.value }))} />
+              <Label htmlFor="account-form-bank-name">Bank</Label>
+              <Input id="account-form-bank-name" placeholder="e.g. FBC Bank" value={accountForm.bankName} onChange={e => setAccountForm(f => ({ ...f, bankName: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Account number</Label>
-              <Input placeholder="Account number" value={accountForm.accountNumber} onChange={e => setAccountForm(f => ({ ...f, accountNumber: e.target.value }))} />
+              <Label htmlFor="account-form-account-number">Account number</Label>
+              <Input id="account-form-account-number" placeholder="Account number" value={accountForm.accountNumber} onChange={e => setAccountForm(f => ({ ...f, accountNumber: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Currency</Label>
+              <Label htmlFor="account-form-currency">Currency</Label>
               <Select value={accountForm.currency} onValueChange={v => setAccountForm(f => ({ ...f, currency: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="account-form-currency"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="USD">USD</SelectItem>
                   <SelectItem value="ZAR">ZAR</SelectItem>
@@ -1142,8 +1142,8 @@ function BankingPanel() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
-              <Textarea rows={2} value={accountForm.notes} onChange={e => setAccountForm(f => ({ ...f, notes: e.target.value }))} />
+              <Label htmlFor="account-form-notes">Notes (optional)</Label>
+              <Textarea id="account-form-notes" rows={2} value={accountForm.notes} onChange={e => setAccountForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>
@@ -1162,21 +1162,21 @@ function BankingPanel() {
           <DialogHeader><DialogTitle>Edit bank account</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label>Account name</Label>
-              <Input value={editAccountForm.accountName} onChange={e => setEditAccountForm(f => ({ ...f, accountName: e.target.value }))} />
+              <Label htmlFor="edit-account-form-account-name">Account name</Label>
+              <Input id="edit-account-form-account-name" value={editAccountForm.accountName} onChange={e => setEditAccountForm(f => ({ ...f, accountName: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Bank</Label>
-              <Input value={editAccountForm.bankName} onChange={e => setEditAccountForm(f => ({ ...f, bankName: e.target.value }))} />
+              <Label htmlFor="edit-account-form-bank-name">Bank</Label>
+              <Input id="edit-account-form-bank-name" value={editAccountForm.bankName} onChange={e => setEditAccountForm(f => ({ ...f, bankName: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Account number</Label>
-              <Input value={editAccountForm.accountNumber} onChange={e => setEditAccountForm(f => ({ ...f, accountNumber: e.target.value }))} />
+              <Label htmlFor="edit-account-form-account-number">Account number</Label>
+              <Input id="edit-account-form-account-number" value={editAccountForm.accountNumber} onChange={e => setEditAccountForm(f => ({ ...f, accountNumber: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Currency</Label>
+              <Label htmlFor="edit-account-form-currency">Currency</Label>
               <Select value={editAccountForm.currency} onValueChange={v => setEditAccountForm(f => ({ ...f, currency: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="edit-account-form-currency"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="USD">USD</SelectItem>
                   <SelectItem value="ZAR">ZAR</SelectItem>
@@ -1185,8 +1185,8 @@ function BankingPanel() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
-              <Textarea rows={2} value={editAccountForm.notes} onChange={e => setEditAccountForm(f => ({ ...f, notes: e.target.value }))} />
+              <Label htmlFor="edit-account-form-notes">Notes (optional)</Label>
+              <Textarea id="edit-account-form-notes" rows={2} value={editAccountForm.notes} onChange={e => setEditAccountForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox checked={editAccountForm.isActive} onCheckedChange={(v) => setEditAccountForm(f => ({ ...f, isActive: !!v }))} />
@@ -1209,13 +1209,13 @@ function BankingPanel() {
           <DialogHeader><DialogTitle>Add safe</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label>Safe name</Label>
-              <Input placeholder="e.g. Head Office Safe" value={safeForm.name} onChange={e => setSafeForm(f => ({ ...f, name: e.target.value }))} />
+              <Label htmlFor="safe-form-name">Safe name</Label>
+              <Input id="safe-form-name" placeholder="e.g. Head Office Safe" value={safeForm.name} onChange={e => setSafeForm(f => ({ ...f, name: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Currency</Label>
+              <Label htmlFor="safe-form-currency">Currency</Label>
               <Select value={safeForm.currency} onValueChange={v => setSafeForm(f => ({ ...f, currency: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="safe-form-currency"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="USD">USD</SelectItem>
                   <SelectItem value="ZAR">ZAR</SelectItem>
@@ -1224,8 +1224,8 @@ function BankingPanel() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
-              <Textarea rows={2} value={safeForm.notes} onChange={e => setSafeForm(f => ({ ...f, notes: e.target.value }))} />
+              <Label htmlFor="safe-form-notes">Notes (optional)</Label>
+              <Textarea id="safe-form-notes" rows={2} value={safeForm.notes} onChange={e => setSafeForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>
@@ -1258,9 +1258,9 @@ function BankingPanel() {
             </div>
             {depositForm.destinationType === "bank" ? (
               <div className="space-y-1.5">
-                <Label>Bank account</Label>
+                <Label htmlFor="deposit-form-bank-account-id">Bank account</Label>
                 <Select value={depositForm.bankAccountId} onValueChange={v => setDepositForm(f => ({ ...f, bankAccountId: v }))}>
-                  <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
+                  <SelectTrigger id="deposit-form-bank-account-id"><SelectValue placeholder="Select account…" /></SelectTrigger>
                   <SelectContent>
                     {bankAccounts.filter((a: any) => a.isActive !== false).map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
                   </SelectContent>
@@ -1300,12 +1300,12 @@ function BankingPanel() {
               <Input type="date" value={depositForm.depositDate} onChange={e => setDepositForm(f => ({ ...f, depositDate: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Deposit slip / reference (optional)</Label>
-              <Input placeholder="Slip number or EFT reference" value={depositForm.reference} onChange={e => setDepositForm(f => ({ ...f, reference: e.target.value }))} />
+              <Label htmlFor="deposit-form-reference">Deposit slip / reference (optional)</Label>
+              <Input id="deposit-form-reference" placeholder="Slip number or EFT reference" value={depositForm.reference} onChange={e => setDepositForm(f => ({ ...f, reference: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
-              <Textarea rows={2} value={depositForm.notes} onChange={e => setDepositForm(f => ({ ...f, notes: e.target.value }))} />
+              <Label htmlFor="deposit-form-notes">Notes (optional)</Label>
+              <Textarea id="deposit-form-notes" rows={2} value={depositForm.notes} onChange={e => setDepositForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>
@@ -1330,9 +1330,9 @@ function BankingPanel() {
           <DialogHeader><DialogTitle>Enter statement closing balance</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label>Bank account</Label>
+              <Label htmlFor="bal-form-bank-account-id">Bank account</Label>
               <Select value={balForm.bankAccountId} onValueChange={v => setBalForm(f => ({ ...f, bankAccountId: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
+                <SelectTrigger id="bal-form-bank-account-id"><SelectValue placeholder="Select account…" /></SelectTrigger>
                 <SelectContent>
                   {bankAccounts.filter((a: any) => a.isActive !== false).map((a: any) => <SelectItem key={a.id} value={a.id}>{a.accountName} ({a.currency})</SelectItem>)}
                 </SelectContent>
@@ -1360,8 +1360,8 @@ function BankingPanel() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
-              <Textarea rows={2} value={balForm.notes} onChange={e => setBalForm(f => ({ ...f, notes: e.target.value }))} />
+              <Label htmlFor="bal-form-notes">Notes (optional)</Label>
+              <Textarea id="bal-form-notes" rows={2} value={balForm.notes} onChange={e => setBalForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>
@@ -2566,17 +2566,17 @@ export default function StaffFinance() {
                 <div className="space-y-4 pt-2">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                      <Label>Date *</Label>
-                      <Input type="date" value={createCashupDate} onChange={(e) => setCreateCashupDate(e.target.value)} data-testid="input-cashup-date" />
+                      <Label htmlFor="create-cashup-date">Date *</Label>
+                      <Input id="create-cashup-date" type="date" value={createCashupDate} onChange={(e) => setCreateCashupDate(e.target.value)} data-testid="input-cashup-date" />
                     </div>
                     <div>
                       <Label>Currency</Label>
                       <CurrencySelect value={createCashupCurrency} onValueChange={setCreateCashupCurrency} />
                     </div>
                     <div>
-                      <Label>Branch</Label>
+                      <Label htmlFor="branch">Branch</Label>
                       <Select value={createCashupBranchId || "none"} onValueChange={(v) => setCreateCashupBranchId(v === "none" ? "" : v)}>
-                        <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
+                        <SelectTrigger id="branch"><SelectValue placeholder="Optional" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">—</SelectItem>
                           {branchesArr.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
@@ -2608,8 +2608,8 @@ export default function StaffFinance() {
                     <Input type="number" min={0} value={createCashupTransactionCount} onChange={(e) => setCreateCashupTransactionCount(e.target.value)} data-testid="input-cashup-txn-count" />
                   </div>
                   <div>
-                    <Label>Notes</Label>
-                    <Input value={createCashupNotes} onChange={(e) => setCreateCashupNotes(e.target.value)} placeholder="Optional" />
+                    <Label htmlFor="create-cashup-notes">Notes</Label>
+                    <Input id="create-cashup-notes" value={createCashupNotes} onChange={(e) => setCreateCashupNotes(e.target.value)} placeholder="Optional" />
                   </div>
                 </div>
                 <DialogFooter>
@@ -2641,12 +2641,12 @@ export default function StaffFinance() {
                     <p className="text-sm text-muted-foreground">Expected total: <strong>{formatAmount(confirmCashup.totalAmount, confirmCashup.currency || "USD")}</strong> {confirmCashup.currency && confirmCashup.currency !== "USD" ? <Badge variant="outline" className="ml-1 text-xs">{confirmCashup.currency}</Badge> : null} ({confirmCashup.transactionCount} transactions). Enter counted total and any discrepancy notes.</p>
                     <div className="space-y-4 pt-2">
                       <div>
-                        <Label>Counted total</Label>
-                        <Input type="number" step="0.01" value={confirmCountedTotal} onChange={(e) => setConfirmCountedTotal(e.target.value)} placeholder={confirmCashup.totalAmount} data-testid="input-confirm-counted-total" />
+                        <Label htmlFor="confirm-counted-total">Counted total</Label>
+                        <Input id="confirm-counted-total" type="number" step="0.01" value={confirmCountedTotal} onChange={(e) => setConfirmCountedTotal(e.target.value)} placeholder={confirmCashup.totalAmount} data-testid="input-confirm-counted-total" />
                       </div>
                       <div>
-                        <Label>Discrepancy notes (if any)</Label>
-                        <Input value={confirmDiscrepancyNotes} onChange={(e) => setConfirmDiscrepancyNotes(e.target.value)} placeholder="Optional" />
+                        <Label htmlFor="confirm-discrepancy-notes">Discrepancy notes (if any)</Label>
+                        <Input id="confirm-discrepancy-notes" value={confirmDiscrepancyNotes} onChange={(e) => setConfirmDiscrepancyNotes(e.target.value)} placeholder="Optional" />
                       </div>
                     </div>
                     <DialogFooter>
@@ -3396,8 +3396,8 @@ export default function StaffFinance() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label>Amount (auto from policy premium)</Label>
-                <Input
+                <Label htmlFor="amount-auto-from-policy-premium">Amount (auto from policy premium)</Label>
+                <Input id="amount-auto-from-policy-premium"
                   type="number"
                   step="0.01"
                   min="0.01"
@@ -3414,9 +3414,9 @@ export default function StaffFinance() {
             </div>
 
             <div>
-              <Label>Payment Method</Label>
+              <Label htmlFor="payment-method">Payment Method</Label>
               <Select value={paymentMethod} onValueChange={setPaymentMethod}>
-                <SelectTrigger data-testid="select-payment-method"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="payment-method" data-testid="select-payment-method"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {!isAgent && <SelectItem value="cash">Cash</SelectItem>}
                   <SelectItem value="ecocash">EcoCash</SelectItem>
@@ -3432,43 +3432,43 @@ export default function StaffFinance() {
               <>
                 {(paymentMethod === "ecocash" || paymentMethod === "onemoney") && (
                   <div>
-                    <Label>Client's Mobile Number (EcoCash/OneMoney)</Label>
-                    <Input placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <Label htmlFor="payment-reference">Client's Mobile Number (EcoCash/OneMoney)</Label>
+                    <Input id="payment-reference" placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
                     <p className="text-xs text-muted-foreground mt-1">EcoCash/OneMoney use USSD — a prompt is sent to this number. The client enters their PIN on their phone (no app push). Use the number registered with EcoCash/OneMoney.</p>
                   </div>
                 )}
                 {paymentMethod === "innbucks" && (
                   <div>
-                    <Label>Client's Mobile Number</Label>
-                    <Input placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <Label htmlFor="payment-reference-2">Client's Mobile Number</Label>
+                    <Input id="payment-reference-2" placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
                     <p className="text-xs text-muted-foreground mt-1">An authorization code will be generated. The client enters it in their InnBucks app.</p>
                   </div>
                 )}
                 {paymentMethod === "omari" && (
                   <div>
-                    <Label>Client's Mobile Number</Label>
-                    <Input placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <Label htmlFor="payment-reference-3">Client's Mobile Number</Label>
+                    <Input id="payment-reference-3" placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
                     <p className="text-xs text-muted-foreground mt-1">An OTP will be sent via SMS. You will need to enter the OTP the client receives.</p>
                   </div>
                 )}
                 {paymentMethod === "visa_mastercard" && (
                   <div>
-                    <Label>Client's Email Address</Label>
-                    <Input type="email" placeholder="client@example.com" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <Label htmlFor="payment-reference-4">Client's Email Address</Label>
+                    <Input id="payment-reference-4" type="email" placeholder="client@example.com" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
                     <p className="text-xs text-muted-foreground mt-1">A secure payment page will open where the client enters card details.</p>
                   </div>
                 )}
                 {paymentMethod === "cash" && (
                   <div>
-                    <Label>Notes (optional)</Label>
-                    <Input placeholder="e.g. Walk-in payment" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
+                    <Label htmlFor="payment-reference-5">Notes (optional)</Label>
+                    <Input id="payment-reference-5" placeholder="e.g. Walk-in payment" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
                     <p className="text-xs text-muted-foreground mt-1">Receipt number is auto-generated by the system.</p>
                   </div>
                 )}
 
                 <div>
-                  <Label>Notes (optional)</Label>
-                  <Input placeholder="Additional notes..." value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} data-testid="input-payment-notes" />
+                  <Label htmlFor="payment-notes">Notes (optional)</Label>
+                  <Input id="payment-notes" placeholder="Additional notes..." value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} data-testid="input-payment-notes" />
                 </div>
               </>
             )}
@@ -3580,20 +3580,20 @@ export default function StaffFinance() {
               {cashReceiptDialogPolicy && <p className="text-xs text-muted-foreground mt-1">Selected: {cashReceiptDialogPolicy.policyNumber}</p>}
             </div>
             <div>
-              <Label>Amount (auto from policy premium)</Label>
-              <Input type="number" step="0.01" placeholder="0.00" value={cashReceiptDialogPolicy?.premiumAmount ? parseFloat(cashReceiptDialogPolicy.premiumAmount).toFixed(2) : cashReceiptAmount} readOnly className="bg-muted cursor-not-allowed" />
+              <Label htmlFor="amount-auto-from-policy-premium-2">Amount (auto from policy premium)</Label>
+              <Input id="amount-auto-from-policy-premium-2" type="number" step="0.01" placeholder="0.00" value={cashReceiptDialogPolicy?.premiumAmount ? parseFloat(cashReceiptDialogPolicy.premiumAmount).toFixed(2) : cashReceiptAmount} readOnly className="bg-muted cursor-not-allowed" />
             </div>
             <div>
               <Label>Currency</Label>
               <CurrencySelect value={cashReceiptCurrency} onValueChange={setCashReceiptCurrency} />
             </div>
             <div>
-              <Label>Notes (optional)</Label>
-              <Input placeholder="e.g. Cash at branch" value={cashReceiptNotes} onChange={(e) => setCashReceiptNotes(e.target.value)} />
+              <Label htmlFor="cash-receipt-notes">Notes (optional)</Label>
+              <Input id="cash-receipt-notes" placeholder="e.g. Cash at branch" value={cashReceiptNotes} onChange={(e) => setCashReceiptNotes(e.target.value)} />
             </div>
             <div>
-              <Label>Received at</Label>
-              <Input type="datetime-local" value={cashReceiptReceivedAt} onChange={(e) => setCashReceiptReceivedAt(e.target.value)} />
+              <Label htmlFor="cash-receipt-received-at">Received at</Label>
+              <Input id="cash-receipt-received-at" type="datetime-local" value={cashReceiptReceivedAt} onChange={(e) => setCashReceiptReceivedAt(e.target.value)} />
             </div>
           </div>
           <DialogFooter>
@@ -3618,10 +3618,10 @@ export default function StaffFinance() {
           {/* Header fields */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs">Requested By</Label>
+              <Label className="text-xs" htmlFor="requested-by">Requested By</Label>
               <Select value={reqHeader.requestedByUserId || (authUser?.id ?? "")}
                 onValueChange={(v) => setReqHeader({ ...reqHeader, requestedByUserId: v })}>
-                <SelectTrigger className="text-sm"><SelectValue placeholder="Who is requesting?" /></SelectTrigger>
+                <SelectTrigger id="requested-by" className="text-sm"><SelectValue placeholder="Who is requesting?" /></SelectTrigger>
                 <SelectContent>
                   {(staffUsers as any[]).map((u: any) => (
                     <SelectItem key={u.id} value={u.id}>{u.displayName || u.email}{u.id === authUser?.id ? " (you)" : ""}</SelectItem>
@@ -3652,8 +3652,8 @@ export default function StaffFinance() {
               <Input type="date" value={reqHeader.raisedDate} onChange={(e) => setReqHeader({ ...reqHeader, raisedDate: e.target.value })} />
             </div>
             <div>
-              <Label className="text-xs">Date Funds Needed *</Label>
-              <Input type="date" value={reqHeader.neededByDate} onChange={(e) => setReqHeader({ ...reqHeader, neededByDate: e.target.value })} />
+              <Label className="text-xs" htmlFor="req-header-needed-by-date">Date Funds Needed *</Label>
+              <Input id="req-header-needed-by-date" type="date" value={reqHeader.neededByDate} onChange={(e) => setReqHeader({ ...reqHeader, neededByDate: e.target.value })} />
             </div>
           </div>
 
@@ -3750,8 +3750,8 @@ export default function StaffFinance() {
           </div>
 
           <div>
-            <Label className="text-xs">Notes</Label>
-            <Input value={reqHeader.notes} onChange={(e) => setReqHeader({ ...reqHeader, notes: e.target.value })} placeholder="Any additional notes…" />
+            <Label className="text-xs" htmlFor="req-header-notes">Notes</Label>
+            <Input id="req-header-notes" value={reqHeader.notes} onChange={(e) => setReqHeader({ ...reqHeader, notes: e.target.value })} placeholder="Any additional notes…" />
           </div>
 
           <DialogFooter>
@@ -3884,23 +3884,23 @@ export default function StaffFinance() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <Label>Amount paying now *</Label>
-                    <Input type="number" step="0.01" min="0.01" max={outstanding}
+                    <Label htmlFor="pay-form-amount">Amount paying now *</Label>
+                    <Input id="pay-form-amount" type="number" step="0.01" min="0.01" max={outstanding}
                       value={payForm.amount} onChange={(e) => setPayForm({ ...payForm, amount: e.target.value })}
                       placeholder={outstanding.toFixed(2)} data-testid="input-pay-amount" />
                   </div>
                   <div className="space-y-1">
-                    <Label>Payment date *</Label>
-                    <Input type="date" value={payForm.paidDate} max={new Date().toISOString().slice(0, 10)}
+                    <Label htmlFor="pay-form-paid-date">Payment date *</Label>
+                    <Input id="pay-form-paid-date" type="date" value={payForm.paidDate} max={new Date().toISOString().slice(0, 10)}
                       onChange={(e) => setPayForm({ ...payForm, paidDate: e.target.value })} />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <Label>Payment method *</Label>
+                    <Label htmlFor="pay-form-payment-method">Payment method *</Label>
                     <Select value={payForm.paymentMethod} onValueChange={(v) => setPayForm({ ...payForm, paymentMethod: v })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="pay-form-payment-method"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="cash">Cash</SelectItem>
                         <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
@@ -3911,21 +3911,21 @@ export default function StaffFinance() {
                     </Select>
                   </div>
                   <div className="space-y-1">
-                    <Label>Reference / Cheque #</Label>
-                    <Input value={payForm.reference} onChange={(e) => setPayForm({ ...payForm, reference: e.target.value })} placeholder="Optional reference" />
+                    <Label htmlFor="pay-form-reference">Reference / Cheque #</Label>
+                    <Input id="pay-form-reference" value={payForm.reference} onChange={(e) => setPayForm({ ...payForm, reference: e.target.value })} placeholder="Optional reference" />
                   </div>
                 </div>
 
                 <div className="space-y-1">
-                  <Label>Received by (recipient) *</Label>
-                  <Input value={payForm.receivedBy} onChange={(e) => setPayForm({ ...payForm, receivedBy: e.target.value, receivedByUserId: "" })}
+                  <Label htmlFor="pay-form-received-by">Received by (recipient) *</Label>
+                  <Input id="pay-form-received-by" value={payForm.receivedBy} onChange={(e) => setPayForm({ ...payForm, receivedBy: e.target.value, receivedByUserId: "" })}
                     placeholder="Supplier name, staff member, vendor…" data-testid="input-received-by" />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Or select a system user as recipient</Label>
+                  <Label className="text-xs text-muted-foreground" htmlFor="pay-form-received-by-user-id">Or select a system user as recipient</Label>
                   <Select value={payForm.receivedByUserId}
                     onValueChange={(v) => setPayForm({ ...payForm, receivedByUserId: v, receivedBy: v ? ((staffUsers as any[]).find((u: any) => u.id === v)?.displayName || "") : payForm.receivedBy })}>
-                    <SelectTrigger className="text-sm"><SelectValue placeholder="Choose system user (optional)…" /></SelectTrigger>
+                    <SelectTrigger id="pay-form-received-by-user-id" className="text-sm"><SelectValue placeholder="Choose system user (optional)…" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="">None — use text above</SelectItem>
                       {(staffUsers as any[]).map((u: any) => (
@@ -3972,8 +3972,8 @@ export default function StaffFinance() {
                         }} />
                       </div>
                       <div className="space-y-1">
-                        <Label>Rate ({payForm.paidCurrency || "?"} per 1 {payTarget.item.currency}) *</Label>
-                        <Input type="number" step="0.0001" min="0.0001" value={payForm.fxRateApplied}
+                        <Label htmlFor="pay-form-fx-rate-applied">Rate ({payForm.paidCurrency || "?"} per 1 {payTarget.item.currency}) *</Label>
+                        <Input id="pay-form-fx-rate-applied" type="number" step="0.0001" min="0.0001" value={payForm.fxRateApplied}
                           onChange={(e) => setPayForm({ ...payForm, fxRateApplied: e.target.value })}
                           placeholder="e.g. 20" data-testid="input-fx-rate-applied" />
                         {platformRateFor(payForm.paidCurrency) && (
@@ -4021,8 +4021,8 @@ export default function StaffFinance() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Amount</Label>
-              <Input
+              <Label htmlFor="settlement-amount">Amount</Label>
+              <Input id="settlement-amount"
                 type="number"
                 step="0.01"
                 min="0.01"
@@ -4037,9 +4037,9 @@ export default function StaffFinance() {
               <CurrencySelect value={settlementCurrency} onValueChange={setSettlementCurrency} />
             </div>
             <div>
-              <Label>Payment Method</Label>
+              <Label htmlFor="settlement-method">Payment Method</Label>
               <Select value={settlementMethod} onValueChange={setSettlementMethod}>
-                <SelectTrigger data-testid="select-settlement-method"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="settlement-method" data-testid="select-settlement-method"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cash">Cash</SelectItem>
                   <SelectItem value="bank">Bank Transfer</SelectItem>
@@ -4052,8 +4052,8 @@ export default function StaffFinance() {
               </Select>
             </div>
             <div>
-              <Label>Reference</Label>
-              <Input
+              <Label htmlFor="settlement-reference">Reference</Label>
+              <Input id="settlement-reference"
                 placeholder="Payment reference..."
                 value={settlementReference}
                 onChange={(e) => setSettlementReference(e.target.value)}
@@ -4198,12 +4198,12 @@ export default function StaffFinance() {
             </DialogDescription>
           </DialogHeader>
           <div>
-            <Label className="text-xs">Actual paid date</Label>
-            <Input type="date" value={correctPaidDateValue} onChange={(e) => setCorrectPaidDateValue(e.target.value)} data-testid="input-correct-paid-date" />
+            <Label className="text-xs" htmlFor="correct-paid-date-value">Actual paid date</Label>
+            <Input id="correct-paid-date-value" type="date" value={correctPaidDateValue} onChange={(e) => setCorrectPaidDateValue(e.target.value)} data-testid="input-correct-paid-date" />
           </div>
           <div>
-            <Label className="text-xs">Reason (optional)</Label>
-            <Textarea value={correctPaidDateReason} onChange={(e) => setCorrectPaidDateReason(e.target.value)} rows={2} placeholder="Why this needs correcting…" data-testid="input-correct-paid-date-reason" />
+            <Label className="text-xs" htmlFor="correct-paid-date-reason">Reason (optional)</Label>
+            <Textarea id="correct-paid-date-reason" value={correctPaidDateReason} onChange={(e) => setCorrectPaidDateReason(e.target.value)} rows={2} placeholder="Why this needs correcting…" data-testid="input-correct-paid-date-reason" />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCorrectPaidDateTarget(null)}>Cancel</Button>
@@ -4236,8 +4236,8 @@ export default function StaffFinance() {
             <CurrencySelect value={correctPaidCurrencyValue} onValueChange={setCorrectPaidCurrencyValue} />
           </div>
           <div>
-            <Label className="text-xs">Reason (optional)</Label>
-            <Textarea value={correctPaidCurrencyReason} onChange={(e) => setCorrectPaidCurrencyReason(e.target.value)} rows={2} placeholder="Why this needs correcting…" data-testid="input-correct-paid-currency-reason" />
+            <Label className="text-xs" htmlFor="correct-paid-currency-reason">Reason (optional)</Label>
+            <Textarea id="correct-paid-currency-reason" value={correctPaidCurrencyReason} onChange={(e) => setCorrectPaidCurrencyReason(e.target.value)} rows={2} placeholder="Why this needs correcting…" data-testid="input-correct-paid-currency-reason" />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCorrectPaidCurrencyTarget(null)}>Cancel</Button>

@@ -177,9 +177,9 @@ export default function ClientClaim() {
               </div>
               <div className="pt-4 border-t space-y-4">
                 <div className="space-y-2">
-                  <Label>Security Question</Label>
+                  <Label htmlFor="security-question-id">Security Question</Label>
                   <Select value={securityQuestionId} onValueChange={setSecurityQuestionId}>
-                    <SelectTrigger data-testid="select-security-question">
+                    <SelectTrigger id="security-question-id" data-testid="select-security-question">
                       <SelectValue placeholder="Select a question" />
                     </SelectTrigger>
                     <SelectContent>

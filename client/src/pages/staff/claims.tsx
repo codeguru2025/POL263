@@ -436,6 +436,7 @@ export default function StaffClaims() {
             <div className="space-y-2">
               <Label htmlFor="claim-policy">Policy <span className="text-destructive">*</span></Label>
               <PolicySearchInput
+                id="claim-policy"
                 value={newClaim.policyId}
                 onChange={handlePolicySelect}
                 placeholder="Search by policy number or client name…"
@@ -525,7 +526,7 @@ export default function StaffClaims() {
             <div className="space-y-2">
               <Label htmlFor="claim-type">Claim Type <span className="text-destructive">*</span></Label>
               <Select value={newClaim.claimType} onValueChange={(v) => setNewClaim((p) => ({ ...p, claimType: v }))}>
-                <SelectTrigger data-testid="select-claim-type">
+                <SelectTrigger id="claim-type" data-testid="select-claim-type">
                   <SelectValue placeholder="Select type…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -608,8 +609,8 @@ export default function StaffClaims() {
 
             {/* Assessment */}
             <div className="space-y-2">
-              <Label>Assessment Notes</Label>
-              <Textarea
+              <Label htmlFor="new-claim-assessment-notes">Assessment Notes</Label>
+              <Textarea id="new-claim-assessment-notes"
                 placeholder="Document your assessment of this claim — supporting documents received, waiting period status, fraud indicators, etc."
                 value={newClaim.assessmentNotes}
                 onChange={(e) => setNewClaim((p) => ({ ...p, assessmentNotes: e.target.value }))}
@@ -620,12 +621,12 @@ export default function StaffClaims() {
 
             {/* Recommendation */}
             <div className="space-y-2">
-              <Label>Recommendation</Label>
+              <Label htmlFor="recommendation">Recommendation</Label>
               <Select
                 value={newClaim.recommendation || "__none__"}
                 onValueChange={(v) => setNewClaim((p) => ({ ...p, recommendation: v === "__none__" ? "" : v }))}
               >
-                <SelectTrigger data-testid="select-claim-recommendation">
+                <SelectTrigger id="recommendation" data-testid="select-claim-recommendation">
                   <SelectValue placeholder="Select recommendation…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -668,9 +669,9 @@ export default function StaffClaims() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Transition To</Label>
+                <Label htmlFor="transition-target">Transition To</Label>
                 <Select value={transitionTarget} onValueChange={setTransitionTarget}>
-                  <SelectTrigger data-testid="select-transition-target">
+                  <SelectTrigger id="transition-target" data-testid="select-transition-target">
                     <SelectValue placeholder="Select new status…" />
                   </SelectTrigger>
                   <SelectContent>

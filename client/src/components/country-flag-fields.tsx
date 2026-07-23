@@ -53,8 +53,8 @@ export function CountryFlagFields({
       </div>
       {checked && (
         <div>
-          <Label>{settings.flagLabel} Reference Number</Label>
-          <Input
+          <Label htmlFor="reference">{settings.flagLabel} Reference Number</Label>
+          <Input id="reference"
             value={reference}
             onChange={(e) => onReferenceChange(e.target.value)}
             placeholder={`e.g. the ${settings.flagLabel} branch's own reference number`}

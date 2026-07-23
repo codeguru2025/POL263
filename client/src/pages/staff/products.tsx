@@ -866,18 +866,18 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Product Name *</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Family Plan Standard" data-testid="input-product-name" />
+              <Label htmlFor="name">Product Name *</Label>
+              <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Family Plan Standard" data-testid="input-product-name" />
             </div>
             <div className="space-y-2">
-              <Label>Product Code *</Label>
-              <Input value={code} onChange={(e) => setCode(e.target.value)} required placeholder="e.g. FAM-STD" data-testid="input-product-code" />
+              <Label htmlFor="code">Product Code *</Label>
+              <Input id="code" value={code} onChange={(e) => setCode(e.target.value)} required placeholder="e.g. FAM-STD" data-testid="input-product-code" />
             </div>
           </div>
 
           <div className="space-y-2">
-            <Label>Description</Label>
-            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="Brief description of the product and what it covers..." data-testid="input-product-description" />
+            <Label htmlFor="description">Description</Label>
+            <Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="Brief description of the product and what it covers..." data-testid="input-product-description" />
           </div>
 
           <Separator />
@@ -885,21 +885,21 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5" />Max Adults</Label>
-              <Input type="number" min="1" max="10" value={maxAdults} onChange={(e) => setMaxAdults(e.target.value)} data-testid="input-max-adults" />
+              <Label className="flex items-center gap-1.5" htmlFor="max-adults"><Users className="h-3.5 w-3.5" />Max Adults</Label>
+              <Input id="max-adults" type="number" min="1" max="10" value={maxAdults} onChange={(e) => setMaxAdults(e.target.value)} data-testid="input-max-adults" />
             </div>
             <div className="space-y-2">
-              <Label className="flex items-center gap-1.5"><Baby className="h-3.5 w-3.5" />Max Children</Label>
-              <Input type="number" min="0" max="20" value={maxChildren} onChange={(e) => setMaxChildren(e.target.value)} data-testid="input-max-children" />
+              <Label className="flex items-center gap-1.5" htmlFor="max-children"><Baby className="h-3.5 w-3.5" />Max Children</Label>
+              <Input id="max-children" type="number" min="0" max="20" value={maxChildren} onChange={(e) => setMaxChildren(e.target.value)} data-testid="input-max-children" />
             </div>
             <div className="space-y-2">
-              <Label className="flex items-center gap-1.5"><Crown className="h-3.5 w-3.5" />Max Extended</Label>
-              <Input type="number" min="0" max="20" value={maxExtended} onChange={(e) => setMaxExtended(e.target.value)} data-testid="input-max-extended" />
+              <Label className="flex items-center gap-1.5" htmlFor="max-extended"><Crown className="h-3.5 w-3.5" />Max Extended</Label>
+              <Input id="max-extended" type="number" min="0" max="20" value={maxExtended} onChange={(e) => setMaxExtended(e.target.value)} data-testid="input-max-extended" />
             </div>
           </div>
           <div className="space-y-2">
-            <Label className="flex items-center gap-1.5">Max Additional Members <span className="text-xs text-muted-foreground font-normal">(beyond included count — leave blank for unlimited)</span></Label>
-            <Input type="number" min="0" max="50" value={maxAdditional} onChange={(e) => setMaxAdditional(e.target.value)} placeholder="e.g. 5 (blank = unlimited)" data-testid="input-max-additional" />
+            <Label className="flex items-center gap-1.5" htmlFor="max-additional">Max Additional Members <span className="text-xs text-muted-foreground font-normal">(beyond included count — leave blank for unlimited)</span></Label>
+            <Input id="max-additional" type="number" min="0" max="50" value={maxAdditional} onChange={(e) => setMaxAdditional(e.target.value)} placeholder="e.g. 5 (blank = unlimited)" data-testid="input-max-additional" />
           </div>
 
           <Separator />
@@ -907,8 +907,8 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Cover Amount</Label>
-              <Input type="number" step="0.01" min="0" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} placeholder="e.g. 15000" data-testid="input-cover-amount" />
+              <Label htmlFor="cover-amount">Cover Amount</Label>
+              <Input id="cover-amount" type="number" step="0.01" min="0" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} placeholder="e.g. 15000" data-testid="input-cover-amount" />
             </div>
             <div className="space-y-2">
               <Label>Cover Currency</Label>
@@ -917,9 +917,9 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
           </div>
 
           <div className="space-y-2">
-            <Label>Casket Type</Label>
+            <Label htmlFor="casket-type">Casket Type</Label>
             <Select value={casketType} onValueChange={setCasketType}>
-              <SelectTrigger data-testid="select-casket-type"><SelectValue placeholder="Select casket type..." /></SelectTrigger>
+              <SelectTrigger id="casket-type" data-testid="select-casket-type"><SelectValue placeholder="Select casket type..." /></SelectTrigger>
               <SelectContent>
                 {CASKET_TYPES.map((ct) => <SelectItem key={ct} value={ct}>{ct}</SelectItem>)}
               </SelectContent>
@@ -1028,12 +1028,12 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
         <DialogHeader><DialogTitle>Edit Product: {product.name}</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-2">
-            <Label>Product Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} required data-testid="input-edit-product-name" />
+            <Label htmlFor="name-2">Product Name</Label>
+            <Input id="name-2" value={name} onChange={(e) => setName(e.target.value)} required data-testid="input-edit-product-name" />
           </div>
           <div className="space-y-2">
-            <Label>Description</Label>
-            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} data-testid="input-edit-product-description" />
+            <Label htmlFor="description-2">Description</Label>
+            <Textarea id="description-2" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} data-testid="input-edit-product-description" />
           </div>
 
           <Separator />
@@ -1044,8 +1044,8 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
             <div className="space-y-2"><Label>Max Extended</Label><Input type="number" min="0" max="20" value={maxExtended} onChange={(e) => setMaxExtended(e.target.value)} /></div>
           </div>
           <div className="space-y-2">
-            <Label>Max Additional Members <span className="text-xs text-muted-foreground font-normal">(beyond included count — blank = unlimited)</span></Label>
-            <Input type="number" min="0" max="50" value={maxAdditional} onChange={(e) => setMaxAdditional(e.target.value)} placeholder="blank = unlimited" />
+            <Label htmlFor="max-additional-2">Max Additional Members <span className="text-xs text-muted-foreground font-normal">(beyond included count — blank = unlimited)</span></Label>
+            <Input id="max-additional-2" type="number" min="0" max="50" value={maxAdditional} onChange={(e) => setMaxAdditional(e.target.value)} placeholder="blank = unlimited" />
           </div>
 
           <Separator />
@@ -1058,8 +1058,8 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Casket Type</Label>
-            <Select value={casketType} onValueChange={setCasketType}><SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+            <Label htmlFor="casket-type-2">Casket Type</Label>
+            <Select value={casketType} onValueChange={setCasketType}><SelectTrigger id="casket-type-2"><SelectValue placeholder="Select..." /></SelectTrigger>
               <SelectContent>{CASKET_TYPES.map((ct) => <SelectItem key={ct} value={ct}>{ct}</SelectItem>)}</SelectContent>
             </Select>
           </div>
@@ -1320,8 +1320,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
         <form onSubmit={handleSubmit} className="space-y-5">
           <VersionFormErrorSummary errors={fieldErrors} />
           <div className="space-y-2">
-            <Label>Effective From *</Label>
-            <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
+            <Label htmlFor="effective-from">Effective From *</Label>
+            <Input id="effective-from" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
             <FieldError message={fieldErrors.effectiveFrom} />
           </div>
 
@@ -1330,35 +1330,35 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Monthly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
+              <Label htmlFor="premium-monthly-usd">Monthly Premium (USD)</Label>
+              <Input id="premium-monthly-usd" type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumMonthlyUsd} />
             </div>
             <div className="space-y-2">
-              <Label>Monthly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
+              <Label htmlFor="premium-monthly-zar">Monthly Premium (ZAR)</Label>
+              <Input id="premium-monthly-zar" type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
+              <Label htmlFor="premium-weekly-usd">Weekly Premium (USD)</Label>
+              <Input id="premium-weekly-usd" type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumWeeklyUsd} />
             </div>
             <div className="space-y-2">
-              <Label>Weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" className={cn(fieldErrors.premiumWeeklyZar && "border-destructive")} />
+              <Label htmlFor="premium-weekly-zar">Weekly Premium (ZAR)</Label>
+              <Input id="premium-weekly-zar" type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" className={cn(fieldErrors.premiumWeeklyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumWeeklyZar} />
             </div>
             <div className="space-y-2">
-              <Label>Bi-weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
+              <Label htmlFor="premium-biweekly-usd">Bi-weekly Premium (USD)</Label>
+              <Input id="premium-biweekly-usd" type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyUsd} />
             </div>
             <div className="space-y-2">
-              <Label>Bi-weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
+              <Label htmlFor="premium-biweekly-zar">Bi-weekly Premium (ZAR)</Label>
+              <Input id="premium-biweekly-zar" type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyZar} />
             </div>
           </div>
@@ -1368,24 +1368,24 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Natural Death (days)</Label>
-              <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
+              <Label htmlFor="waiting-period-days">Natural Death (days)</Label>
+              <Input id="waiting-period-days" type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
               <FieldError message={fieldErrors.waitingPeriodDays} />
             </div>
             <div className="space-y-2">
-              <Label>Accidental Death (days)</Label>
-              <Input type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-version-waiting-accidental" className={cn(fieldErrors.waitingAccidental && "border-destructive")} />
+              <Label htmlFor="waiting-accidental">Accidental Death (days)</Label>
+              <Input id="waiting-accidental" type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-version-waiting-accidental" className={cn(fieldErrors.waitingAccidental && "border-destructive")} />
               <FieldError message={fieldErrors.waitingAccidental} />
             </div>
             <div className="space-y-2">
-              <Label>Suicide (days)</Label>
-              <Input type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-version-waiting-suicide" className={cn(fieldErrors.waitingSuicide && "border-destructive")} />
+              <Label htmlFor="waiting-suicide">Suicide (days)</Label>
+              <Input id="waiting-suicide" type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-version-waiting-suicide" className={cn(fieldErrors.waitingSuicide && "border-destructive")} />
               <FieldError message={fieldErrors.waitingSuicide} />
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Grace Period (days)</Label>
-            <Input type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-version-grace" className={cn(fieldErrors.gracePeriodDays && "border-destructive")} />
+            <Label htmlFor="grace-period-days">Grace Period (days)</Label>
+            <Input id="grace-period-days" type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-version-grace" className={cn(fieldErrors.gracePeriodDays && "border-destructive")} />
             <FieldError message={fieldErrors.gracePeriodDays} />
           </div>
 
@@ -1421,18 +1421,18 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Min Age (main member)</Label>
-              <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
+              <Label htmlFor="eligibility-min-age">Min Age (main member)</Label>
+              <Input id="eligibility-min-age" type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
               <FieldError message={fieldErrors.eligibilityMinAge} />
             </div>
             <div className="space-y-2">
-              <Label>Max Age (main member)</Label>
-              <Input type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-version-max-age" className={cn(fieldErrors.eligibilityMaxAge && "border-destructive")} />
+              <Label htmlFor="eligibility-max-age">Max Age (main member)</Label>
+              <Input id="eligibility-max-age" type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-version-max-age" className={cn(fieldErrors.eligibilityMaxAge && "border-destructive")} />
               <FieldError message={fieldErrors.eligibilityMaxAge} />
             </div>
             <div className="space-y-2">
-              <Label>Max Dependent Age</Label>
-              <Input type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-version-dependent-max-age" className={cn(fieldErrors.dependentMaxAge && "border-destructive")} />
+              <Label htmlFor="dependent-max-age">Max Dependent Age</Label>
+              <Input id="dependent-max-age" type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-version-dependent-max-age" className={cn(fieldErrors.dependentMaxAge && "border-destructive")} />
               <FieldError message={fieldErrors.dependentMaxAge} />
             </div>
           </div>
@@ -1442,12 +1442,12 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Adult Cash in Lieu</Label>
-              <Input type="number" step="0.01" value={cashInLieuAdult} onChange={(e) => setCashInLieuAdult(e.target.value)} placeholder="e.g. 5000.00" data-testid="input-version-cash-adult" />
+              <Label htmlFor="cash-in-lieu-adult">Adult Cash in Lieu</Label>
+              <Input id="cash-in-lieu-adult" type="number" step="0.01" value={cashInLieuAdult} onChange={(e) => setCashInLieuAdult(e.target.value)} placeholder="e.g. 5000.00" data-testid="input-version-cash-adult" />
             </div>
             <div className="space-y-2">
-              <Label>Child Cash in Lieu</Label>
-              <Input type="number" step="0.01" value={cashInLieuChild} onChange={(e) => setCashInLieuChild(e.target.value)} placeholder="e.g. 2500.00" data-testid="input-version-cash-child" />
+              <Label htmlFor="cash-in-lieu-child">Child Cash in Lieu</Label>
+              <Input id="cash-in-lieu-child" type="number" step="0.01" value={cashInLieuChild} onChange={(e) => setCashInLieuChild(e.target.value)} placeholder="e.g. 2500.00" data-testid="input-version-cash-child" />
             </div>
           </div>
 
@@ -1456,32 +1456,32 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Initial Months Count</Label>
-              <Input type="number" value={commFirstMonths} onChange={(e) => setCommFirstMonths(e.target.value)} placeholder="e.g. 2" data-testid="input-version-comm-first-months" />
+              <Label htmlFor="comm-first-months">Initial Months Count</Label>
+              <Input id="comm-first-months" type="number" value={commFirstMonths} onChange={(e) => setCommFirstMonths(e.target.value)} placeholder="e.g. 2" data-testid="input-version-comm-first-months" />
             </div>
             <div className="space-y-2">
-              <Label>Initial Months Rate (%)</Label>
-              <Input type="number" step="0.01" value={commFirstRate} onChange={(e) => setCommFirstRate(e.target.value)} placeholder="e.g. 50" data-testid="input-version-comm-first-rate" />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Recurring Start Month</Label>
-              <Input type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-version-comm-recurring-start" />
-            </div>
-            <div className="space-y-2">
-              <Label>Recurring Rate (%)</Label>
-              <Input type="number" step="0.01" value={commRecurringRate} onChange={(e) => setCommRecurringRate(e.target.value)} placeholder="e.g. 10" data-testid="input-version-comm-recurring-rate" />
+              <Label htmlFor="comm-first-rate">Initial Months Rate (%)</Label>
+              <Input id="comm-first-rate" type="number" step="0.01" value={commFirstRate} onChange={(e) => setCommFirstRate(e.target.value)} placeholder="e.g. 50" data-testid="input-version-comm-first-rate" />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Clawback Threshold (payments)</Label>
-              <Input type="number" value={commClawback} onChange={(e) => setCommClawback(e.target.value)} placeholder="e.g. 4" data-testid="input-version-comm-clawback" />
+              <Label htmlFor="comm-recurring-start">Recurring Start Month</Label>
+              <Input id="comm-recurring-start" type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-version-comm-recurring-start" />
             </div>
             <div className="space-y-2">
-              <Label>Funeral Service Incentive</Label>
-              <Input type="number" step="0.01" value={commFuneralIncentive} onChange={(e) => setCommFuneralIncentive(e.target.value)} placeholder="e.g. 50.00" data-testid="input-version-comm-funeral" />
+              <Label htmlFor="comm-recurring-rate">Recurring Rate (%)</Label>
+              <Input id="comm-recurring-rate" type="number" step="0.01" value={commRecurringRate} onChange={(e) => setCommRecurringRate(e.target.value)} placeholder="e.g. 10" data-testid="input-version-comm-recurring-rate" />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="comm-clawback">Clawback Threshold (payments)</Label>
+              <Input id="comm-clawback" type="number" value={commClawback} onChange={(e) => setCommClawback(e.target.value)} placeholder="e.g. 4" data-testid="input-version-comm-clawback" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="comm-funeral-incentive">Funeral Service Incentive</Label>
+              <Input id="comm-funeral-incentive" type="number" step="0.01" value={commFuneralIncentive} onChange={(e) => setCommFuneralIncentive(e.target.value)} placeholder="e.g. 50.00" data-testid="input-version-comm-funeral" />
             </div>
           </div>
 
@@ -1490,12 +1490,12 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if this product has no underwriter.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Amount per adult (per month)</Label>
-              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-version-underwriter-adult" />
+              <Label htmlFor="underwriter-amount-adult">Amount per adult (per month)</Label>
+              <Input id="underwriter-amount-adult" type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-version-underwriter-adult" />
             </div>
             <div className="space-y-2">
-              <Label>Amount per child (per month)</Label>
-              <Input type="number" step="0.01" value={underwriterAmountChild} onChange={(e) => setUnderwriterAmountChild(e.target.value)} placeholder="Same as adult if not set" data-testid="input-version-underwriter-child" disabled={underwriterSameAmount} />
+              <Label htmlFor="underwriter-amount-child">Amount per child (per month)</Label>
+              <Input id="underwriter-amount-child" type="number" step="0.01" value={underwriterAmountChild} onChange={(e) => setUnderwriterAmountChild(e.target.value)} placeholder="Same as adult if not set" data-testid="input-version-underwriter-child" disabled={underwriterSameAmount} />
             </div>
           </div>
           <div className="flex items-center space-x-2">
@@ -1503,8 +1503,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             <Label htmlFor="underwriter-same-amount" className="text-sm font-normal cursor-pointer">Same amount for adult and child</Label>
           </div>
           <div className="space-y-2">
-            <Label>Pay underwriter in advance (months)</Label>
-            <Input type="number" min={0} value={underwriterAdvanceMonths} onChange={(e) => setUnderwriterAdvanceMonths(e.target.value)} placeholder="e.g. 3" data-testid="input-version-underwriter-advance" />
+            <Label htmlFor="underwriter-advance-months">Pay underwriter in advance (months)</Label>
+            <Input id="underwriter-advance-months" type="number" min={0} value={underwriterAdvanceMonths} onChange={(e) => setUnderwriterAdvanceMonths(e.target.value)} placeholder="e.g. 3" data-testid="input-version-underwriter-advance" />
             <p className="text-xs text-muted-foreground">e.g. 3 = tenant pays 3 months ahead; total payable = monthly × (1 + advance months).</p>
           </div>
 
@@ -1516,12 +1516,12 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Per additional member / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-version-additional-member-usd" />
+              <Label htmlFor="additional-member-premium-monthly-usd">Per additional member / month (USD)</Label>
+              <Input id="additional-member-premium-monthly-usd" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-version-additional-member-usd" />
             </div>
             <div className="space-y-2">
-              <Label>Per additional member / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-version-additional-member-zar" />
+              <Label htmlFor="additional-member-premium-monthly-zar">Per additional member / month (ZAR)</Label>
+              <Input id="additional-member-premium-monthly-zar" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-version-additional-member-zar" />
             </div>
           </div>
 
@@ -1531,36 +1531,36 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Child / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-version-ageband-child-usd" />
+              <Label htmlFor="age-band-rate-child-usd">Child / month (USD)</Label>
+              <Input id="age-band-rate-child-usd" type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-version-ageband-child-usd" />
             </div>
             <div className="space-y-2">
-              <Label>Child / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-version-ageband-child-zar" />
+              <Label htmlFor="age-band-rate-child-zar">Child / month (ZAR)</Label>
+              <Input id="age-band-rate-child-zar" type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-version-ageband-child-zar" />
             </div>
             <div className="space-y-2">
-              <Label>21–65 / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Usd} onChange={(e) => setAgeBandRate21To65Usd(e.target.value)} data-testid="input-version-ageband-21-65-usd" />
+              <Label htmlFor="age-band-rate21-to65-usd">21–65 / month (USD)</Label>
+              <Input id="age-band-rate21-to65-usd" type="number" step="0.01" min={0} value={ageBandRate21To65Usd} onChange={(e) => setAgeBandRate21To65Usd(e.target.value)} data-testid="input-version-ageband-21-65-usd" />
             </div>
             <div className="space-y-2">
-              <Label>21–65 / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-version-ageband-21-65-zar" />
+              <Label htmlFor="age-band-rate21-to65-zar">21–65 / month (ZAR)</Label>
+              <Input id="age-band-rate21-to65-zar" type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-version-ageband-21-65-zar" />
             </div>
             <div className="space-y-2">
-              <Label>66–84 / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-version-ageband-66-84-usd" />
+              <Label htmlFor="age-band-rate66-to84-usd">66–84 / month (USD)</Label>
+              <Input id="age-band-rate66-to84-usd" type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-version-ageband-66-84-usd" />
             </div>
             <div className="space-y-2">
-              <Label>66–84 / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-version-ageband-66-84-zar" />
+              <Label htmlFor="age-band-rate66-to84-zar">66–84 / month (ZAR)</Label>
+              <Input id="age-band-rate66-to84-zar" type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-version-ageband-66-84-zar" />
             </div>
             <div className="space-y-2">
-              <Label>85+ / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-version-ageband-85-plus-usd" />
+              <Label htmlFor="age-band-rate85-plus-usd">85+ / month (USD)</Label>
+              <Input id="age-band-rate85-plus-usd" type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-version-ageband-85-plus-usd" />
             </div>
             <div className="space-y-2">
-              <Label>85+ / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-version-ageband-85-plus-zar" />
+              <Label htmlFor="age-band-rate85-plus-zar">85+ / month (ZAR)</Label>
+              <Input id="age-band-rate85-plus-zar" type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-version-ageband-85-plus-zar" />
             </div>
           </div>
 
@@ -1684,8 +1684,8 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <VersionFormErrorSummary errors={fieldErrors} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Effective From *</Label>
-              <Input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-edit-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
+              <Label htmlFor="effective-from-2">Effective From *</Label>
+              <Input id="effective-from-2" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-edit-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
               <FieldError message={fieldErrors.effectiveFrom} />
             </div>
             <div className="flex items-center gap-2 pt-7">
@@ -1699,35 +1699,35 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Monthly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-edit-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
+              <Label htmlFor="premium-monthly-usd-2">Monthly Premium (USD)</Label>
+              <Input id="premium-monthly-usd-2" type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-edit-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumMonthlyUsd} />
             </div>
             <div className="space-y-2">
-              <Label>Monthly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-edit-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
+              <Label htmlFor="premium-monthly-zar-2">Monthly Premium (ZAR)</Label>
+              <Input id="premium-monthly-zar-2" type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-edit-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-edit-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
+              <Label htmlFor="premium-weekly-usd-2">Weekly Premium (USD)</Label>
+              <Input id="premium-weekly-usd-2" type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-edit-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumWeeklyUsd} />
             </div>
             <div className="space-y-2">
-              <Label>Weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" className={cn(fieldErrors.premiumWeeklyZar && "border-destructive")} />
+              <Label htmlFor="premium-weekly-zar-2">Weekly Premium (ZAR)</Label>
+              <Input id="premium-weekly-zar-2" type="number" step="0.01" value={premiumWeeklyZar} onChange={(e) => setPremiumWeeklyZar(e.target.value)} placeholder="e.g. 75.00" className={cn(fieldErrors.premiumWeeklyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumWeeklyZar} />
             </div>
             <div className="space-y-2">
-              <Label>Bi-weekly Premium (USD)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-edit-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
+              <Label htmlFor="premium-biweekly-usd-2">Bi-weekly Premium (USD)</Label>
+              <Input id="premium-biweekly-usd-2" type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-edit-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyUsd} />
             </div>
             <div className="space-y-2">
-              <Label>Bi-weekly Premium (ZAR)</Label>
-              <Input type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
+              <Label htmlFor="premium-biweekly-zar-2">Bi-weekly Premium (ZAR)</Label>
+              <Input id="premium-biweekly-zar-2" type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyZar} />
             </div>
           </div>
@@ -1737,24 +1737,24 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Natural Death (days)</Label>
-              <Input type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-edit-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
+              <Label htmlFor="waiting-period-days-2">Natural Death (days)</Label>
+              <Input id="waiting-period-days-2" type="number" value={waitingPeriodDays} onChange={(e) => setWaitingPeriodDays(e.target.value)} data-testid="input-edit-version-waiting" className={cn(fieldErrors.waitingPeriodDays && "border-destructive")} />
               <FieldError message={fieldErrors.waitingPeriodDays} />
             </div>
             <div className="space-y-2">
-              <Label>Accidental Death (days)</Label>
-              <Input type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-edit-version-waiting-accidental" className={cn(fieldErrors.waitingAccidental && "border-destructive")} />
+              <Label htmlFor="waiting-accidental-2">Accidental Death (days)</Label>
+              <Input id="waiting-accidental-2" type="number" value={waitingAccidental} onChange={(e) => setWaitingAccidental(e.target.value)} data-testid="input-edit-version-waiting-accidental" className={cn(fieldErrors.waitingAccidental && "border-destructive")} />
               <FieldError message={fieldErrors.waitingAccidental} />
             </div>
             <div className="space-y-2">
-              <Label>Suicide (days)</Label>
-              <Input type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-edit-version-waiting-suicide" className={cn(fieldErrors.waitingSuicide && "border-destructive")} />
+              <Label htmlFor="waiting-suicide-2">Suicide (days)</Label>
+              <Input id="waiting-suicide-2" type="number" value={waitingSuicide} onChange={(e) => setWaitingSuicide(e.target.value)} data-testid="input-edit-version-waiting-suicide" className={cn(fieldErrors.waitingSuicide && "border-destructive")} />
               <FieldError message={fieldErrors.waitingSuicide} />
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Grace Period (days)</Label>
-            <Input type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-edit-version-grace" className={cn(fieldErrors.gracePeriodDays && "border-destructive")} />
+            <Label htmlFor="grace-period-days-2">Grace Period (days)</Label>
+            <Input id="grace-period-days-2" type="number" value={gracePeriodDays} onChange={(e) => setGracePeriodDays(e.target.value)} data-testid="input-edit-version-grace" className={cn(fieldErrors.gracePeriodDays && "border-destructive")} />
             <FieldError message={fieldErrors.gracePeriodDays} />
           </div>
 
@@ -1776,18 +1776,18 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Min Age (main member)</Label>
-              <Input type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-edit-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
+              <Label htmlFor="eligibility-min-age-2">Min Age (main member)</Label>
+              <Input id="eligibility-min-age-2" type="number" value={eligibilityMinAge} onChange={(e) => setEligibilityMinAge(e.target.value)} data-testid="input-edit-version-min-age" className={cn(fieldErrors.eligibilityMinAge && "border-destructive")} />
               <FieldError message={fieldErrors.eligibilityMinAge} />
             </div>
             <div className="space-y-2">
-              <Label>Max Age (main member)</Label>
-              <Input type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-edit-version-max-age" className={cn(fieldErrors.eligibilityMaxAge && "border-destructive")} />
+              <Label htmlFor="eligibility-max-age-2">Max Age (main member)</Label>
+              <Input id="eligibility-max-age-2" type="number" value={eligibilityMaxAge} onChange={(e) => setEligibilityMaxAge(e.target.value)} data-testid="input-edit-version-max-age" className={cn(fieldErrors.eligibilityMaxAge && "border-destructive")} />
               <FieldError message={fieldErrors.eligibilityMaxAge} />
             </div>
             <div className="space-y-2">
-              <Label>Max Dependent Age</Label>
-              <Input type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-edit-version-dependent-max-age" className={cn(fieldErrors.dependentMaxAge && "border-destructive")} />
+              <Label htmlFor="dependent-max-age-2">Max Dependent Age</Label>
+              <Input id="dependent-max-age-2" type="number" value={dependentMaxAge} onChange={(e) => setDependentMaxAge(e.target.value)} data-testid="input-edit-version-dependent-max-age" className={cn(fieldErrors.dependentMaxAge && "border-destructive")} />
               <FieldError message={fieldErrors.dependentMaxAge} />
             </div>
           </div>
@@ -1797,12 +1797,12 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Adult Cash in Lieu</Label>
-              <Input type="number" step="0.01" value={cashInLieuAdult} onChange={(e) => setCashInLieuAdult(e.target.value)} placeholder="e.g. 5000.00" data-testid="input-edit-version-cash-adult" />
+              <Label htmlFor="cash-in-lieu-adult-2">Adult Cash in Lieu</Label>
+              <Input id="cash-in-lieu-adult-2" type="number" step="0.01" value={cashInLieuAdult} onChange={(e) => setCashInLieuAdult(e.target.value)} placeholder="e.g. 5000.00" data-testid="input-edit-version-cash-adult" />
             </div>
             <div className="space-y-2">
-              <Label>Child Cash in Lieu</Label>
-              <Input type="number" step="0.01" value={cashInLieuChild} onChange={(e) => setCashInLieuChild(e.target.value)} placeholder="e.g. 2500.00" data-testid="input-edit-version-cash-child" />
+              <Label htmlFor="cash-in-lieu-child-2">Child Cash in Lieu</Label>
+              <Input id="cash-in-lieu-child-2" type="number" step="0.01" value={cashInLieuChild} onChange={(e) => setCashInLieuChild(e.target.value)} placeholder="e.g. 2500.00" data-testid="input-edit-version-cash-child" />
             </div>
           </div>
 
@@ -1811,32 +1811,32 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Initial Months Count</Label>
-              <Input type="number" value={commFirstMonths} onChange={(e) => setCommFirstMonths(e.target.value)} placeholder="e.g. 2" data-testid="input-edit-version-comm-first-months" />
+              <Label htmlFor="comm-first-months-2">Initial Months Count</Label>
+              <Input id="comm-first-months-2" type="number" value={commFirstMonths} onChange={(e) => setCommFirstMonths(e.target.value)} placeholder="e.g. 2" data-testid="input-edit-version-comm-first-months" />
             </div>
             <div className="space-y-2">
-              <Label>Initial Months Rate (%)</Label>
-              <Input type="number" step="0.01" value={commFirstRate} onChange={(e) => setCommFirstRate(e.target.value)} placeholder="e.g. 50" data-testid="input-edit-version-comm-first-rate" />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Recurring Start Month</Label>
-              <Input type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-edit-version-comm-recurring-start" />
-            </div>
-            <div className="space-y-2">
-              <Label>Recurring Rate (%)</Label>
-              <Input type="number" step="0.01" value={commRecurringRate} onChange={(e) => setCommRecurringRate(e.target.value)} placeholder="e.g. 10" data-testid="input-edit-version-comm-recurring-rate" />
+              <Label htmlFor="comm-first-rate-2">Initial Months Rate (%)</Label>
+              <Input id="comm-first-rate-2" type="number" step="0.01" value={commFirstRate} onChange={(e) => setCommFirstRate(e.target.value)} placeholder="e.g. 50" data-testid="input-edit-version-comm-first-rate" />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Clawback Threshold (payments)</Label>
-              <Input type="number" value={commClawback} onChange={(e) => setCommClawback(e.target.value)} placeholder="e.g. 4" data-testid="input-edit-version-comm-clawback" />
+              <Label htmlFor="comm-recurring-start-2">Recurring Start Month</Label>
+              <Input id="comm-recurring-start-2" type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-edit-version-comm-recurring-start" />
             </div>
             <div className="space-y-2">
-              <Label>Funeral Service Incentive</Label>
-              <Input type="number" step="0.01" value={commFuneralIncentive} onChange={(e) => setCommFuneralIncentive(e.target.value)} placeholder="e.g. 50.00" data-testid="input-edit-version-comm-funeral" />
+              <Label htmlFor="comm-recurring-rate-2">Recurring Rate (%)</Label>
+              <Input id="comm-recurring-rate-2" type="number" step="0.01" value={commRecurringRate} onChange={(e) => setCommRecurringRate(e.target.value)} placeholder="e.g. 10" data-testid="input-edit-version-comm-recurring-rate" />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="comm-clawback-2">Clawback Threshold (payments)</Label>
+              <Input id="comm-clawback-2" type="number" value={commClawback} onChange={(e) => setCommClawback(e.target.value)} placeholder="e.g. 4" data-testid="input-edit-version-comm-clawback" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="comm-funeral-incentive-2">Funeral Service Incentive</Label>
+              <Input id="comm-funeral-incentive-2" type="number" step="0.01" value={commFuneralIncentive} onChange={(e) => setCommFuneralIncentive(e.target.value)} placeholder="e.g. 50.00" data-testid="input-edit-version-comm-funeral" />
             </div>
           </div>
 
@@ -1845,12 +1845,12 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <p className="text-sm text-muted-foreground">Amount the tenant pays to the underwriter per member per month. Leave blank if no underwriter.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Amount per adult (per month)</Label>
-              <Input type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-edit-version-underwriter-adult" />
+              <Label htmlFor="underwriter-amount-adult-2">Amount per adult (per month)</Label>
+              <Input id="underwriter-amount-adult-2" type="number" step="0.01" value={underwriterAmountAdult} onChange={(e) => setUnderwriterAmountAdult(e.target.value)} placeholder="Optional — e.g. 5.00" data-testid="input-edit-version-underwriter-adult" />
             </div>
             <div className="space-y-2">
-              <Label>Amount per child (per month)</Label>
-              <Input type="number" step="0.01" value={underwriterAmountChild} onChange={(e) => setUnderwriterAmountChild(e.target.value)} placeholder="Same as adult if not set" data-testid="input-edit-version-underwriter-child" disabled={underwriterSameAmount} />
+              <Label htmlFor="underwriter-amount-child-2">Amount per child (per month)</Label>
+              <Input id="underwriter-amount-child-2" type="number" step="0.01" value={underwriterAmountChild} onChange={(e) => setUnderwriterAmountChild(e.target.value)} placeholder="Same as adult if not set" data-testid="input-edit-version-underwriter-child" disabled={underwriterSameAmount} />
             </div>
           </div>
           <div className="flex items-center space-x-2">
@@ -1858,8 +1858,8 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
             <Label htmlFor="edit-underwriter-same-amount" className="text-sm font-normal cursor-pointer">Same amount for adult and child</Label>
           </div>
           <div className="space-y-2">
-            <Label>Pay underwriter in advance (months)</Label>
-            <Input type="number" min={0} value={underwriterAdvanceMonths} onChange={(e) => setUnderwriterAdvanceMonths(e.target.value)} placeholder="e.g. 3" data-testid="input-edit-version-underwriter-advance" />
+            <Label htmlFor="underwriter-advance-months-2">Pay underwriter in advance (months)</Label>
+            <Input id="underwriter-advance-months-2" type="number" min={0} value={underwriterAdvanceMonths} onChange={(e) => setUnderwriterAdvanceMonths(e.target.value)} placeholder="e.g. 3" data-testid="input-edit-version-underwriter-advance" />
           </div>
 
           <Separator />
@@ -1870,12 +1870,12 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Per additional member / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-edit-version-additional-member-usd" />
+              <Label htmlFor="additional-member-premium-monthly-usd-2">Per additional member / month (USD)</Label>
+              <Input id="additional-member-premium-monthly-usd-2" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-edit-version-additional-member-usd" />
             </div>
             <div className="space-y-2">
-              <Label>Per additional member / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-edit-version-additional-member-zar" />
+              <Label htmlFor="additional-member-premium-monthly-zar-2">Per additional member / month (ZAR)</Label>
+              <Input id="additional-member-premium-monthly-zar-2" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-edit-version-additional-member-zar" />
             </div>
           </div>
 
@@ -1885,36 +1885,36 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Child / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-edit-version-ageband-child-usd" />
+              <Label htmlFor="age-band-rate-child-usd-2">Child / month (USD)</Label>
+              <Input id="age-band-rate-child-usd-2" type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-edit-version-ageband-child-usd" />
             </div>
             <div className="space-y-2">
-              <Label>Child / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-edit-version-ageband-child-zar" />
+              <Label htmlFor="age-band-rate-child-zar-2">Child / month (ZAR)</Label>
+              <Input id="age-band-rate-child-zar-2" type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-edit-version-ageband-child-zar" />
             </div>
             <div className="space-y-2">
-              <Label>21–65 / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Usd} onChange={(e) => setAgeBandRate21To65Usd(e.target.value)} data-testid="input-edit-version-ageband-21-65-usd" />
+              <Label htmlFor="age-band-rate21-to65-usd-2">21–65 / month (USD)</Label>
+              <Input id="age-band-rate21-to65-usd-2" type="number" step="0.01" min={0} value={ageBandRate21To65Usd} onChange={(e) => setAgeBandRate21To65Usd(e.target.value)} data-testid="input-edit-version-ageband-21-65-usd" />
             </div>
             <div className="space-y-2">
-              <Label>21–65 / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-edit-version-ageband-21-65-zar" />
+              <Label htmlFor="age-band-rate21-to65-zar-2">21–65 / month (ZAR)</Label>
+              <Input id="age-band-rate21-to65-zar-2" type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-edit-version-ageband-21-65-zar" />
             </div>
             <div className="space-y-2">
-              <Label>66–84 / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-edit-version-ageband-66-84-usd" />
+              <Label htmlFor="age-band-rate66-to84-usd-2">66–84 / month (USD)</Label>
+              <Input id="age-band-rate66-to84-usd-2" type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-edit-version-ageband-66-84-usd" />
             </div>
             <div className="space-y-2">
-              <Label>66–84 / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-edit-version-ageband-66-84-zar" />
+              <Label htmlFor="age-band-rate66-to84-zar-2">66–84 / month (ZAR)</Label>
+              <Input id="age-band-rate66-to84-zar-2" type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-edit-version-ageband-66-84-zar" />
             </div>
             <div className="space-y-2">
-              <Label>85+ / month (USD)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-edit-version-ageband-85-plus-usd" />
+              <Label htmlFor="age-band-rate85-plus-usd-2">85+ / month (USD)</Label>
+              <Input id="age-band-rate85-plus-usd-2" type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-edit-version-ageband-85-plus-usd" />
             </div>
             <div className="space-y-2">
-              <Label>85+ / month (ZAR)</Label>
-              <Input type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-edit-version-ageband-85-plus-zar" />
+              <Label htmlFor="age-band-rate85-plus-zar-2">85+ / month (ZAR)</Label>
+              <Input id="age-band-rate85-plus-zar-2" type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-edit-version-ageband-85-plus-zar" />
             </div>
           </div>
 
@@ -2008,9 +2008,9 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
           <div className="space-y-2"><Label>Add-On Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Tombstone Cover" data-testid="input-addon-name" /></div>
           <div className="space-y-2"><Label>Description</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What does this add-on provide?" data-testid="input-addon-description" /></div>
           <div className="space-y-2">
-            <Label>Pricing Mode</Label>
+            <Label htmlFor="pricing-mode">Pricing Mode</Label>
             <Select value={pricingMode} onValueChange={setPricingMode}>
-              <SelectTrigger data-testid="input-addon-pricing-mode"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="pricing-mode" data-testid="input-addon-pricing-mode"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="flat">Flat Rate</SelectItem>
                 <SelectItem value="percentage">Percentage of base premium</SelectItem>
@@ -2020,24 +2020,24 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
           </div>
           {pricingMode === "percentage" ? (
             <div className="space-y-2">
-              <Label>Percentage (%)</Label>
-              <Input type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} placeholder="e.g. 10" data-testid="input-addon-price" />
+              <Label htmlFor="price-amount">Percentage (%)</Label>
+              <Input id="price-amount" type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} placeholder="e.g. 10" data-testid="input-addon-price" />
             </div>
           ) : (
             <>
               <p className="text-xs text-muted-foreground">Set the price for each billing frequency, just like the main product.</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-2">
-                  <Label className="text-xs">Monthly ($)</Label>
-                  <Input type="number" step="0.01" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} placeholder="e.g. 10.00" data-testid="input-addon-price-monthly" />
+                  <Label className="text-xs" htmlFor="price-monthly">Monthly ($)</Label>
+                  <Input id="price-monthly" type="number" step="0.01" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} placeholder="e.g. 10.00" data-testid="input-addon-price-monthly" />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs">Weekly ($)</Label>
-                  <Input type="number" step="0.01" value={priceWeekly} onChange={(e) => setPriceWeekly(e.target.value)} placeholder="e.g. 2.50" data-testid="input-addon-price-weekly" />
+                  <Label className="text-xs" htmlFor="price-weekly">Weekly ($)</Label>
+                  <Input id="price-weekly" type="number" step="0.01" value={priceWeekly} onChange={(e) => setPriceWeekly(e.target.value)} placeholder="e.g. 2.50" data-testid="input-addon-price-weekly" />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs">Bi-weekly ($)</Label>
-                  <Input type="number" step="0.01" value={priceBiweekly} onChange={(e) => setPriceBiweekly(e.target.value)} placeholder="e.g. 5.00" data-testid="input-addon-price-biweekly" />
+                  <Label className="text-xs" htmlFor="price-biweekly">Bi-weekly ($)</Label>
+                  <Input id="price-biweekly" type="number" step="0.01" value={priceBiweekly} onChange={(e) => setPriceBiweekly(e.target.value)} placeholder="e.g. 5.00" data-testid="input-addon-price-biweekly" />
                 </div>
               </div>
             </>
@@ -2119,9 +2119,9 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
           <div className="space-y-2"><Label>Add-On Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required /></div>
           <div className="space-y-2"><Label>Description</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} /></div>
           <div className="space-y-2">
-            <Label>Pricing Mode</Label>
+            <Label htmlFor="pricing-mode-2">Pricing Mode</Label>
             <Select value={pricingMode} onValueChange={setPricingMode}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="pricing-mode-2"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="flat">Flat Rate</SelectItem>
                 <SelectItem value="percentage">Percentage of base premium</SelectItem>
@@ -2131,22 +2131,22 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
           </div>
           {pricingMode === "percentage" ? (
             <div className="space-y-2">
-              <Label>Percentage (%)</Label>
-              <Input type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} />
+              <Label htmlFor="price-amount-2">Percentage (%)</Label>
+              <Input id="price-amount-2" type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} />
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="space-y-2">
-                <Label className="text-xs">Monthly ($)</Label>
-                <Input type="number" step="0.01" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} />
+                <Label className="text-xs" htmlFor="price-monthly-2">Monthly ($)</Label>
+                <Input id="price-monthly-2" type="number" step="0.01" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label className="text-xs">Weekly ($)</Label>
-                <Input type="number" step="0.01" value={priceWeekly} onChange={(e) => setPriceWeekly(e.target.value)} />
+                <Label className="text-xs" htmlFor="price-weekly-2">Weekly ($)</Label>
+                <Input id="price-weekly-2" type="number" step="0.01" value={priceWeekly} onChange={(e) => setPriceWeekly(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label className="text-xs">Bi-weekly ($)</Label>
-                <Input type="number" step="0.01" value={priceBiweekly} onChange={(e) => setPriceBiweekly(e.target.value)} />
+                <Label className="text-xs" htmlFor="price-biweekly-2">Bi-weekly ($)</Label>
+                <Input id="price-biweekly-2" type="number" step="0.01" value={priceBiweekly} onChange={(e) => setPriceBiweekly(e.target.value)} />
               </div>
             </div>
           )}
@@ -2270,9 +2270,9 @@ function CreateTermDialog({ open, onClose, onSubmit, isPending, productVersions 
         <DialogHeader><DialogTitle>Create Term / Clause</DialogTitle></DialogHeader>
         <form onSubmit={(e) => { e.preventDefault(); onSubmit({ title, content, category, sortOrder: parseInt(sortOrder) || 0, productVersionId: pvId || null }); }} className="space-y-4">
           <div className="space-y-2">
-            <Label>Product Version (optional)</Label>
+            <Label htmlFor="product-version-optional">Product Version (optional)</Label>
             <Select value={pvId || "__general__"} onValueChange={(v) => setPvId(v === "__general__" ? "" : v)}>
-              <SelectTrigger><SelectValue placeholder="General (all products)" /></SelectTrigger>
+              <SelectTrigger id="product-version-optional"><SelectValue placeholder="General (all products)" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__general__">General (all products)</SelectItem>
                 {productVersions.map((pv) => (
@@ -2327,9 +2327,9 @@ function EditTermDialog({ term, open, onClose, onSubmit, isPending, productVersi
         <DialogHeader><DialogTitle>Edit Term / Clause</DialogTitle></DialogHeader>
         <form onSubmit={(e) => { e.preventDefault(); onSubmit({ title, content, category, sortOrder: parseInt(sortOrder) || 0, productVersionId: pvId || null, isActive }); }} className="space-y-4">
           <div className="space-y-2">
-            <Label>Product Version (optional)</Label>
+            <Label htmlFor="product-version-optional-2">Product Version (optional)</Label>
             <Select value={pvId || "__general__"} onValueChange={(v) => setPvId(v === "__general__" ? "" : v)}>
-              <SelectTrigger><SelectValue placeholder="General (all products)" /></SelectTrigger>
+              <SelectTrigger id="product-version-optional-2"><SelectValue placeholder="General (all products)" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__general__">General (all products)</SelectItem>
                 {productVersions.map((pv) => (

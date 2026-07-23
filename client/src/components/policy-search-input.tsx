@@ -18,12 +18,14 @@ export function PolicySearchInput({
   onChange,
   placeholder = "Search by policy number or client name...",
   disabled,
+  id,
   "data-testid": dataTestId,
 }: {
   value: string;
   onChange: (policyId: string, policy: PolicyOption | null) => void;
   placeholder?: string;
   disabled?: boolean;
+  id?: string;
   "data-testid"?: string;
 }) {
   const [query, setQuery] = useState("");
@@ -120,6 +122,7 @@ export function PolicySearchInput({
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
         <Input
+          id={id}
           data-testid={dataTestId}
           className="pl-9"
           placeholder={placeholder}

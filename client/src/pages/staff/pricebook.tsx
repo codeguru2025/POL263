@@ -579,9 +579,9 @@ function CreatePriceBookItemDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>Category</Label>
+            <Label htmlFor="category">Category</Label>
             <Select value={category} onValueChange={(v) => { setCategory(v); setCasketType(""); setName(""); }}>
-              <SelectTrigger data-testid="select-pricebook-category-top">
+              <SelectTrigger id="category" data-testid="select-pricebook-category-top">
                 <SelectValue placeholder="Select category first…" />
               </SelectTrigger>
               <SelectContent>
@@ -815,12 +815,12 @@ function AddLineItemDialog({
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Quantity</Label>
-              <Input type="number" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} data-testid="input-lineitem-quantity" />
+              <Label htmlFor="quantity">Quantity</Label>
+              <Input id="quantity" type="number" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} data-testid="input-lineitem-quantity" />
             </div>
             <div className="space-y-2">
-              <Label>Unit Price *</Label>
-              <Input type="number" step="0.01" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} placeholder="0.00" data-testid="input-lineitem-unitprice" />
+              <Label htmlFor="unit-price">Unit Price *</Label>
+              <Input id="unit-price" type="number" step="0.01" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} placeholder="0.00" data-testid="input-lineitem-unitprice" />
             </div>
           </div>
           <div className="bg-muted/50 rounded-lg px-4 py-3 flex items-center justify-between">
@@ -884,9 +884,9 @@ function EditPriceBookItemDialog({
         <DialogHeader><DialogTitle>Edit Price Book Item</DialogTitle></DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>Category</Label>
+            <Label htmlFor="category-2">Category</Label>
             <Select value={category} onValueChange={(v) => { setCategory(v); setCasketType(""); setName(""); }}>
-              <SelectTrigger><SelectValue placeholder="Select category…" /></SelectTrigger>
+              <SelectTrigger id="category-2"><SelectValue placeholder="Select category…" /></SelectTrigger>
               <SelectContent>{CATEGORIES.map((cat) => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}</SelectContent>
             </Select>
           </div>

@@ -961,8 +961,8 @@ export default function StaffDashboard() {
         <CardSection title="Filters" icon={Filter}>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Date From</Label>
-                <Input
+                <Label className="text-xs text-muted-foreground" htmlFor="date-from">Date From</Label>
+                <Input id="date-from"
                   type="date"
                   value={dateFrom}
                   onChange={(e) => setDateFrom(e.target.value)}
@@ -971,8 +971,8 @@ export default function StaffDashboard() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Date To</Label>
-                <Input
+                <Label className="text-xs text-muted-foreground" htmlFor="date-to">Date To</Label>
+                <Input id="date-to"
                   type="date"
                   value={dateTo}
                   onChange={(e) => setDateTo(e.target.value)}
@@ -981,9 +981,9 @@ export default function StaffDashboard() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Policy Status</Label>
+                <Label className="text-xs text-muted-foreground" htmlFor="status-filter">Policy Status</Label>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="h-9" data-testid="filter-status">
+                  <SelectTrigger id="status-filter" className="h-9" data-testid="filter-status">
                     <SelectValue placeholder="All statuses" />
                   </SelectTrigger>
                   <SelectContent>
@@ -997,9 +997,9 @@ export default function StaffDashboard() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Branch</Label>
+                <Label className="text-xs text-muted-foreground" htmlFor="branch-filter">Branch</Label>
                 <Select value={branchFilter} onValueChange={setBranchFilter}>
-                  <SelectTrigger className="h-9" data-testid="filter-branch">
+                  <SelectTrigger id="branch-filter" className="h-9" data-testid="filter-branch">
                     <SelectValue placeholder="All branches" />
                   </SelectTrigger>
                   <SelectContent>

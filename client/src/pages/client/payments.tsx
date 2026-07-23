@@ -348,9 +348,9 @@ export default function ClientPayments() {
             )}
 
             <div>
-              <Label>Policy</Label>
+              <Label htmlFor="selected-policy-id">Policy</Label>
               <Select value={selectedPolicyId} onValueChange={setSelectedPolicyId}>
-                <SelectTrigger><SelectValue placeholder="Select policy" /></SelectTrigger>
+                <SelectTrigger id="selected-policy-id"><SelectValue placeholder="Select policy" /></SelectTrigger>
                 <SelectContent>
                   {displayPolicies?.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
@@ -398,8 +398,8 @@ export default function ClientPayments() {
             </div>
 
             <div>
-              <Label>Amount</Label>
-              <Input
+              <Label htmlFor="amount">Amount</Label>
+              <Input id="amount"
                 type="number"
                 step="0.01"
                 placeholder={policy ? `${policy.currency} ${policy.premiumAmount}` : "Amount"}
@@ -409,9 +409,9 @@ export default function ClientPayments() {
             </div>
 
             <div>
-              <Label>Payment method</Label>
+              <Label htmlFor="method">Payment method</Label>
               <Select value={method} onValueChange={(v) => { setMethod(v); setInnbucksCode(""); setNeedsOtp(false); }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="method"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ecocash">EcoCash</SelectItem>
                   <SelectItem value="onemoney">OneMoney</SelectItem>
@@ -424,29 +424,29 @@ export default function ClientPayments() {
 
             {(method === "ecocash" || method === "onemoney") && (
               <div>
-                <Label>Mobile number</Label>
-                <Input placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
+                <Label htmlFor="payer-phone">Mobile number</Label>
+                <Input id="payer-phone" placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
                 <p className="text-xs text-muted-foreground mt-1">A USSD prompt will be sent to your phone. Enter your PIN to approve the payment.</p>
               </div>
             )}
             {method === "innbucks" && (
               <div>
-                <Label>Mobile number</Label>
-                <Input placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
+                <Label htmlFor="payer-phone-2">Mobile number</Label>
+                <Input id="payer-phone-2" placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
                 <p className="text-xs text-muted-foreground mt-1">You will receive an authorization code. Open the InnBucks app and enter the code to approve.</p>
               </div>
             )}
             {method === "omari" && (
               <div>
-                <Label>Mobile number</Label>
-                <Input placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
+                <Label htmlFor="payer-phone-3">Mobile number</Label>
+                <Input id="payer-phone-3" placeholder="0771234567" value={payerPhone} onChange={(e) => setPayerPhone(e.target.value)} />
                 <p className="text-xs text-muted-foreground mt-1">An OTP will be sent to your phone via SMS. You will need to enter it below to complete the payment.</p>
               </div>
             )}
             {method === "visa_mastercard" && (
               <div>
-                <Label>Email address</Label>
-                <Input type="email" placeholder="you@example.com" value={payerEmail} onChange={(e) => setPayerEmail(e.target.value)} />
+                <Label htmlFor="payer-email">Email address</Label>
+                <Input id="payer-email" type="email" placeholder="you@example.com" value={payerEmail} onChange={(e) => setPayerEmail(e.target.value)} />
                 <p className="text-xs text-muted-foreground mt-1">You will be redirected to Paynow's secure payment page to enter your card details.</p>
               </div>
             )}
@@ -613,9 +613,9 @@ function GroupReceiptSection({ groups }: { groups: any[] }) {
       <div className="space-y-4">
         {groups.length > 1 && (
           <div>
-            <Label>Select Group</Label>
+            <Label htmlFor="selected-group-id">Select Group</Label>
             <Select value={selectedGroupId} onValueChange={setSelectedGroupId}>
-              <SelectTrigger><SelectValue placeholder="Choose a group" /></SelectTrigger>
+              <SelectTrigger id="selected-group-id"><SelectValue placeholder="Choose a group" /></SelectTrigger>
               <SelectContent>
                 {groups.map((g: any) => (
                   <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>

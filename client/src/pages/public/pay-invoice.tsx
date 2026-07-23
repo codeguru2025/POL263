@@ -113,9 +113,9 @@ export default function PayInvoice() {
               </div>
 
               <div className="space-y-2">
-                <Label>Payment method</Label>
+                <Label htmlFor="method">Payment method</Label>
                 <Select value={method} onValueChange={(v) => { setMethod(v); initiateMutation.reset(); }}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="method"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ecocash">EcoCash</SelectItem>
                     <SelectItem value="onemoney">OneMoney</SelectItem>

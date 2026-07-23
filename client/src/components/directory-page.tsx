@@ -209,40 +209,40 @@ export function DirectoryPage({ title, description, icon: Icon, type, singularLa
             </DialogHeader>
             <div className="grid gap-3 py-2">
               <div className="grid gap-1.5">
-                <Label>Name *</Label>
-                <Input value={form.name || ""} onChange={f("name")} placeholder={`${singularLabel} or company name`} />
+                <Label htmlFor="name">Name *</Label>
+                <Input id="name" value={form.name || ""} onChange={f("name")} placeholder={`${singularLabel} or company name`} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
-                  <Label>Contact person</Label>
-                  <Input value={form.contactPerson || ""} onChange={f("contactPerson")} placeholder="Full name" />
+                  <Label htmlFor="contact-person">Contact person</Label>
+                  <Input id="contact-person" value={form.contactPerson || ""} onChange={f("contactPerson")} placeholder="Full name" />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label>City / town</Label>
-                  <Input value={form.city || ""} onChange={f("city")} placeholder="e.g. Harare" />
+                  <Label htmlFor="city-town">City / town</Label>
+                  <Input id="city-town" value={form.city || ""} onChange={f("city")} placeholder="e.g. Harare" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
-                  <Label>Phone</Label>
-                  <Input value={form.phone || ""} onChange={f("phone")} placeholder="+263 77 …" />
+                  <Label htmlFor="phone">Phone</Label>
+                  <Input id="phone" value={form.phone || ""} onChange={f("phone")} placeholder="+263 77 …" />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label>Alt. phone</Label>
-                  <Input value={form.altPhone || ""} onChange={f("altPhone")} placeholder="Second number" />
+                  <Label htmlFor="alt-phone">Alt. phone</Label>
+                  <Input id="alt-phone" value={form.altPhone || ""} onChange={f("altPhone")} placeholder="Second number" />
                 </div>
               </div>
               <div className="grid gap-1.5">
-                <Label>Email</Label>
-                <Input type="email" value={form.email || ""} onChange={f("email")} placeholder="name@example.com" />
+                <Label htmlFor="email">Email</Label>
+                <Input id="email" type="email" value={form.email || ""} onChange={f("email")} placeholder="name@example.com" />
               </div>
               <div className="grid gap-1.5">
-                <Label>Address</Label>
-                <Input value={form.address || ""} onChange={f("address")} placeholder="Street / P.O. Box" />
+                <Label htmlFor="address">Address</Label>
+                <Input id="address" value={form.address || ""} onChange={f("address")} placeholder="Street / P.O. Box" />
               </div>
               <div className="grid gap-1.5">
-                <Label>Notes</Label>
-                <Textarea value={form.notes || ""} onChange={f("notes")} placeholder="Any extra info…" className="min-h-[72px]" />
+                <Label htmlFor="notes">Notes</Label>
+                <Textarea id="notes" value={form.notes || ""} onChange={f("notes")} placeholder="Any extra info…" className="min-h-[72px]" />
               </div>
             </div>
             <DialogFooter>

@@ -935,9 +935,9 @@ export default function StaffClients() {
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <Label>Document Type</Label>
+                <Label htmlFor="upload-doc-type">Document Type</Label>
                 <Select value={uploadDocType} onValueChange={setUploadDocType}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="upload-doc-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="national_id">National ID</SelectItem>
                     <SelectItem value="passport">Passport</SelectItem>
@@ -948,16 +948,16 @@ export default function StaffClients() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Label <span className="text-muted-foreground">(optional)</span></Label>
-                <Input
+                <Label htmlFor="upload-doc-label">Label <span className="text-muted-foreground">(optional)</span></Label>
+                <Input id="upload-doc-label"
                   placeholder="e.g. Front of ID"
                   value={uploadDocLabel}
                   onChange={(e) => setUploadDocLabel(e.target.value)}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>File</Label>
-                <input
+                <Label htmlFor="file">File</Label>
+                <input id="file"
                   ref={fileInputRef}
                   type="file"
                   accept="image/*,.pdf"
@@ -1409,8 +1409,8 @@ function DependentFormFields({
   return (
     <div className="grid grid-cols-2 gap-4">
       <div className="space-y-2">
-        <Label>First Name *</Label>
-        <Input
+        <Label htmlFor="dep-form-first-name">First Name *</Label>
+        <Input id="dep-form-first-name"
           value={depForm.firstName}
           onChange={(e) => update("firstName", e.target.value)}
           placeholder="First name"
@@ -1418,8 +1418,8 @@ function DependentFormFields({
         />
       </div>
       <div className="space-y-2">
-        <Label>Last Name *</Label>
-        <Input
+        <Label htmlFor="dep-form-last-name">Last Name *</Label>
+        <Input id="dep-form-last-name"
           value={depForm.lastName}
           onChange={(e) => update("lastName", e.target.value)}
           placeholder="Last name"
@@ -1427,9 +1427,9 @@ function DependentFormFields({
         />
       </div>
       <div className="space-y-2">
-        <Label>Relationship *</Label>
+        <Label htmlFor="dep-form-relationship">Relationship *</Label>
         <Select value={depForm.relationship} onValueChange={(v) => update("relationship", v)}>
-          <SelectTrigger data-testid="select-dep-relationship">
+          <SelectTrigger id="dep-form-relationship" data-testid="select-dep-relationship">
             <SelectValue placeholder="Select relationship" />
           </SelectTrigger>
           <SelectContent>
@@ -1440,8 +1440,8 @@ function DependentFormFields({
         </Select>
       </div>
       <div className="space-y-2">
-        <Label>National ID</Label>
-        <Input
+        <Label htmlFor="dep-form-national-id">National ID</Label>
+        <Input id="dep-form-national-id"
           value={depForm.nationalId}
           onChange={(e) => update("nationalId", e.target.value)}
           placeholder="ID number"
@@ -1449,8 +1449,8 @@ function DependentFormFields({
         />
       </div>
       <div className="space-y-2">
-        <Label>Date of Birth</Label>
-        <Input
+        <Label htmlFor="dep-form-date-of-birth">Date of Birth</Label>
+        <Input id="dep-form-date-of-birth"
           type="date"
           value={depForm.dateOfBirth}
           onChange={(e) => update("dateOfBirth", e.target.value)}
@@ -1458,9 +1458,9 @@ function DependentFormFields({
         />
       </div>
       <div className="space-y-2">
-        <Label>Gender</Label>
+        <Label htmlFor="dep-form-gender">Gender</Label>
         <Select value={depForm.gender} onValueChange={(v) => update("gender", v)}>
-          <SelectTrigger data-testid="select-dep-gender">
+          <SelectTrigger id="dep-form-gender" data-testid="select-dep-gender">
             <SelectValue placeholder="Select gender" />
           </SelectTrigger>
           <SelectContent>
@@ -1487,9 +1487,9 @@ function ClientForm({
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <div className="space-y-2">
-        <Label>Title</Label>
+        <Label htmlFor="form-data-title">Title</Label>
         <Select value={formData.title} onValueChange={(v) => update("title", v)}>
-          <SelectTrigger data-testid="select-title">
+          <SelectTrigger id="form-data-title" data-testid="select-title">
             <SelectValue placeholder="Select title" />
           </SelectTrigger>
           <SelectContent>
@@ -1540,9 +1540,9 @@ function ClientForm({
         />
       </div>
       <div className="space-y-2">
-        <Label>Gender</Label>
+        <Label htmlFor="form-data-gender">Gender</Label>
         <Select value={formData.gender} onValueChange={(v) => update("gender", v)}>
-          <SelectTrigger data-testid="select-gender">
+          <SelectTrigger id="form-data-gender" data-testid="select-gender">
             <SelectValue placeholder="Select gender" />
           </SelectTrigger>
           <SelectContent>
@@ -1553,9 +1553,9 @@ function ClientForm({
         </Select>
       </div>
       <div className="space-y-2">
-        <Label>Marital Status</Label>
+        <Label htmlFor="form-data-marital-status">Marital Status</Label>
         <Select value={formData.maritalStatus} onValueChange={(v) => update("maritalStatus", v)}>
-          <SelectTrigger data-testid="select-marital-status">
+          <SelectTrigger id="form-data-marital-status" data-testid="select-marital-status">
             <SelectValue placeholder="Select status" />
           </SelectTrigger>
           <SelectContent>
@@ -1576,9 +1576,9 @@ function ClientForm({
         />
       </div>
       <div className="space-y-2">
-        <Label>Preferred Contact Method</Label>
+        <Label htmlFor="form-data-preferred-comm-method">Preferred Contact Method</Label>
         <Select value={formData.preferredCommMethod} onValueChange={(v) => update("preferredCommMethod", v)}>
-          <SelectTrigger data-testid="select-comm-method">
+          <SelectTrigger id="form-data-preferred-comm-method" data-testid="select-comm-method">
             <SelectValue placeholder="Select method" />
           </SelectTrigger>
           <SelectContent>

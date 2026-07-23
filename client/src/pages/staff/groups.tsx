@@ -422,22 +422,22 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
               <p className="text-[10px] text-muted-foreground mt-0.5">Auto-summed from the selected policies' premiums — edit if the amount actually collected differs.</p>
             </div>
             <div>
-              <Label>Receipt date</Label>
-              <Input type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
+              <Label htmlFor="receipt-date">Receipt date</Label>
+              <Input id="receipt-date" type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
             </div>
           </div>
 
           <div>
-            <Label>Notes (optional)</Label>
-            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any notes about this receipt session..." rows={2} className="text-sm" data-testid="textarea-group-receipt-notes" />
+            <Label htmlFor="notes">Notes (optional)</Label>
+            <Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any notes about this receipt session..." rows={2} className="text-sm" data-testid="textarea-group-receipt-notes" />
           </div>
 
           {isBackdated && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 space-y-2">
               <p className="text-sm font-medium text-amber-800 dark:text-amber-400">Backdated — approval required</p>
               <div className="space-y-1">
-                <Label className="text-xs">Notes for approver *</Label>
-                <Textarea value={submitterNote} onChange={(e) => setSubmitterNote(e.target.value)}
+                <Label className="text-xs" htmlFor="submitter-note">Notes for approver *</Label>
+                <Textarea id="submitter-note" value={submitterNote} onChange={(e) => setSubmitterNote(e.target.value)}
                   placeholder="Explain why this receipt is backdated..." rows={2} className="text-sm" data-testid="textarea-submitter-note-inline" />
               </div>
             </div>
@@ -774,12 +774,12 @@ function GroupDetailPanel({ group }: { group: Group }) {
             <p className="text-sm text-muted-foreground">Enter the member's name. After capture you'll be taken to issue their policy (already linked to this group).</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>First Name *</Label>
-                <Input value={legacyFirst} onChange={(e) => setLegacyFirst(e.target.value)} placeholder="First name" autoFocus data-testid="input-legacy-first" />
+                <Label htmlFor="legacy-first">First Name *</Label>
+                <Input id="legacy-first" value={legacyFirst} onChange={(e) => setLegacyFirst(e.target.value)} placeholder="First name" autoFocus data-testid="input-legacy-first" />
               </div>
               <div className="space-y-2">
-                <Label>Last Name *</Label>
-                <Input value={legacyLast} onChange={(e) => setLegacyLast(e.target.value)} placeholder="Last name" data-testid="input-legacy-last" />
+                <Label htmlFor="legacy-last">Last Name *</Label>
+                <Input id="legacy-last" value={legacyLast} onChange={(e) => setLegacyLast(e.target.value)} placeholder="Last name" data-testid="input-legacy-last" />
               </div>
             </div>
             {legacyMutation.isError && <p className="text-sm text-destructive">{(legacyMutation.error as Error).message}</p>}
@@ -810,9 +810,9 @@ function GroupDetailPanel({ group }: { group: Group }) {
             <DialogTitle>Assign Existing Policy — {group.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <Label>Select Policy</Label>
+            <Label htmlFor="assign-policy-id">Select Policy</Label>
             <Select value={assignPolicyId} onValueChange={setAssignPolicyId}>
-              <SelectTrigger><SelectValue placeholder="Choose a policy…" /></SelectTrigger>
+              <SelectTrigger id="assign-policy-id"><SelectValue placeholder="Choose a policy…" /></SelectTrigger>
               <SelectContent>
                 {unassigned.map((p: any) => (
                   <SelectItem key={p.id} value={p.id}>
@@ -873,13 +873,13 @@ function LegacyGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
       </p>
       <div className="grid grid-cols-3 gap-4 max-w-md">
         <div>
-          <Label>Amount</Label>
-          <Input type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+          <Label htmlFor="amount">Amount</Label>
+          <Input id="amount" type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
         </div>
         <div>
-          <Label>Currency</Label>
+          <Label htmlFor="currency">Currency</Label>
           <Select value={currency} onValueChange={setCurrency}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectTrigger id="currency"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="USD">USD</SelectItem>
               <SelectItem value="ZAR">ZAR</SelectItem>
@@ -888,13 +888,13 @@ function LegacyGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
           </Select>
         </div>
         <div>
-          <Label>Payment date</Label>
-          <Input type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} />
+          <Label htmlFor="payment-date">Payment date</Label>
+          <Input id="payment-date" type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} />
         </div>
       </div>
       <div className="max-w-md">
-        <Label>Notes (optional)</Label>
-        <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
+        <Label htmlFor="notes-2">Notes (optional)</Label>
+        <Input id="notes-2" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
       </div>
       <Button onClick={() => mutation.mutate()} disabled={!amount || parseFloat(amount) <= 0 || mutation.isPending}>
         {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
@@ -1369,13 +1369,13 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Group Details</h3>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label>Group Name *</Label>
-            <Input value={formData.name} onChange={(e) => update("name", e.target.value)} placeholder="e.g. Sunrise Community Group" data-testid={`input-${prefix}-group-name`} />
+            <Label htmlFor="form-data-name">Group Name *</Label>
+            <Input id="form-data-name" value={formData.name} onChange={(e) => update("name", e.target.value)} placeholder="e.g. Sunrise Community Group" data-testid={`input-${prefix}-group-name`} />
           </div>
           <div className="space-y-2">
-            <Label>Type</Label>
+            <Label htmlFor="form-data-type">Type</Label>
             <Select value={formData.type} onValueChange={(val) => update("type", val)}>
-              <SelectTrigger data-testid={`select-${prefix}-group-type`}><SelectValue /></SelectTrigger>
+              <SelectTrigger id="form-data-type" data-testid={`select-${prefix}-group-type`}><SelectValue /></SelectTrigger>
               <SelectContent>
                 {GROUP_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
               </SelectContent>

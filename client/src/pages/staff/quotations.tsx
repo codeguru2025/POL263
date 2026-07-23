@@ -177,16 +177,16 @@ export function QuoteDialog({
             <AccordionTrigger className="text-sm font-semibold">Client / Informant Details</AccordionTrigger>
             <AccordionContent className="space-y-3 pt-2">
               <div>
-                <Label>Full Names <span className="text-destructive">*</span></Label>
-                <Input value={form.informantFullNames} onChange={(e) => set("informantFullNames", e.target.value)} placeholder="First and last name" />
+                <Label htmlFor="form-informant-full-names">Full Names <span className="text-destructive">*</span></Label>
+                <Input id="form-informant-full-names" value={form.informantFullNames} onChange={(e) => set("informantFullNames", e.target.value)} placeholder="First and last name" />
               </div>
               <div>
-                <Label>Phone</Label>
-                <Input value={form.informantPhone} onChange={(e) => set("informantPhone", e.target.value)} placeholder="+263…" />
+                <Label htmlFor="form-informant-phone">Phone</Label>
+                <Input id="form-informant-phone" value={form.informantPhone} onChange={(e) => set("informantPhone", e.target.value)} placeholder="+263…" />
               </div>
               <div>
-                <Label>Address</Label>
-                <Textarea value={form.informantAddress} onChange={(e) => set("informantAddress", e.target.value)} rows={2} />
+                <Label htmlFor="form-informant-address">Address</Label>
+                <Textarea id="form-informant-address" value={form.informantAddress} onChange={(e) => set("informantAddress", e.target.value)} rows={2} />
               </div>
             </AccordionContent>
           </AccordionItem>
@@ -196,18 +196,18 @@ export function QuoteDialog({
             <AccordionTrigger className="text-sm font-semibold">Deceased Details</AccordionTrigger>
             <AccordionContent className="space-y-3 pt-2">
               <div>
-                <Label>Deceased Name <span className="text-destructive">*</span></Label>
-                <Input value={form.deceasedName} onChange={(e) => set("deceasedName", e.target.value)} />
+                <Label htmlFor="form-deceased-name">Deceased Name <span className="text-destructive">*</span></Label>
+                <Input id="form-deceased-name" value={form.deceasedName} onChange={(e) => set("deceasedName", e.target.value)} />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <Label>Age</Label>
-                  <Input type="number" min="0" value={form.deceasedAge} onChange={(e) => set("deceasedAge", e.target.value)} />
+                  <Label htmlFor="form-deceased-age">Age</Label>
+                  <Input id="form-deceased-age" type="number" min="0" value={form.deceasedAge} onChange={(e) => set("deceasedAge", e.target.value)} />
                 </div>
                 <div>
-                  <Label>Sex</Label>
+                  <Label htmlFor="form-deceased-sex">Sex</Label>
                   <Select value={form.deceasedSex} onValueChange={(v) => set("deceasedSex", v)}>
-                    <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                    <SelectTrigger id="form-deceased-sex"><SelectValue placeholder="Select…" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="male">Male</SelectItem>
                       <SelectItem value="female">Female</SelectItem>
@@ -218,9 +218,9 @@ export function QuoteDialog({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <Label>Casket Type</Label>
+                  <Label htmlFor="form-casket-type">Casket Type</Label>
                   <Select value={form.casketType} onValueChange={(v) => set("casketType", v)}>
-                    <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                    <SelectTrigger id="form-casket-type"><SelectValue placeholder="Select…" /></SelectTrigger>
                     <SelectContent>
                       {CASKET_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                     </SelectContent>
@@ -291,12 +291,12 @@ export function QuoteDialog({
 
               <div className="mt-4 space-y-2 max-w-xs ml-auto text-sm">
                 <div className="flex items-center gap-2">
-                  <Label className="w-32 shrink-0">VAT Rate (%)</Label>
-                  <Input className="h-7 text-right" type="number" min="0" value={form.vatRate} onChange={(e) => set("vatRate", e.target.value)} />
+                  <Label className="w-32 shrink-0" htmlFor="form-vat-rate">VAT Rate (%)</Label>
+                  <Input id="form-vat-rate" className="h-7 text-right" type="number" min="0" value={form.vatRate} onChange={(e) => set("vatRate", e.target.value)} />
                 </div>
                 <div className="flex items-center gap-2">
-                  <Label className="w-32 shrink-0">Discount</Label>
-                  <Input className="h-7 text-right" type="number" min="0" step="0.01" value={form.discountAmount} onChange={(e) => set("discountAmount", e.target.value)} />
+                  <Label className="w-32 shrink-0" htmlFor="form-discount-amount">Discount</Label>
+                  <Input id="form-discount-amount" className="h-7 text-right" type="number" min="0" step="0.01" value={form.discountAmount} onChange={(e) => set("discountAmount", e.target.value)} />
                 </div>
                 <div className="border-t pt-2 space-y-1">
                   <div className="flex justify-between text-muted-foreground">
@@ -328,9 +328,9 @@ export function QuoteDialog({
             <AccordionContent className="space-y-3 pt-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <Label>Currency</Label>
+                  <Label htmlFor="form-currency">Currency</Label>
                   <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="form-currency"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="USD">USD</SelectItem>
                       <SelectItem value="ZAR">ZAR</SelectItem>
@@ -339,9 +339,9 @@ export function QuoteDialog({
                   </Select>
                 </div>
                 <div>
-                  <Label>Payment Type</Label>
+                  <Label htmlFor="form-payment-type">Payment Type</Label>
                   <Select value={form.paymentType} onValueChange={(v) => set("paymentType", v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="form-payment-type"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="full">Full Payment</SelectItem>
                       <SelectItem value="part">Part Payment</SelectItem>
@@ -350,8 +350,8 @@ export function QuoteDialog({
                 </div>
               </div>
               <div>
-                <Label>Notes</Label>
-                <Textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={2} />
+                <Label htmlFor="form-notes">Notes</Label>
+                <Textarea id="form-notes" value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={2} />
               </div>
             </AccordionContent>
           </AccordionItem>
@@ -443,14 +443,14 @@ function CollateralDialog({ open, onClose, quoteId }: { open: boolean; onClose: 
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <Label>Item Description <span className="text-destructive">*</span></Label>
-            <Input value={form.itemDescription} onChange={(e) => set("itemDescription", e.target.value)} />
+            <Label htmlFor="form-item-description">Item Description <span className="text-destructive">*</span></Label>
+            <Input id="form-item-description" value={form.itemDescription} onChange={(e) => set("itemDescription", e.target.value)} />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label>Condition</Label>
+              <Label htmlFor="form-condition">Condition</Label>
               <Select value={form.condition} onValueChange={(v) => set("condition", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="form-condition"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="good">Good</SelectItem>
                   <SelectItem value="fair">Fair</SelectItem>
@@ -459,18 +459,18 @@ function CollateralDialog({ open, onClose, quoteId }: { open: boolean; onClose: 
               </Select>
             </div>
             <div>
-              <Label>Value</Label>
-              <Input type="number" min="0" step="0.01" value={form.value} onChange={(e) => set("value", e.target.value)} />
+              <Label htmlFor="form-value">Value</Label>
+              <Input id="form-value" type="number" min="0" step="0.01" value={form.value} onChange={(e) => set("value", e.target.value)} />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label>Due Date</Label>
-              <Input type="date" value={form.dueDate} onChange={(e) => set("dueDate", e.target.value)} />
+              <Label htmlFor="form-due-date">Due Date</Label>
+              <Input id="form-due-date" type="date" value={form.dueDate} onChange={(e) => set("dueDate", e.target.value)} />
             </div>
             <div>
-              <Label>Forfeiture Date</Label>
-              <Input type="date" value={form.forfeitureDate} onChange={(e) => set("forfeitureDate", e.target.value)} />
+              <Label htmlFor="form-forfeiture-date">Forfeiture Date</Label>
+              <Input id="form-forfeiture-date" type="date" value={form.forfeitureDate} onChange={(e) => set("forfeitureDate", e.target.value)} />
             </div>
           </div>
         </div>

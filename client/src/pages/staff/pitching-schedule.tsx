@@ -68,8 +68,8 @@ export default function StaffPitchingSchedule() {
         />
         <div className="flex items-center justify-between mb-4 gap-3">
           <div className="w-48">
-            <Label className="text-xs">Date</Label>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-schedule-date" />
+            <Label className="text-xs" htmlFor="date">Date</Label>
+            <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-schedule-date" />
           </div>
           {canWrite && (
             <Button onClick={() => setShowAdd(true)} data-testid="button-add-pitching-assignment">

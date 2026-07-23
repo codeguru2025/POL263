@@ -139,12 +139,12 @@ export default function ClientFeedback() {
                 </Select>
               </div>
               <div>
-                <Label>Subject</Label>
-                <Input value={form.subject} onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))} placeholder="Short subject" maxLength={500} />
+                <Label htmlFor="form-subject">Subject</Label>
+                <Input id="form-subject" value={form.subject} onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))} placeholder="Short subject" maxLength={500} />
               </div>
               <div>
-                <Label>Message</Label>
-                <Textarea value={form.message} onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))} placeholder="Your message..." rows={4} maxLength={5000} />
+                <Label htmlFor="form-message">Message</Label>
+                <Textarea id="form-message" value={form.message} onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))} placeholder="Your message..." rows={4} maxLength={5000} />
               </div>
               <div className="flex gap-2">
                 <Button

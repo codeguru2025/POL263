@@ -352,13 +352,13 @@ function QrKiosksPanel() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
-              <Label>Label</Label>
-              <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Head Office Main Entrance" />
+              <Label htmlFor="label">Label</Label>
+              <Input id="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Head Office Main Entrance" />
             </div>
             <div className="space-y-1.5">
-              <Label>Branch <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Label htmlFor="branch-id">Branch <span className="text-muted-foreground text-xs">(optional)</span></Label>
               <Select value={branchId} onValueChange={setBranchId}>
-                <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                <SelectTrigger id="branch-id"><SelectValue placeholder="None" /></SelectTrigger>
                 <SelectContent>
                   {branches.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
                 </SelectContent>
@@ -390,17 +390,17 @@ function QrKiosksPanel() {
             </Button>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Latitude</Label>
-                <Input value={geoLat} onChange={(e) => setGeoLat(e.target.value)} placeholder="e.g. -17.8252" />
+                <Label htmlFor="geo-lat">Latitude</Label>
+                <Input id="geo-lat" value={geoLat} onChange={(e) => setGeoLat(e.target.value)} placeholder="e.g. -17.8252" />
               </div>
               <div className="space-y-1.5">
-                <Label>Longitude</Label>
-                <Input value={geoLng} onChange={(e) => setGeoLng(e.target.value)} placeholder="e.g. 31.0335" />
+                <Label htmlFor="geo-lng">Longitude</Label>
+                <Input id="geo-lng" value={geoLng} onChange={(e) => setGeoLng(e.target.value)} placeholder="e.g. 31.0335" />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Radius (metres)</Label>
-              <Input type="number" min={50} max={20000} value={geoRadius} onChange={(e) => setGeoRadius(e.target.value)} />
+              <Label htmlFor="geo-radius">Radius (metres)</Label>
+              <Input id="geo-radius" type="number" min={50} max={20000} value={geoRadius} onChange={(e) => setGeoRadius(e.target.value)} />
             </div>
           </div>
           <DialogFooter className="flex-wrap gap-2">
@@ -722,22 +722,22 @@ export default function StaffAttendance() {
             <CardSection title="Manual Attendance Correction" description="Use the Scan tab to clock in/out normally. Use this to fix a missed scan — it fills in whichever time you enter without disturbing an existing scan." icon={ClipboardCheck}>
               <div className="space-y-4 max-w-sm">
                 <div className="space-y-1.5">
-                  <Label>Date</Label>
-                  <Input type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} />
+                  <Label htmlFor="log-date">Date</Label>
+                  <Input id="log-date" type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label>Clock In <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                    <Input type="time" value={logClockIn} onChange={(e) => setLogClockIn(e.target.value)} />
+                    <Label htmlFor="log-clock-in">Clock In <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input id="log-clock-in" type="time" value={logClockIn} onChange={(e) => setLogClockIn(e.target.value)} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Clock Out <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                    <Input type="time" value={logClockOut} onChange={(e) => setLogClockOut(e.target.value)} />
+                    <Label htmlFor="log-clock-out">Clock Out <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input id="log-clock-out" type="time" value={logClockOut} onChange={(e) => setLogClockOut(e.target.value)} />
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                  <Textarea
+                  <Label htmlFor="log-notes">Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                  <Textarea id="log-notes"
                     value={logNotes}
                     onChange={(e) => setLogNotes(e.target.value)}
                     rows={2}
@@ -804,9 +804,9 @@ export default function StaffAttendance() {
                   <Input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} className="w-44 h-8" />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Status</Label>
+                  <Label className="text-xs" htmlFor="filter-status">Status</Label>
                   <Select value={filterStatus} onValueChange={setFilterStatus}>
-                    <SelectTrigger className="w-36 h-8">
+                    <SelectTrigger id="filter-status" className="w-36 h-8">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -933,8 +933,8 @@ export default function StaffAttendance() {
             <DialogDescription>Confirm the employee reported for work. Add a note if needed.</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5 py-2">
-            <Label>Approval Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
-            <Textarea value={actionNotes} onChange={(e) => setActionNotes(e.target.value)} rows={2} />
+            <Label htmlFor="action-notes">Approval Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
+            <Textarea id="action-notes" value={actionNotes} onChange={(e) => setActionNotes(e.target.value)} rows={2} />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setApproveId(null)}>Cancel</Button>
@@ -957,8 +957,8 @@ export default function StaffAttendance() {
             <DialogDescription>Reject this attendance log. Please provide a reason.</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5 py-2">
-            <Label>Reason</Label>
-            <Textarea value={actionNotes} onChange={(e) => setActionNotes(e.target.value)} rows={2} />
+            <Label htmlFor="action-notes-2">Reason</Label>
+            <Textarea id="action-notes-2" value={actionNotes} onChange={(e) => setActionNotes(e.target.value)} rows={2} />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectId(null)}>Cancel</Button>
@@ -984,12 +984,12 @@ export default function StaffAttendance() {
           </DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
             <div className="space-y-1.5">
-              <Label>Clock In</Label>
-              <Input type="time" value={correctClockIn} onChange={(e) => setCorrectClockIn(e.target.value)} />
+              <Label htmlFor="correct-clock-in">Clock In</Label>
+              <Input id="correct-clock-in" type="time" value={correctClockIn} onChange={(e) => setCorrectClockIn(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Clock Out</Label>
-              <Input type="time" value={correctClockOut} onChange={(e) => setCorrectClockOut(e.target.value)} />
+              <Label htmlFor="correct-clock-out">Clock Out</Label>
+              <Input id="correct-clock-out" type="time" value={correctClockOut} onChange={(e) => setCorrectClockOut(e.target.value)} />
             </div>
           </div>
           <DialogFooter>

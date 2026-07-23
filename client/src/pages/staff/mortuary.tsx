@@ -951,9 +951,9 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">Partner Parlour *</Label>
+            <Label className="text-xs" htmlFor="partner-parlour">Partner Parlour *</Label>
             <Select value={form.partnerParlourId || "__none__"} onValueChange={setSel("partnerParlourId")}>
-              <SelectTrigger><SelectValue placeholder="Select parlour…" /></SelectTrigger>
+              <SelectTrigger id="partner-parlour"><SelectValue placeholder="Select parlour…" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">— Select parlour —</SelectItem>
                 {partnerParlours.map((p: any) => (
@@ -984,22 +984,22 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Date & Time</Label>
-              <Input type="datetime-local" value={form.usageDateTime} onChange={set("usageDateTime")} />
+              <Label className="text-xs" htmlFor="form-usage-date-time">Date & Time</Label>
+              <Input id="form-usage-date-time" type="datetime-local" value={form.usageDateTime} onChange={set("usageDateTime")} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Deceased Name</Label>
-            <Input value={form.deceasedName} onChange={set("deceasedName")} placeholder="Whose removal/burial this is for" />
+            <Label className="text-xs" htmlFor="form-deceased-name">Deceased Name</Label>
+            <Input id="form-deceased-name" value={form.deceasedName} onChange={set("deceasedName")} placeholder="Whose removal/burial this is for" />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Destination</Label>
-            <Input value={form.destination} onChange={set("destination")} placeholder="Where the vehicle is going" />
+            <Label className="text-xs" htmlFor="form-destination">Destination</Label>
+            <Input id="form-destination" value={form.destination} onChange={set("destination")} placeholder="Where the vehicle is going" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Fee Amount</Label>
-              <Input type="number" step="0.01" min="0" value={form.feeAmount} onChange={set("feeAmount")} placeholder="0.00" />
+              <Label className="text-xs" htmlFor="form-fee-amount">Fee Amount</Label>
+              <Input id="form-fee-amount" type="number" step="0.01" min="0" value={form.feeAmount} onChange={set("feeAmount")} placeholder="0.00" />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Fee Currency</Label>
@@ -1007,8 +1007,8 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Notes</Label>
-            <Textarea value={form.notes} onChange={set("notes")} rows={2} />
+            <Label className="text-xs" htmlFor="form-notes">Notes</Label>
+            <Textarea id="form-notes" value={form.notes} onChange={set("notes")} rows={2} />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -1043,8 +1043,8 @@ function FeePaymentDialog({ open, onOpenChange, feeAmount, feeCurrency, onSubmit
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">Paid By *</Label>
-            <Input value={paidBy} onChange={(e) => setPaidBy(e.target.value)} required placeholder="Name of person who paid" />
+            <Label className="text-xs" htmlFor="paid-by">Paid By *</Label>
+            <Input id="paid-by" value={paidBy} onChange={(e) => setPaidBy(e.target.value)} required placeholder="Name of person who paid" />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -1154,9 +1154,9 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label className="text-xs">Service Scope *</Label>
+              <Label className="text-xs" htmlFor="form-service-scope">Service Scope *</Label>
               <Select value={form.serviceScope} onValueChange={setSel("serviceScope")}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="form-service-scope"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="full_service">Full Service (we handle burial)</SelectItem>
                   <SelectItem value="storage_only">Storage Only (another parlour does burial)</SelectItem>
@@ -1166,9 +1166,9 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Branch</Label>
+              <Label className="text-xs" htmlFor="form-branch-id">Branch</Label>
               <Select value={form.branchId} onValueChange={setSel("branchId")}>
-                <SelectTrigger data-testid="select-intake-branch"><SelectValue placeholder="Select branch" /></SelectTrigger>
+                <SelectTrigger id="form-branch-id" data-testid="select-intake-branch"><SelectValue placeholder="Select branch" /></SelectTrigger>
                 <SelectContent>
                   {branches.map((b: any) => (
                     <SelectItem key={b.id} value={b.id}>{b.name}{b.isHeadOffice ? " (Head Office)" : ""}</SelectItem>
@@ -1196,24 +1196,24 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Age</Label>
-                <Input type="number" min="0" value={form.deceasedAge} onChange={set("deceasedAge")} placeholder="e.g. 65" />
+                <Label className="text-xs" htmlFor="form-deceased-age">Age</Label>
+                <Input id="form-deceased-age" type="number" min="0" value={form.deceasedAge} onChange={set("deceasedAge")} placeholder="e.g. 65" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">National ID</Label>
-                <Input value={form.deceasedNationalId} onChange={set("deceasedNationalId")} placeholder="ID / Passport" />
+                <Label className="text-xs" htmlFor="form-deceased-national-id">National ID</Label>
+                <Input id="form-deceased-national-id" value={form.deceasedNationalId} onChange={set("deceasedNationalId")} placeholder="ID / Passport" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Date of Death</Label>
-                <Input type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} />
+                <Label className="text-xs" htmlFor="form-date-of-death">Date of Death</Label>
+                <Input id="form-date-of-death" type="date" value={form.dateOfDeath} onChange={set("dateOfDeath")} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Cause of Death</Label>
-                <Input value={form.causeOfDeath} onChange={set("causeOfDeath")} placeholder="e.g. Natural causes" />
+                <Label className="text-xs" htmlFor="form-cause-of-death">Cause of Death</Label>
+                <Input id="form-cause-of-death" value={form.causeOfDeath} onChange={set("causeOfDeath")} placeholder="e.g. Natural causes" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Place of Death</Label>
-                <Input value={form.placeOfDeath} onChange={set("placeOfDeath")} placeholder="Hospital, home, etc." />
+                <Label className="text-xs" htmlFor="form-place-of-death">Place of Death</Label>
+                <Input id="form-place-of-death" value={form.placeOfDeath} onChange={set("placeOfDeath")} placeholder="Hospital, home, etc." />
               </div>
             </div>
 
@@ -1223,9 +1223,9 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Partner Parlour & Storage Fee</p>
 
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Partner Parlour *</Label>
+                  <Label className="text-xs" htmlFor="partner-parlour-2">Partner Parlour *</Label>
                   <Select value={form.partnerParlourId || "__none__"} onValueChange={setSel("partnerParlourId")}>
-                    <SelectTrigger><SelectValue placeholder="Select partner parlour…" /></SelectTrigger>
+                    <SelectTrigger id="partner-parlour-2"><SelectValue placeholder="Select partner parlour…" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__none__">— Select parlour —</SelectItem>
                       {partnerParlours.map((p: any) => (
@@ -1264,8 +1264,8 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
                   </div>
                   {form.storageFeeStatus === "paid_at_admission" && (
                     <div className="col-span-2 space-y-1.5">
-                      <Label className="text-xs">Received From (Name)</Label>
-                      <Input value={form.storageFeePaidBy} onChange={set("storageFeePaidBy")} placeholder="Name of person who paid" />
+                      <Label className="text-xs" htmlFor="form-storage-fee-paid-by">Received From (Name)</Label>
+                      <Input id="form-storage-fee-paid-by" value={form.storageFeePaidBy} onChange={set("storageFeePaidBy")} placeholder="Name of person who paid" />
                     </div>
                   )}
                 </div>
@@ -1280,28 +1280,28 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Next of Kin / Informant</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs">Informant Name</Label>
-                <Input value={form.informantName} onChange={set("informantName")} />
+                <Label className="text-xs" htmlFor="form-informant-name">Informant Name</Label>
+                <Input id="form-informant-name" value={form.informantName} onChange={set("informantName")} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Informant Phone</Label>
-                <Input value={form.informantPhone} onChange={set("informantPhone")} />
+                <Label className="text-xs" htmlFor="form-informant-phone">Informant Phone</Label>
+                <Input id="form-informant-phone" value={form.informantPhone} onChange={set("informantPhone")} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Relationship</Label>
-                <Input value={form.informantRelationship} onChange={set("informantRelationship")} placeholder="e.g. Spouse, Son" />
+                <Label className="text-xs" htmlFor="form-informant-relationship">Relationship</Label>
+                <Input id="form-informant-relationship" value={form.informantRelationship} onChange={set("informantRelationship")} placeholder="e.g. Spouse, Son" />
               </div>
             </div>
 
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-1">Removal Details</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="col-span-2 space-y-1.5">
-                <Label className="text-xs">Removal Location</Label>
-                <Input value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where body was collected from" />
+                <Label className="text-xs" htmlFor="form-removal-location">Removal Location</Label>
+                <Input id="form-removal-location" value={form.removalLocation} onChange={set("removalLocation")} placeholder="Where body was collected from" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Date & Time of Removal</Label>
-                <Input type="datetime-local" value={form.removalDateTime} onChange={set("removalDateTime")} />
+                <Label className="text-xs" htmlFor="form-removal-date-time">Date & Time of Removal</Label>
+                <Input id="form-removal-date-time" type="datetime-local" value={form.removalDateTime} onChange={set("removalDateTime")} />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Removal Driver</Label>
@@ -1320,16 +1320,16 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
                 <SearchableSelect options={userOptions} value={form.receivedByUserId} onChange={setSel("receivedByUserId")} placeholder="Select staff member…" searchPlaceholder="Search…" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Received At</Label>
-                <Input type="datetime-local" value={form.receivedAt} onChange={set("receivedAt")} />
+                <Label className="text-xs" htmlFor="form-received-at">Received At</Label>
+                <Input id="form-received-at" type="datetime-local" value={form.receivedAt} onChange={set("receivedAt")} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Receiver Acknowledged Name (printed)</Label>
-                <Input value={form.receiverAcknowledgedName} onChange={set("receiverAcknowledgedName")} placeholder="Printed name at sign-off" />
+                <Label className="text-xs" htmlFor="form-receiver-acknowledged-name">Receiver Acknowledged Name (printed)</Label>
+                <Input id="form-receiver-acknowledged-name" value={form.receiverAcknowledgedName} onChange={set("receiverAcknowledgedName")} placeholder="Printed name at sign-off" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Receiver ID Number</Label>
-                <Input value={form.receiverAcknowledgedIdNumber} onChange={set("receiverAcknowledgedIdNumber")} placeholder="ID / Passport number" />
+                <Label className="text-xs" htmlFor="form-receiver-acknowledged-id-number">Receiver ID Number</Label>
+                <Input id="form-receiver-acknowledged-id-number" value={form.receiverAcknowledgedIdNumber} onChange={set("receiverAcknowledgedIdNumber")} placeholder="ID / Passport number" />
               </div>
             </div>
 
@@ -1350,8 +1350,8 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
             )}
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Notes</Label>
-              <Textarea value={form.notes} onChange={set("notes")} rows={2} placeholder="Any additional information…" />
+              <Label className="text-xs" htmlFor="form-notes-2">Notes</Label>
+              <Textarea id="form-notes-2" value={form.notes} onChange={set("notes")} rows={2} placeholder="Any additional information…" />
             </div>
 
             <DialogFooter>
@@ -1418,22 +1418,22 @@ function CreateParlourDialog({ open, onOpenChange, onCreated }: {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">Parlour Name *</Label>
-            <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required placeholder="e.g. ABC Funerals" />
+            <Label className="text-xs" htmlFor="form-name">Parlour Name *</Label>
+            <Input id="form-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required placeholder="e.g. ABC Funerals" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Phone</Label>
-              <Input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="+263…" />
+              <Label className="text-xs" htmlFor="form-phone">Phone</Label>
+              <Input id="form-phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="+263…" />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Contact Person</Label>
-              <Input value={form.contactPerson} onChange={(e) => setForm((f) => ({ ...f, contactPerson: e.target.value }))} placeholder="Full name" />
+              <Label className="text-xs" htmlFor="form-contact-person">Contact Person</Label>
+              <Input id="form-contact-person" value={form.contactPerson} onChange={(e) => setForm((f) => ({ ...f, contactPerson: e.target.value }))} placeholder="Full name" />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Address</Label>
-            <Textarea value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} rows={2} placeholder="Physical address" />
+            <Label className="text-xs" htmlFor="form-address">Address</Label>
+            <Textarea id="form-address" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} rows={2} placeholder="Physical address" />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -1485,9 +1485,9 @@ function RecordPaymentDialog({ open, onOpenChange, feeAmount, onSubmit, isPendin
         <form onSubmit={handleSubmit} className="space-y-3">
           {options.length > 1 && (
             <div className="space-y-1.5">
-              <Label className="text-xs">Payment Type *</Label>
+              <Label className="text-xs" htmlFor="form-status">Payment Type *</Label>
               <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="form-status"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                 </SelectContent>
@@ -1569,34 +1569,34 @@ function DispatchDialog({ open, onOpenChange, intake, onSubmit, isPending }: {
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Date & Time of Dispatch</Label>
-              <Input type="datetime-local" value={form.dispatchedAt} onChange={(e) => setForm((f) => ({ ...f, dispatchedAt: e.target.value }))} />
+              <Label className="text-xs" htmlFor="form-dispatched-at">Date & Time of Dispatch</Label>
+              <Input id="form-dispatched-at" type="datetime-local" value={form.dispatchedAt} onChange={(e) => setForm((f) => ({ ...f, dispatchedAt: e.target.value }))} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs">Collected By (Name) *</Label>
-                <Input value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} required placeholder="Person collecting" />
+                <Label className="text-xs" htmlFor="form-collected-by-name">Collected By (Name) *</Label>
+                <Input id="form-collected-by-name" value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} required placeholder="Person collecting" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Collector ID Number</Label>
-                <Input value={form.collectedByIdNumber} onChange={(e) => setForm((f) => ({ ...f, collectedByIdNumber: e.target.value }))} placeholder="ID / Passport" />
+                <Label className="text-xs" htmlFor="form-collected-by-id-number">Collector ID Number</Label>
+                <Input id="form-collected-by-id-number" value={form.collectedByIdNumber} onChange={(e) => setForm((f) => ({ ...f, collectedByIdNumber: e.target.value }))} placeholder="ID / Passport" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Collector Organisation</Label>
-                <Input value={form.collectedByOrganization} onChange={(e) => setForm((f) => ({ ...f, collectedByOrganization: e.target.value }))} placeholder="Other parlour / hospital" />
+                <Label className="text-xs" htmlFor="form-collected-by-organization">Collector Organisation</Label>
+                <Input id="form-collected-by-organization" value={form.collectedByOrganization} onChange={(e) => setForm((f) => ({ ...f, collectedByOrganization: e.target.value }))} placeholder="Other parlour / hospital" />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Destination</Label>
-                <Input value={form.destination} onChange={(e) => setForm((f) => ({ ...f, destination: e.target.value }))} placeholder="Cemetery, other parlour, etc." />
+                <Label className="text-xs" htmlFor="form-destination-2">Destination</Label>
+                <Input id="form-destination-2" value={form.destination} onChange={(e) => setForm((f) => ({ ...f, destination: e.target.value }))} placeholder="Cemetery, other parlour, etc." />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Collector Acknowledged Name (printed)</Label>
-              <Input value={form.collectorAcknowledgedName} onChange={(e) => setForm((f) => ({ ...f, collectorAcknowledgedName: e.target.value }))} placeholder="Printed name at sign-off" />
+              <Label className="text-xs" htmlFor="form-collector-acknowledged-name">Collector Acknowledged Name (printed)</Label>
+              <Input id="form-collector-acknowledged-name" value={form.collectorAcknowledgedName} onChange={(e) => setForm((f) => ({ ...f, collectorAcknowledgedName: e.target.value }))} placeholder="Printed name at sign-off" />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Notes</Label>
-              <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
+              <Label className="text-xs" htmlFor="form-notes-3">Notes</Label>
+              <Textarea id="form-notes-3" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
             </div>
             {intake?.partnerParlourId && (
               <p className="text-xs text-muted-foreground rounded-md border border-border bg-muted/40 px-3 py-2.5">
@@ -1649,26 +1649,26 @@ function SendForPostMortemDialog({ open, onOpenChange, onSubmit, isPending }: {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">Date & Time Taken Out</Label>
-            <Input type="datetime-local" value={form.takenOutAt} onChange={(e) => setForm((f) => ({ ...f, takenOutAt: e.target.value }))} />
+            <Label className="text-xs" htmlFor="form-taken-out-at">Date & Time Taken Out</Label>
+            <Input id="form-taken-out-at" type="datetime-local" value={form.takenOutAt} onChange={(e) => setForm((f) => ({ ...f, takenOutAt: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Taken To (location)</Label>
-            <Input value={form.takenToLocation} onChange={(e) => setForm((f) => ({ ...f, takenToLocation: e.target.value }))} placeholder="e.g. State Pathologist, hospital name" />
+            <Label className="text-xs" htmlFor="form-taken-to-location">Taken To (location)</Label>
+            <Input id="form-taken-to-location" value={form.takenToLocation} onChange={(e) => setForm((f) => ({ ...f, takenToLocation: e.target.value }))} placeholder="e.g. State Pathologist, hospital name" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Authorized By</Label>
-              <Input value={form.authorizedBy} onChange={(e) => setForm((f) => ({ ...f, authorizedBy: e.target.value }))} placeholder="Doctor / police officer" />
+              <Label className="text-xs" htmlFor="form-authorized-by">Authorized By</Label>
+              <Input id="form-authorized-by" value={form.authorizedBy} onChange={(e) => setForm((f) => ({ ...f, authorizedBy: e.target.value }))} placeholder="Doctor / police officer" />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Collected By (Name)</Label>
-              <Input value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} placeholder="Person/ambulance collecting" />
+              <Label className="text-xs" htmlFor="form-collected-by-name-2">Collected By (Name)</Label>
+              <Input id="form-collected-by-name-2" value={form.collectedByName} onChange={(e) => setForm((f) => ({ ...f, collectedByName: e.target.value }))} placeholder="Person/ambulance collecting" />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Notes</Label>
-            <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
+            <Label className="text-xs" htmlFor="form-notes-4">Notes</Label>
+            <Textarea id="form-notes-4" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -1700,22 +1700,22 @@ function AddBelongingDialog({ open, onOpenChange, onSubmit, isPending }: {
         <DialogHeader><DialogTitle>Add Belonging</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">Item Description *</Label>
-            <Input value={form.itemDescription} onChange={(e) => setForm((f) => ({ ...f, itemDescription: e.target.value }))} required placeholder="e.g. Watch, Wallet, Clothing" />
+            <Label className="text-xs" htmlFor="form-item-description">Item Description *</Label>
+            <Input id="form-item-description" value={form.itemDescription} onChange={(e) => setForm((f) => ({ ...f, itemDescription: e.target.value }))} required placeholder="e.g. Watch, Wallet, Clothing" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Quantity</Label>
-              <Input type="number" min="1" value={form.quantity} onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))} />
+              <Label className="text-xs" htmlFor="form-quantity">Quantity</Label>
+              <Input id="form-quantity" type="number" min="1" value={form.quantity} onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Submitted By</Label>
-              <Input value={form.submittedByName} onChange={(e) => setForm((f) => ({ ...f, submittedByName: e.target.value }))} placeholder="Name of person" />
+              <Label className="text-xs" htmlFor="form-submitted-by-name">Submitted By</Label>
+              <Input id="form-submitted-by-name" value={form.submittedByName} onChange={(e) => setForm((f) => ({ ...f, submittedByName: e.target.value }))} placeholder="Name of person" />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Notes</Label>
-            <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
+            <Label className="text-xs" htmlFor="form-notes-5">Notes</Label>
+            <Textarea id="form-notes-5" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={2} />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>

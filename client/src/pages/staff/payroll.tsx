@@ -760,9 +760,9 @@ export default function StaffPayroll() {
 
             {/* Link to system user */}
             <div className="space-y-1.5">
-              <Label>System User Account <span className="text-muted-foreground text-xs">(optional — required for self-logging attendance)</span></Label>
+              <Label htmlFor="system-user-account-optional-required-for-self-logging-attendance">System User Account <span className="text-muted-foreground text-xs">(optional — required for self-logging attendance)</span></Label>
               <Select value={empUserId || "__none__"} onValueChange={(v) => setEmpUserId(v === "__none__" ? "" : v)}>
-                <SelectTrigger><SelectValue placeholder="Not linked to a user" /></SelectTrigger>
+                <SelectTrigger id="system-user-account-optional-required-for-self-logging-attendance"><SelectValue placeholder="Not linked to a user" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">Not linked to a user</SelectItem>
                   {(staffUsers as any[]).map((u: any) => (
@@ -793,9 +793,9 @@ export default function StaffPayroll() {
               <p className="text-sm font-semibold mb-3">Employment Details</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>Employment Type</Label>
+                  <Label htmlFor="emp-employment-type">Employment Type</Label>
                   <Select value={empEmploymentType} onValueChange={setEmpEmploymentType}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="emp-employment-type"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="permanent">Permanent</SelectItem>
                       <SelectItem value="contract">Contract</SelectItem>
@@ -807,12 +807,12 @@ export default function StaffPayroll() {
                 </div>
                 <div /> {/* spacer */}
                 <div className="space-y-1.5">
-                  <Label>Contract Start Date</Label>
-                  <Input type="date" value={empContractStart} onChange={(e) => setEmpContractStart(e.target.value)} />
+                  <Label htmlFor="emp-contract-start">Contract Start Date</Label>
+                  <Input id="emp-contract-start" type="date" value={empContractStart} onChange={(e) => setEmpContractStart(e.target.value)} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Contract End Date <span className="text-muted-foreground text-xs">(if applicable)</span></Label>
-                  <Input type="date" value={empContractEnd} onChange={(e) => setEmpContractEnd(e.target.value)} />
+                  <Label htmlFor="emp-contract-end">Contract End Date <span className="text-muted-foreground text-xs">(if applicable)</span></Label>
+                  <Input id="emp-contract-end" type="date" value={empContractEnd} onChange={(e) => setEmpContractEnd(e.target.value)} />
                 </div>
               </div>
               {empEmploymentType !== "permanent" && empContractEnd && (() => {
@@ -833,9 +833,9 @@ export default function StaffPayroll() {
                 <div className="space-y-1.5"><Label>Branch Name</Label><Input value={empBankBranch} onChange={(e) => setEmpBankBranch(e.target.value)} placeholder="e.g. Harare Main" /></div>
                 <div className="space-y-1.5"><Label>Account Number</Label><Input value={empBankAccount} onChange={(e) => setEmpBankAccount(e.target.value)} placeholder="Account number" /></div>
                 <div className="space-y-1.5">
-                  <Label>Account Type</Label>
+                  <Label htmlFor="emp-bank-account-type">Account Type</Label>
                   <Select value={empBankAccountType} onValueChange={setEmpBankAccountType}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="emp-bank-account-type"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="current">Current</SelectItem>
                       <SelectItem value="savings">Savings</SelectItem>

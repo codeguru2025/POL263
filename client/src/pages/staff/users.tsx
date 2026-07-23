@@ -230,9 +230,9 @@ export default function StaffUsers() {
                 </div>
                 {branches.length > 0 && (
                   <div className="space-y-2">
-                    <Label>Branch</Label>
+                    <Label htmlFor="new-user-branch-id">Branch</Label>
                     <Select value={newUser.branchId} onValueChange={v => setNewUser(p => ({ ...p, branchId: v }))}>
-                      <SelectTrigger data-testid="select-user-branch"><SelectValue placeholder="Select branch" /></SelectTrigger>
+                      <SelectTrigger id="new-user-branch-id" data-testid="select-user-branch"><SelectValue placeholder="Select branch" /></SelectTrigger>
                       <SelectContent>
                         {branches.map((b: any) => (
                           <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
@@ -281,9 +281,9 @@ export default function StaffUsers() {
                       <Input id="new-dob" type="date" value={newUser.dateOfBirth} onChange={e => setNewUser(p => ({ ...p, dateOfBirth: e.target.value }))} />
                     </div>
                     <div className="space-y-1">
-                      <Label>Gender</Label>
+                      <Label htmlFor="new-user-gender">Gender</Label>
                       <Select value={newUser.gender} onValueChange={v => setNewUser(p => ({ ...p, gender: v }))}>
-                        <SelectTrigger><SelectValue placeholder="Select gender" /></SelectTrigger>
+                        <SelectTrigger id="new-user-gender"><SelectValue placeholder="Select gender" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="Male">Male</SelectItem>
                           <SelectItem value="Female">Female</SelectItem>
@@ -292,9 +292,9 @@ export default function StaffUsers() {
                       </Select>
                     </div>
                     <div className="space-y-1">
-                      <Label>Marital Status</Label>
+                      <Label htmlFor="new-user-marital-status">Marital Status</Label>
                       <Select value={newUser.maritalStatus} onValueChange={v => setNewUser(p => ({ ...p, maritalStatus: v }))}>
-                        <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
+                        <SelectTrigger id="new-user-marital-status"><SelectValue placeholder="Select status" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="Single">Single</SelectItem>
                           <SelectItem value="Married">Married</SelectItem>
@@ -452,9 +452,9 @@ export default function StaffUsers() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Status</Label>
+                  <Label htmlFor="status">Status</Label>
                   <Select value={editingUser.isActive ? "true" : "false"} onValueChange={v => setEditingUser((p: any) => ({ ...p, isActive: v === "true" }))} disabled={!canEditUsers}>
-                    <SelectTrigger data-testid="select-edit-user-status"><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="status" data-testid="select-edit-user-status"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="true">Active</SelectItem>
                       <SelectItem value="false">Inactive</SelectItem>
@@ -462,14 +462,14 @@ export default function StaffUsers() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>New password (optional, min 8 characters)</Label>
-                  <Input type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" disabled={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
+                  <Label htmlFor="new-password-optional-min-8-characters">New password (optional, min 8 characters)</Label>
+                  <Input id="new-password-optional-min-8-characters" type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" disabled={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
                 </div>
                 {branches.length > 0 && (
                   <div className="space-y-2">
-                    <Label>Branch</Label>
+                    <Label htmlFor="branch">Branch</Label>
                     <Select value={editingUser.branchId || "none"} onValueChange={v => setEditingUser((p: any) => ({ ...p, branchId: v === "none" ? "" : v }))} disabled={!canEditUsers}>
-                      <SelectTrigger data-testid="select-edit-user-branch"><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="branch" data-testid="select-edit-user-branch"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">No Branch</SelectItem>
                         {branches.map((b: any) => (
@@ -549,9 +549,9 @@ export default function StaffUsers() {
                       <Input id="edit-dob" type="date" value={editingUser.dateOfBirth || ""} onChange={e => setEditingUser((p: any) => ({ ...p, dateOfBirth: e.target.value }))} readOnly={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
                     </div>
                     <div className="space-y-1">
-                      <Label>Gender</Label>
+                      <Label htmlFor="gender">Gender</Label>
                       <Select value={editingUser.gender || ""} onValueChange={v => setEditingUser((p: any) => ({ ...p, gender: v }))} disabled={!canEditUsers}>
-                        <SelectTrigger><SelectValue placeholder="Select gender" /></SelectTrigger>
+                        <SelectTrigger id="gender"><SelectValue placeholder="Select gender" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="Male">Male</SelectItem>
                           <SelectItem value="Female">Female</SelectItem>
@@ -560,9 +560,9 @@ export default function StaffUsers() {
                       </Select>
                     </div>
                     <div className="space-y-1">
-                      <Label>Marital Status</Label>
+                      <Label htmlFor="marital-status">Marital Status</Label>
                       <Select value={editingUser.maritalStatus || ""} onValueChange={v => setEditingUser((p: any) => ({ ...p, maritalStatus: v }))} disabled={!canEditUsers}>
-                        <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
+                        <SelectTrigger id="marital-status"><SelectValue placeholder="Select status" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="Single">Single</SelectItem>
                           <SelectItem value="Married">Married</SelectItem>

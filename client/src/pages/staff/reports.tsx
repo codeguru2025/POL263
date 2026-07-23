@@ -284,9 +284,9 @@ function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged }: { ba
             {!editEntry && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>Section</Label>
+                  <Label htmlFor="form-section">Section</Label>
                   <Select value={form.section} onValueChange={v => setForm(f => ({ ...f, section: v, subsection: v === "equity" ? "" : "current" }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="form-section"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="asset">Asset</SelectItem>
                       <SelectItem value="liability">Liability</SelectItem>
@@ -296,9 +296,9 @@ function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged }: { ba
                 </div>
                 {form.section !== "equity" && (
                   <div className="space-y-1.5">
-                    <Label>Subsection</Label>
+                    <Label htmlFor="form-subsection">Subsection</Label>
                     <Select value={form.subsection} onValueChange={v => setForm(f => ({ ...f, subsection: v }))}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="form-subsection"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="current">Current</SelectItem>
                         <SelectItem value="non_current">Non-current</SelectItem>
@@ -309,18 +309,18 @@ function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged }: { ba
               </div>
             )}
             <div className="space-y-1.5">
-              <Label>Label</Label>
-              <Input placeholder="e.g. Motor vehicle, Bank loan, Share capital" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+              <Label htmlFor="form-label">Label</Label>
+              <Input id="form-label" placeholder="e.g. Motor vehicle, Bank loan, Share capital" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Amount</Label>
-                <Input type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                <Label htmlFor="form-amount">Amount</Label>
+                <Input id="form-amount" type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
               </div>
               <div className="space-y-1.5">
-                <Label>Currency</Label>
+                <Label htmlFor="form-currency">Currency</Label>
                 <Select value={form.currency} onValueChange={v => setForm(f => ({ ...f, currency: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="form-currency"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="USD">USD</SelectItem>
                     <SelectItem value="ZAR">ZAR</SelectItem>
@@ -330,8 +330,8 @@ function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged }: { ba
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
-              <Textarea rows={2} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+              <Label htmlFor="form-notes">Notes (optional)</Label>
+              <Textarea id="form-notes" rows={2} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>

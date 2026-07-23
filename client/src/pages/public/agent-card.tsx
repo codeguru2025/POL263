@@ -151,12 +151,12 @@ export default function AgentCardPage() {
             {options ? (
               <>
                 <div className="space-y-1.5">
-                  <Label>Plan</Label>
+                  <Label htmlFor="product-version-id">Plan</Label>
                   <Select
                     value={productVersionId}
                     onValueChange={(v) => { setProductVersionId(v); setQuote(null); }}
                   >
-                    <SelectTrigger data-testid="select-quote-product"><SelectValue placeholder="Select a plan" /></SelectTrigger>
+                    <SelectTrigger id="product-version-id" data-testid="select-quote-product"><SelectValue placeholder="Select a plan" /></SelectTrigger>
                     <SelectContent>
                       {options.products.map((p) =>
                         p.versions.map((v) => (

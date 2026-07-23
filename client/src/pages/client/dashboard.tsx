@@ -66,12 +66,12 @@ function ClientNotificationSettings() {
       <p className="text-sm font-medium text-muted-foreground">Notification preferences</p>
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
-          <Label className="text-sm">Sound</Label>
+          <Label className="text-sm" htmlFor="settings-notification-tone">Sound</Label>
           <Select
             value={settings.notificationTone}
             onValueChange={(v) => updateMutation.mutate({ notificationTone: v })}
           >
-            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectTrigger id="settings-notification-tone" className="w-32"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="default">Default</SelectItem>
               <SelectItem value="silent">Silent</SelectItem>
@@ -123,8 +123,8 @@ function ClientChangePassword() {
       <p className="text-sm font-medium text-muted-foreground">Change your portal password</p>
       <div className="grid gap-3 max-w-sm">
         <div>
-          <Label className="text-sm">Current password</Label>
-          <Input
+          <Label className="text-sm" htmlFor="current-password">Current password</Label>
+          <Input id="current-password"
             type="password"
             autoComplete="current-password"
             value={currentPassword}
@@ -134,8 +134,8 @@ function ClientChangePassword() {
           />
         </div>
         <div>
-          <Label className="text-sm">New password (min 8 characters)</Label>
-          <Input
+          <Label className="text-sm" htmlFor="new-password">New password (min 8 characters)</Label>
+          <Input id="new-password"
             type="password"
             autoComplete="new-password"
             value={newPassword}
@@ -145,8 +145,8 @@ function ClientChangePassword() {
           />
         </div>
         <div>
-          <Label className="text-sm">Confirm new password</Label>
-          <Input
+          <Label className="text-sm" htmlFor="confirm-password">Confirm new password</Label>
+          <Input id="confirm-password"
             type="password"
             autoComplete="new-password"
             value={confirmPassword}
@@ -913,18 +913,18 @@ function DependentsSection({ clientId }: { clientId: string }) {
             <p className="text-sm font-medium">Add a new dependent</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>First Name *</Label>
-                <Input value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} data-testid="input-dep-first-name" />
+                <Label htmlFor="form-first-name">First Name *</Label>
+                <Input id="form-first-name" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} data-testid="input-dep-first-name" />
               </div>
               <div>
-                <Label>Last Name *</Label>
-                <Input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} data-testid="input-dep-last-name" />
+                <Label htmlFor="form-last-name">Last Name *</Label>
+                <Input id="form-last-name" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} data-testid="input-dep-last-name" />
               </div>
             </div>
             <div>
-              <Label>Relationship *</Label>
+              <Label htmlFor="form-relationship">Relationship *</Label>
               <Select value={form.relationship} onValueChange={(v) => setForm({ ...form, relationship: v })}>
-                <SelectTrigger data-testid="select-dep-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
+                <SelectTrigger id="form-relationship" data-testid="select-dep-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="spouse">Spouse</SelectItem>
                   <SelectItem value="child">Child</SelectItem>
@@ -936,12 +936,12 @@ function DependentsSection({ clientId }: { clientId: string }) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>Date of Birth</Label>
-                <Input type="date" value={form.dateOfBirth} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} data-testid="input-dep-dob" />
+                <Label htmlFor="form-date-of-birth">Date of Birth</Label>
+                <Input id="form-date-of-birth" type="date" value={form.dateOfBirth} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} data-testid="input-dep-dob" />
               </div>
               <div>
-                <Label>National ID</Label>
-                <Input value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} data-testid="input-dep-national-id" />
+                <Label htmlFor="form-national-id">National ID</Label>
+                <Input id="form-national-id" value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} data-testid="input-dep-national-id" />
               </div>
             </div>
             <div className="flex gap-2">
@@ -1126,18 +1126,18 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
                 <p className="text-sm font-medium">Enter beneficiary details</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label>First Name *</Label>
-                    <Input value={benForm.firstName} onChange={(e) => setBenForm({ ...benForm, firstName: e.target.value })} data-testid="input-ben-first-name" />
+                    <Label htmlFor="ben-form-first-name">First Name *</Label>
+                    <Input id="ben-form-first-name" value={benForm.firstName} onChange={(e) => setBenForm({ ...benForm, firstName: e.target.value })} data-testid="input-ben-first-name" />
                   </div>
                   <div>
-                    <Label>Last Name *</Label>
-                    <Input value={benForm.lastName} onChange={(e) => setBenForm({ ...benForm, lastName: e.target.value })} data-testid="input-ben-last-name" />
+                    <Label htmlFor="ben-form-last-name">Last Name *</Label>
+                    <Input id="ben-form-last-name" value={benForm.lastName} onChange={(e) => setBenForm({ ...benForm, lastName: e.target.value })} data-testid="input-ben-last-name" />
                   </div>
                 </div>
                 <div>
-                  <Label>Relationship</Label>
+                  <Label htmlFor="ben-form-relationship">Relationship</Label>
                   <Select value={benForm.relationship} onValueChange={(v) => setBenForm({ ...benForm, relationship: v })}>
-                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectTrigger id="ben-form-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="spouse">Spouse</SelectItem>
                       <SelectItem value="child">Child</SelectItem>
@@ -1150,12 +1150,12 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label>National ID</Label>
-                    <Input value={benForm.nationalId} onChange={(e) => setBenForm({ ...benForm, nationalId: e.target.value })} data-testid="input-ben-national-id" />
+                    <Label htmlFor="ben-form-national-id">National ID</Label>
+                    <Input id="ben-form-national-id" value={benForm.nationalId} onChange={(e) => setBenForm({ ...benForm, nationalId: e.target.value })} data-testid="input-ben-national-id" />
                   </div>
                   <div>
-                    <Label>Phone</Label>
-                    <Input value={benForm.phone} onChange={(e) => setBenForm({ ...benForm, phone: e.target.value })} data-testid="input-ben-phone" />
+                    <Label htmlFor="ben-form-phone">Phone</Label>
+                    <Input id="ben-form-phone" value={benForm.phone} onChange={(e) => setBenForm({ ...benForm, phone: e.target.value })} data-testid="input-ben-phone" />
                   </div>
                 </div>
                 <div className="flex gap-2">

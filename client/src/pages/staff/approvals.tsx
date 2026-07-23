@@ -474,8 +474,8 @@ export default function StaffApprovals() {
           </DialogHeader>
           {waiverAction === "reject" && (
             <div className="space-y-2">
-              <Label>Rejection Reason</Label>
-              <Textarea value={waiverRejectionReason} onChange={(e) => setWaiverRejectionReason(e.target.value)} placeholder="Why is this waiver being rejected?" />
+              <Label htmlFor="waiver-rejection-reason">Rejection Reason</Label>
+              <Textarea id="waiver-rejection-reason" value={waiverRejectionReason} onChange={(e) => setWaiverRejectionReason(e.target.value)} placeholder="Why is this waiver being rejected?" />
             </div>
           )}
           <DialogFooter>

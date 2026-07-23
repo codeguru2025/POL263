@@ -238,9 +238,9 @@ function PayStep({
           />
         </div>
         <div>
-          <Label>Currency</Label>
+          <Label htmlFor="currency">Currency</Label>
           <Select value={currency} onValueChange={setCurrency}>
-            <SelectTrigger className="mt-1 w-[5.5rem]">
+            <SelectTrigger id="currency" className="mt-1 w-[5.5rem]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

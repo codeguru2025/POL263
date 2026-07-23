@@ -174,9 +174,9 @@ export default function StaffBilling() {
           <DialogHeader><DialogTitle>Pay invoice — {payInvoice?.currency} {payInvoice?.amount}</DialogTitle></DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-2">
-              <Label>Payment method</Label>
+              <Label htmlFor="method">Payment method</Label>
               <Select value={method} onValueChange={setMethod}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="method"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ecocash">EcoCash</SelectItem>
                   <SelectItem value="onemoney">OneMoney</SelectItem>

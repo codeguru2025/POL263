@@ -232,30 +232,30 @@ export default function StaffLeads() {
                 <form onSubmit={handleCreate} noValidate className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <Label>First Name *</Label>
-                      <Input name="firstName" required data-testid="input-lead-first-name" />
+                      <Label htmlFor="first-name">First Name *</Label>
+                      <Input id="first-name" name="firstName" required data-testid="input-lead-first-name" />
                     </div>
                     <div>
-                      <Label>Last Name *</Label>
-                      <Input name="lastName" required data-testid="input-lead-last-name" />
+                      <Label htmlFor="last-name">Last Name *</Label>
+                      <Input id="last-name" name="lastName" required data-testid="input-lead-last-name" />
                     </div>
                   </div>
                   <div>
-                    <Label>Phone</Label>
-                    <Input name="phone" data-testid="input-lead-phone" />
+                    <Label htmlFor="phone">Phone</Label>
+                    <Input id="phone" name="phone" data-testid="input-lead-phone" />
                   </div>
                   <div>
-                    <Label>Email</Label>
-                    <Input name="email" type="email" data-testid="input-lead-email" />
+                    <Label htmlFor="email">Email</Label>
+                    <Input id="email" name="email" type="email" data-testid="input-lead-email" />
                   </div>
                   <div>
-                    <Label>Product of Interest</Label>
-                    <Input name="productInterest" placeholder="e.g. Life Cover, Funeral Plan…" />
+                    <Label htmlFor="product-of-interest">Product of Interest</Label>
+                    <Input id="product-of-interest" name="productInterest" placeholder="e.g. Life Cover, Funeral Plan…" />
                   </div>
                   <div>
-                    <Label>Source</Label>
+                    <Label htmlFor="create-source">Source</Label>
                     <Select name="source" value={createSource} onValueChange={setCreateSource}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="create-source"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="walk_in">Walk-in</SelectItem>
                         <SelectItem value="agent_link">Agent Referral</SelectItem>

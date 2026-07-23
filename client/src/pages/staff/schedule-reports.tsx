@@ -90,8 +90,8 @@ export default function StaffScheduleReports() {
 
           <div className="flex flex-wrap items-end gap-4">
             <div className="space-y-1.5">
-              <Label>Service Date</Label>
-              <Input
+              <Label htmlFor="schedule-date">Service Date</Label>
+              <Input id="schedule-date"
                 type="date"
                 value={scheduleDate}
                 onChange={(e) => setScheduleDate(e.target.value)}
@@ -167,12 +167,12 @@ export default function StaffScheduleReports() {
 
             {/* Date range */}
             <div className="space-y-1.5">
-              <Label>From Date</Label>
-              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+              <Label htmlFor="from-date">From Date</Label>
+              <Input id="from-date" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>To Date</Label>
-              <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+              <Label htmlFor="to-date">To Date</Label>
+              <Input id="to-date" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
             </div>
             <div className="flex items-end">
               <div className="space-y-1.5">

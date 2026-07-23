@@ -2468,9 +2468,9 @@ export default function StaffPolicies() {
             {canWritePolicy && (
               <div className="flex flex-wrap items-end gap-3">
                 <div className="grid gap-1.5">
-                  <Label className="text-xs">Document type</Label>
+                  <Label className="text-xs" htmlFor="doc-upload-type">Document type</Label>
                   <Select value={docUploadType} onValueChange={setDocUploadType}>
-                    <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="doc-upload-type" className="w-40 h-9"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="other">General</SelectItem>
                       <SelectItem value="id_copy">ID Copy</SelectItem>
@@ -2483,8 +2483,8 @@ export default function StaffPolicies() {
                   </Select>
                 </div>
                 <div className="grid gap-1.5">
-                  <Label className="text-xs">Label (optional)</Label>
-                  <Input className="w-48 h-9" placeholder="e.g. ID copy front" value={docUploadLabel} onChange={(e) => setDocUploadLabel(e.target.value)} />
+                  <Label className="text-xs" htmlFor="doc-upload-label">Label (optional)</Label>
+                  <Input id="doc-upload-label" className="w-48 h-9" placeholder="e.g. ID copy front" value={docUploadLabel} onChange={(e) => setDocUploadLabel(e.target.value)} />
                 </div>
                 <Button variant="outline" className="gap-2 h-9" disabled={docUploading} onClick={() => docFileInputRef.current?.click()}>
                   {docUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Upload file
@@ -2680,12 +2680,12 @@ export default function StaffPolicies() {
               </DialogHeader>
               <div className="space-y-3">
                 <div>
-                  <Label>Reason for waiver <span className="text-destructive">*</span></Label>
-                  <Textarea placeholder="e.g. Client had an active policy with another insurer for the past 2 years" value={waiverReason} onChange={(e) => setWaiverReason(e.target.value)} rows={3} />
+                  <Label htmlFor="waiver-reason">Reason for waiver <span className="text-destructive">*</span></Label>
+                  <Textarea id="waiver-reason" placeholder="e.g. Client had an active policy with another insurer for the past 2 years" value={waiverReason} onChange={(e) => setWaiverReason(e.target.value)} rows={3} />
                 </div>
                 <div>
-                  <Label>Supporting notes (optional)</Label>
-                  <Textarea placeholder="Any additional context or document references" value={waiverNotes} onChange={(e) => setWaiverNotes(e.target.value)} rows={2} />
+                  <Label htmlFor="waiver-notes">Supporting notes (optional)</Label>
+                  <Textarea id="waiver-notes" placeholder="Any additional context or document references" value={waiverNotes} onChange={(e) => setWaiverNotes(e.target.value)} rows={2} />
                 </div>
                 <p className="text-xs text-muted-foreground">Upload supporting documents (payment history, previous policy docs) in the Documents section of this policy.</p>
               </div>
@@ -2792,8 +2792,8 @@ export default function StaffPolicies() {
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label>Reason</Label>
-                <Textarea
+                <Label htmlFor="transition-reason">Reason</Label>
+                <Textarea id="transition-reason"
                   value={transitionReason}
                   onChange={(e) => setTransitionReason(e.target.value)}
                   placeholder="Provide a reason for this status change..."
@@ -2830,9 +2830,9 @@ export default function StaffPolicies() {
                   <CurrencySelect value={editForm.currency} onValueChange={(v) => setEditForm({ ...editForm, currency: v })} />
                 </div>
                 <div>
-                  <Label className="text-xs">Payment Schedule</Label>
+                  <Label className="text-xs" htmlFor="edit-form-payment-schedule">Payment Schedule</Label>
                   <Select value={editForm.paymentSchedule} onValueChange={(v) => setEditForm({ ...editForm, paymentSchedule: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="edit-form-payment-schedule"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="monthly">Monthly</SelectItem>
                       <SelectItem value="weekly">Weekly</SelectItem>
@@ -2843,19 +2843,19 @@ export default function StaffPolicies() {
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-xs">Effective Date</Label>
-                  <Input type="date" value={editForm.effectiveDate} onChange={(e) => setEditForm({ ...editForm, effectiveDate: e.target.value })} />
+                  <Label className="text-xs" htmlFor="edit-form-effective-date">Effective Date</Label>
+                  <Input id="edit-form-effective-date" type="date" value={editForm.effectiveDate} onChange={(e) => setEditForm({ ...editForm, effectiveDate: e.target.value })} />
                 </div>
                 {canEditPremium && (
                   <div>
-                    <Label className="text-xs">Inception Date</Label>
-                    <Input type="date" value={editForm.inceptionDate} onChange={(e) => setEditForm({ ...editForm, inceptionDate: e.target.value })} />
+                    <Label className="text-xs" htmlFor="edit-form-inception-date">Inception Date</Label>
+                    <Input id="edit-form-inception-date" type="date" value={editForm.inceptionDate} onChange={(e) => setEditForm({ ...editForm, inceptionDate: e.target.value })} />
                   </div>
                 )}
                 <div>
-                  <Label className="text-xs">Branch</Label>
+                  <Label className="text-xs" htmlFor="branch">Branch</Label>
                   <Select value={editForm.branchId || "none"} onValueChange={(v) => setEditForm({ ...editForm, branchId: v === "none" ? "" : v })}>
-                    <SelectTrigger><SelectValue placeholder="No branch" /></SelectTrigger>
+                    <SelectTrigger id="branch"><SelectValue placeholder="No branch" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No branch</SelectItem>
                       {branches.map((b: any) => (
@@ -2943,12 +2943,12 @@ export default function StaffPolicies() {
                       <p className="text-[11px] text-muted-foreground mt-1">Auto-calculated; override only if needed.</p>
                     </div>
                     <div>
-                      <Label className="text-xs">Effective from</Label>
-                      <Input type="date" value={editForm.premiumEffectiveDate} onChange={(e) => setEditForm({ ...editForm, premiumEffectiveDate: e.target.value })} data-testid="input-edit-premium-date" />
+                      <Label className="text-xs" htmlFor="edit-form-premium-effective-date">Effective from</Label>
+                      <Input id="edit-form-premium-effective-date" type="date" value={editForm.premiumEffectiveDate} onChange={(e) => setEditForm({ ...editForm, premiumEffectiveDate: e.target.value })} data-testid="input-edit-premium-date" />
                     </div>
                     <div className="col-span-2">
-                      <Label className="text-xs">Reason (optional)</Label>
-                      <Input value={editForm.premiumChangeReason} onChange={(e) => setEditForm({ ...editForm, premiumChangeReason: e.target.value })} placeholder="e.g. Correction, negotiated rate" />
+                      <Label className="text-xs" htmlFor="edit-form-premium-change-reason">Reason (optional)</Label>
+                      <Input id="edit-form-premium-change-reason" value={editForm.premiumChangeReason} onChange={(e) => setEditForm({ ...editForm, premiumChangeReason: e.target.value })} placeholder="e.g. Correction, negotiated rate" />
                     </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-1">A past effective date back-charges (arrears) or credits the difference for the elapsed periods.</p>
@@ -3011,17 +3011,17 @@ export default function StaffPolicies() {
             <div className="space-y-4 py-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Phone</Label>
-                  <Input value={editClientForm.phone} onChange={(e) => setEditClientForm({ ...editClientForm, phone: e.target.value })} />
+                  <Label htmlFor="edit-client-form-phone">Phone</Label>
+                  <Input id="edit-client-form-phone" value={editClientForm.phone} onChange={(e) => setEditClientForm({ ...editClientForm, phone: e.target.value })} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Email</Label>
-                  <Input type="email" value={editClientForm.email} onChange={(e) => setEditClientForm({ ...editClientForm, email: e.target.value })} />
+                  <Label htmlFor="edit-client-form-email">Email</Label>
+                  <Input id="edit-client-form-email" type="email" value={editClientForm.email} onChange={(e) => setEditClientForm({ ...editClientForm, email: e.target.value })} />
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>Physical Address</Label>
-                <Textarea rows={2} value={editClientForm.physicalAddress} onChange={(e) => setEditClientForm({ ...editClientForm, physicalAddress: e.target.value })} placeholder="Street address, suburb, city" />
+                <Label htmlFor="edit-client-form-physical-address">Physical Address</Label>
+                <Textarea id="edit-client-form-physical-address" rows={2} value={editClientForm.physicalAddress} onChange={(e) => setEditClientForm({ ...editClientForm, physicalAddress: e.target.value })} placeholder="Street address, suburb, city" />
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -3058,17 +3058,17 @@ export default function StaffPolicies() {
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-xs">First Name</Label>
-                  <Input value={editMemberForm.firstName} onChange={(e) => setEditMemberForm({ ...editMemberForm, firstName: e.target.value })} placeholder="First name" />
+                  <Label className="text-xs" htmlFor="edit-member-form-first-name">First Name</Label>
+                  <Input id="edit-member-form-first-name" value={editMemberForm.firstName} onChange={(e) => setEditMemberForm({ ...editMemberForm, firstName: e.target.value })} placeholder="First name" />
                 </div>
                 <div>
-                  <Label className="text-xs">Last Name</Label>
-                  <Input value={editMemberForm.lastName} onChange={(e) => setEditMemberForm({ ...editMemberForm, lastName: e.target.value })} placeholder="Last name" />
+                  <Label className="text-xs" htmlFor="edit-member-form-last-name">Last Name</Label>
+                  <Input id="edit-member-form-last-name" value={editMemberForm.lastName} onChange={(e) => setEditMemberForm({ ...editMemberForm, lastName: e.target.value })} placeholder="Last name" />
                 </div>
                 <div>
-                  <Label className="text-xs">Relationship</Label>
+                  <Label className="text-xs" htmlFor="relationship">Relationship</Label>
                   <Select value={editMemberForm.relationship || "none"} onValueChange={(v) => setEditMemberForm({ ...editMemberForm, relationship: v === "none" ? "" : v })}>
-                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectTrigger id="relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Not set</SelectItem>
                       <SelectItem value="Policy Holder">Policy Holder</SelectItem>
@@ -3101,12 +3101,12 @@ export default function StaffPolicies() {
                 {(editingMember?.role === "policy_holder" || editingMember?.role === "principal") && (
                   <>
                     <div>
-                      <Label className="text-xs">Phone</Label>
-                      <Input value={editMemberForm.phone} onChange={(e) => setEditMemberForm({ ...editMemberForm, phone: e.target.value })} placeholder="Phone number" />
+                      <Label className="text-xs" htmlFor="edit-member-form-phone">Phone</Label>
+                      <Input id="edit-member-form-phone" value={editMemberForm.phone} onChange={(e) => setEditMemberForm({ ...editMemberForm, phone: e.target.value })} placeholder="Phone number" />
                     </div>
                     <div>
-                      <Label className="text-xs">Email</Label>
-                      <Input type="email" value={editMemberForm.email} onChange={(e) => setEditMemberForm({ ...editMemberForm, email: e.target.value })} placeholder="Email address" />
+                      <Label className="text-xs" htmlFor="edit-member-form-email">Email</Label>
+                      <Input id="edit-member-form-email" type="email" value={editMemberForm.email} onChange={(e) => setEditMemberForm({ ...editMemberForm, email: e.target.value })} placeholder="Email address" />
                     </div>
                   </>
                 )}
@@ -3135,12 +3135,12 @@ export default function StaffPolicies() {
                 Current product: <strong>{displayPolicy?.productName || "Unknown"}</strong> ({displayPolicy?.productVersionLabel || `v${displayPolicy?.version || "?"}`})
               </div>
               <div className="space-y-2">
-                <Label>Product</Label>
+                <Label htmlFor="product">Product</Label>
                 <Select
                   value={upgradeForm.selectedProductId || undefined}
                   onValueChange={(v) => setUpgradeForm({ selectedProductId: v, productVersionId: "" })}
                 >
-                  <SelectTrigger data-testid="select-upgrade-product">
+                  <SelectTrigger id="product" data-testid="select-upgrade-product">
                     <SelectValue placeholder="Select product..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -3210,9 +3210,9 @@ export default function StaffPolicies() {
             </DialogHeader>
             <div className="space-y-3">
               <div>
-                <Label>Provider</Label>
+                <Label htmlFor="payment-method-form-provider">Provider</Label>
                 <Select value={paymentMethodForm.provider} onValueChange={(v) => setPaymentMethodForm({ ...paymentMethodForm, provider: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="payment-method-form-provider"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ecocash">EcoCash</SelectItem>
                     <SelectItem value="onemoney">OneMoney</SelectItem>
@@ -3222,8 +3222,8 @@ export default function StaffPolicies() {
                 </Select>
               </div>
               <div>
-                <Label>Mobile Number</Label>
-                <Input value={paymentMethodForm.mobileNumber} onChange={(e) => setPaymentMethodForm({ ...paymentMethodForm, mobileNumber: e.target.value })} placeholder="e.g. 0771234567" />
+                <Label htmlFor="payment-method-form-mobile-number">Mobile Number</Label>
+                <Input id="payment-method-form-mobile-number" value={paymentMethodForm.mobileNumber} onChange={(e) => setPaymentMethodForm({ ...paymentMethodForm, mobileNumber: e.target.value })} placeholder="e.g. 0771234567" />
               </div>
             </div>
             <DialogFooter>
@@ -3284,17 +3284,17 @@ export default function StaffPolicies() {
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <Label className="text-xs">First Name *</Label>
-                    <Input value={detailDepForm.firstName} onChange={(e) => setDetailDepForm({ ...detailDepForm, firstName: e.target.value })} placeholder="First name" />
+                    <Label className="text-xs" htmlFor="detail-dep-form-first-name">First Name *</Label>
+                    <Input id="detail-dep-form-first-name" value={detailDepForm.firstName} onChange={(e) => setDetailDepForm({ ...detailDepForm, firstName: e.target.value })} placeholder="First name" />
                   </div>
                   <div>
-                    <Label className="text-xs">Last Name *</Label>
-                    <Input value={detailDepForm.lastName} onChange={(e) => setDetailDepForm({ ...detailDepForm, lastName: e.target.value })} placeholder="Last name" />
+                    <Label className="text-xs" htmlFor="detail-dep-form-last-name">Last Name *</Label>
+                    <Input id="detail-dep-form-last-name" value={detailDepForm.lastName} onChange={(e) => setDetailDepForm({ ...detailDepForm, lastName: e.target.value })} placeholder="Last name" />
                   </div>
                   <div>
-                    <Label className="text-xs">Relationship *</Label>
+                    <Label className="text-xs" htmlFor="detail-dep-form-relationship">Relationship *</Label>
                     <Select value={detailDepForm.relationship} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, relationship: v })}>
-                      <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectTrigger id="detail-dep-form-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
                       <SelectContent>
                         {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
                           <SelectItem key={r} value={r}>{r}</SelectItem>
@@ -3348,9 +3348,9 @@ export default function StaffPolicies() {
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <Label className="text-xs">Months</Label>
+                  <Label className="text-xs" htmlFor="months">Months</Label>
                   <Select value={String(inPolicyReceiptMonths)} onValueChange={(v) => setInPolicyReceiptMonths(Number(v))} disabled={pnPhase !== "select"}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="months"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                         <SelectItem key={m} value={String(m)}>{m} {m === 1 ? "month" : "months"}</SelectItem>
@@ -3385,8 +3385,8 @@ export default function StaffPolicies() {
                       Amount differs from system premium ({inPolicyReceiptCurrency} {systemAmount.toFixed(2)}) — this receipt will be held for approval and won't apply to the policy until approved.
                     </p>
                     <div className="space-y-1">
-                      <Label className="text-xs">Notes for approver *</Label>
-                      <Textarea value={inPolicyReceiptSubmitterNote} onChange={(e) => setInPolicyReceiptSubmitterNote(e.target.value)}
+                      <Label className="text-xs" htmlFor="in-policy-receipt-submitter-note">Notes for approver *</Label>
+                      <Textarea id="in-policy-receipt-submitter-note" value={inPolicyReceiptSubmitterNote} onChange={(e) => setInPolicyReceiptSubmitterNote(e.target.value)}
                         placeholder="Explain why this amount differs from the system premium..." rows={2} className="text-sm" data-testid="textarea-in-policy-submitter-note" />
                     </div>
                   </div>
@@ -3398,9 +3398,9 @@ export default function StaffPolicies() {
                 </p>
               )}
               <div>
-                <Label className="text-xs">Payment Method</Label>
+                <Label className="text-xs" htmlFor="in-policy-receipt-method">Payment Method</Label>
                 <Select value={inPolicyReceiptMethod} onValueChange={setInPolicyReceiptMethod}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="in-policy-receipt-method"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {!isAgent && <SelectItem value="cash">Cash</SelectItem>}
                     <SelectItem value="ecocash">EcoCash</SelectItem>
@@ -3416,42 +3416,42 @@ export default function StaffPolicies() {
                 <>
                   {(inPolicyReceiptMethod === "ecocash" || inPolicyReceiptMethod === "onemoney") && (
                     <div>
-                      <Label className="text-xs">Client's Mobile Number (EcoCash/OneMoney)</Label>
-                      <Input placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
+                      <Label className="text-xs" htmlFor="in-policy-receipt-ref">Client's Mobile Number (EcoCash/OneMoney)</Label>
+                      <Input id="in-policy-receipt-ref" placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
                       <p className="text-xs text-muted-foreground mt-1">EcoCash uses USSD — a prompt is sent to this number. The client enters their PIN on their phone (no app push). Use the number registered with EcoCash/OneMoney.</p>
                     </div>
                   )}
                   {inPolicyReceiptMethod === "innbucks" && (
                     <div>
-                      <Label className="text-xs">Client's Mobile Number</Label>
-                      <Input placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
+                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-2">Client's Mobile Number</Label>
+                      <Input id="in-policy-receipt-ref-2" placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
                       <p className="text-xs text-muted-foreground mt-1">An authorization code will be generated for the InnBucks app.</p>
                     </div>
                   )}
                   {inPolicyReceiptMethod === "omari" && (
                     <div>
-                      <Label className="text-xs">Client's Mobile Number</Label>
-                      <Input placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
+                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-3">Client's Mobile Number</Label>
+                      <Input id="in-policy-receipt-ref-3" placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
                       <p className="text-xs text-muted-foreground mt-1">An OTP will be sent via SMS. You'll enter it here.</p>
                     </div>
                   )}
                   {inPolicyReceiptMethod === "visa_mastercard" && (
                     <div>
-                      <Label className="text-xs">Client's Email Address</Label>
-                      <Input type="email" placeholder="client@example.com" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
+                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-4">Client's Email Address</Label>
+                      <Input id="in-policy-receipt-ref-4" type="email" placeholder="client@example.com" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
                       <p className="text-xs text-muted-foreground mt-1">A secure card payment page will open.</p>
                     </div>
                   )}
                   {inPolicyReceiptMethod === "cash" && (
                     <div>
-                      <Label className="text-xs">Notes (optional)</Label>
-                      <Input placeholder="e.g. Walk-in payment" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
+                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-5">Notes (optional)</Label>
+                      <Input id="in-policy-receipt-ref-5" placeholder="e.g. Walk-in payment" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
                       <p className="text-xs text-muted-foreground mt-1">Receipt number is auto-generated.</p>
                     </div>
                   )}
                   <div>
-                    <Label className="text-xs">Notes (optional)</Label>
-                    <Input placeholder="Additional notes..." value={inPolicyReceiptNotes} onChange={(e) => setInPolicyReceiptNotes(e.target.value)} />
+                    <Label className="text-xs" htmlFor="in-policy-receipt-notes">Notes (optional)</Label>
+                    <Input id="in-policy-receipt-notes" placeholder="Additional notes..." value={inPolicyReceiptNotes} onChange={(e) => setInPolicyReceiptNotes(e.target.value)} />
                   </div>
                 </>
               )}
@@ -3572,8 +3572,8 @@ export default function StaffPolicies() {
             {!generatedPaymentLink ? (
               <div className="space-y-4">
                 <div>
-                  <Label>Amount (USD)</Label>
-                  <Input
+                  <Label htmlFor="payment-link-amount">Amount (USD)</Label>
+                  <Input id="payment-link-amount"
                     type="number"
                     min="0.01"
                     step="0.01"
@@ -3583,9 +3583,9 @@ export default function StaffPolicies() {
                   />
                 </div>
                 <div>
-                  <Label>Payment Method</Label>
+                  <Label htmlFor="payment-link-method">Payment Method</Label>
                   <Select value={paymentLinkMethod} onValueChange={setPaymentLinkMethod}>
-                    <SelectTrigger data-testid="select-payment-link-method"><SelectValue /></SelectTrigger>
+                    <SelectTrigger id="payment-link-method" data-testid="select-payment-link-method"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="ecocash">EcoCash</SelectItem>
                       <SelectItem value="onemoney">OneMoney</SelectItem>
@@ -3670,13 +3670,13 @@ export default function StaffPolicies() {
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label className="text-xs">Amount</Label>
-                <Input type="number" step="0.01" value={editPaymentForm.amount} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, amount: e.target.value })} />
+                <Label className="text-xs" htmlFor="edit-payment-form-amount">Amount</Label>
+                <Input id="edit-payment-form-amount" type="number" step="0.01" value={editPaymentForm.amount} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, amount: e.target.value })} />
               </div>
               <div>
-                <Label className="text-xs">Status</Label>
+                <Label className="text-xs" htmlFor="edit-payment-form-status">Status</Label>
                 <Select value={editPaymentForm.status} onValueChange={(v) => setEditPaymentForm({ ...editPaymentForm, status: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="edit-payment-form-status"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pending">Pending</SelectItem>
                     <SelectItem value="cleared">Cleared</SelectItem>
@@ -3686,12 +3686,12 @@ export default function StaffPolicies() {
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Reference</Label>
-                <Input value={editPaymentForm.reference} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, reference: e.target.value })} />
+                <Label className="text-xs" htmlFor="edit-payment-form-reference">Reference</Label>
+                <Input id="edit-payment-form-reference" value={editPaymentForm.reference} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, reference: e.target.value })} />
               </div>
               <div>
-                <Label className="text-xs">Notes</Label>
-                <Textarea value={editPaymentForm.notes} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, notes: e.target.value })} rows={2} />
+                <Label className="text-xs" htmlFor="edit-payment-form-notes">Notes</Label>
+                <Textarea id="edit-payment-form-notes" value={editPaymentForm.notes} onChange={(e) => setEditPaymentForm({ ...editPaymentForm, notes: e.target.value })} rows={2} />
               </div>
             </div>
             <DialogFooter>
@@ -3739,13 +3739,13 @@ export default function StaffPolicies() {
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label className="text-xs">Amount</Label>
-                <Input type="number" step="0.01" value={editReceiptForm.amount} onChange={(e) => setEditReceiptForm({ ...editReceiptForm, amount: e.target.value })} />
+                <Label className="text-xs" htmlFor="edit-receipt-form-amount">Amount</Label>
+                <Input id="edit-receipt-form-amount" type="number" step="0.01" value={editReceiptForm.amount} onChange={(e) => setEditReceiptForm({ ...editReceiptForm, amount: e.target.value })} />
               </div>
               <div>
-                <Label className="text-xs">Status</Label>
+                <Label className="text-xs" htmlFor="edit-receipt-form-status">Status</Label>
                 <Select value={editReceiptForm.status} onValueChange={(v) => setEditReceiptForm({ ...editReceiptForm, status: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="edit-receipt-form-status"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="issued">Issued</SelectItem>
                     <SelectItem value="voided">Voided</SelectItem>
@@ -3753,9 +3753,9 @@ export default function StaffPolicies() {
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Payment Channel</Label>
+                <Label className="text-xs" htmlFor="edit-receipt-form-payment-channel">Payment Channel</Label>
                 <Select value={editReceiptForm.paymentChannel} onValueChange={(v) => setEditReceiptForm({ ...editReceiptForm, paymentChannel: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="edit-receipt-form-payment-channel"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cash">Cash</SelectItem>
                     <SelectItem value="paynow_ecocash">EcoCash</SelectItem>
@@ -4135,8 +4135,8 @@ export default function StaffPolicies() {
                       <p className="text-xs text-muted-foreground">A client record will be auto-created when the policy is saved. All fields required except email. Text is stored in uppercase. National ID: digits + check letter + 2 digits (e.g. 08833089H38).</p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                          <Label className="text-xs">First Name *</Label>
-                          <Input
+                          <Label className="text-xs" htmlFor="create-form-new-client-first-name">First Name *</Label>
+                          <Input id="create-form-new-client-first-name"
                             value={createForm.newClient.firstName}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, firstName: e.target.value } })}
                             onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, firstName: toUpper(e.target.value) } })}
@@ -4144,8 +4144,8 @@ export default function StaffPolicies() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Last Name *</Label>
-                          <Input
+                          <Label className="text-xs" htmlFor="create-form-new-client-last-name">Last Name *</Label>
+                          <Input id="create-form-new-client-last-name"
                             value={createForm.newClient.lastName}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, lastName: e.target.value } })}
                             onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, lastName: toUpper(e.target.value) } })}
@@ -4153,8 +4153,8 @@ export default function StaffPolicies() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Phone *</Label>
-                          <Input
+                          <Label className="text-xs" htmlFor="create-form-new-client-phone">Phone *</Label>
+                          <Input id="create-form-new-client-phone"
                             value={createForm.newClient.phone}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, phone: e.target.value } })}
                             onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, phone: toUpper(e.target.value) } })}
@@ -4162,8 +4162,8 @@ export default function StaffPolicies() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Email</Label>
-                          <Input
+                          <Label className="text-xs" htmlFor="create-form-new-client-email">Email</Label>
+                          <Input id="create-form-new-client-email"
                             type="email"
                             value={createForm.newClient.email}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, email: e.target.value } })}
@@ -4171,8 +4171,8 @@ export default function StaffPolicies() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">National ID *</Label>
-                          <Input
+                          <Label className="text-xs" htmlFor="create-form-new-client-national-id">National ID *</Label>
+                          <Input id="create-form-new-client-national-id"
                             value={createForm.newClient.nationalId}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, nationalId: e.target.value } })}
                             onBlur={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, nationalId: toUpper(e.target.value) } })}
@@ -4180,20 +4180,20 @@ export default function StaffPolicies() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Date of Birth *</Label>
-                          <Input
+                          <Label className="text-xs" htmlFor="create-form-new-client-date-of-birth">Date of Birth *</Label>
+                          <Input id="create-form-new-client-date-of-birth"
                             type="date"
                             value={createForm.newClient.dateOfBirth}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, dateOfBirth: e.target.value } })}
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Gender *</Label>
+                          <Label className="text-xs" htmlFor="create-form-new-client-gender">Gender *</Label>
                           <Select
                             value={createForm.newClient.gender}
                             onValueChange={(v) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, gender: v } })}
                           >
-                            <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                            <SelectTrigger id="create-form-new-client-gender"><SelectValue placeholder="Select..." /></SelectTrigger>
                             <SelectContent>
                               <SelectItem value="male">Male</SelectItem>
                               <SelectItem value="female">Female</SelectItem>
@@ -4202,8 +4202,8 @@ export default function StaffPolicies() {
                           </Select>
                         </div>
                         <div className="col-span-2">
-                          <Label className="text-xs">Physical Address</Label>
-                          <Input
+                          <Label className="text-xs" htmlFor="create-form-new-client-physical-address">Physical Address</Label>
+                          <Input id="create-form-new-client-physical-address"
                             value={createForm.newClient.physicalAddress}
                             onChange={(e) => setCreateForm({ ...createForm, newClient: { ...createForm.newClient, physicalAddress: e.target.value } })}
                             placeholder="Street address, suburb, city"
@@ -4325,17 +4325,17 @@ export default function StaffPolicies() {
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
-                            <Label className="text-xs">First Name *</Label>
-                            <Input value={newDep.firstName} onChange={(e) => setNewDep({ ...newDep, firstName: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, firstName: toUpper(e.target.value) })} placeholder="First name" />
+                            <Label className="text-xs" htmlFor="new-dep-first-name">First Name *</Label>
+                            <Input id="new-dep-first-name" value={newDep.firstName} onChange={(e) => setNewDep({ ...newDep, firstName: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, firstName: toUpper(e.target.value) })} placeholder="First name" />
                           </div>
                           <div>
-                            <Label className="text-xs">Last Name *</Label>
-                            <Input value={newDep.lastName} onChange={(e) => setNewDep({ ...newDep, lastName: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, lastName: toUpper(e.target.value) })} placeholder="Last name" />
+                            <Label className="text-xs" htmlFor="new-dep-last-name">Last Name *</Label>
+                            <Input id="new-dep-last-name" value={newDep.lastName} onChange={(e) => setNewDep({ ...newDep, lastName: e.target.value })} onBlur={(e) => setNewDep({ ...newDep, lastName: toUpper(e.target.value) })} placeholder="Last name" />
                           </div>
                           <div>
-                            <Label className="text-xs">Relationship *</Label>
+                            <Label className="text-xs" htmlFor="new-dep-relationship">Relationship *</Label>
                             <Select value={newDep.relationship} onValueChange={(v) => setNewDep({ ...newDep, relationship: v })}>
-                              <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                              <SelectTrigger id="new-dep-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
                               <SelectContent>
                                 {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
                                   <SelectItem key={r} value={r}>{r}</SelectItem>
@@ -4595,8 +4595,8 @@ export default function StaffPolicies() {
                 {canEditPremium && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <Label>Override premium ({createForm.currency})</Label>
-                      <Input
+                      <Label htmlFor="create-form-premium-amount">Override premium ({createForm.currency})</Label>
+                      <Input id="create-form-premium-amount"
                         type="number"
                         step="0.01"
                         min="0"
@@ -4617,9 +4617,9 @@ export default function StaffPolicies() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <Label>Payment Schedule</Label>
+                    <Label htmlFor="create-form-payment-schedule">Payment Schedule</Label>
                     <Select value={createForm.paymentSchedule} onValueChange={(v) => setCreateForm({ ...createForm, paymentSchedule: v })}>
-                      <SelectTrigger data-testid="select-schedule">
+                      <SelectTrigger id="create-form-payment-schedule" data-testid="select-schedule">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -4630,8 +4630,8 @@ export default function StaffPolicies() {
                     </Select>
                   </div>
                   <div>
-                    <Label>Effective Date</Label>
-                    <Input
+                    <Label htmlFor="create-form-effective-date">Effective Date</Label>
+                    <Input id="create-form-effective-date"
                       type="date"
                       value={createForm.effectiveDate}
                       onChange={(e) => setCreateForm({ ...createForm, effectiveDate: e.target.value })}
@@ -4640,9 +4640,9 @@ export default function StaffPolicies() {
                   </div>
                 </div>
                 <div>
-                  <Label>Branch</Label>
+                  <Label htmlFor="create-form-branch-id">Branch</Label>
                   <Select value={createForm.branchId} onValueChange={(v) => setCreateForm({ ...createForm, branchId: v })}>
-                    <SelectTrigger data-testid="select-create-branch">
+                    <SelectTrigger id="create-form-branch-id" data-testid="select-create-branch">
                       <SelectValue placeholder="Select branch" />
                     </SelectTrigger>
                     <SelectContent>
@@ -4696,8 +4696,8 @@ export default function StaffPolicies() {
                     </Select>
                   </div>
                   <div>
-                    <Label>Mobile Number</Label>
-                    <Input
+                    <Label htmlFor="create-form-payment-method-mobile-number">Mobile Number</Label>
+                    <Input id="create-form-payment-method-mobile-number"
                       value={createForm.paymentMethod.mobileNumber}
                       onChange={(e) => setCreateForm({
                         ...createForm,
@@ -4827,8 +4827,8 @@ export default function StaffPolicies() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Reason</Label>
-              <Textarea
+              <Label htmlFor="transition-reason-2">Reason</Label>
+              <Textarea id="transition-reason-2"
                 value={transitionReason}
                 onChange={(e) => setTransitionReason(e.target.value)}
                 placeholder="Provide a reason for this status change..."

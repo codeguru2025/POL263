@@ -393,8 +393,8 @@ export default function JoinRegisterPage() {
               </select>
             </div>
             <div>
-              <Label>Product *</Label>
-              <select
+              <Label htmlFor="form-product-id">Product *</Label>
+              <select id="form-product-id"
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 value={form.productId}
                 onChange={(e) => setForm((f) => ({ ...f, productId: e.target.value }))}
@@ -500,13 +500,13 @@ export default function JoinRegisterPage() {
                       <Input className="h-8 text-sm" value={depDraft.firstName} onChange={(e) => setDepDraft({ ...depDraft, firstName: e.target.value })} />
                     </div>
                     <div>
-                      <Label className="text-xs">Last Name *</Label>
-                      <Input className="h-8 text-sm" value={depDraft.lastName} onChange={(e) => setDepDraft({ ...depDraft, lastName: e.target.value })} />
+                      <Label className="text-xs" htmlFor="dep-draft-last-name">Last Name *</Label>
+                      <Input id="dep-draft-last-name" className="h-8 text-sm" value={depDraft.lastName} onChange={(e) => setDepDraft({ ...depDraft, lastName: e.target.value })} />
                     </div>
                   </div>
                   <div>
-                    <Label className="text-xs">Relationship *</Label>
-                    <select className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm" value={depDraft.relationship} onChange={(e) => setDepDraft({ ...depDraft, relationship: e.target.value })}>
+                    <Label className="text-xs" htmlFor="dep-draft-relationship">Relationship *</Label>
+                    <select id="dep-draft-relationship" className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm" value={depDraft.relationship} onChange={(e) => setDepDraft({ ...depDraft, relationship: e.target.value })}>
                       <option value="">Select...</option>
                       <option value="spouse">Spouse</option>
                       <option value="child">Child</option>
@@ -517,12 +517,12 @@ export default function JoinRegisterPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <Label className="text-xs">Date of Birth</Label>
-                      <Input className="h-8 text-sm" type="date" value={depDraft.dateOfBirth} onChange={(e) => setDepDraft({ ...depDraft, dateOfBirth: e.target.value })} />
+                      <Label className="text-xs" htmlFor="dep-draft-date-of-birth">Date of Birth</Label>
+                      <Input id="dep-draft-date-of-birth" className="h-8 text-sm" type="date" value={depDraft.dateOfBirth} onChange={(e) => setDepDraft({ ...depDraft, dateOfBirth: e.target.value })} />
                     </div>
                     <div>
-                      <Label className="text-xs">National ID</Label>
-                      <Input className="h-8 text-sm" value={depDraft.nationalId} onChange={(e) => setDepDraft({ ...depDraft, nationalId: e.target.value })} />
+                      <Label className="text-xs" htmlFor="dep-draft-national-id">National ID</Label>
+                      <Input id="dep-draft-national-id" className="h-8 text-sm" value={depDraft.nationalId} onChange={(e) => setDepDraft({ ...depDraft, nationalId: e.target.value })} />
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -560,17 +560,17 @@ export default function JoinRegisterPage() {
                 <div className="p-3 border rounded-md bg-muted/20 space-y-2">
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <Label className="text-xs">First Name *</Label>
-                      <Input className="h-8 text-sm" value={beneficiary.firstName} onChange={(e) => setBeneficiary({ ...beneficiary, firstName: e.target.value, fromDependentIndex: null })} />
+                      <Label className="text-xs" htmlFor="beneficiary-first-name">First Name *</Label>
+                      <Input id="beneficiary-first-name" className="h-8 text-sm" value={beneficiary.firstName} onChange={(e) => setBeneficiary({ ...beneficiary, firstName: e.target.value, fromDependentIndex: null })} />
                     </div>
                     <div>
-                      <Label className="text-xs">Last Name *</Label>
-                      <Input className="h-8 text-sm" value={beneficiary.lastName} onChange={(e) => setBeneficiary({ ...beneficiary, lastName: e.target.value, fromDependentIndex: null })} />
+                      <Label className="text-xs" htmlFor="beneficiary-last-name">Last Name *</Label>
+                      <Input id="beneficiary-last-name" className="h-8 text-sm" value={beneficiary.lastName} onChange={(e) => setBeneficiary({ ...beneficiary, lastName: e.target.value, fromDependentIndex: null })} />
                     </div>
                   </div>
                   <div>
-                    <Label className="text-xs">Relationship</Label>
-                    <select className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm" value={beneficiary.relationship} onChange={(e) => setBeneficiary({ ...beneficiary, relationship: e.target.value })}>
+                    <Label className="text-xs" htmlFor="beneficiary-relationship">Relationship</Label>
+                    <select id="beneficiary-relationship" className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-sm" value={beneficiary.relationship} onChange={(e) => setBeneficiary({ ...beneficiary, relationship: e.target.value })}>
                       <option value="">Select...</option>
                       <option value="spouse">Spouse</option>
                       <option value="child">Child</option>
@@ -582,12 +582,12 @@ export default function JoinRegisterPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <Label className="text-xs">National ID</Label>
-                      <Input className="h-8 text-sm" value={beneficiary.nationalId} onChange={(e) => setBeneficiary({ ...beneficiary, nationalId: e.target.value })} />
+                      <Label className="text-xs" htmlFor="beneficiary-national-id">National ID</Label>
+                      <Input id="beneficiary-national-id" className="h-8 text-sm" value={beneficiary.nationalId} onChange={(e) => setBeneficiary({ ...beneficiary, nationalId: e.target.value })} />
                     </div>
                     <div>
-                      <Label className="text-xs">Phone</Label>
-                      <Input className="h-8 text-sm" value={beneficiary.phone} onChange={(e) => setBeneficiary({ ...beneficiary, phone: e.target.value })} />
+                      <Label className="text-xs" htmlFor="beneficiary-phone">Phone</Label>
+                      <Input id="beneficiary-phone" className="h-8 text-sm" value={beneficiary.phone} onChange={(e) => setBeneficiary({ ...beneficiary, phone: e.target.value })} />
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -602,8 +602,8 @@ export default function JoinRegisterPage() {
 
             {options.branches.length > 0 && (
               <div>
-                <Label>Branch (optional)</Label>
-                <select
+                <Label htmlFor="form-branch-id">Branch (optional)</Label>
+                <select id="form-branch-id"
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={form.branchId}
                   onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}

@@ -112,8 +112,8 @@ export default function MemberCardAdmin() {
             <CardSection title="Template" icon={CreditCard}>
               <div className="space-y-4 max-w-md">
                 <div>
-                  <Label>Card title</Label>
-                  <Input value={form.cardTitle} onChange={(e) => set("cardTitle", e.target.value)} placeholder="Membership Card" />
+                  <Label htmlFor="form-card-title">Card title</Label>
+                  <Input id="form-card-title" value={form.cardTitle} onChange={(e) => set("cardTitle", e.target.value)} placeholder="Membership Card" />
                 </div>
 
                 {([
@@ -151,8 +151,8 @@ export default function MemberCardAdmin() {
                 </div>
 
                 <div>
-                  <Label>Footer slogan (optional)</Label>
-                  <Input
+                  <Label htmlFor="footer-slogan-optional">Footer slogan (optional)</Label>
+                  <Input id="footer-slogan-optional"
                     value={form.footerSlogan ?? ""}
                     onChange={(e) => set("footerSlogan", e.target.value)}
                     placeholder="e.g. With Dignity. With Care. With Ubuntu."

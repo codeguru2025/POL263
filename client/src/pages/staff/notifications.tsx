@@ -345,8 +345,8 @@ export default function StaffNotifications() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label>Start after days since last payment</Label>
-                <Input
+                <Label htmlFor="start-after-days-since-last-payment">Start after days since last payment</Label>
+                <Input id="start-after-days-since-last-payment"
                   type="number"
                   min={1}
                   value={String(autoSettings.daysAfterLastPayment)}
@@ -354,8 +354,8 @@ export default function StaffNotifications() {
                 />
               </div>
               <div>
-                <Label>Repeat every (days)</Label>
-                <Input
+                <Label htmlFor="repeat-every-days">Repeat every (days)</Label>
+                <Input id="repeat-every-days"
                   type="number"
                   min={1}
                   value={String(autoSettings.repeatEveryDays)}
