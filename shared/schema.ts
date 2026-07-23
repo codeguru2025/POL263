@@ -3344,6 +3344,14 @@ export const groups = pgTable(
     capacity: integer("capacity"),
     isActive: boolean("is_active").default(true).notNull(),
     isLegacy: boolean("is_legacy").default(false).notNull(),
+    /**
+     * Pool-society engine (server/pool-society.ts, Phase 3d) — configurable payout amounts per
+     * event type: array of { eventType, label, amount, currency }. Null for every group today;
+     * entirely separate from legacy_group_receipts (the existing lump-sum-per-group ledger used
+     * by POST /api/groups/legacy-receipts) and from the risk/policy engine (3a-3c) — a burial
+     * society's pool payout is not a policy claim.
+     */
+    payoutRules: jsonb("payout_rules"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("groups_org_idx").on(t.organizationId)]
@@ -3352,6 +3360,89 @@ export const groups = pgTable(
 export const insertGroupSchema = createInsertSchema(groups).omit({ id: true, createdAt: true });
 export type Group = typeof groups.$inferSelect;
 export type InsertGroup = z.infer<typeof insertGroupSchema>;
+
+// ─── POOL-SOCIETY ENGINE (burial societies / cash clubs — Phase 3d) ──────────
+// Self-contained: no FK into policies/claims/product_versions. A member's roster entry,
+// contribution history, and pool payouts all live here; server/pool-society.ts computes the
+// pool balance from contributions minus paid payouts (never stored, to avoid a second source
+// of truth that can drift from the ledger).
+
+export const groupMembers = pgTable(
+  "group_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
+    // Nullable: a roster member doesn't have to already be an onboarded client (many legacy
+    // society members aren't).
+    clientId: uuid("client_id").references(() => clients.id),
+    fullName: text("full_name").notNull(),
+    memberNumber: text("member_number"),
+    status: text("status").default("active").notNull(), // 'active' | 'inactive'
+    joinedDate: date("joined_date"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("gm2_org_idx").on(t.organizationId),
+    index("gm2_group_idx").on(t.groupId),
+    index("gm2_client_idx").on(t.clientId),
+  ]
+);
+export const insertGroupMemberSchema = createInsertSchema(groupMembers).omit({ id: true, createdAt: true });
+export type GroupMember = typeof groupMembers.$inferSelect;
+export type InsertGroupMember = z.infer<typeof insertGroupMemberSchema>;
+
+export const groupContributions = pgTable(
+  "group_contributions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
+    groupMemberId: uuid("group_member_id").notNull().references(() => groupMembers.id, { onDelete: "cascade" }),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    contributionDate: date("contribution_date").notNull(),
+    recordedBy: uuid("recorded_by").references(() => users.id),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("gc_org_idx").on(t.organizationId),
+    index("gc_group_idx").on(t.groupId),
+    index("gc_member_idx").on(t.groupMemberId),
+  ]
+);
+export const insertGroupContributionSchema = createInsertSchema(groupContributions).omit({ id: true, createdAt: true });
+export type GroupContribution = typeof groupContributions.$inferSelect;
+export type InsertGroupContribution = z.infer<typeof insertGroupContributionSchema>;
+
+export const groupPoolPayouts = pgTable(
+  "group_pool_payouts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
+    groupMemberId: uuid("group_member_id").notNull().references(() => groupMembers.id),
+    eventType: text("event_type").notNull(), // matches a groups.payoutRules[].eventType, if configured
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    status: text("status").default("pending").notNull(), // 'pending' | 'approved' | 'paid'
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at"),
+    payoutDate: date("payout_date"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("gpp_org_idx").on(t.organizationId),
+    index("gpp_group_idx").on(t.groupId),
+    index("gpp_member_idx").on(t.groupMemberId),
+    index("gpp_status_idx").on(t.status),
+  ]
+);
+export const insertGroupPoolPayoutSchema = createInsertSchema(groupPoolPayouts).omit({ id: true, createdAt: true });
+export type GroupPoolPayout = typeof groupPoolPayouts.$inferSelect;
+export type InsertGroupPoolPayout = z.infer<typeof insertGroupPoolPayoutSchema>;
 
 // ─── REMINDERS ─────────────────────────────────────────────
 // Personal per-user reminders, persisted server-side.

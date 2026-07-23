@@ -30,7 +30,7 @@ import {
   vehicleLocationPings, vehicleAlerts,
   notificationTemplates, notificationLogs, leads, expenditures,
   approvalRequests, dependentChangeRequests, securityQuestions,
-  productBenefitBundleLinks, groups, settlementAllocations, termsAndConditions,
+  productBenefitBundleLinks, groups, groupMembers, groupContributions, groupPoolPayouts, settlementAllocations, termsAndConditions,
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
   bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
@@ -128,6 +128,9 @@ import {
   vehicleTripLogs,
   type VehicleTripLog, type InsertVehicleTripLog,
   type Group, type InsertGroup,
+  type GroupMember, type InsertGroupMember,
+  type GroupContribution, type InsertGroupContribution,
+  type GroupPoolPayout, type InsertGroupPoolPayout,
   type PlatformReceivable, type InsertPlatformReceivable,
   type Settlement, type InsertSettlement,
   type TermsAndConditions, type InsertTerms,
@@ -611,6 +614,15 @@ export interface IStorage {
   updateGroup(id: string, data: Partial<InsertGroup>, orgId: string): Promise<Group | undefined>;
   getGroupsWhereClientIsExecutive(orgId: string, clientId: string): Promise<Group[]>;
   getPoliciesByGroupId(orgId: string, groupId: string): Promise<Policy[]>;
+  // Pool-society engine (Phase 3d) — server/pool-society.ts.
+  getGroupMembers(orgId: string, groupId: string): Promise<GroupMember[]>;
+  createGroupMember(member: InsertGroupMember): Promise<GroupMember>;
+  getGroupContributions(orgId: string, groupId: string): Promise<GroupContribution[]>;
+  createGroupContribution(contribution: InsertGroupContribution): Promise<GroupContribution>;
+  getGroupPoolPayouts(orgId: string, groupId: string): Promise<GroupPoolPayout[]>;
+  getGroupPoolPayout(id: string, orgId: string): Promise<GroupPoolPayout | undefined>;
+  createGroupPoolPayout(payout: InsertGroupPoolPayout): Promise<GroupPoolPayout>;
+  updateGroupPoolPayout(id: string, data: Partial<InsertGroupPoolPayout>, orgId: string): Promise<GroupPoolPayout | undefined>;
   createGroupPaymentIntent(intent: InsertGroupPaymentIntent): Promise<GroupPaymentIntent>;
   getGroupPaymentIntentById(id: string, orgId: string): Promise<GroupPaymentIntent | undefined>;
   getGroupPaymentIntentByOrgAndIdempotencyKey(orgId: string, key: string): Promise<GroupPaymentIntent | undefined>;
@@ -4901,6 +4913,54 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(policies)
       .where(and(eq(policies.organizationId, orgId), eq(policies.groupId, groupId)))
       .orderBy(desc(policies.createdAt));
+  }
+
+  // ─── Pool-society engine (Phase 3d, server/pool-society.ts) ─────────────
+  async getGroupMembers(orgId: string, groupId: string): Promise<GroupMember[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(groupMembers)
+      .where(and(eq(groupMembers.organizationId, orgId), eq(groupMembers.groupId, groupId)))
+      .orderBy(desc(groupMembers.createdAt));
+  }
+  async createGroupMember(member: InsertGroupMember): Promise<GroupMember> {
+    const tdb = await getDbForOrg(member.organizationId);
+    const [created] = await tdb.insert(groupMembers).values(member).returning();
+    return created;
+  }
+  async getGroupContributions(orgId: string, groupId: string): Promise<GroupContribution[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(groupContributions)
+      .where(and(eq(groupContributions.organizationId, orgId), eq(groupContributions.groupId, groupId)))
+      .orderBy(desc(groupContributions.contributionDate));
+  }
+  async createGroupContribution(contribution: InsertGroupContribution): Promise<GroupContribution> {
+    const tdb = await getDbForOrg(contribution.organizationId);
+    const [created] = await tdb.insert(groupContributions).values(contribution).returning();
+    return created;
+  }
+  async getGroupPoolPayouts(orgId: string, groupId: string): Promise<GroupPoolPayout[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(groupPoolPayouts)
+      .where(and(eq(groupPoolPayouts.organizationId, orgId), eq(groupPoolPayouts.groupId, groupId)))
+      .orderBy(desc(groupPoolPayouts.createdAt));
+  }
+  async getGroupPoolPayout(id: string, orgId: string): Promise<GroupPoolPayout | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [p] = await tdb.select().from(groupPoolPayouts)
+      .where(and(eq(groupPoolPayouts.id, id), eq(groupPoolPayouts.organizationId, orgId)));
+    return p;
+  }
+  async createGroupPoolPayout(payout: InsertGroupPoolPayout): Promise<GroupPoolPayout> {
+    const tdb = await getDbForOrg(payout.organizationId);
+    const [created] = await tdb.insert(groupPoolPayouts).values(payout).returning();
+    return created;
+  }
+  async updateGroupPoolPayout(id: string, data: Partial<InsertGroupPoolPayout>, orgId: string): Promise<GroupPoolPayout | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(groupPoolPayouts).set(data)
+      .where(and(eq(groupPoolPayouts.id, id), eq(groupPoolPayouts.organizationId, orgId)))
+      .returning();
+    return updated;
   }
 
   async createGroupPaymentIntent(intent: InsertGroupPaymentIntent): Promise<GroupPaymentIntent> {

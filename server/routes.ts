@@ -69,7 +69,8 @@ import {
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
-  insertGroupSchema, insertPlatformReceivableSchema, insertSettlementSchema,
+  insertGroupSchema, insertGroupMemberSchema, insertGroupContributionSchema, insertGroupPoolPayoutSchema,
+  insertPlatformReceivableSchema, insertSettlementSchema,
   insertReceiptAdvertSchema,
   insertAgentContentPostSchema,
   insertDependentSchema, insertTermsSchema,
@@ -79,6 +80,7 @@ import {
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, claimStatusHistory, policyStatusHistory, leads, branches, appReleases, waitingPeriodWaivers,
   groupPaymentIntents, groupPaymentAllocations,
+  type InsertGroupPoolPayout,
   paymentDisbursements, requisitions, expenditures, outboxMessages,
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
@@ -10251,6 +10253,181 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       })
     );
     return res.json(enriched);
+  });
+
+  // ─── Pool-society engine (Phase 3d): member roster, contribution ledger, pool balance,
+  // payout rules. Self-contained — no interaction with policies/claims or with the existing
+  // lump-sum legacy_group_receipts ledger below. See server/pool-society.ts.
+
+  app.get("/api/groups/:id/members", requireAuth, requireTenantScope, requireAnyPermission("read:policy", "read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    return res.json(await storage.getGroupMembers(user.organizationId, groupId));
+  });
+
+  app.post("/api/groups/:id/members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    try {
+      const group = await storage.getGroup(groupId, user.organizationId);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      const parsed = insertGroupMemberSchema.parse({ ...req.body, organizationId: user.organizationId, groupId });
+      const member = await storage.createGroupMember(parsed);
+      await auditLog(req, "create", "group_member", member.id, null, member);
+      return res.status(201).json(member);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      structuredLog("error", "POST /api/groups/:id/members failed", { error: err?.message, groupId });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.get("/api/groups/:id/contributions", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    return res.json(await storage.getGroupContributions(user.organizationId, groupId));
+  });
+
+  app.post("/api/groups/:id/contributions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    try {
+      const group = await storage.getGroup(groupId, user.organizationId);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      const member = await storage.getGroupMembers(user.organizationId, groupId);
+      if (!member.some((m) => m.id === req.body.groupMemberId)) {
+        return res.status(400).json({ message: "groupMemberId must belong to this group's roster." });
+      }
+      const recordedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+      const parsed = insertGroupContributionSchema.parse({
+        ...req.body, organizationId: user.organizationId, groupId, recordedBy,
+      });
+      const contribution = await storage.createGroupContribution(parsed);
+      await auditLog(req, "create", "group_contribution", contribution.id, null, contribution);
+      return res.status(201).json(contribution);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      structuredLog("error", "POST /api/groups/:id/contributions failed", { error: err?.message, groupId });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.get("/api/groups/:id/pool-balance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    const { computePoolBalance } = await import("./pool-society");
+    const [contributions, payouts] = await Promise.all([
+      storage.getGroupContributions(user.organizationId, groupId),
+      storage.getGroupPoolPayouts(user.organizationId, groupId),
+    ]);
+    return res.json({ balance: computePoolBalance(contributions, payouts) });
+  });
+
+  app.patch("/api/groups/:id/payout-rules", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const existing = await storage.getGroup(groupId, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Group not found" });
+    const rules = Array.isArray(req.body.payoutRules) ? req.body.payoutRules : [];
+    const updated = await storage.updateGroup(groupId, { payoutRules: rules } as any, user.organizationId);
+    await auditLog(req, "update", "group_payout_rules", groupId, existing.payoutRules, rules);
+    return res.json(updated);
+  });
+
+  app.get("/api/groups/:id/payouts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    return res.json(await storage.getGroupPoolPayouts(user.organizationId, groupId));
+  });
+
+  app.post("/api/groups/:id/payouts", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    try {
+      const group = await storage.getGroup(groupId, user.organizationId);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+      const rosterMembers = await storage.getGroupMembers(user.organizationId, groupId);
+      if (!rosterMembers.some((m) => m.id === req.body.groupMemberId)) {
+        return res.status(400).json({ message: "groupMemberId must belong to this group's roster." });
+      }
+
+      const { computePoolBalance, resolvePoolPayoutAmount, checkPoolPayoutAffordability } = await import("./pool-society");
+      const currency = req.body.currency || "USD";
+      const [contributions, payouts] = await Promise.all([
+        storage.getGroupContributions(user.organizationId, groupId),
+        storage.getGroupPoolPayouts(user.organizationId, groupId),
+      ]);
+      const balance = computePoolBalance(contributions, payouts)[currency] ?? 0;
+
+      let amount = parseFloat(String(req.body.amount ?? ""));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        const ruleAmount = resolvePoolPayoutAmount((group as any).payoutRules, req.body.eventType, currency);
+        if (ruleAmount == null) {
+          return res.status(400).json({ message: "No payout amount given and no matching payout rule configured for this event type/currency." });
+        }
+        amount = ruleAmount;
+      }
+
+      const affordability = checkPoolPayoutAffordability(balance, amount);
+      if (!affordability.sufficientFunds && !req.body.force) {
+        return res.status(400).json({
+          error: "Insufficient pool balance",
+          message: `Pool balance (${affordability.currentBalance.toFixed(2)} ${currency}) is short by ${affordability.shortfall.toFixed(2)} ${currency}. Pass force:true to record it anyway.`,
+          ...affordability,
+        });
+      }
+
+      const parsed = insertGroupPoolPayoutSchema.parse({
+        organizationId: user.organizationId,
+        groupId,
+        groupMemberId: req.body.groupMemberId,
+        eventType: req.body.eventType,
+        amount: amount.toFixed(2),
+        currency,
+        notes: req.body.notes ?? null,
+        status: "pending",
+      });
+      const payout = await storage.createGroupPoolPayout(parsed);
+      await auditLog(req, "create", "group_pool_payout", payout.id, null, payout);
+      return res.status(201).json(payout);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      structuredLog("error", "POST /api/groups/:id/payouts failed", { error: err?.message, groupId });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/groups/:id/payouts/:payoutId", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { id: groupId, payoutId } = req.params as { id: string; payoutId: string };
+    const existing = await storage.getGroupPoolPayout(payoutId, user.organizationId);
+    if (!existing || existing.groupId !== groupId) return res.status(404).json({ message: "Payout not found" });
+
+    const allowedStatuses = ["pending", "approved", "paid"];
+    const updates: Partial<InsertGroupPoolPayout> = {};
+    if (req.body.status && allowedStatuses.includes(req.body.status)) {
+      updates.status = req.body.status;
+      if (req.body.status === "approved") {
+        updates.approvedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+        updates.approvedAt = new Date();
+      }
+      if (req.body.status === "paid") {
+        updates.payoutDate = req.body.payoutDate || new Date().toISOString().split("T")[0];
+      }
+    }
+    if (typeof req.body.notes === "string") updates.notes = req.body.notes;
+
+    const updated = await storage.updateGroupPoolPayout(payoutId, updates, user.organizationId);
+    await auditLog(req, "update", "group_pool_payout", payoutId, existing, updated);
+    return res.json(updated);
   });
 
   app.get("/api/groups/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
