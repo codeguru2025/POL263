@@ -163,6 +163,7 @@ export const orgPolicySequences = pgTable("org_policy_sequences", {
   employeeNext: integer("employee_next").default(0).notNull(),
   requisitionNext: integer("requisition_next").default(0).notNull(),
   disbursementNext: integer("disbursement_next").default(0).notNull(),
+  accumulationNext: integer("accumulation_next").default(0).notNull(),
 });
 
 // ─── IDENTITY ───────────────────────────────────────────────
@@ -707,6 +708,16 @@ export const productVersions = pgTable(
      */
     requiresUnderwriting: boolean("requires_underwriting").default(false).notNull(),
     underwritingQuestions: jsonb("underwriting_questions"),
+    /**
+     * Accumulation engine (server/accumulation.ts, Phase 3e) — only relevant to accumulation-
+     * type products (pension_savings/investment/education_protect per shared/org-profile.ts's
+     * PRODUCT_TYPE_ENGINE); null for every risk-type product version, which is every product
+     * version today. Growth is computed analytically from the contribution ledger (see
+     * accumulationContributions) rather than posted periodically, so there's no growth-posting
+     * job to run.
+     */
+    annualGrowthRatePercent: numeric("annual_growth_rate_percent"),
+    maturityTermMonths: integer("maturity_term_months"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -939,6 +950,88 @@ export const policyAddOns = pgTable(
     // Uniqueness enforced via partial SQL indexes in the migration script (see script/add-policy-addon-member.ts)
   ]
 );
+
+// ─── ACCUMULATION ENGINE (pensions, investments, education protect — Phase 3e) ──
+// The accumulation-product analog of policies: a client's account into a fund that grows over
+// time and pays out at maturity, rather than a premium-in/claim-out risk policy. Deliberately a
+// separate table, not a repurposed `policies` row — almost none of policies' fields (premium
+// schedule, waiting period, beneficiary) apply here. Fund balance is never stored; it's computed
+// analytically from the contribution ledger by server/accumulation.ts (each contribution
+// compounds independently from its own contribution date), so there's no growth-posting job to
+// run or drift out of sync with the ledger.
+
+export const accumulationAccounts = pgTable(
+  "accumulation_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    clientId: uuid("client_id").notNull().references(() => clients.id),
+    productVersionId: uuid("product_version_id").notNull().references(() => productVersions.id),
+    accountNumber: text("account_number").notNull(),
+    currency: text("currency").default("USD").notNull(),
+    status: text("status").default("active").notNull(), // 'active' | 'matured' | 'withdrawn' | 'cancelled'
+    startDate: date("start_date").notNull(),
+    /** Derived from startDate + productVersion.maturityTermMonths at creation time; stored for display. */
+    maturityDate: date("maturity_date"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("aa_account_number_org_idx").on(t.organizationId, t.accountNumber),
+    index("aa_org_idx").on(t.organizationId),
+    index("aa_client_idx").on(t.clientId),
+  ]
+);
+export const insertAccumulationAccountSchema = createInsertSchema(accumulationAccounts).omit({ id: true, createdAt: true });
+export type AccumulationAccount = typeof accumulationAccounts.$inferSelect;
+export type InsertAccumulationAccount = z.infer<typeof insertAccumulationAccountSchema>;
+
+export const accumulationContributions = pgTable(
+  "accumulation_contributions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    accumulationAccountId: uuid("accumulation_account_id").notNull().references(() => accumulationAccounts.id, { onDelete: "cascade" }),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    contributionDate: date("contribution_date").notNull(),
+    recordedBy: uuid("recorded_by").references(() => users.id),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("acon_org_idx").on(t.organizationId),
+    index("acon_account_idx").on(t.accumulationAccountId),
+  ]
+);
+export const insertAccumulationContributionSchema = createInsertSchema(accumulationContributions).omit({ id: true, createdAt: true });
+export type AccumulationContribution = typeof accumulationContributions.$inferSelect;
+export type InsertAccumulationContribution = z.infer<typeof insertAccumulationContributionSchema>;
+
+export const accumulationWithdrawals = pgTable(
+  "accumulation_withdrawals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    accumulationAccountId: uuid("accumulation_account_id").notNull().references(() => accumulationAccounts.id, { onDelete: "cascade" }),
+    withdrawalType: text("withdrawal_type").default("maturity").notNull(), // 'maturity' | 'early' | 'partial'
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    status: text("status").default("pending").notNull(), // 'pending' | 'approved' | 'paid'
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at"),
+    payoutDate: date("payout_date"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("awd_org_idx").on(t.organizationId),
+    index("awd_account_idx").on(t.accumulationAccountId),
+    index("awd_status_idx").on(t.status),
+  ]
+);
+export const insertAccumulationWithdrawalSchema = createInsertSchema(accumulationWithdrawals).omit({ id: true, createdAt: true });
+export type AccumulationWithdrawal = typeof accumulationWithdrawals.$inferSelect;
+export type InsertAccumulationWithdrawal = z.infer<typeof insertAccumulationWithdrawalSchema>;
 
 // ─── PAYMENTS & FINANCE (IMMUTABLE LEDGER) ──────────────────
 

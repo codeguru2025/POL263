@@ -70,6 +70,7 @@ import {
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertGroupMemberSchema, insertGroupContributionSchema, insertGroupPoolPayoutSchema,
+  insertAccumulationAccountSchema, insertAccumulationContributionSchema, insertAccumulationWithdrawalSchema,
   insertPlatformReceivableSchema, insertSettlementSchema,
   insertReceiptAdvertSchema,
   insertAgentContentPostSchema,
@@ -81,6 +82,7 @@ import {
   policies, paymentTransactions, paymentReceipts, users, clients, claims, claimStatusHistory, policyStatusHistory, leads, branches, appReleases, waitingPeriodWaivers,
   groupPaymentIntents, groupPaymentAllocations,
   type InsertGroupPoolPayout,
+  type InsertAccumulationWithdrawal,
   paymentDisbursements, requisitions, expenditures, outboxMessages,
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
@@ -10525,6 +10527,183 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       structuredLog("error", "POST /api/groups/legacy-receipts failed", { error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
+  });
+
+  // ─── Accumulation engine (Phase 3e): pensions, investments, education protect. A client's
+  // account into a fund that grows toward a maturity payout — structurally separate from
+  // policies (no premium schedule, no waiting period, no claims). See server/accumulation.ts.
+
+  app.get("/api/clients/:id/accumulation-accounts", requireAuth, requireTenantScope, requireAnyPermission("read:policy", "read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const clientId = String(req.params.id);
+    const client = await storage.getClient(clientId, user.organizationId);
+    if (!client) return res.status(404).json({ message: "Client not found" });
+    return res.json(await storage.getAccumulationAccountsByClient(user.organizationId, clientId));
+  });
+
+  app.post("/api/accumulation-accounts", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    try {
+      const client = await storage.getClient(req.body.clientId, user.organizationId);
+      if (!client) return res.status(400).json({ message: "The selected client was not found in this organization." });
+      const productVersion = await storage.getProductVersion(req.body.productVersionId, user.organizationId);
+      if (!productVersion) return res.status(400).json({ message: "The selected product is no longer available." });
+
+      const { resolveMaturityDate } = await import("./accumulation");
+      const startDate = req.body.startDate || new Date().toISOString().split("T")[0];
+      const maturityDate = resolveMaturityDate(startDate, (productVersion as any).maturityTermMonths);
+      const accountNumber = await storage.generateAccumulationAccountNumber(user.organizationId);
+
+      const parsed = insertAccumulationAccountSchema.parse({
+        organizationId: user.organizationId,
+        clientId: req.body.clientId,
+        productVersionId: req.body.productVersionId,
+        accountNumber,
+        currency: req.body.currency || "USD",
+        status: "active",
+        startDate,
+        maturityDate,
+      });
+      const account = await storage.createAccumulationAccount(parsed);
+      await auditLog(req, "create", "accumulation_account", account.id, null, account);
+      return res.status(201).json(account);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      structuredLog("error", "POST /api/accumulation-accounts failed", { error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.get("/api/accumulation-accounts/:id", requireAuth, requireTenantScope, requireAnyPermission("read:policy", "read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const account = await storage.getAccumulationAccount(String(req.params.id), user.organizationId);
+    if (!account) return res.status(404).json({ message: "Account not found" });
+
+    const productVersion = await storage.getProductVersion(account.productVersionId, user.organizationId);
+    const { computeAccumulationBalance, isMatured } = await import("./accumulation");
+    const [contributions, withdrawals] = await Promise.all([
+      storage.getAccumulationContributions(user.organizationId, account.id),
+      storage.getAccumulationWithdrawals(user.organizationId, account.id),
+    ]);
+    const today = new Date().toISOString().split("T")[0];
+    const balance = computeAccumulationBalance(
+      contributions, withdrawals, (productVersion as any)?.annualGrowthRatePercent, today,
+    );
+    return res.json({ ...account, balance, matured: isMatured(account.maturityDate, today) });
+  });
+
+  app.get("/api/accumulation-accounts/:id/contributions", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const account = await storage.getAccumulationAccount(String(req.params.id), user.organizationId);
+    if (!account) return res.status(404).json({ message: "Account not found" });
+    return res.json(await storage.getAccumulationContributions(user.organizationId, account.id));
+  });
+
+  app.post("/api/accumulation-accounts/:id/contributions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const accountId = String(req.params.id);
+    try {
+      const account = await storage.getAccumulationAccount(accountId, user.organizationId);
+      if (!account) return res.status(404).json({ message: "Account not found" });
+      const recordedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+      const parsed = insertAccumulationContributionSchema.parse({
+        ...req.body, organizationId: user.organizationId, accumulationAccountId: accountId, recordedBy,
+      });
+      const contribution = await storage.createAccumulationContribution(parsed);
+      await auditLog(req, "create", "accumulation_contribution", contribution.id, null, contribution);
+      return res.status(201).json(contribution);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      structuredLog("error", "POST /api/accumulation-accounts/:id/contributions failed", { error: err?.message, accountId });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.get("/api/accumulation-accounts/:id/withdrawals", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const account = await storage.getAccumulationAccount(String(req.params.id), user.organizationId);
+    if (!account) return res.status(404).json({ message: "Account not found" });
+    return res.json(await storage.getAccumulationWithdrawals(user.organizationId, account.id));
+  });
+
+  app.post("/api/accumulation-accounts/:id/withdrawals", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const accountId = String(req.params.id);
+    try {
+      const account = await storage.getAccumulationAccount(accountId, user.organizationId);
+      if (!account) return res.status(404).json({ message: "Account not found" });
+      const productVersion = await storage.getProductVersion(account.productVersionId, user.organizationId);
+
+      const { computeAccumulationBalance } = await import("./accumulation");
+      const currency = req.body.currency || account.currency;
+      const [contributions, withdrawals] = await Promise.all([
+        storage.getAccumulationContributions(user.organizationId, accountId),
+        storage.getAccumulationWithdrawals(user.organizationId, accountId),
+      ]);
+      const today = new Date().toISOString().split("T")[0];
+      const balance = computeAccumulationBalance(
+        contributions, withdrawals, (productVersion as any)?.annualGrowthRatePercent, today,
+      )[currency] ?? 0;
+
+      const amount = parseFloat(String(req.body.amount ?? ""));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ message: "A positive amount is required." });
+      }
+      const shortfall = Math.max(0, amount - balance);
+      if (shortfall > 0 && !req.body.force) {
+        return res.status(400).json({
+          error: "Insufficient fund balance",
+          message: `Fund balance (${balance.toFixed(2)} ${currency}) is short by ${shortfall.toFixed(2)} ${currency}. Pass force:true to record it anyway.`,
+          currentBalance: balance, requestedAmount: amount, shortfall,
+        });
+      }
+
+      const parsed = insertAccumulationWithdrawalSchema.parse({
+        organizationId: user.organizationId,
+        accumulationAccountId: accountId,
+        withdrawalType: req.body.withdrawalType || "maturity",
+        amount: amount.toFixed(2),
+        currency,
+        notes: req.body.notes ?? null,
+        status: "pending",
+      });
+      const withdrawal = await storage.createAccumulationWithdrawal(parsed);
+      await auditLog(req, "create", "accumulation_withdrawal", withdrawal.id, null, withdrawal);
+      return res.status(201).json(withdrawal);
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      structuredLog("error", "POST /api/accumulation-accounts/:id/withdrawals failed", { error: err?.message, accountId });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/accumulation-accounts/:id/withdrawals/:withdrawalId", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { id: accountId, withdrawalId } = req.params as { id: string; withdrawalId: string };
+    const existing = await storage.getAccumulationWithdrawal(withdrawalId, user.organizationId);
+    if (!existing || existing.accumulationAccountId !== accountId) return res.status(404).json({ message: "Withdrawal not found" });
+
+    const allowedStatuses = ["pending", "approved", "paid"];
+    const updates: Partial<InsertAccumulationWithdrawal> = {};
+    if (req.body.status && allowedStatuses.includes(req.body.status)) {
+      updates.status = req.body.status;
+      if (req.body.status === "approved") {
+        updates.approvedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+        updates.approvedAt = new Date();
+      }
+      if (req.body.status === "paid") {
+        updates.payoutDate = req.body.payoutDate || new Date().toISOString().split("T")[0];
+        // A paid maturity/full withdrawal closes the account out.
+        if (existing.withdrawalType !== "partial") {
+          await storage.updateAccumulationAccount(accountId, { status: "withdrawn" } as any, user.organizationId);
+        }
+      }
+    }
+    if (typeof req.body.notes === "string") updates.notes = req.body.notes;
+
+    const updated = await storage.updateAccumulationWithdrawal(withdrawalId, updates, user.organizationId);
+    await auditLog(req, "update", "accumulation_withdrawal", withdrawalId, existing, updated);
+    return res.json(updated);
   });
 
   // ─── Directory Contacts (undertakers, underwriters, transport, general) ──

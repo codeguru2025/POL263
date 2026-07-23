@@ -31,6 +31,7 @@ import {
   notificationTemplates, notificationLogs, leads, expenditures,
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, groupMembers, groupContributions, groupPoolPayouts, settlementAllocations, termsAndConditions,
+  accumulationAccounts, accumulationContributions, accumulationWithdrawals,
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
   bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
@@ -131,6 +132,9 @@ import {
   type GroupMember, type InsertGroupMember,
   type GroupContribution, type InsertGroupContribution,
   type GroupPoolPayout, type InsertGroupPoolPayout,
+  type AccumulationAccount, type InsertAccumulationAccount,
+  type AccumulationContribution, type InsertAccumulationContribution,
+  type AccumulationWithdrawal, type InsertAccumulationWithdrawal,
   type PlatformReceivable, type InsertPlatformReceivable,
   type Settlement, type InsertSettlement,
   type TermsAndConditions, type InsertTerms,
@@ -623,6 +627,18 @@ export interface IStorage {
   getGroupPoolPayout(id: string, orgId: string): Promise<GroupPoolPayout | undefined>;
   createGroupPoolPayout(payout: InsertGroupPoolPayout): Promise<GroupPoolPayout>;
   updateGroupPoolPayout(id: string, data: Partial<InsertGroupPoolPayout>, orgId: string): Promise<GroupPoolPayout | undefined>;
+  // Accumulation engine (Phase 3e) — server/accumulation.ts.
+  generateAccumulationAccountNumber(orgId: string): Promise<string>;
+  getAccumulationAccountsByClient(orgId: string, clientId: string): Promise<AccumulationAccount[]>;
+  getAccumulationAccount(id: string, orgId: string): Promise<AccumulationAccount | undefined>;
+  createAccumulationAccount(account: InsertAccumulationAccount): Promise<AccumulationAccount>;
+  updateAccumulationAccount(id: string, data: Partial<InsertAccumulationAccount>, orgId: string): Promise<AccumulationAccount | undefined>;
+  getAccumulationContributions(orgId: string, accountId: string): Promise<AccumulationContribution[]>;
+  createAccumulationContribution(contribution: InsertAccumulationContribution): Promise<AccumulationContribution>;
+  getAccumulationWithdrawals(orgId: string, accountId: string): Promise<AccumulationWithdrawal[]>;
+  getAccumulationWithdrawal(id: string, orgId: string): Promise<AccumulationWithdrawal | undefined>;
+  createAccumulationWithdrawal(withdrawal: InsertAccumulationWithdrawal): Promise<AccumulationWithdrawal>;
+  updateAccumulationWithdrawal(id: string, data: Partial<InsertAccumulationWithdrawal>, orgId: string): Promise<AccumulationWithdrawal | undefined>;
   createGroupPaymentIntent(intent: InsertGroupPaymentIntent): Promise<GroupPaymentIntent>;
   getGroupPaymentIntentById(id: string, orgId: string): Promise<GroupPaymentIntent | undefined>;
   getGroupPaymentIntentByOrgAndIdempotencyKey(orgId: string, key: string): Promise<GroupPaymentIntent | undefined>;
@@ -4860,6 +4876,17 @@ export class DatabaseStorage implements IStorage {
     return `REQ-${String(nextVal).padStart(5, "0")}`;
   }
 
+  async generateAccumulationAccountNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, accumulation_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET accumulation_next = org_policy_sequences.accumulation_next + 1
+      RETURNING accumulation_next
+    `);
+    const nextVal = (result as unknown as { rows?: { accumulation_next: number }[] }).rows?.[0]?.accumulation_next ?? 1;
+    return `ACC-${String(nextVal).padStart(6, "0")}`;
+  }
+
   async generateVoucherNumber(orgId: string): Promise<string> {
     const tdb = await getDbForOrg(orgId);
     return this.generateVoucherNumberInTx(tdb, orgId);
@@ -4959,6 +4986,67 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(groupPoolPayouts).set(data)
       .where(and(eq(groupPoolPayouts.id, id), eq(groupPoolPayouts.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+
+  // ─── Accumulation engine (Phase 3e, server/accumulation.ts) ─────────────
+  async getAccumulationAccountsByClient(orgId: string, clientId: string): Promise<AccumulationAccount[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(accumulationAccounts)
+      .where(and(eq(accumulationAccounts.organizationId, orgId), eq(accumulationAccounts.clientId, clientId)))
+      .orderBy(desc(accumulationAccounts.createdAt));
+  }
+  async getAccumulationAccount(id: string, orgId: string): Promise<AccumulationAccount | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [a] = await tdb.select().from(accumulationAccounts)
+      .where(and(eq(accumulationAccounts.id, id), eq(accumulationAccounts.organizationId, orgId)));
+    return a;
+  }
+  async createAccumulationAccount(account: InsertAccumulationAccount): Promise<AccumulationAccount> {
+    const tdb = await getDbForOrg(account.organizationId);
+    const [created] = await tdb.insert(accumulationAccounts).values(account).returning();
+    return created;
+  }
+  async updateAccumulationAccount(id: string, data: Partial<InsertAccumulationAccount>, orgId: string): Promise<AccumulationAccount | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(accumulationAccounts).set(data)
+      .where(and(eq(accumulationAccounts.id, id), eq(accumulationAccounts.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  async getAccumulationContributions(orgId: string, accountId: string): Promise<AccumulationContribution[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(accumulationContributions)
+      .where(and(eq(accumulationContributions.organizationId, orgId), eq(accumulationContributions.accumulationAccountId, accountId)))
+      .orderBy(desc(accumulationContributions.contributionDate));
+  }
+  async createAccumulationContribution(contribution: InsertAccumulationContribution): Promise<AccumulationContribution> {
+    const tdb = await getDbForOrg(contribution.organizationId);
+    const [created] = await tdb.insert(accumulationContributions).values(contribution).returning();
+    return created;
+  }
+  async getAccumulationWithdrawals(orgId: string, accountId: string): Promise<AccumulationWithdrawal[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(accumulationWithdrawals)
+      .where(and(eq(accumulationWithdrawals.organizationId, orgId), eq(accumulationWithdrawals.accumulationAccountId, accountId)))
+      .orderBy(desc(accumulationWithdrawals.createdAt));
+  }
+  async getAccumulationWithdrawal(id: string, orgId: string): Promise<AccumulationWithdrawal | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [w] = await tdb.select().from(accumulationWithdrawals)
+      .where(and(eq(accumulationWithdrawals.id, id), eq(accumulationWithdrawals.organizationId, orgId)));
+    return w;
+  }
+  async createAccumulationWithdrawal(withdrawal: InsertAccumulationWithdrawal): Promise<AccumulationWithdrawal> {
+    const tdb = await getDbForOrg(withdrawal.organizationId);
+    const [created] = await tdb.insert(accumulationWithdrawals).values(withdrawal).returning();
+    return created;
+  }
+  async updateAccumulationWithdrawal(id: string, data: Partial<InsertAccumulationWithdrawal>, orgId: string): Promise<AccumulationWithdrawal | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(accumulationWithdrawals).set(data)
+      .where(and(eq(accumulationWithdrawals.id, id), eq(accumulationWithdrawals.organizationId, orgId)))
       .returning();
     return updated;
   }
