@@ -6971,7 +6971,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const vehicleId = req.params.id as string;
     const existing = await storage.getFleetVehicleById(vehicleId, user.organizationId);
     if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ message: "Vehicle not found" });
-    const ALLOWED = new Set(["registration", "make", "model", "year", "vehicleType", "currentMileage", "status", "speedLimitKmh"]);
+    const ALLOWED = new Set(["registration", "make", "model", "year", "vehicleType", "currentMileage", "status", "speedLimitKmh", "defaultDriverId"]);
     const body: Record<string, any> = {};
     for (const [k, v] of Object.entries(req.body)) {
       if (ALLOWED.has(k)) body[k] = v;

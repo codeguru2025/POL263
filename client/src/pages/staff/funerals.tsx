@@ -201,6 +201,11 @@ export default function StaffFunerals() {
   const { data: users = [] } = useQuery<any[]>({
     queryKey: ["/api/users"],
   });
+  // Drivers are staff explicitly assigned the "driver" role (same convention as the funeral-case
+  // removal/burial/overnight driver pickers further down this page).
+  const vehicleDriverOptions: SearchableOption[] = users
+    .filter((u: any) => u.isActive !== false && Array.isArray(u?.roles) && u.roles.some((r: any) => r?.name === "driver"))
+    .map((u: any) => ({ value: u.id, label: u.displayName || u.email, hint: u.email || undefined }));
 
   const { data: branches = [] } = useQuery<any[]>({
     queryKey: ["/api/branches"],
@@ -791,6 +796,7 @@ export default function StaffFunerals() {
                       <TableHead>Type</TableHead>
                       <TableHead>Mileage</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Default Driver</TableHead>
                       <TableHead className="text-right pr-6">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -808,6 +814,9 @@ export default function StaffFunerals() {
                           <Badge variant="outline" className={`font-medium text-[10px] ${v.status === "available" ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : v.status === "dispatched" ? "bg-blue-500/15 text-blue-700 border-blue-200" : "bg-amber-500/15 text-amber-700 border-amber-200"}`}>
                             {v.status.toUpperCase()}
                           </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {v.defaultDriverId ? (users.find((u: any) => u.id === v.defaultDriverId)?.displayName || users.find((u: any) => u.id === v.defaultDriverId)?.email || "—") : "—"}
                         </TableCell>
                         <TableCell className="text-right pr-6">
                           <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit vehicle" data-testid={`button-edit-vehicle-${v.id}`}
@@ -1285,6 +1294,7 @@ export default function StaffFunerals() {
         onOpenChange={setShowCreateVehicle}
         onSubmit={(data) => createVehicleMutation.mutate(data)}
         isPending={createVehicleMutation.isPending}
+        driverOptions={vehicleDriverOptions}
       />
       {selectedVehicle && (
         <EditVehicleDialog
@@ -1293,6 +1303,7 @@ export default function StaffFunerals() {
           vehicle={selectedVehicle}
           onSubmit={(data) => updateVehicleMutation.mutate({ id: selectedVehicle.id, data })}
           isPending={updateVehicleMutation.isPending}
+          driverOptions={vehicleDriverOptions}
         />
       )}
 
@@ -2378,6 +2389,19 @@ function CaseFormDialog({
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const setSel = (k: keyof CaseForm) => (v: string) =>
     setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
+  // Picking a vehicle pre-fills its default driver into the paired driver field — but only when
+  // that field is still blank, so it never overwrites a driver the user already chose (same
+  // blanks-only rule this codebase already applies elsewhere, e.g. auto-populate from a linked
+  // funeral case in mortuary.tsx).
+  const setVehicleWithDefaultDriver = (vehicleKey: keyof CaseForm, driverKey: keyof CaseForm) => (v: string) => {
+    const id = v === "__none__" ? "" : v;
+    const defaultDriverId = vehicles.find((veh) => veh.id === id)?.defaultDriverId || "";
+    setForm((f) => ({
+      ...f,
+      [vehicleKey]: id,
+      [driverKey]: (!f[driverKey] && defaultDriverId) ? defaultDriverId : f[driverKey],
+    }));
+  };
 
   // Branch list/head-office flag load async after this dialog mounts — backfill the default
   // once available rather than only at initial mount (create dialog only, never overwrite an edit).
@@ -2857,7 +2881,7 @@ function CaseFormDialog({
                         </Field>
                       </div>
                       <Field label="Removal Vehicle">
-                        <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setSel("removalVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
+                        <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setVehicleWithDefaultDriver("removalVehicleId", "removalDriverId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
                       </Field>
                       <Field label="Removal Driver">
                         <SearchableSelect options={driverOptions} value={form.removalDriverId} onChange={setSel("removalDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" emptyText="No staff have the Driver role yet." />
@@ -2881,7 +2905,7 @@ function CaseFormDialog({
                           <Input value={form.overnightLocation} onChange={set("overnightLocation")} placeholder="Deceased's residence" />
                         </Field>
                         <Field label="Overnight Vehicle">
-                          <SearchableSelect options={vehicleOptions} value={form.overnightVehicleId} onChange={setSel("overnightVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
+                          <SearchableSelect options={vehicleOptions} value={form.overnightVehicleId} onChange={setVehicleWithDefaultDriver("overnightVehicleId", "overnightDriverId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
                         </Field>
                         <Field label="Overnight Driver">
                           <SearchableSelect options={driverOptions} value={form.overnightDriverId} onChange={setSel("overnightDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" emptyText="No staff have the Driver role yet." />
@@ -2895,7 +2919,7 @@ function CaseFormDialog({
                     <p className="text-xs text-muted-foreground mb-2">Can be the same or different vehicle/driver as removal.</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Field label="Burial Vehicle">
-                        <SearchableSelect options={vehicleOptions} value={form.burialVehicleId} onChange={setSel("burialVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
+                        <SearchableSelect options={vehicleOptions} value={form.burialVehicleId} onChange={setVehicleWithDefaultDriver("burialVehicleId", "burialDriverId")} placeholder="Select vehicle…" searchPlaceholder="Search by registration…" />
                       </Field>
                       <Field label="Burial Driver">
                         <SearchableSelect options={driverOptions} value={form.burialDriverId} onChange={setSel("burialDriverId")} placeholder="Select driver…" searchPlaceholder="Search by name…" emptyText="No staff have the Driver role yet." />
@@ -3189,10 +3213,11 @@ function DriverChecklistDialog({ open, onOpenChange, funeralCase, existing, user
 
 // ─── Edit Vehicle Dialog ──────────────────────────────────────────────────────
 
-function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }: {
+function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending, driverOptions }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   vehicle: FleetVehicle;
   onSubmit: (data: Record<string, string | number | null>) => void; isPending: boolean;
+  driverOptions: SearchableOption[];
 }) {
   const [form, setForm] = useState({
     registration: vehicle.registration,
@@ -3202,6 +3227,7 @@ function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }:
     vehicleType: vehicle.vehicleType || "",
     currentMileage: vehicle.currentMileage != null ? String(vehicle.currentMileage) : "",
     status: vehicle.status || "available",
+    defaultDriverId: vehicle.defaultDriverId || "",
   });
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -3213,6 +3239,7 @@ function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }:
       vehicleType: form.vehicleType || null,
       currentMileage: form.currentMileage ? parseInt(form.currentMileage) : null,
       status: form.status,
+      defaultDriverId: form.defaultDriverId || null,
     });
   };
   return (
@@ -3257,6 +3284,18 @@ function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }:
               </Select>
             </div>
           </div>
+          <div className="space-y-2">
+            <Label>Default Driver</Label>
+            <SearchableSelect
+              options={driverOptions}
+              value={form.defaultDriverId}
+              onChange={(v) => setForm({ ...form, defaultDriverId: v })}
+              placeholder="No default driver"
+              searchPlaceholder="Search by name…"
+              emptyText="No staff have the Driver role yet."
+            />
+            <p className="text-xs text-muted-foreground">Pre-fills as the driver whenever this vehicle is picked for a removal, burial, or overnight stay — can still be changed per assignment.</p>
+          </div>
           <DialogFooter>
             <Button type="submit" disabled={isPending || !form.registration} data-testid="button-submit-edit-vehicle">
               {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}Save Changes
@@ -3270,15 +3309,16 @@ function EditVehicleDialog({ open, onOpenChange, vehicle, onSubmit, isPending }:
 
 // ─── Create Vehicle Dialog ────────────────────────────────────────────────────
 
-function CreateVehicleDialog({ open, onOpenChange, onSubmit, isPending }: {
+function CreateVehicleDialog({ open, onOpenChange, onSubmit, isPending, driverOptions }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   onSubmit: (data: Record<string, string | number | null>) => void; isPending: boolean;
+  driverOptions: SearchableOption[];
 }) {
-  const [form, setForm] = useState({ registration: "", make: "", model: "", year: "", vehicleType: "" });
+  const [form, setForm] = useState({ registration: "", make: "", model: "", year: "", vehicleType: "", defaultDriverId: "" });
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit({ registration: form.registration, make: form.make || null, model: form.model || null, year: form.year ? parseInt(form.year) : null, vehicleType: form.vehicleType || null });
-    setForm({ registration: "", make: "", model: "", year: "", vehicleType: "" });
+    onSubmit({ registration: form.registration, make: form.make || null, model: form.model || null, year: form.year ? parseInt(form.year) : null, vehicleType: form.vehicleType || null, defaultDriverId: form.defaultDriverId || null });
+    setForm({ registration: "", make: "", model: "", year: "", vehicleType: "", defaultDriverId: "" });
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -3307,6 +3347,18 @@ function CreateVehicleDialog({ open, onOpenChange, onSubmit, isPending }: {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Default Driver</Label>
+            <SearchableSelect
+              options={driverOptions}
+              value={form.defaultDriverId}
+              onChange={(v) => setForm({ ...form, defaultDriverId: v })}
+              placeholder="No default driver"
+              searchPlaceholder="Search by name…"
+              emptyText="No staff have the Driver role yet."
+            />
+            <p className="text-xs text-muted-foreground">Pre-fills as the driver whenever this vehicle is picked for a removal, burial, or overnight stay — can still be changed per assignment.</p>
           </div>
           <DialogFooter>
             <Button type="submit" disabled={isPending || !form.registration} data-testid="button-submit-vehicle">

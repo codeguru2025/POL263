@@ -1999,6 +1999,11 @@ export const fleetVehicles = pgTable(
     status: text("status").default("available").notNull(),
     currentMileage: integer("current_mileage"),
     speedLimitKmh: integer("speed_limit_kmh").default(120).notNull(),
+    /** Home/default driver, set when the vehicle is added — pre-fills (but doesn't constrain)
+     *  the driver field whenever this vehicle is picked for a specific duty (removal/burial/
+     *  overnight/ad-hoc usage). Purely a UI convenience; unrelated to driverAssignments below,
+     *  which is the self-service checkout/GPS-tracking flow. */
+    defaultDriverId: uuid("default_driver_id").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("fv_org_idx").on(t.organizationId)]

@@ -664,6 +664,7 @@ export default function StaffMortuary() {
 
           <PartnerParlourVehicleUsageSection
             vehicleOptions={vehicleOptions}
+            vehicles={fleetVehicles}
             userOptions={userOptions}
             partnerParlours={partnerParlours}
           />
@@ -676,6 +677,7 @@ export default function StaffMortuary() {
         open={showCreateIntake}
         onOpenChange={setShowCreateIntake}
         vehicleOptions={vehicleOptions}
+        vehicles={fleetVehicles}
         userOptions={userOptions}
         partnerParlours={partnerParlours}
         funeralCases={funeralCases}
@@ -758,8 +760,9 @@ export default function StaffMortuary() {
 
 // ─── Partner Parlour Vehicle Usage ─────────────────────────────────────────────
 
-function PartnerParlourVehicleUsageSection({ vehicleOptions, userOptions, partnerParlours }: {
+function PartnerParlourVehicleUsageSection({ vehicleOptions, vehicles, userOptions, partnerParlours }: {
   vehicleOptions: SearchableOption[];
+  vehicles: FleetVehicle[];
   userOptions: SearchableOption[];
   partnerParlours: any[];
 }) {
@@ -884,6 +887,7 @@ function PartnerParlourVehicleUsageSection({ vehicleOptions, userOptions, partne
         open={showLogUsage}
         onOpenChange={setShowLogUsage}
         vehicleOptions={vehicleOptions}
+        vehicles={vehicles}
         userOptions={userOptions}
         partnerParlours={partnerParlours}
         onSubmit={(data) => logUsageMutation.mutate(data)}
@@ -904,9 +908,9 @@ function PartnerParlourVehicleUsageSection({ vehicleOptions, userOptions, partne
   );
 }
 
-function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, onSubmit, isPending }: {
+function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, vehicles, userOptions, partnerParlours, onSubmit, isPending }: {
   open: boolean; onOpenChange: (v: boolean) => void;
-  vehicleOptions: SearchableOption[]; userOptions: SearchableOption[]; partnerParlours: any[];
+  vehicleOptions: SearchableOption[]; vehicles: FleetVehicle[]; userOptions: SearchableOption[]; partnerParlours: any[];
   onSubmit: (data: Record<string, any>) => void; isPending: boolean;
 }) {
   const [form, setForm] = useState({
@@ -923,6 +927,13 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
   });
 
   const setSel = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
+  // Picking a vehicle pre-fills its default driver — only when the driver field is still blank,
+  // so it never overwrites a driver already chosen (same rule funerals.tsx's case form uses).
+  const setVehicleWithDefaultDriver = (v: string) => {
+    const id = v === "__none__" ? "" : v;
+    const defaultDriverId = vehicles.find((veh) => veh.id === id)?.defaultDriverId || "";
+    setForm((f) => ({ ...f, vehicleId: id, driverId: (!f.driverId && defaultDriverId) ? defaultDriverId : f.driverId }));
+  };
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -965,7 +976,7 @@ function LogVehicleUsageDialog({ open, onOpenChange, vehicleOptions, userOptions
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Vehicle *</Label>
-              <SearchableSelect options={vehicleOptions} value={form.vehicleId} onChange={setSel("vehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search…" />
+              <SearchableSelect options={vehicleOptions} value={form.vehicleId} onChange={setVehicleWithDefaultDriver} placeholder="Select vehicle…" searchPlaceholder="Search…" />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Driver</Label>
@@ -1060,10 +1071,11 @@ function FeePaymentDialog({ open, onOpenChange, feeAmount, feeCurrency, onSubmit
 
 // ─── New Intake Dialog ────────────────────────────────────────────────────────
 
-function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, partnerParlours, funeralCases, funeralCaseOptions, onSubmit, isPending, onParlourCreated, branches, defaultBranchId }: {
+function NewIntakeDialog({ open, onOpenChange, vehicleOptions, vehicles, userOptions, partnerParlours, funeralCases, funeralCaseOptions, onSubmit, isPending, onParlourCreated, branches, defaultBranchId }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   vehicleOptions: SearchableOption[];
+  vehicles: FleetVehicle[];
   userOptions: SearchableOption[];
   partnerParlours: any[];
   funeralCases: any[];
@@ -1090,6 +1102,17 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
     setForm((f) => ({ ...f, [k]: e.target.value }));
   const setSel = (k: keyof IntakeForm) => (v: string) =>
     setForm((f) => ({ ...f, [k]: v === "__none__" ? "" : v }));
+  // Picking a vehicle pre-fills its default driver — only when the driver field is still blank
+  // (same blanks-only rule the funeral-case auto-populate below already follows).
+  const setVehicleWithDefaultDriver = (vehicleKey: keyof IntakeForm, driverKey: keyof IntakeForm) => (v: string) => {
+    const id = v === "__none__" ? "" : v;
+    const defaultDriverId = vehicles.find((veh) => veh.id === id)?.defaultDriverId || "";
+    setForm((f) => ({
+      ...f,
+      [vehicleKey]: id,
+      [driverKey]: (!f[driverKey] && defaultDriverId) ? defaultDriverId : f[driverKey],
+    }));
+  };
 
   // Blanks-only auto-populate from a linked funeral case — never overwrites something the
   // user already typed (same rule the backend enforces again on submit as the source of truth).
@@ -1309,7 +1332,7 @@ function NewIntakeDialog({ open, onOpenChange, vehicleOptions, userOptions, part
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Removal Vehicle</Label>
-                <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setSel("removalVehicleId")} placeholder="Select vehicle…" searchPlaceholder="Search…" />
+                <SearchableSelect options={vehicleOptions} value={form.removalVehicleId} onChange={setVehicleWithDefaultDriver("removalVehicleId", "removalDriverId")} placeholder="Select vehicle…" searchPlaceholder="Search…" />
               </div>
             </div>
 
