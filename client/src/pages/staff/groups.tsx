@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
+import { LegacyGroupReceiptForm } from "@/components/legacy-group-receipt-form";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -696,7 +697,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
       {activeSection === "receipt" && (
         <div className="p-4">
           {group.isLegacy && groupPolicies.length === 0 ? (
-            <LegacyGroupReceiptForm group={group} onSuccess={(r) => {
+            <LegacyGroupReceiptForm groupId={group.id} onSuccess={(r) => {
               setLastSessionReceipts([r]);
               toast({ title: `Receipt ${r.receipt_number} recorded`, description: `${r.currency} ${parseFloat(r.amount).toFixed(2)} for ${r.group_name}` });
             }} />
@@ -836,74 +837,8 @@ function GroupDetailPanel({ group }: { group: Group }) {
   );
 }
 
-// ─── Legacy Group Receipt Form (for groups with no policies yet) ─────────
-
-function LegacyGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess: (r: any) => void }) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const today = new Date().toISOString().slice(0, 10);
-  const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState("USD");
-  const [paymentDate, setPaymentDate] = useState(today);
-  const [notes, setNotes] = useState("");
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/groups/legacy-receipts", {
-        groupId: group.id, amount: parseFloat(amount), currency, paymentDate, notes: notes.trim() || undefined,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed");
-      return data;
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/groups/legacy-receipts"] });
-      setAmount(""); setNotes(""); setPaymentDate(today);
-      toast({ title: "Payment recorded", description: `Receipt ${data.receipt_number} issued` });
-      onSuccess(data);
-    },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        This group has no member policies yet. Record the lump-sum payment here — it will appear in financials
-        immediately. Once members are added and given policies, future payments use the member-selection form below.
-      </p>
-      <div className="grid grid-cols-3 gap-4 max-w-md">
-        <div>
-          <Label htmlFor="amount">Amount</Label>
-          <Input id="amount" type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
-        </div>
-        <div>
-          <Label htmlFor="currency">Currency</Label>
-          <Select value={currency} onValueChange={setCurrency}>
-            <SelectTrigger id="currency"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="USD">USD</SelectItem>
-              <SelectItem value="ZAR">ZAR</SelectItem>
-              <SelectItem value="ZIG">ZIG</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label htmlFor="payment-date">Payment date</Label>
-          <Input id="payment-date" type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} />
-        </div>
-      </div>
-      <div className="max-w-md">
-        <Label htmlFor="notes-2">Notes (optional)</Label>
-        <Input id="notes-2" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
-      </div>
-      <Button onClick={() => mutation.mutate()} disabled={!amount || parseFloat(amount) <= 0 || mutation.isPending}>
-        {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-        Record Payment
-      </Button>
-      {mutation.isError && <p className="text-sm text-destructive">{(mutation.error as Error).message}</p>}
-    </div>
-  );
-}
+// Legacy group lump-sum receipt form now lives in @/components/legacy-group-receipt-form
+// (shared with finance.tsx's Group Receipt tab, which previously had its own copy).
 
 // ─── Legacy Policies Premium Override Section ────────────────
 

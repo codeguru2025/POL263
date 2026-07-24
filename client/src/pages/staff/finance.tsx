@@ -26,6 +26,7 @@ import { PolicySearchInput } from "@/components/policy-search-input";
 import { useAuth } from "@/hooks/use-auth";
 import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { CurrencySelect } from "@/components/currency-select";
+import { LegacyGroupReceiptForm } from "@/components/legacy-group-receipt-form";
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { formatAmount } from "@shared/validation";
 import { isAgentScoped } from "@shared/roles";
@@ -431,23 +432,6 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   // Legacy groups with no member policies yet are receipted as one lump sum against the
   // group itself (no per-member allocation possible), same as the per-group panel in Groups.
   const isLegacyLumpSum = !!selectedGroup?.isLegacy && groupPolicies.length === 0;
-  const [legacyCurrency, setLegacyCurrency] = useState("USD");
-  const legacyMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/groups/legacy-receipts", {
-        groupId, amount: parseFloat(totalAmount), currency: legacyCurrency, paymentDate: receiptDate, notes: notes.trim() || undefined,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed");
-      return data;
-    },
-    onSuccess: (data) => {
-      setTotalAmount(""); setNotes(""); setReceiptDate(today);
-      toast({ title: `Receipt ${data.receipt_number} recorded` });
-      onSuccess();
-    },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
 
   return (
     <div className="space-y-4">
@@ -461,42 +445,7 @@ function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
         </Select>
       </div>
       {groupId && isLegacyLumpSum ? (
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            This legacy group has no member policies yet. Record the lump-sum payment here — it will appear in
-            financials immediately. Once members are added and given policies, use the member-selection form instead.
-          </p>
-          <div className="grid grid-cols-3 gap-4 max-w-md">
-            <div>
-              <Label htmlFor="total-amount">Amount</Label>
-              <Input id="total-amount" type="number" step="0.01" min="0" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="0.00" />
-            </div>
-            <div>
-              <Label htmlFor="legacy-currency">Currency</Label>
-              <Select value={legacyCurrency} onValueChange={setLegacyCurrency}>
-                <SelectTrigger id="legacy-currency"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="ZAR">ZAR</SelectItem>
-                  <SelectItem value="ZIG">ZIG</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="receipt-date">Receipt date</Label>
-              <Input id="receipt-date" type="date" value={receiptDate} max={today} onChange={(e) => setReceiptDate(e.target.value)} />
-            </div>
-          </div>
-          <div className="max-w-md">
-            <Label htmlFor="notes">Notes (optional)</Label>
-            <Input id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
-          </div>
-          <Button onClick={() => legacyMutation.mutate()} disabled={!totalAmount || parseFloat(totalAmount) <= 0 || legacyMutation.isPending}>
-            {legacyMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-            Record Payment
-          </Button>
-          {legacyMutation.isError && <p className="text-sm text-destructive">{(legacyMutation.error as Error).message}</p>}
-        </div>
+        <LegacyGroupReceiptForm groupId={groupId} onSuccess={onSuccess} />
       ) : groupId && (
         <>
           <div>
