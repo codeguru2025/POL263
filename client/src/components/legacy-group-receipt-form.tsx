@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,9 @@ import { apiRequest } from "@/lib/queryClient";
 export function LegacyGroupReceiptForm({ groupId, onSuccess }: { groupId: string; onSuccess: (receipt: any) => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  // Defensive: guarantees unique ids even if this ever renders more than once on the same page
+  // (matches the existing useId() convention already used by policy-search-input.tsx).
+  const uid = useId();
   const today = new Date().toISOString().slice(0, 10);
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("USD");
@@ -49,13 +52,13 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess }: { groupId: string
       </p>
       <div className="grid grid-cols-3 gap-4 max-w-md">
         <div>
-          <Label htmlFor="legacy-group-receipt-amount">Amount</Label>
-          <Input id="legacy-group-receipt-amount" type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+          <Label htmlFor={`${uid}-amount`}>Amount</Label>
+          <Input id={`${uid}-amount`} type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
         </div>
         <div>
-          <Label htmlFor="legacy-group-receipt-currency">Currency</Label>
+          <Label htmlFor={`${uid}-currency`}>Currency</Label>
           <Select value={currency} onValueChange={setCurrency}>
-            <SelectTrigger id="legacy-group-receipt-currency"><SelectValue /></SelectTrigger>
+            <SelectTrigger id={`${uid}-currency`}><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="USD">USD</SelectItem>
               <SelectItem value="ZAR">ZAR</SelectItem>
@@ -64,13 +67,13 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess }: { groupId: string
           </Select>
         </div>
         <div>
-          <Label htmlFor="legacy-group-receipt-date">Payment date</Label>
-          <Input id="legacy-group-receipt-date" type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} />
+          <Label htmlFor={`${uid}-date`}>Payment date</Label>
+          <Input id={`${uid}-date`} type="date" value={paymentDate} max={today} onChange={(e) => setPaymentDate(e.target.value)} />
         </div>
       </div>
       <div className="max-w-md">
-        <Label htmlFor="legacy-group-receipt-notes">Notes (optional)</Label>
-        <Input id="legacy-group-receipt-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
+        <Label htmlFor={`${uid}-notes`}>Notes (optional)</Label>
+        <Input id={`${uid}-notes`} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. July collection" />
       </div>
       <Button onClick={() => mutation.mutate()} disabled={!amount || parseFloat(amount) <= 0 || mutation.isPending}>
         {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -172,6 +172,11 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
     title, description, submitLabel, submitIcon = DEFAULT_SUBMIT_ICON, testIds = {},
   } = props;
 
+  // finance.tsx renders two instances of this component simultaneously (dialogs #1 and #2, only
+  // one "open" at a time) — element ids must be unique per instance, not just per field, so a
+  // closed-but-still-mounted dialog's ids never collide with the open one's.
+  const uid = useId();
+
   // ── Policy resolution (search mode owns its own enrichment fetch; fixed mode just uses the prop) ──
   const [searchPolicyId, setSearchPolicyId] = useState("");
   const { data: searchPolicyData } = useQuery<PolicyLike | null>({
@@ -341,9 +346,9 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
           <div className={`grid grid-cols-1 ${showMonths ? "sm:grid-cols-3" : "sm:grid-cols-2"} gap-4`}>
             {showMonths && (
               <div>
-                <Label className="text-xs" htmlFor="policy-premium-receipt-months">Months</Label>
+                <Label className="text-xs" htmlFor={`${uid}-months`}>Months</Label>
                 <Select value={String(months)} onValueChange={(v) => onMonthsChange?.(Number(v))} disabled={phase !== "select"}>
-                  <SelectTrigger id="policy-premium-receipt-months"><SelectValue /></SelectTrigger>
+                  <SelectTrigger id={`${uid}-months`}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>{m} {m === 1 ? "month" : "months"}</SelectItem>
@@ -353,8 +358,8 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
               </div>
             )}
             <div>
-              <Label htmlFor="policy-premium-receipt-amount">{allowAmountOverride ? "Amount" : "Amount (auto from policy premium)"}</Label>
-              <Input id="policy-premium-receipt-amount"
+              <Label htmlFor={`${uid}-amount`}>{allowAmountOverride ? "Amount" : "Amount (auto from policy premium)"}</Label>
+              <Input id={`${uid}-amount`}
                 type="number"
                 step="0.01"
                 min="0.01"
@@ -377,8 +382,8 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
                 Amount differs from system premium ({currency} {systemAmount.toFixed(2)}) — this receipt will be held for approval and won't apply to the policy until approved.
               </p>
               <div className="space-y-1">
-                <Label className="text-xs" htmlFor="policy-premium-receipt-submitter-note">Notes for approver *</Label>
-                <Textarea id="policy-premium-receipt-submitter-note" value={submitterNote} onChange={(e) => onSubmitterNoteChange?.(e.target.value)}
+                <Label className="text-xs" htmlFor={`${uid}-submitter-note`}>Notes for approver *</Label>
+                <Textarea id={`${uid}-submitter-note`} value={submitterNote} onChange={(e) => onSubmitterNoteChange?.(e.target.value)}
                   placeholder="Explain why this amount differs from the system premium..." rows={2} className="text-sm" data-testid="textarea-in-policy-submitter-note" />
               </div>
             </div>
@@ -392,9 +397,9 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
 
           {enablePaynow && (
             <div>
-              <Label htmlFor="policy-premium-receipt-method">Payment Method</Label>
+              <Label htmlFor={`${uid}-method`}>Payment Method</Label>
               <Select value={paymentMethod} onValueChange={onPaymentMethodChange}>
-                <SelectTrigger id="policy-premium-receipt-method" data-testid={testIds.paymentMethod || "select-payment-method"}><SelectValue /></SelectTrigger>
+                <SelectTrigger id={`${uid}-method`} data-testid={testIds.paymentMethod || "select-payment-method"}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {!isAgent && <SelectItem value="cash">Cash</SelectItem>}
                   <SelectItem value="ecocash">EcoCash</SelectItem>
@@ -411,49 +416,49 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
             <>
               {enablePaynow && (paymentMethod === "ecocash" || paymentMethod === "onemoney") && (
                 <div>
-                  <Label htmlFor="policy-premium-receipt-reference">Client's Mobile Number (EcoCash/OneMoney)</Label>
-                  <Input id="policy-premium-receipt-reference" placeholder="e.g. 0771234567" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
+                  <Label htmlFor={`${uid}-reference`}>Client's Mobile Number (EcoCash/OneMoney)</Label>
+                  <Input id={`${uid}-reference`} placeholder="e.g. 0771234567" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
                   <p className="text-xs text-muted-foreground mt-1">EcoCash/OneMoney use USSD — a prompt is sent to this number. The client enters their PIN on their phone (no app push). Use the number registered with EcoCash/OneMoney.</p>
                 </div>
               )}
               {enablePaynow && paymentMethod === "innbucks" && (
                 <div>
-                  <Label htmlFor="policy-premium-receipt-reference">Client's Mobile Number</Label>
-                  <Input id="policy-premium-receipt-reference" placeholder="e.g. 0771234567" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
+                  <Label htmlFor={`${uid}-reference`}>Client's Mobile Number</Label>
+                  <Input id={`${uid}-reference`} placeholder="e.g. 0771234567" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
                   <p className="text-xs text-muted-foreground mt-1">An authorization code will be generated. The client enters it in their InnBucks app.</p>
                 </div>
               )}
               {enablePaynow && paymentMethod === "omari" && (
                 <div>
-                  <Label htmlFor="policy-premium-receipt-reference">Client's Mobile Number</Label>
-                  <Input id="policy-premium-receipt-reference" placeholder="e.g. 0771234567" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
+                  <Label htmlFor={`${uid}-reference`}>Client's Mobile Number</Label>
+                  <Input id={`${uid}-reference`} placeholder="e.g. 0771234567" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
                   <p className="text-xs text-muted-foreground mt-1">An OTP will be sent via SMS. You will need to enter the OTP the client receives.</p>
                 </div>
               )}
               {enablePaynow && paymentMethod === "visa_mastercard" && (
                 <div>
-                  <Label htmlFor="policy-premium-receipt-reference">Client's Email Address</Label>
-                  <Input id="policy-premium-receipt-reference" type="email" placeholder="client@example.com" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
+                  <Label htmlFor={`${uid}-reference`}>Client's Email Address</Label>
+                  <Input id={`${uid}-reference`} type="email" placeholder="client@example.com" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
                   <p className="text-xs text-muted-foreground mt-1">A secure payment page will open where the client enters card details.</p>
                 </div>
               )}
               {enablePaynow && paymentMethod === "cash" && (
                 <div>
-                  <Label htmlFor="policy-premium-receipt-reference">Notes (optional)</Label>
-                  <Input id="policy-premium-receipt-reference" placeholder="e.g. Walk-in payment" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
+                  <Label htmlFor={`${uid}-reference`}>Notes (optional)</Label>
+                  <Input id={`${uid}-reference`} placeholder="e.g. Walk-in payment" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
                   <p className="text-xs text-muted-foreground mt-1">Receipt number is auto-generated by the system.</p>
                 </div>
               )}
 
               <div>
-                <Label htmlFor="policy-premium-receipt-notes">Notes (optional)</Label>
-                <Input id="policy-premium-receipt-notes" placeholder="Additional notes..." value={notes} onChange={(e) => onNotesChange(e.target.value)} data-testid={testIds.notes || "input-payment-notes"} />
+                <Label htmlFor={`${uid}-notes`}>Notes (optional)</Label>
+                <Input id={`${uid}-notes`} placeholder="Additional notes..." value={notes} onChange={(e) => onNotesChange(e.target.value)} data-testid={testIds.notes || "input-payment-notes"} />
               </div>
 
               {!enablePaynow && (
                 <div>
-                  <Label htmlFor="policy-premium-receipt-received-at">Received at</Label>
-                  <Input id="policy-premium-receipt-received-at" type="datetime-local" value={receivedAt} onChange={(e) => onReceivedAtChange?.(e.target.value)} />
+                  <Label htmlFor={`${uid}-received-at`}>Received at</Label>
+                  <Input id={`${uid}-received-at`} type="datetime-local" value={receivedAt} onChange={(e) => onReceivedAtChange?.(e.target.value)} />
                 </div>
               )}
             </>
