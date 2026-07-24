@@ -25,7 +25,7 @@ import {
   mortuaryServiceRates, caseServiceCharges,
   cemeteries, equipmentItems, pitchingAssignments, pitchingAssignmentStaff, pitchingAssignmentEquipment,
   fleetFuelLogs, fleetMaintenance, priceBookItems, costSheets, costLineItems,
-  commissionPlans, commissionLedgerEntries, platformReceivables, settlements,
+  commissionPlans, commissionLedgerEntries, platformReceivables, settlements, platformFeeCredits,
   payrollEmployees, payrollRuns, payslips, attendanceLogs, attendanceQrCodes, attendanceScans,
   vehicleLocationPings, vehicleAlerts,
   notificationTemplates, notificationLogs, leads, expenditures,
@@ -293,6 +293,15 @@ export interface ConversionEntry {
   currentStatus: string;
 }
 
+/** One roster member + their historical contributions, for formalizing an existing informal
+ *  burial society/cash club in one atomic import — see storage.bulkImportGroupMembers. */
+export interface BulkImportGroupMemberRow {
+  fullName: string;
+  memberNumber?: string;
+  joinedDate?: string;
+  contributions?: { amount: string; currency: string; contributionDate: string; notes?: string }[];
+}
+
 export interface IStorage {
   getOrganization(id: string): Promise<Organization | undefined>;
   getOrganizations(): Promise<Organization[]>;
@@ -357,6 +366,7 @@ export interface IStorage {
   getClientDocuments(clientId: string, orgId: string): Promise<ClientDocument[]>;
   createClientDocument(doc: InsertClientDocument): Promise<ClientDocument>;
   deleteClientDocument(id: string, orgId: string): Promise<void>;
+  verifyClientDocument(id: string, orgId: string, data: { verificationStatus: "verified" | "rejected"; verifiedBy: string; rejectionReason?: string | null }): Promise<ClientDocument | undefined>;
   getPolicyDocuments(policyId: string, orgId: string): Promise<PolicyDocument[]>;
   createPolicyDocument(doc: InsertPolicyDocument): Promise<PolicyDocument>;
   deletePolicyDocument(id: string, orgId: string): Promise<void>;
@@ -627,6 +637,7 @@ export interface IStorage {
   getGroupPoolPayout(id: string, orgId: string): Promise<GroupPoolPayout | undefined>;
   createGroupPoolPayout(payout: InsertGroupPoolPayout): Promise<GroupPoolPayout>;
   updateGroupPoolPayout(id: string, data: Partial<InsertGroupPoolPayout>, orgId: string): Promise<GroupPoolPayout | undefined>;
+  bulkImportGroupMembers(orgId: string, groupId: string, rows: BulkImportGroupMemberRow[]): Promise<{ membersCreated: number; contributionsCreated: number }>;
   // Accumulation engine (Phase 3e) — server/accumulation.ts.
   generateAccumulationAccountNumber(orgId: string): Promise<string>;
   getAccumulationAccountsByClient(orgId: string, clientId: string): Promise<AccumulationAccount[]>;
@@ -1386,6 +1397,16 @@ export class DatabaseStorage implements IStorage {
   async deleteClientDocument(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(clientDocuments).where(and(eq(clientDocuments.id, id), eq(clientDocuments.organizationId, orgId)));
+  }
+  async verifyClientDocument(id: string, orgId: string, data: { verificationStatus: "verified" | "rejected"; verifiedBy: string; rejectionReason?: string | null }): Promise<ClientDocument | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(clientDocuments).set({
+      verificationStatus: data.verificationStatus,
+      verifiedBy: data.verifiedBy,
+      verifiedAt: new Date(),
+      rejectionReason: data.verificationStatus === "rejected" ? (data.rejectionReason ?? null) : null,
+    }).where(and(eq(clientDocuments.id, id), eq(clientDocuments.organizationId, orgId))).returning();
+    return updated;
   }
 
   // ─── Policy Documents ──────────────────────────────────────
@@ -4989,6 +5010,35 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return updated;
   }
+  /** Formalizes an existing informal society in one commit — every roster member and their
+   *  historical contributions, or none of them, never a half-imported society. */
+  async bulkImportGroupMembers(orgId: string, groupId: string, rows: BulkImportGroupMemberRow[]): Promise<{ membersCreated: number; contributionsCreated: number }> {
+    return withOrgTransaction(orgId, async (tx) => {
+      let contributionsCreated = 0;
+      for (const row of rows) {
+        const [member] = await tx.insert(groupMembers).values({
+          organizationId: orgId,
+          groupId,
+          fullName: row.fullName,
+          memberNumber: row.memberNumber || undefined,
+          joinedDate: row.joinedDate || undefined,
+        }).returning();
+        for (const c of row.contributions || []) {
+          await tx.insert(groupContributions).values({
+            organizationId: orgId,
+            groupId,
+            groupMemberId: member.id,
+            amount: c.amount,
+            currency: c.currency,
+            contributionDate: c.contributionDate,
+            notes: c.notes || undefined,
+          });
+          contributionsCreated++;
+        }
+      }
+      return { membersCreated: rows.length, contributionsCreated };
+    });
+  }
 
   // ─── Accumulation engine (Phase 3e, server/accumulation.ts) ─────────────
   async getAccumulationAccountsByClient(orgId: string, clientId: string): Promise<AccumulationAccount[]> {
@@ -6015,9 +6065,32 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(platformReceivables.createdAt)).limit(limit).offset(offset);
   }
   async createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
-    const tdb = await getDbForOrg(entry.organizationId);
-    const [created] = await tdb.insert(platformReceivables).values(entry).returning();
-    return created;
+    return withOrgTransaction(entry.organizationId, async (tx) => {
+      const [created] = await tx.insert(platformReceivables).values(entry).returning();
+
+      // Immediately draw down any same-currency fee credit this org built up from a past
+      // settlement overpayment (see approveSettlementWithAllocation) rather than leaving this
+      // fee sitting unsettled while a credit for it is available. Conditional UPDATE avoids a
+      // race against a concurrent draw-down of the same balance.
+      const amount = parseFloat(String(created.amount));
+      if (amount > 0.005) {
+        const deduct = await tx.execute(sql`
+          UPDATE platform_fee_credits
+          SET balance = balance - ${amount.toFixed(2)}::numeric, updated_at = now()
+          WHERE organization_id = ${entry.organizationId}
+            AND currency = ${created.currency}
+            AND balance >= ${amount.toFixed(2)}::numeric
+          RETURNING id
+        `);
+        const deductedRows = (deduct as unknown as { rows?: { id: string }[] }).rows;
+        if (deductedRows && deductedRows.length > 0) {
+          const [settled] = await tx.update(platformReceivables).set({ isSettled: true })
+            .where(eq(platformReceivables.id, created.id)).returning();
+          return settled;
+        }
+      }
+      return created;
+    });
   }
   async getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }> {
     // Grouped by currency — platform_receivables holds USD, ZAR, and ZIG amounts,
@@ -6149,10 +6222,10 @@ export class DatabaseStorage implements IStorage {
         return { settlement, allocated: "0.00", receivablesSettled: 0 };
       }
 
-      // Oldest unsettled receivables first, across ALL currencies — a settlement's currency no
-      // longer has to match a receivable's to cover it. Cross-currency conversion goes through
-      // the org's fx_rates (USD-per-unit-of-currency, same convention as resolveCrossCurrencyPayout
-      // for requisition/expenditure payments). Left join settlement_allocations to account for a
+      // Unsettled receivables, across ALL currencies — a settlement's currency no longer has to
+      // match a receivable's to cover it. Cross-currency conversion goes through the org's
+      // fx_rates (USD-per-unit-of-currency, same convention as resolveCrossCurrencyPayout for
+      // requisition/expenditure payments). Left join settlement_allocations to account for a
       // receivable that was already partially covered by an earlier settlement.
       const rows = await tx
         .select({
@@ -6176,6 +6249,20 @@ export class DatabaseStorage implements IStorage {
       let receivablesSettled = 0;
       let totalAllocated = 0;
       const settlementCurrency = settlement.currency.toUpperCase();
+
+      // Allocation priority: same currency as the settlement first (a direct match, no
+      // conversion needed), then USD (the platform's reference currency — any leftover after
+      // covering the settlement's own currency is steered there before other currencies),
+      // then everything else. Array.sort is stable, so createdAt order (oldest first) is
+      // preserved within each tier since `rows` was already fetched in that order.
+      const currencyTier = (c: string) => {
+        const upper = c.toUpperCase();
+        if (upper === settlementCurrency) return 0;
+        if (upper === "USD") return 1;
+        return 2;
+      };
+      rows.sort((a, b) => currencyTier(a.currency) - currencyTier(b.currency));
+
       for (const r of rows) {
         if (remaining <= 0.005) break;
         const owed = parseFloat(r.amount) - parseFloat(r.alreadyAllocated || "0");
@@ -6208,6 +6295,18 @@ export class DatabaseStorage implements IStorage {
           await tx.update(platformReceivables).set({ isSettled: true }).where(eq(platformReceivables.id, r.id));
           receivablesSettled++;
         }
+      }
+
+      // Settlement outlasted every currently-owed receivable — bank the true overpayment as a
+      // per-currency credit rather than letting it vanish; createPlatformReceivable() draws it
+      // down automatically the next time a same-currency fee is raised for this org.
+      if (remaining > 0.005) {
+        await tx.insert(platformFeeCredits)
+          .values({ organizationId: orgId, currency: settlementCurrency, balance: remaining.toFixed(2) })
+          .onConflictDoUpdate({
+            target: [platformFeeCredits.organizationId, platformFeeCredits.currency],
+            set: { balance: sql`${platformFeeCredits.balance} + ${remaining.toFixed(2)}::numeric`, updatedAt: new Date() },
+          });
       }
 
       const [updated] = await tx.update(settlements).set({ status: "approved", approvedBy })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { addBillingCycle, getEffectiveGraceDays, computeNextPeriod } from "../../server/tenant-billing-math";
+import { addBillingCycle, getEffectiveGraceDays, computeNextPeriod, effectiveBillingIntervalMonths, computeInvoiceAmount } from "../../server/tenant-billing-math";
 
 describe("addBillingCycle", () => {
   it("adds whole months in the ordinary case", () => {
@@ -66,5 +66,34 @@ describe("computeNextPeriod (the paid-invoice period-extension rule)", () => {
     const currentPeriodEnd = new Date("2026-07-30T00:00:00.000Z");
     const { periodStart } = computeNextPeriod(now, currentPeriodEnd, 1);
     expect(periodStart.toISOString()).toBe(currentPeriodEnd.toISOString());
+  });
+});
+
+describe("effectiveBillingIntervalMonths", () => {
+  it("uses the plan's own interval for monthly billing", () => {
+    expect(effectiveBillingIntervalMonths("monthly", 1)).toBe(1);
+  });
+
+  it("overrides to 12 months for annual billing regardless of the plan's own interval", () => {
+    expect(effectiveBillingIntervalMonths("annual", 1)).toBe(12);
+  });
+});
+
+describe("computeInvoiceAmount", () => {
+  it("charges the plain monthly price for monthly billing", () => {
+    expect(computeInvoiceAmount("50.00", "monthly")).toBe("50.00");
+  });
+
+  it("charges 12 months at a 20% discount for annual billing", () => {
+    // 50 * 12 = 600; 20% off = 480
+    expect(computeInvoiceAmount("50.00", "annual")).toBe("480.00");
+  });
+
+  it("rounds to 2 decimal places", () => {
+    expect(computeInvoiceAmount("19.99", "annual")).toBe("191.90");
+  });
+
+  it("accepts a numeric priceMonthlyUsd as well as a string", () => {
+    expect(computeInvoiceAmount(50, "annual")).toBe("480.00");
   });
 });

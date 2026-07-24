@@ -192,6 +192,11 @@ export const users = pgTable(
     department: text("department"),
     /** Short bio shown on the agent's public vCard page (/join/:refCode). */
     bio: text("bio"),
+    /** DB-backed login lockout (agent email/password login, server/auth.ts) — mirrors
+     *  clients.failedLoginAttempts/lockedUntil above. Only ever set once a real user row has
+     *  been located; an unrecognized login email has no row to lock. */
+    failedLoginAttempts: integer("failed_login_attempts").default(0).notNull(),
+    lockedUntil: timestamp("locked_until"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("users_org_idx").on(t.organizationId)]
@@ -377,6 +382,13 @@ export const clientDocuments = pgTable(
     fileSize: integer("file_size"),
     /** Who uploaded it */
     uploadedBy: uuid("uploaded_by").references(() => users.id),
+    /** KYC review — pending | verified | rejected. Every document starts unreviewed; nothing in
+     *  the app currently gates on this (no downstream feature checks it yet), it's a visibility/
+     *  record-keeping layer for staff to work through. */
+    verificationStatus: text("verification_status").default("pending").notNull(),
+    verifiedBy: uuid("verified_by").references(() => users.id),
+    verifiedAt: timestamp("verified_at"),
+    rejectionReason: text("rejection_reason"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -2293,6 +2305,28 @@ export const settlements = pgTable(
   (t) => [index("settlements_org_idx").on(t.organizationId)]
 );
 
+/** Running per-currency wallet of settlement overpayment beyond everything a tenant currently
+ *  owed the platform — same "balance that future dues auto-draw down" shape as
+ *  policyCreditBalances above. Built up in storage.approveSettlementWithAllocation() when a
+ *  settlement outlasts every unsettled platform_receivables row; drawn down automatically in
+ *  storage.createPlatformReceivable() the moment a new same-currency fee is raised. */
+export const platformFeeCredits = pgTable(
+  "platform_fee_credits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    currency: text("currency").default("USD").notNull(),
+    balance: numeric("balance", { precision: 12, scale: 2 }).default("0").notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pfc_org_idx").on(t.organizationId),
+    uniqueIndex("pfc_org_currency_idx").on(t.organizationId, t.currency),
+  ]
+);
+
 // ─── PAYROLL ────────────────────────────────────────────────
 
 export const payrollEmployees = pgTable(
@@ -3660,6 +3694,8 @@ export type InsertPlatformReceivable = z.infer<typeof insertPlatformReceivableSc
 export const insertSettlementSchema = createInsertSchema(settlements).omit({ id: true, createdAt: true });
 export type Settlement = typeof settlements.$inferSelect;
 export type InsertSettlement = z.infer<typeof insertSettlementSchema>;
+
+export type PlatformFeeCredit = typeof platformFeeCredits.$inferSelect;
 
 // ─── APP DOWNLOAD INTEREST REGISTRATIONS ──────────────────────
 // Platform-level (not org-scoped): captures name + email of people who

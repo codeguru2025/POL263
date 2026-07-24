@@ -39,3 +39,16 @@ export function computeNextPeriod(now: Date, currentPeriodEnd: Date, billingInte
   const periodEnd = addBillingCycle(periodStart, billingIntervalMonths);
   return { periodStart, periodEnd };
 }
+
+/** A subscription's billingCycle overrides the plan's own (fixed, monthly-base) interval — the
+ *  plan's billingIntervalMonths is only ever "1" today; annual is a per-subscription choice. */
+export function effectiveBillingIntervalMonths(billingCycle: string, planIntervalMonths: number): number {
+  return billingCycle === "annual" ? 12 : planIntervalMonths;
+}
+
+/** Annual billing is 12 months of the monthly price at a 20% discount. */
+export function computeInvoiceAmount(priceMonthlyUsd: string | number, billingCycle: string): string {
+  const monthly = parseFloat(String(priceMonthlyUsd));
+  const amount = billingCycle === "annual" ? monthly * 12 * 0.8 : monthly;
+  return amount.toFixed(2);
+}

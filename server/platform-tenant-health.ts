@@ -7,7 +7,7 @@
  */
 import { and, count, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
-import { tenants as cpTenants, tenantSubscriptions, billingPlans, backupSyncRuns } from "@shared/control-plane-schema";
+import { tenants as cpTenants, tenantSubscriptions, billingPlans, backupSyncRuns, tenantIntegrations } from "@shared/control-plane-schema";
 import { getDbForOrg } from "./tenant-db";
 import { db } from "./db";
 import { organizations, policies, paymentAutomationRuns, platformReceivables } from "@shared/schema";
@@ -64,14 +64,33 @@ export async function buildTenantHealth(): Promise<{
   const planNameById = new Map(planRows.map((p) => [p.id, p.name]));
   const subByTenant = new Map(subRows.map((s) => [s.tenantId, s]));
 
-  const orgRows = tenantIds.length
-    ? await db.select({
-        id: organizations.id,
-        paynowIntegrationId: organizations.paynowIntegrationId,
-        paynowIntegrationKey: organizations.paynowIntegrationKey,
-      }).from(organizations).where(inArray(organizations.id, tenantIds))
-    : [];
-  const paynowConfiguredByTenant = new Map(orgRows.map((o) => [o.id, !!(o.paynowIntegrationId && o.paynowIntegrationKey)]));
+  // PayNow credentials can live in either of two places (see server/paynow-config.ts):
+  // the control-plane's encrypted tenant_integrations table (where the platform-owner
+  // "Configure" screen actually reads/writes via getOrgPaynowConfig/upsertOrgPaynowConfig —
+  // the current path for any tenant configured recently), or the legacy plaintext columns on
+  // the shared organizations table (pre-migration tenants). Checking only the legacy columns
+  // here previously caused tenants configured through the control plane to be incorrectly
+  // flagged as "not configured".
+  const [orgRows, paynowIntegrationRows] = tenantIds.length
+    ? await Promise.all([
+        db.select({
+          id: organizations.id,
+          paynowIntegrationId: organizations.paynowIntegrationId,
+          paynowIntegrationKey: organizations.paynowIntegrationKey,
+        }).from(organizations).where(inArray(organizations.id, tenantIds)),
+        cpDb.select({ tenantId: tenantIntegrations.tenantId, config: tenantIntegrations.config })
+          .from(tenantIntegrations)
+          .where(and(inArray(tenantIntegrations.tenantId, tenantIds), eq(tenantIntegrations.provider, "paynow"), eq(tenantIntegrations.isActive, true))),
+      ])
+    : [[], []];
+  const legacyConfiguredByTenant = new Map(orgRows.map((o) => [o.id, !!(o.paynowIntegrationId && o.paynowIntegrationKey)]));
+  const controlPlaneConfiguredByTenant = new Map(paynowIntegrationRows.map((r) => {
+    const cfg = r.config as { integrationId?: string; integrationKey?: string } | null;
+    return [r.tenantId, !!(cfg?.integrationId && cfg?.integrationKey)];
+  }));
+  const paynowConfiguredByTenant = new Map(
+    tenantIds.map((id) => [id, controlPlaneConfiguredByTenant.get(id) || legacyConfiguredByTenant.get(id) || false])
+  );
 
   // Backup sync runs are platform-wide (one run covers every tenant DB), not per-tenant rows —
   // errors[] entries are "orgName:table: message" strings, so per-tenant matching below is

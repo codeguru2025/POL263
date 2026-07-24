@@ -14,6 +14,7 @@ import { pool } from "./db";
 import { startOutboxBackgroundDrain } from "./outbox";
 import { drainActiveJobs } from "./job-queue";
 import csurf from "csurf";
+import cors from "cors";
 import { createRedisStore } from "./rate-limit-redis-store";
 
 const app = express();
@@ -43,10 +44,19 @@ app.use(
   })
 );
 
-// TODO(security): Install the `cors` npm package and add explicit CORS configuration:
-//   import cors from "cors";
-//   app.use(cors({ origin: (APP_BASE_URL || "").split(",").map(s => s.trim()).filter(Boolean), credentials: true }));
-// Required for the Capacitor mobile app when VITE_API_BASE points to a remote host.
+// Same-origin browser requests (the normal web app, and any subdomain/custom-domain tenant
+// routing handled by tenant-resolver.ts) never need CORS headers at all — this is only for a
+// client whose JS is served from a genuinely different origin than this API, e.g. a mobile app
+// (VITE_API_BASE pointing at a remote host) or a standalone `vite dev` frontend. Secure by
+// default: with no origins configured, no CORS headers are sent and the browser's normal
+// same-origin policy blocks any cross-origin request outright.
+const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || process.env.APP_BASE_URL || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+if (corsAllowedOrigins.length > 0) {
+  app.use(cors({ origin: corsAllowedOrigins, credentials: true }));
+}
 
 app.use(compression());
 app.use(cookieParser());
@@ -191,6 +201,7 @@ if (enableCsrf) {
   app.use("/api/public/register-policy", writeLimiter);
   app.use("/api/public/walkin-register", writeLimiter);
   app.use("/api/public/billing", writeLimiter);
+  app.use("/api/public/tenant-signup", writeLimiter);
   app.use("/api/admin/run-notifications", writeLimiter);
   app.use("/api/pay", writeLimiter);
 

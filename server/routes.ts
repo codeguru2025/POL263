@@ -2,7 +2,7 @@
 import type { Server } from "http";
 import argon2 from "argon2";
 import crypto from "crypto";
-import { storage, findPaymentReceiptById, type ReportFilters } from "./storage";
+import { storage, findPaymentReceiptById, type ReportFilters, type BulkImportGroupMemberRow } from "./storage";
 import { computePlatformFee } from "./platform-fee";
 import {
   withOrgTransaction,
@@ -16,6 +16,7 @@ import {
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { withClaimAging } from "./claims-sla";
 import { withAdvisoryLock } from "./advisory-lock";
 import { todayInHarare, harareLocalToUtcDate } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, fxMapFor } from "./financial-statements";
@@ -36,16 +37,17 @@ import { registerFinanceFormRoutes } from "./routes-pdf-finance";
 import { registerPlatformRoutes } from "./platform-routes";
 import { registerPlatformBillingRoutes } from "./platform-billing-routes";
 import { registerBillingPublicRoutes } from "./billing-public-routes";
+import { registerTenantSignupPublicRoutes } from "./tenant-signup-public-routes";
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
 import { requireModule } from "./module-gate";
-import { tenantSubscriptions, billingPlans, tenantInvoices, billingSettings } from "@shared/control-plane-schema";
-import { seedTenantBranding } from "./tenant-branding-config";
+import { tenantSubscriptions, billingPlans, tenantInvoices } from "@shared/control-plane-schema";
+import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
 import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import * as objectStorage from "./object-storage";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
-import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS, ROLE_PERMISSION_MAP } from "./constants";
+import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS } from "./constants";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
@@ -1419,23 +1421,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ...updated, ...sanitizedTenant });
   });
 
-  /** URL-safe slug for subdomain routing (tenant-resolver.ts), unique in the control plane. */
-  async function generateUniqueTenantSlug(orgName: string): Promise<string> {
-    const base = orgName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "tenant";
-    let candidate = base;
-    let suffix = 1;
-    while (true) {
-      const [existing] = await cpDb.select({ id: cpTenants.id }).from(cpTenants).where(eq(cpTenants.slug, candidate)).limit(1);
-      if (!existing) return candidate;
-      suffix += 1;
-      candidate = `${base}-${suffix}`;
-    }
-  }
-
   app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
     const user = req.user as any;
     const isPlatformOwner = user?.email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
@@ -1458,137 +1443,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = insertOrganizationSchema.parse(orgData);
     const org = await storage.createOrganization(parsed);
     try {
-      // Register in the control plane too — tenant_databases (needed to later commission a
-      // dedicated database) and tenant_branding both have a foreign key to control_plane.tenants,
-      // so a tenant that only exists in the shared registry DB can never get either. New orgs
-      // start on the shared platform DB in "trial" status; commissioning a dedicated database
-      // (see POST /api/platform/tenants/:id/commission-database) flips this to "active" once
-      // a real database has been provisioned and their data migrated onto it.
-      const slug = await generateUniqueTenantSlug(org.name);
-      await cpDb.insert(cpTenants).values({
-        id: org.id,
-        name: org.name,
-        slug,
-        isActive: true,
-        licenseStatus: "trial",
-        provisioningState: "ready",
+      const { defaultBranchId, adminUser } = await provisionTenantCore(org, {
+        adminEmail, adminPassword, adminDisplayName, billingCycle: "monthly",
       });
-      await seedTenantBranding(org.id, {
-        logoUrl: org.logoUrl,
-        signatureUrl: org.signatureUrl,
-        primaryColor: org.primaryColor,
-        footerText: org.footerText,
-        address: org.address,
-        phone: org.phone,
-        email: org.email,
-        website: org.website,
-        policyNumberPrefix: org.policyNumberPrefix,
-        policyNumberPadding: org.policyNumberPadding,
-        isWhitelabeled: org.isWhitelabeled,
-      });
-
-      const defaultBranch = await storage.createBranch({
-        organizationId: org.id,
-        name: "Head Office",
-        isActive: true,
-        isHeadOffice: true,
-      });
-
-      const allPerms = await storage.getPermissions();
-      const permMap = new Map<string, string>();
-      for (const p of allPerms) permMap.set(p.name, p.id);
-
-      const roleMap = new Map<string, string>();
-      for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
-        const role = await storage.createRole({
-          name: roleName,
-          organizationId: org.id,
-          description: `System ${roleName} role`,
-          isSystem: true,
-        });
-        roleMap.set(roleName, role.id);
-
-        if (roleName !== "superuser") {
-          for (const permName of permNames) {
-            const permId = permMap.get(permName);
-            if (permId) await storage.addRolePermission(role.id, permId, org.id);
-          }
-        }
-      }
-
-      let adminUser: any = null;
-      if (adminEmail && adminPassword) {
-        const passwordHash = await argon2.hash(String(adminPassword), { type: argon2.argon2id });
-        const refCode = `AGT${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-        adminUser = await storage.createUser({
-          email: adminEmail,
-          displayName: adminDisplayName || adminEmail.split("@")[0],
-          organizationId: org.id,
-          branchId: defaultBranch.id,
-          referralCode: refCode,
-          isActive: true,
-          passwordHash,
-        });
-
-        const adminRoleId = roleMap.get("administrator");
-        if (adminRoleId) await storage.addUserRole(adminUser.id, adminRoleId, org.id);
-      }
-
-      // Auto-trial: every new tenant starts on a trial subscription so billing
-      // enforcement (once turned on, see server/module-gate.ts) has something to
-      // check from day one. Fails soft if no plan has been seeded yet (e.g. before
-      // Phase 7's platform console UI creates the first plan) — tenant creation
-      // must never fail just because billing setup hasn't happened yet.
-      try {
-        const [trialPlan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.isActive, true)).orderBy(asc(billingPlans.sortOrder)).limit(1);
-        if (trialPlan) {
-          const [settings] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
-          const trialDays = settings?.trialDays ?? 14;
-          const now = new Date();
-          const trialEndsAt = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
-          await cpDb.insert(tenantSubscriptions).values({
-            tenantId: org.id,
-            planId: trialPlan.id,
-            status: "trialing",
-            trialEndsAt,
-            currentPeriodStart: now,
-            currentPeriodEnd: trialEndsAt,
-          });
-        } else {
-          structuredLog("warn", "No billing plan exists yet — skipping auto-trial subscription", { orgId: org.id });
-        }
-      } catch (err) {
-        structuredLog("error", "Auto-trial subscription creation failed — tenant created without one", { orgId: org.id, error: (err as Error).message });
-      }
 
       await auditLog(req, "CREATE_ORGANIZATION", "Organization", org.id, null, {
         ...org,
-        defaultBranchId: defaultBranch.id,
+        defaultBranchId,
         ...(adminUser ? { adminUserId: adminUser.id, adminEmail } : {}),
       }, org.id);
       return res.status(201).json({
         ...org,
-        defaultBranchId: defaultBranch.id,
-        ...(adminUser ? { adminUser: { id: adminUser.id, email: adminUser.email, displayName: adminUser.displayName } } : {}),
+        defaultBranchId,
+        ...(adminUser ? { adminUser } : {}),
       });
     } catch (err) {
-      // Soft-delete the orphaned org to prevent partial tenant state
-      try {
-        await storage.updateOrganization(org.id, { name: parsed.name + " (deleted)" });
-      } catch (rollbackErr) {
-        structuredLog("error", "Failed to soft-delete orphaned org after create failure", {
-          orgId: org.id,
-          error: (rollbackErr as Error).message,
-        });
-      }
-      try {
-        await cpDb.update(cpTenants).set({ isActive: false, name: parsed.name + " (deleted)" }).where(eq(cpTenants.id, org.id));
-      } catch (rollbackErr) {
-        structuredLog("error", "Failed to deactivate orphaned control-plane tenant after create failure", {
-          orgId: org.id,
-          error: (rollbackErr as Error).message,
-        });
-      }
+      await rollbackFailedProvisioning(org.id, parsed.name);
       throw err;
     }
   });
@@ -2402,6 +2272,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(doc);
   });
   app.use("/api/clients/:clientId/documents", handleMulterError);
+
+  // KYC review — record that a staff member actually checked an uploaded identity document,
+  // not just that one was uploaded. Nothing downstream currently gates on this status; it's a
+  // visibility/audit layer for staff to work through, not an access control.
+  app.patch("/api/clients/:clientId/documents/:docId/verify", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const client = await storage.getClient(req.params.clientId as string, user.organizationId);
+    if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
+
+    const status = req.body.status;
+    if (status !== "verified" && status !== "rejected") {
+      return res.status(400).json({ message: "status must be 'verified' or 'rejected'" });
+    }
+    const documents = await storage.getClientDocuments(client.id, user.organizationId);
+    const before = documents.find((d) => d.id === req.params.docId);
+    if (!before) return res.status(404).json({ message: "Document not found" });
+
+    const verifiedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const updated = await storage.verifyClientDocument(req.params.docId as string, user.organizationId, {
+      verificationStatus: status,
+      verifiedBy,
+      rejectionReason: typeof req.body.rejectionReason === "string" ? req.body.rejectionReason.trim() || undefined : undefined,
+    });
+    await auditLog(req, "VERIFY_CLIENT_DOCUMENT", "ClientDocument", req.params.docId as string, before, updated);
+    return res.json(updated);
+  });
 
   app.delete("/api/clients/:clientId/documents/:docId", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
@@ -5661,7 +5557,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
-    return res.json(await storage.getClaimsByOrg(user.organizationId, limit, offset, filters));
+    const claims = await storage.getClaimsByOrg(user.organizationId, limit, offset, filters);
+    return res.json(claims.map((c: any) => withClaimAging(c)));
   });
 
   app.get("/api/claims/:id", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
@@ -5669,7 +5566,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const claim = await storage.getClaim(req.params.id as string, user.organizationId);
     if (!claim) return res.status(404).json({ message: "Not found" });
     if (claim.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
-    return res.json(claim);
+    return res.json(withClaimAging(claim));
   });
 
   /**
@@ -10286,6 +10183,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // Formalizes an existing informal burial society/cash club: brings in its full roster and
+  // historical contribution record in one atomic operation, rather than one member/contribution
+  // at a time. See server/storage.ts's bulkImportGroupMembers and docs/POL263-STRATEGY (burial-
+  // society formalization).
+  app.post("/api/groups/:id/members/bulk-import", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    try {
+      const group = await storage.getGroup(groupId, user.organizationId);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+
+      const rows = Array.isArray(req.body.members) ? req.body.members : [];
+      if (rows.length === 0) return res.status(400).json({ message: "members must be a non-empty array" });
+
+      const cleaned: BulkImportGroupMemberRow[] = [];
+      for (const [i, row] of rows.entries()) {
+        if (!row.fullName || typeof row.fullName !== "string" || !row.fullName.trim()) {
+          return res.status(400).json({ message: `members[${i}].fullName is required` });
+        }
+        const contributions = Array.isArray(row.contributions) ? row.contributions : [];
+        for (const [j, c] of contributions.entries()) {
+          const amount = parseFloat(String(c.amount));
+          if (!Number.isFinite(amount) || amount <= 0) {
+            return res.status(400).json({ message: `members[${i}].contributions[${j}].amount must be a positive number` });
+          }
+          if (!c.currency || typeof c.currency !== "string") {
+            return res.status(400).json({ message: `members[${i}].contributions[${j}].currency is required` });
+          }
+          if (!c.contributionDate || typeof c.contributionDate !== "string") {
+            return res.status(400).json({ message: `members[${i}].contributions[${j}].contributionDate is required` });
+          }
+        }
+        cleaned.push({
+          fullName: row.fullName.trim(),
+          memberNumber: row.memberNumber || undefined,
+          joinedDate: row.joinedDate || undefined,
+          contributions: contributions.map((c: any) => ({
+            amount: parseFloat(String(c.amount)).toFixed(2),
+            currency: c.currency,
+            contributionDate: c.contributionDate,
+            notes: c.notes || undefined,
+          })),
+        });
+      }
+
+      const result = await storage.bulkImportGroupMembers(user.organizationId, groupId, cleaned);
+      await auditLog(req, "bulk_import", "group_member", groupId, null, result);
+      return res.status(201).json(result);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/groups/:id/members/bulk-import failed", { error: err?.message, groupId });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
   app.get("/api/groups/:id/contributions", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
@@ -11116,6 +11067,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerPlatformRoutes(app);
   registerPlatformBillingRoutes(app);
   registerBillingPublicRoutes(app);
+  registerTenantSignupPublicRoutes(app);
   registerHrFleetFormRoutes(app);
 
   // ─── Tenant-facing billing (logged-in Pay Now flow) ────────────────

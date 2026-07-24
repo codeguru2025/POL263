@@ -247,6 +247,11 @@ export const tenantSubscriptions = pgTable(
       .references(() => billingPlans.id),
     /** trialing | active | past_due | suspended | cancelled */
     status: text("status").default("trialing").notNull(),
+    /** monthly | annual. Drives both the renewal-invoice amount (annual = 12mo at 20% off, see
+     *  tenant-billing-math.ts's computeInvoiceAmount) and the period length (see
+     *  effectiveBillingIntervalMonths) — the plan's own billingIntervalMonths stays a fixed "1" and
+     *  is only ever the *monthly* base price; this field is what actually varies per subscription. */
+    billingCycle: text("billing_cycle").default("monthly").notNull(),
     trialEndsAt: timestamp("trial_ends_at"),
     currentPeriodStart: timestamp("current_period_start").notNull(),
     currentPeriodEnd: timestamp("current_period_end").notNull(),
@@ -306,6 +311,61 @@ export const tenantInvoices = pgTable(
     uniqueIndex("tenant_invoices_token_idx").on(t.paymentToken),
     index("tenant_invoices_tenant_idx").on(t.tenantId),
     index("tenant_invoices_status_due_idx").on(t.status, t.dueDate),
+  ]
+);
+
+// ─── SELF-SERVE SIGNUP ─────────────────────────────────────────────────────────
+
+/**
+ * A prospect's signup submission, staged here until their $1 PayNow verification charge
+ * clears — only then does server/tenant-provisioning.ts turn this into a real tenant (see
+ * server/tenant-signup-service.ts). paymentToken is the ONLY identifier ever exposed on an
+ * unauthenticated route (server/tenant-signup-public-routes.ts), same convention as
+ * tenantInvoices.paymentToken above. adminPasswordHash is hashed at submit time — this table
+ * never holds a plaintext password, even transiently.
+ */
+export const pendingTenantSignups = pgTable(
+  "pending_tenant_signups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    businessName: text("business_name").notNull(),
+    phone: text("phone"),
+    email: text("email"),
+    website: text("website"),
+    /** Mirrors organizations' own business-profile columns (shared/org-profile.ts) — copied
+     *  onto the real org verbatim once provisioned. */
+    orgType: text("org_type"),
+    productTypes: jsonb("product_types").notNull().default([]),
+    distributionChannels: jsonb("distribution_channels").notNull().default([]),
+    bookStatus: text("book_status"),
+    bookSizeCurrent: integer("book_size_current"),
+    bookSizeProjected12mo: integer("book_size_projected_12mo"),
+    staffComplement: integer("staff_complement"),
+    adminEmail: text("admin_email").notNull(),
+    adminDisplayName: text("admin_display_name"),
+    adminPasswordHash: text("admin_password_hash").notNull(),
+    planId: uuid("plan_id")
+      .notNull()
+      .references(() => billingPlans.id),
+    /** monthly | annual — the prospect's choice, carried onto the real subscription once provisioned. */
+    billingCycle: text("billing_cycle").default("monthly").notNull(),
+    verificationAmount: numeric("verification_amount").default("1.00").notNull(),
+    currency: text("currency").default("USD").notNull(),
+    /** awaiting_payment | provisioned | failed */
+    status: text("status").default("awaiting_payment").notNull(),
+    paymentToken: text("payment_token").notNull(),
+    merchantReference: text("merchant_reference"),
+    paynowPollUrl: text("paynow_poll_url"),
+    paynowStatus: text("paynow_status"),
+    /** Set once provisioning succeeds — makes the poll route idempotent (a second poll after
+     *  success returns "already provisioned" instead of creating a second tenant). */
+    provisionedTenantId: uuid("provisioned_tenant_id").references(() => tenants.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("pending_tenant_signups_token_idx").on(t.paymentToken),
+    index("pending_tenant_signups_email_idx").on(t.adminEmail),
   ]
 );
 
@@ -377,3 +437,4 @@ export type TenantSubscription = typeof tenantSubscriptions.$inferSelect;
 export type TenantInvoice = typeof tenantInvoices.$inferSelect;
 export type BillingSettings = typeof billingSettings.$inferSelect;
 export type TenantBillingEvent = typeof tenantBillingEvents.$inferSelect;
+export type PendingTenantSignup = typeof pendingTenantSignups.$inferSelect;

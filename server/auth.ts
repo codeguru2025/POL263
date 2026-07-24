@@ -27,37 +27,31 @@ setInterval(() => {
   mobileAuthTokens.forEach((d, t) => { if (d.expiresAt < now) mobileAuthTokens.delete(t); });
 }, 60_000).unref();
 
-// Per-account lockout for agent (email/password) login. Complements the IP-based
-// authLimiter in index.ts. In-memory only (per-process) — under horizontal scaling each
-// instance tracks its own counter, so an attacker gets AGENT_LOCKOUT_THRESHOLD × N attempts.
-// TODO(scalability): migrate to DB-backed lockout using a lockedUntil column on the users
-// table (mirrors the pattern already used for clients.lockedUntil) and read/write via storage.
+// Per-account lockout for agent (email/password) login. Complements the IP-based authLimiter in
+// index.ts. DB-backed via users.failedLoginAttempts/lockedUntil (mirrors clients.lockedUntil's
+// pattern in client-auth.ts) — safe under horizontal scaling, unlike a per-process in-memory
+// counter, since every instance reads/writes the same row. Only ever enforced once a real user
+// row has been located (an unrecognized login email has no row to lock against, same as the
+// client-login path's behavior for an unrecognized policy number).
 const AGENT_LOCKOUT_THRESHOLD = 5;
 const AGENT_LOCKOUT_DURATION_MS = 15 * 60 * 1000;
-const agentLoginAttempts = new Map<string, { count: number; lockedUntil: number }>();
 
-function agentLockKey(email: string): string {
-  return email.toLowerCase().trim();
-}
-/** Returns ms remaining if the account is currently locked, else 0. */
-function agentLockRemaining(email: string): number {
-  const rec = agentLoginAttempts.get(agentLockKey(email));
-  if (!rec || !rec.lockedUntil) return 0;
-  const remaining = rec.lockedUntil - Date.now();
+/** Returns ms remaining if the given user is currently locked, else 0. */
+function agentLockRemaining(user: { lockedUntil: Date | string | null }): number {
+  if (!user.lockedUntil) return 0;
+  const remaining = new Date(user.lockedUntil).getTime() - Date.now();
   return remaining > 0 ? remaining : 0;
 }
-function recordAgentLoginFailure(email: string): void {
-  const key = agentLockKey(email);
-  const rec = agentLoginAttempts.get(key) ?? { count: 0, lockedUntil: 0 };
-  rec.count += 1;
-  if (rec.count >= AGENT_LOCKOUT_THRESHOLD) {
-    rec.lockedUntil = Date.now() + AGENT_LOCKOUT_DURATION_MS;
-    rec.count = 0;
+async function recordAgentLoginFailure(userId: string, currentAttempts: number): Promise<void> {
+  const attempts = (currentAttempts || 0) + 1;
+  const data: { failedLoginAttempts: number; lockedUntil?: Date } = { failedLoginAttempts: attempts };
+  if (attempts >= AGENT_LOCKOUT_THRESHOLD) {
+    data.lockedUntil = new Date(Date.now() + AGENT_LOCKOUT_DURATION_MS);
   }
-  agentLoginAttempts.set(key, rec);
+  await storage.updateUser(userId, data as any);
 }
-function clearAgentLoginFailures(email: string): void {
-  agentLoginAttempts.delete(agentLockKey(email));
+async function clearAgentLoginFailures(userId: string): Promise<void> {
+  await storage.updateUser(userId, { failedLoginAttempts: 0, lockedUntil: null } as any);
 }
 
 // Global budget on the "scan every isolated-DB tenant" login fallback below — that loop's cost
@@ -638,13 +632,6 @@ export function setupAuth(app: Express) {
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
     }
-    const lockRemainingMs = agentLockRemaining(email);
-    if (lockRemainingMs > 0) {
-      return res.status(429).json({
-        message: "Too many failed attempts. Please try again later.",
-        retryAfterSeconds: Math.ceil(lockRemainingMs / 1000),
-      });
-    }
     try {
       // Resolve tenant: subdomain middleware (production) takes priority,
       // body orgId is the fallback for local dev or direct URL access.
@@ -696,8 +683,14 @@ export function setupAuth(app: Express) {
       }
       if (!user) {
         structuredLog("info", "Agent login: user not found", { email: email.toLowerCase().trim() });
-        recordAgentLoginFailure(email);
         return res.status(401).json({ message: "Invalid email or password" });
+      }
+      const lockRemainingMs = agentLockRemaining(user);
+      if (lockRemainingMs > 0) {
+        return res.status(429).json({
+          message: "Too many failed attempts. Please try again later.",
+          retryAfterSeconds: Math.ceil(lockRemainingMs / 1000),
+        });
       }
       if (!user.isActive) {
         structuredLog("info", "Agent login: account disabled", { userId: user.id });
@@ -705,7 +698,7 @@ export function setupAuth(app: Express) {
       }
       if (!user.passwordHash) {
         structuredLog("info", "Agent login: no password hash", { userId: user.id });
-        recordAgentLoginFailure(email);
+        await recordAgentLoginFailure(user.id, user.failedLoginAttempts);
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
@@ -724,12 +717,12 @@ export function setupAuth(app: Express) {
       const valid = await argon2.verify(user.passwordHash, password);
       structuredLog("info", "Agent login password check", { userId: user.id, valid });
       if (!valid) {
-        recordAgentLoginFailure(email);
+        await recordAgentLoginFailure(user.id, user.failedLoginAttempts);
         structuredLog("warn", "AGENT_LOGIN_FAILED", { userId: user.id, email, ip: req.ip, reason: "invalid_password" });
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
-      clearAgentLoginFailures(email);
+      await clearAgentLoginFailures(user.id);
       req.login(user, async (err) => {
         if (err) {
           return res.status(500).json({ message: "Login failed" });

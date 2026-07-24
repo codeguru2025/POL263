@@ -24,7 +24,7 @@ import {
   type TenantInvoice,
 } from "@shared/control-plane-schema";
 import { getPaynowConfig } from "./paynow-config";
-import { computeNextPeriod } from "./tenant-billing-math";
+import { computeNextPeriod, computeInvoiceAmount, effectiveBillingIntervalMonths } from "./tenant-billing-math";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache } from "./module-gate";
@@ -87,7 +87,7 @@ export async function generateInvoiceForSubscription(subscription: TenantSubscri
       tenantId: subscription.tenantId,
       subscriptionId: subscription.id,
       planId: plan.id,
-      amount: plan.priceMonthlyUsd,
+      amount: computeInvoiceAmount(plan.priceMonthlyUsd, subscription.billingCycle),
       currency: "USD",
       status: "open",
       periodStart: subscription.currentPeriodStart,
@@ -129,7 +129,8 @@ export async function applyTenantInvoicePayment(
       if (!plan) return { ok: false as const, error: "Plan not found" };
 
       const now = new Date();
-      const { periodStart: cycleStart, periodEnd: cycleEnd } = computeNextPeriod(now, subscription.currentPeriodEnd, plan.billingIntervalMonths);
+      const intervalMonths = effectiveBillingIntervalMonths(subscription.billingCycle, plan.billingIntervalMonths);
+      const { periodStart: cycleStart, periodEnd: cycleEnd } = computeNextPeriod(now, subscription.currentPeriodEnd, intervalMonths);
 
       await tx.update(tenantInvoices).set({
         status: "paid",
