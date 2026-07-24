@@ -42,6 +42,8 @@ import {
   ExternalLink,
   FileDown,
   ChevronDown,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 
 interface Client {
@@ -404,6 +406,20 @@ export default function StaffClients() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "documents"] });
       toast({ title: "Document deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const verifyDocMutation = useMutation({
+    mutationFn: async ({ clientId, docId, status, rejectionReason }: { clientId: string; docId: string; status: "verified" | "rejected"; rejectionReason?: string }) => {
+      const res = await apiRequest("PATCH", `/api/clients/${clientId}/documents/${docId}/verify`, { status, rejectionReason });
+      return res.json();
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients", selectedClientId, "documents"] });
+      toast({ title: vars.status === "verified" ? "Document verified" : "Document rejected" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -818,6 +834,7 @@ export default function StaffClients() {
                         <TableHead>Type</TableHead>
                         <TableHead>Size</TableHead>
                         <TableHead>Uploaded</TableHead>
+                        <TableHead>Verification</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -839,8 +856,42 @@ export default function StaffClients() {
                           <TableCell className="text-muted-foreground text-sm">
                             {new Date(doc.createdAt).toLocaleDateString()}
                           </TableCell>
+                          <TableCell>
+                            {(doc as any).verificationStatus === "verified" ? (
+                              <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600">
+                                <CheckCircle2 className="h-3 w-3" /> Verified
+                              </Badge>
+                            ) : (doc as any).verificationStatus === "rejected" ? (
+                              <Badge variant="destructive" className="gap-1" title={(doc as any).rejectionReason || undefined}>
+                                <XCircle className="h-3 w-3" /> Rejected
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline">Pending review</Badge>
+                            )}
+                          </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">
+                              {(doc as any).verificationStatus !== "verified" && (
+                                <Button
+                                  variant="ghost" size="icon" className="h-8 w-8 text-emerald-600 hover:text-emerald-600"
+                                  aria-label="Verify document"
+                                  onClick={() => verifyDocMutation.mutate({ clientId: selectedClientId!, docId: doc.id, status: "verified" })}
+                                >
+                                  <CheckCircle2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                              {(doc as any).verificationStatus !== "rejected" && (
+                                <Button
+                                  variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive"
+                                  aria-label="Reject document"
+                                  onClick={() => {
+                                    const reason = prompt("Reason for rejecting this document (optional):") || undefined;
+                                    verifyDocMutation.mutate({ clientId: selectedClientId!, docId: doc.id, status: "rejected", rejectionReason: reason });
+                                  }}
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              )}
                               <Button variant="ghost" size="icon" className="h-8 w-8" asChild aria-label="View document">
                                 <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
                                   <ExternalLink className="h-4 w-4" aria-hidden="true" />

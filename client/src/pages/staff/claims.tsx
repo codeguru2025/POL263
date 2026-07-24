@@ -14,13 +14,23 @@ import { PolicySearchInput } from "@/components/policy-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye, FileDown, AlertTriangle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { formatAmountWithCode } from "@shared/validation";
 import type { Claim } from "@shared/schema";
 
 /** The claims list is left-joined server-side with any linked funeral case — see
  *  storage.getClaimsByOrg — so the Claims<->Funerals cross-link needs no extra fetch. */
-type ClaimWithFuneralCase = Claim & { funeralCaseId: string | null; funeralCaseNumber: string | null };
+type ClaimWithFuneralCase = Claim & {
+  funeralCaseId: string | null; funeralCaseNumber: string | null;
+  /** Server-computed (server/claims-sla.ts) — days since filed, and whether that exceeds the
+   *  claims SLA window for a still-open claim. Never set for rejected/closed claims. */
+  ageDays: number; isOverdue: boolean;
+};
+
+/** Must match server/claims-sla.ts's CLAIM_SLA_DAYS — display-only here, the server already
+ *  computes isOverdue itself, this is just for the tooltip copy. */
+const CLAIM_SLA_DAYS = 5;
 
 const CLAIM_TRANSITIONS: Record<string, string[]> = {
   submitted: ["verified", "rejected"],
@@ -138,6 +148,7 @@ export default function StaffClaims() {
   const { data: claims = [], isLoading, isError: claimsError, error: claimsErrorObj, refetch: refetchClaims } = useQuery<ClaimWithFuneralCase[]>({
     queryKey: ["/api/claims"],
   });
+  const overdueCount = claims.filter((c) => c.isOverdue).length;
 
   // Deep-link support for the Funerals<->Claims cross-link (funerals.tsx links here via
   // ?openClaim=), matching the ?openPolicy= pattern already used on the Policies page.
@@ -308,6 +319,21 @@ export default function StaffClaims() {
       cell: (c) => <span className="text-muted-foreground text-sm tabular-nums">{formatDate(c.createdAt as any)}</span>,
     },
     {
+      id: "ageDays",
+      header: "Age",
+      accessor: (c) => c.ageDays ?? 0,
+      cell: (c) => (
+        <span
+          className={`text-sm tabular-nums flex items-center gap-1 ${c.isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`}
+          data-testid={`age-claim-${c.id}`}
+          title={c.isOverdue ? `Open ${c.ageDays} days — past the ${CLAIM_SLA_DAYS}-day claims SLA` : undefined}
+        >
+          {c.isOverdue && <AlertTriangle className="h-3.5 w-3.5" />}
+          {c.ageDays} {c.ageDays === 1 ? "day" : "days"}
+        </span>
+      ),
+    },
+    {
       id: "actions",
       header: "Actions",
       align: "right",
@@ -360,6 +386,15 @@ export default function StaffClaims() {
             </div>
           )}
         />
+
+        {overdueCount > 0 && (
+          <div className="flex items-center gap-2 -mt-2">
+            <Badge variant="destructive" className="gap-1.5" data-testid="badge-claims-overdue">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              {overdueCount} claim{overdueCount === 1 ? "" : "s"} open past {CLAIM_SLA_DAYS} days
+            </Badge>
+          </div>
+        )}
 
         <AiInsightsPanel surface="claims" title="AI Insights" description="Ask AI to summarize claims activity and flag anything unusual." />
 

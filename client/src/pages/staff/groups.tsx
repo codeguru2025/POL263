@@ -51,7 +51,15 @@ interface Group {
   capacity: number | null;
   isActive: boolean;
   isLegacy: boolean;
+  payoutRules: PoolPayoutRule[] | null;
   createdAt: string;
+}
+
+interface PoolPayoutRule {
+  eventType: string;
+  label: string;
+  amount: number;
+  currency: string;
 }
 
 interface GroupFormData {
@@ -93,6 +101,8 @@ const GROUP_TYPES = [
   { value: "corporate", label: "Corporate" },
   { value: "church", label: "Church" },
   { value: "cooperative", label: "Cooperative" },
+  { value: "burial_society", label: "Burial Society" },
+  { value: "cash_club", label: "Cash Club / Informal Savings Group" },
   { value: "other", label: "Other" },
 ];
 
@@ -478,7 +488,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
-  const [activeSection, setActiveSection] = useState<"members" | "receipt" | "history">("members");
+  const [activeSection, setActiveSection] = useState<"members" | "receipt" | "history" | "pool">("members");
   const [showLegacyDialog, setShowLegacyDialog] = useState(false);
   const [legacyFirst, setLegacyFirst] = useState("");
   const [legacyLast, setLegacyLast] = useState("");
@@ -626,13 +636,13 @@ function GroupDetailPanel({ group }: { group: Group }) {
 
       {/* Section tabs */}
       <div className="flex border-b px-4 gap-1">
-        {(["members", "receipt", "history"] as const).map((s) => (
+        {(["members", "receipt", "history", "pool"] as const).map((s) => (
           <button
             key={s}
             onClick={() => setActiveSection(s)}
             className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeSection === s ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
           >
-            {s === "members" ? `Members (${groupPolicies.length})` : s === "receipt" ? "Issue Receipt" : "Receipt History"}
+            {s === "members" ? `Members (${groupPolicies.length})` : s === "receipt" ? "Issue Receipt" : s === "history" ? "Receipt History" : "Pool Society"}
           </button>
         ))}
       </div>
@@ -765,6 +775,15 @@ function GroupDetailPanel({ group }: { group: Group }) {
         </div>
       )}
 
+      {/* Pool society section — formalizes an informal burial society/cash club: roster,
+          payout rules, contributions, and pool payouts. Self-contained from the policy/legacy
+          receipt flows above (server/pool-society.ts). */}
+      {activeSection === "pool" && (
+        <div className="p-4">
+          <PoolSocietySection group={group} />
+        </div>
+      )}
+
       {/* Legacy member capture dialog */}
       <Dialog open={showLegacyDialog} onOpenChange={setShowLegacyDialog}>
         <DialogContent className="max-w-md">
@@ -829,6 +848,472 @@ function GroupDetailPanel({ group }: { group: Group }) {
             <Button onClick={() => { if (assignPolicyId) assignMutation.mutate(assignPolicyId); }} disabled={!assignPolicyId || assignMutation.isPending}>
               {assignMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Assign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── Pool Society (Phase 3d, server/pool-society.ts) ─────────
+// Formalizes an informal burial society/cash club: roster + historical contributions can be
+// bulk-imported in one atomic operation, day-to-day contributions/payouts recorded from then on.
+// Deliberately separate from the policy-based Members/Receipt tabs above.
+
+function PoolSocietySection({ group }: { group: Group }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const groupId = group.id;
+
+  const { data: members = [], isLoading: loadingMembers } = useQuery<any[]>({
+    queryKey: ["/api/groups", groupId, "members"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/members`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const { data: contributions = [] } = useQuery<any[]>({
+    queryKey: ["/api/groups", groupId, "contributions"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/contributions`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const { data: payouts = [] } = useQuery<any[]>({
+    queryKey: ["/api/groups", groupId, "payouts"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/payouts`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const { data: balanceData } = useQuery<{ balance: Record<string, number> }>({
+    queryKey: ["/api/groups", groupId, "pool-balance"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/pool-balance`, { credentials: "include" });
+      if (!res.ok) return { balance: {} };
+      return res.json();
+    },
+  });
+  const balance = balanceData?.balance || {};
+
+  const memberName = (id: string) => members.find((m: any) => m.id === id)?.fullName || "—";
+
+  const invalidatePool = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "members"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "contributions"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "payouts"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/groups", groupId, "pool-balance"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
+  };
+
+  // ── Payout rules ──
+  const [rules, setRules] = useState<PoolPayoutRule[]>(group.payoutRules || []);
+  useEffect(() => { setRules(group.payoutRules || []); }, [group.payoutRules]);
+  const saveRulesMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/groups/${groupId}/payout-rules`, { payoutRules: rules });
+      return res.json();
+    },
+    onSuccess: () => { toast({ title: "Payout rules saved" }); invalidatePool(); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Add member ──
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [newMemberName, setNewMemberName] = useState("");
+  const [newMemberNumber, setNewMemberNumber] = useState("");
+  const addMemberMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/groups/${groupId}/members`, {
+        fullName: newMemberName.trim(), memberNumber: newMemberNumber.trim() || undefined,
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      setShowAddMember(false); setNewMemberName(""); setNewMemberNumber("");
+      toast({ title: "Member added" }); invalidatePool();
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Bulk import (formalization) ──
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkRows, setBulkRows] = useState<{ fullName: string; memberNumber: string; amount: string; currency: string; contributionDate: string }[]>([
+    { fullName: "", memberNumber: "", amount: "", currency: "USD", contributionDate: "" },
+  ]);
+  const bulkImportMutation = useMutation({
+    mutationFn: async () => {
+      const membersPayload = bulkRows
+        .filter((r) => r.fullName.trim())
+        .map((r) => ({
+          fullName: r.fullName.trim(),
+          memberNumber: r.memberNumber.trim() || undefined,
+          contributions: r.amount && r.contributionDate
+            ? [{ amount: r.amount, currency: r.currency, contributionDate: r.contributionDate }]
+            : [],
+        }));
+      const res = await apiRequest("POST", `/api/groups/${groupId}/members/bulk-import`, { members: membersPayload });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Import failed"); }
+      return res.json() as Promise<{ membersCreated: number; contributionsCreated: number }>;
+    },
+    onSuccess: (data) => {
+      setShowBulkImport(false);
+      setBulkRows([{ fullName: "", memberNumber: "", amount: "", currency: "USD", contributionDate: "" }]);
+      toast({ title: "Society formalized", description: `${data.membersCreated} member${data.membersCreated === 1 ? "" : "s"} and ${data.contributionsCreated} historical contribution${data.contributionsCreated === 1 ? "" : "s"} imported.` });
+      invalidatePool();
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Record contribution ──
+  const [showAddContribution, setShowAddContribution] = useState(false);
+  const [contribMemberId, setContribMemberId] = useState("");
+  const [contribAmount, setContribAmount] = useState("");
+  const [contribCurrency, setContribCurrency] = useState("USD");
+  const [contribDate, setContribDate] = useState(new Date().toISOString().slice(0, 10));
+  const addContributionMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/groups/${groupId}/contributions`, {
+        groupMemberId: contribMemberId, amount: contribAmount, currency: contribCurrency, contributionDate: contribDate,
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      setShowAddContribution(false); setContribMemberId(""); setContribAmount("");
+      toast({ title: "Contribution recorded" }); invalidatePool();
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Request payout ──
+  const [showRequestPayout, setShowRequestPayout] = useState(false);
+  const [payoutMemberId, setPayoutMemberId] = useState("");
+  const [payoutEventType, setPayoutEventType] = useState("");
+  const [payoutAmount, setPayoutAmount] = useState("");
+  const [payoutCurrency, setPayoutCurrency] = useState("USD");
+  const requestPayoutMutation = useMutation({
+    mutationFn: async (force?: boolean) => {
+      const res = await apiRequest("POST", `/api/groups/${groupId}/payouts`, {
+        groupMemberId: payoutMemberId, eventType: payoutEventType,
+        amount: payoutAmount || undefined, currency: payoutCurrency, force,
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      setShowRequestPayout(false); setPayoutMemberId(""); setPayoutEventType(""); setPayoutAmount("");
+      toast({ title: "Payout requested" }); invalidatePool();
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updatePayoutStatusMutation = useMutation({
+    mutationFn: async ({ payoutId, status }: { payoutId: string; status: string }) => {
+      const res = await apiRequest("PATCH", `/api/groups/${groupId}/payouts/${payoutId}`, { status });
+      return res.json();
+    },
+    onSuccess: () => { invalidatePool(); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-6">
+      {/* Pool balance */}
+      <div>
+        <h3 className="text-sm font-semibold mb-2">Pool Balance</h3>
+        {Object.keys(balance).length === 0 ? (
+          <p className="text-sm text-muted-foreground">No contributions recorded yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-3">
+            {Object.entries(balance).map(([currency, amt]) => (
+              <div key={currency} className="border rounded-lg px-3 py-2">
+                <p className="text-xs text-muted-foreground">{currency}</p>
+                <p className="font-mono font-semibold">{(amt as number).toFixed(2)}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* Payout rules */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold">Payout Rules</h3>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setRules([...rules, { eventType: "", label: "", amount: 0, currency: "USD" }])}>
+            <Plus className="h-3.5 w-3.5" /> Add Rule
+          </Button>
+        </div>
+        {rules.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No payout rules configured — payouts will need a manual amount each time.</p>
+        ) : (
+          <div className="space-y-2">
+            {rules.map((r, i) => (
+              <div key={i} className="grid grid-cols-[1fr_1fr_100px_90px_auto] gap-2 items-center">
+                <Input placeholder="Event type (e.g. death)" value={r.eventType} onChange={(e) => setRules(rules.map((x, j) => j === i ? { ...x, eventType: e.target.value } : x))} />
+                <Input placeholder="Label" value={r.label} onChange={(e) => setRules(rules.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
+                <Input type="number" step="0.01" placeholder="Amount" value={r.amount || ""} onChange={(e) => setRules(rules.map((x, j) => j === i ? { ...x, amount: parseFloat(e.target.value) || 0 } : x))} />
+                <Select value={r.currency} onValueChange={(v) => setRules(rules.map((x, j) => j === i ? { ...x, currency: v } : x))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="ZAR">ZAR</SelectItem>
+                    <SelectItem value="ZIG">ZIG</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setRules(rules.filter((_, j) => j !== i))}>Remove</Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <Button size="sm" className="mt-2 gap-1.5" onClick={() => saveRulesMutation.mutate()} disabled={saveRulesMutation.isPending}>
+          {saveRulesMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save Rules
+        </Button>
+      </div>
+
+      <Separator />
+
+      {/* Roster */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold">Roster ({members.length})</h3>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowBulkImport(true)}>
+              <UserPlus className="h-3.5 w-3.5" /> Bring in an existing society
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => setShowAddMember(true)}>
+              <Plus className="h-3.5 w-3.5" /> Add Member
+            </Button>
+          </div>
+        </div>
+        {loadingMembers ? (
+          <div className="py-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+        ) : members.length === 0 ? (
+          <EmptyState icon={FileStack} title="No roster members yet" description="Add members one at a time, or bring in an existing society's full roster and contribution history at once." className="border-0 bg-transparent py-6" />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead className="pl-0">Name</TableHead><TableHead>Member #</TableHead><TableHead>Status</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {members.map((m: any) => (
+                <TableRow key={m.id}>
+                  <TableCell className="pl-0 text-sm">{m.fullName}</TableCell>
+                  <TableCell className="text-sm font-mono">{m.memberNumber || "—"}</TableCell>
+                  <TableCell><Badge variant={m.status === "active" ? "default" : "secondary"} className="text-xs">{m.status}</Badge></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* Contributions */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold">Contributions ({contributions.length})</h3>
+          <Button size="sm" className="gap-1.5" onClick={() => setShowAddContribution(true)} disabled={members.length === 0}>
+            <Plus className="h-3.5 w-3.5" /> Record Contribution
+          </Button>
+        </div>
+        {contributions.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4">No contributions recorded yet.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead className="pl-0">Member</TableHead><TableHead>Amount</TableHead><TableHead>Date</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {contributions.map((c: any) => (
+                <TableRow key={c.id}>
+                  <TableCell className="pl-0 text-sm">{memberName(c.groupMemberId)}</TableCell>
+                  <TableCell className="text-sm font-mono">{c.currency} {parseFloat(c.amount).toFixed(2)}</TableCell>
+                  <TableCell className="text-sm">{c.contributionDate}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* Payouts */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold">Payouts ({payouts.length})</h3>
+          <Button size="sm" className="gap-1.5" onClick={() => setShowRequestPayout(true)} disabled={members.length === 0}>
+            <Plus className="h-3.5 w-3.5" /> Request Payout
+          </Button>
+        </div>
+        {payouts.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4">No payouts recorded yet.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead className="pl-0">Member</TableHead><TableHead>Event</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {payouts.map((p: any) => (
+                <TableRow key={p.id}>
+                  <TableCell className="pl-0 text-sm">{memberName(p.groupMemberId)}</TableCell>
+                  <TableCell className="text-sm">{p.eventType}</TableCell>
+                  <TableCell className="text-sm font-mono">{p.currency} {parseFloat(p.amount).toFixed(2)}</TableCell>
+                  <TableCell><Badge variant={p.status === "paid" ? "default" : "secondary"} className="text-xs">{p.status}</Badge></TableCell>
+                  <TableCell className="text-right">
+                    {p.status === "pending" && (
+                      <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => updatePayoutStatusMutation.mutate({ payoutId: p.id, status: "approved" })}>Approve</Button>
+                    )}
+                    {p.status === "approved" && (
+                      <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => updatePayoutStatusMutation.mutate({ payoutId: p.id, status: "paid" })}>Mark Paid</Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+
+      {/* Add member dialog */}
+      <Dialog open={showAddMember} onOpenChange={setShowAddMember}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Add Roster Member</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2"><Label>Full Name *</Label><Input value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} autoFocus /></div>
+            <div className="space-y-2"><Label>Member Number</Label><Input value={newMemberNumber} onChange={(e) => setNewMemberNumber(e.target.value)} /></div>
+            {addMemberMutation.isError && <p className="text-sm text-destructive">{(addMemberMutation.error as Error).message}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddMember(false)}>Cancel</Button>
+            <Button onClick={() => addMemberMutation.mutate()} disabled={!newMemberName.trim() || addMemberMutation.isPending}>
+              {addMemberMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk import (formalization) dialog */}
+      <Dialog open={showBulkImport} onOpenChange={setShowBulkImport}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Bring in an existing society</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Enter the society's current members and, where known, their most recent contribution. This creates
+            every member and contribution in one go — nothing is saved until you confirm.
+          </p>
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {bulkRows.map((row, i) => (
+              <div key={i} className="grid grid-cols-[1.2fr_0.8fr_0.7fr_0.6fr_0.9fr_auto] gap-2 items-center">
+                <Input placeholder="Full name *" value={row.fullName} onChange={(e) => setBulkRows(bulkRows.map((r, j) => j === i ? { ...r, fullName: e.target.value } : r))} />
+                <Input placeholder="Member #" value={row.memberNumber} onChange={(e) => setBulkRows(bulkRows.map((r, j) => j === i ? { ...r, memberNumber: e.target.value } : r))} />
+                <Input type="number" step="0.01" placeholder="Contribution" value={row.amount} onChange={(e) => setBulkRows(bulkRows.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))} />
+                <Select value={row.currency} onValueChange={(v) => setBulkRows(bulkRows.map((r, j) => j === i ? { ...r, currency: v } : r))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="ZAR">ZAR</SelectItem>
+                    <SelectItem value="ZIG">ZIG</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input type="date" value={row.contributionDate} onChange={(e) => setBulkRows(bulkRows.map((r, j) => j === i ? { ...r, contributionDate: e.target.value } : r))} />
+                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setBulkRows(bulkRows.filter((_, j) => j !== i))} disabled={bulkRows.length === 1}>Remove</Button>
+              </div>
+            ))}
+          </div>
+          <Button size="sm" variant="outline" className="gap-1.5 w-fit" onClick={() => setBulkRows([...bulkRows, { fullName: "", memberNumber: "", amount: "", currency: "USD", contributionDate: "" }])}>
+            <Plus className="h-3.5 w-3.5" /> Add Row
+          </Button>
+          {bulkImportMutation.isError && <p className="text-sm text-destructive">{(bulkImportMutation.error as Error).message}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkImport(false)}>Cancel</Button>
+            <Button onClick={() => bulkImportMutation.mutate()} disabled={!bulkRows.some((r) => r.fullName.trim()) || bulkImportMutation.isPending}>
+              {bulkImportMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Import
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Record contribution dialog */}
+      <Dialog open={showAddContribution} onOpenChange={setShowAddContribution}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Record Contribution</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Member *</Label>
+              <Select value={contribMemberId} onValueChange={setContribMemberId}>
+                <SelectTrigger><SelectValue placeholder="Choose a member…" /></SelectTrigger>
+                <SelectContent>{members.map((m: any) => <SelectItem key={m.id} value={m.id}>{m.fullName}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Amount *</Label><Input type="number" step="0.01" value={contribAmount} onChange={(e) => setContribAmount(e.target.value)} /></div>
+              <div className="space-y-2">
+                <Label>Currency</Label>
+                <Select value={contribCurrency} onValueChange={setContribCurrency}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="USD">USD</SelectItem><SelectItem value="ZAR">ZAR</SelectItem><SelectItem value="ZIG">ZIG</SelectItem></SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2"><Label>Date</Label><Input type="date" value={contribDate} onChange={(e) => setContribDate(e.target.value)} /></div>
+            {addContributionMutation.isError && <p className="text-sm text-destructive">{(addContributionMutation.error as Error).message}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddContribution(false)}>Cancel</Button>
+            <Button onClick={() => addContributionMutation.mutate()} disabled={!contribMemberId || !contribAmount || addContributionMutation.isPending}>
+              {addContributionMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Record
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Request payout dialog */}
+      <Dialog open={showRequestPayout} onOpenChange={setShowRequestPayout}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Request Payout</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Member *</Label>
+              <Select value={payoutMemberId} onValueChange={setPayoutMemberId}>
+                <SelectTrigger><SelectValue placeholder="Choose a member…" /></SelectTrigger>
+                <SelectContent>{members.map((m: any) => <SelectItem key={m.id} value={m.id}>{m.fullName}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2"><Label>Event Type *</Label><Input placeholder="e.g. death" value={payoutEventType} onChange={(e) => setPayoutEventType(e.target.value)} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Amount (optional — uses matching rule if blank)</Label><Input type="number" step="0.01" value={payoutAmount} onChange={(e) => setPayoutAmount(e.target.value)} /></div>
+              <div className="space-y-2">
+                <Label>Currency</Label>
+                <Select value={payoutCurrency} onValueChange={setPayoutCurrency}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="USD">USD</SelectItem><SelectItem value="ZAR">ZAR</SelectItem><SelectItem value="ZIG">ZIG</SelectItem></SelectContent>
+                </Select>
+              </div>
+            </div>
+            {requestPayoutMutation.isError && (
+              <div className="text-sm text-destructive space-y-2">
+                <p>{(requestPayoutMutation.error as Error).message}</p>
+                {(requestPayoutMutation.error as Error).message.toLowerCase().includes("insufficient") && (
+                  <Button size="sm" variant="outline" onClick={() => requestPayoutMutation.mutate(true)}>Record anyway</Button>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRequestPayout(false)}>Cancel</Button>
+            <Button onClick={() => requestPayoutMutation.mutate(undefined)} disabled={!payoutMemberId || !payoutEventType.trim() || requestPayoutMutation.isPending}>
+              {requestPayoutMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Request
             </Button>
           </DialogFooter>
         </DialogContent>

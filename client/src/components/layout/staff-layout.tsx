@@ -617,8 +617,12 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     return location === href || location.startsWith(`${path}/`);
   };
 
+  // In control-plane mode (no tenant selected) this must stay undefined — falling back to
+  // orgs[0] here previously made the header/tenant-switcher silently display whichever tenant
+  // happened to be first in the list (e.g. Falakhe) as if it were selected, even though the
+  // control panel is intentionally sitting outside every tenant.
   const currentOrg = isPlatformOwner
-    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) || orgs[0] : undefined)
+    ? (Array.isArray(orgs) ? orgs.find((o: any) => o.id === effectiveOrgId) || (isControlPlaneMode ? undefined : orgs[0]) : undefined)
     : (Array.isArray(orgs) ? orgs[0] : undefined);
 
   // When whitelabeled, set app title to tenant name (must run every render to satisfy hooks order)
@@ -711,7 +715,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1.5 min-w-0 shrink">
                     <Globe className="h-3.5 w-3.5 text-primary shrink-0" />
-                    <span className="truncate max-w-[100px] sm:max-w-[140px]">{currentOrg?.name || "Tenant"}</span>
+                    <span className="truncate max-w-[100px] sm:max-w-[140px]">{currentOrg?.name || (isControlPlaneMode ? "Control plane" : "Tenant")}</span>
                     <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
                   </Button>
                 </DropdownMenuTrigger>
