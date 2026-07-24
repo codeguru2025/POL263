@@ -27,6 +27,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { CurrencySelect } from "@/components/currency-select";
 import { LegacyGroupReceiptForm } from "@/components/legacy-group-receipt-form";
+import { PolicyPremiumReceiptDialog, type PolicyLike } from "@/components/policy-premium-receipt-dialog";
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { formatAmount } from "@shared/validation";
 import { isAgentScoped } from "@shared/roles";
@@ -1442,10 +1443,9 @@ export default function StaffFinance() {
   };
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(() => crypto.randomUUID());
-  const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
-  const [policySearch, setPolicySearch] = useState("");
-  const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
-  const [paymentAmount, setPaymentAmount] = useState("");
+  // Fed by PolicyPremiumReceiptDialog's onPolicyResolved — the dialog owns policy search/
+  // enrichment internally now; the parent only needs the resolved policy number for the toast.
+  const [paymentDialogPolicyNumber, setPaymentDialogPolicyNumber] = useState("");
   const [paymentCurrency, setPaymentCurrency] = useState("USD");
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [paymentReference, setPaymentReference] = useState("");
@@ -1459,25 +1459,16 @@ export default function StaffFinance() {
   const [settlementReference, setSettlementReference] = useState("");
 
   const [showCashReceiptDialog, setShowCashReceiptDialog] = useState(false);
-  const [cashReceiptSelectedPolicyId, setCashReceiptSelectedPolicyId] = useState<string>("");
-  const [cashReceiptPolicySearch, setCashReceiptPolicySearch] = useState("");
-  const [cashReceiptSelectedPolicy, setCashReceiptSelectedPolicy] = useState<any>(null);
-  const [cashReceiptAmount, setCashReceiptAmount] = useState("");
   const [cashReceiptCurrency, setCashReceiptCurrency] = useState("USD");
   const [cashReceiptNotes, setCashReceiptNotes] = useState("");
   const [cashReceiptReceivedAt, setCashReceiptReceivedAt] = useState(new Date().toISOString().slice(0, 16));
   const [reprintReceiptId, setReprintReceiptId] = useState("");
   const [pollingIntentId, setPollingIntentId] = useState<string | null>(null);
 
-  // Paynow flow state for receipt dialog
+  // Paynow flow state for receipt dialog — intent id + whether the shared dialog's poll should
+  // be active are still parent-owned since the parent owns the poll useQuery below.
   const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
   const [paynowPolling, setPaynowPolling] = useState(false);
-  const [paynowInnbucksCode, setPaynowInnbucksCode] = useState("");
-  const [paynowInnbucksExpiry, setPaynowInnbucksExpiry] = useState("");
-  const [paynowNeedsOtp, setPaynowNeedsOtp] = useState(false);
-  const [paynowOtpRef, setPaynowOtpRef] = useState("");
-  const [paynowOtp, setPaynowOtp] = useState("");
-  const [paynowPhase, setPaynowPhase] = useState<"select" | "waiting">("select");
 
   const [cashupStatusFilter, setCashupStatusFilter] = useState<string>("");
   const [showCreateCashupDialog, setShowCreateCashupDialog] = useState(false);
@@ -1732,24 +1723,6 @@ export default function StaffFinance() {
   const expenditures = Array.isArray(rawExpenditures) ? rawExpenditures : [];
   const policies = Array.isArray(rawPolicies) ? rawPolicies : [];
   const clients = Array.isArray(rawClients) ? rawClients : [];
-  const { data: selectedPolicyData } = useQuery<any>({
-    queryKey: ["/api/policies", selectedPolicyId],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + `/api/policies/${selectedPolicyId}`, { credentials: "include" });
-      if (!res.ok) return null;
-      return res.json();
-    },
-    enabled: !!selectedPolicyId,
-  });
-  const { data: cashReceiptPolicyData } = useQuery<any>({
-    queryKey: ["/api/policies", cashReceiptSelectedPolicyId],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + `/api/policies/${cashReceiptSelectedPolicyId}`, { credentials: "include" });
-      if (!res.ok) return null;
-      return res.json();
-    },
-    enabled: !!cashReceiptSelectedPolicyId,
-  });
   const { data: rawPlatformReceivables } = useQuery<any[]>({ queryKey: ["/api/platform/receivables"] });
   const { data: platformSummary } = useQuery<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }>({ queryKey: ["/api/platform/summary"] });
   const { data: rawSettlements } = useQuery<any[]>({ queryKey: ["/api/settlements"] });
@@ -1763,35 +1736,6 @@ export default function StaffFinance() {
     clients.forEach((c: any) => { map[c.id] = c; });
     return map;
   }, [clients]);
-
-  const filteredPolicies = useMemo(() => {
-    if (!policySearch.trim()) return [];
-    const q = policySearch.toLowerCase();
-    return policies.filter((p: any) => {
-      const client = clientMap[p.clientId];
-      const clientName = client ? `${client.firstName} ${client.lastName}`.toLowerCase() : "";
-      return (
-        (p.policyNumber || "").toLowerCase().includes(q) ||
-        clientName.includes(q)
-      );
-    }).slice(0, 8);
-  }, [policySearch, policies, clientMap]);
-
-  const receiptDialogPolicy = selectedPolicyData ?? selectedPolicy;
-  const cashReceiptDialogPolicy = cashReceiptPolicyData ?? cashReceiptSelectedPolicy;
-
-  const filteredPoliciesForCash = useMemo(() => {
-    if (!cashReceiptPolicySearch.trim()) return [];
-    const q = cashReceiptPolicySearch.toLowerCase();
-    return policies.filter((p: any) => {
-      const client = clientMap[p.clientId];
-      const clientName = client ? `${client.firstName} ${client.lastName}`.toLowerCase() : "";
-      return (
-        (p.policyNumber || "").toLowerCase().includes(q) ||
-        clientName.includes(q)
-      );
-    }).slice(0, 8);
-  }, [cashReceiptPolicySearch, policies, clientMap]);
 
   // True totals for the KPI tiles below — `payments` above is capped at the API's default
   // page size (100), so `.length` / a currency-blind sum over it silently under-reports once
@@ -1831,7 +1775,7 @@ export default function StaffFinance() {
       resetPaymentForm();
       setReceiptResult(result);
       setShowReceiptDialog(true);
-      toast({ title: "Payment recorded & receipt generated", description: `Receipt for ${receiptDialogPolicy?.policyNumber || "policy"}` });
+      toast({ title: "Payment recorded & receipt generated", description: `Receipt for ${paymentDialogPolicyNumber || "policy"}` });
     },
     onError: (err: any) => toast({
       title: "Payment failed",
@@ -1843,24 +1787,15 @@ export default function StaffFinance() {
   });
 
   const cashReceiptMutation = useMutation({
-    mutationFn: async () => {
-      const autoAmount = cashReceiptDialogPolicy?.premiumAmount ? parseFloat(cashReceiptDialogPolicy.premiumAmount).toFixed(2) : cashReceiptAmount;
-      const res = await apiRequest("POST", "/api/admin/receipts/cash", {
-        policyId: cashReceiptDialogPolicy?.id,
-        amount: autoAmount,
-        currency: cashReceiptCurrency,
-        notes: cashReceiptNotes || undefined,
-        receivedAt: cashReceiptReceivedAt ? new Date(cashReceiptReceivedAt).toISOString() : undefined,
-      });
+    mutationFn: async (payload: { policyId: string; amount: string; currency: string; notes?: string; receivedAt?: string }) => {
+      const res = await apiRequest("POST", "/api/admin/receipts/cash", payload);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/payment-intents"] });
       setShowCashReceiptDialog(false);
-      setCashReceiptSelectedPolicyId("");
-      setCashReceiptSelectedPolicy(null);
-      setCashReceiptAmount("");
+      setCashReceiptCurrency("USD");
       setCashReceiptNotes("");
       setCashReceiptReceivedAt(new Date().toISOString().slice(0, 16));
       toast({ title: "Cash receipt recorded", description: "Receipt generated." });
@@ -1945,22 +1880,13 @@ export default function StaffFinance() {
   });
 
   const resetPaymentForm = () => {
-    setSelectedPolicyId("");
-    setPolicySearch("");
-    setSelectedPolicy(null);
-    setPaymentAmount("");
+    setPaymentDialogPolicyNumber("");
     setPaymentCurrency("USD");
     setPaymentMethod(isAgent ? "ecocash" : "cash");
     setPaymentReference("");
     setPaymentNotes("");
     setPaynowIntentId(null);
     setPaynowPolling(false);
-    setPaynowInnbucksCode("");
-    setPaynowInnbucksExpiry("");
-    setPaynowNeedsOtp(false);
-    setPaynowOtpRef("");
-    setPaynowOtp("");
-    setPaynowPhase("select");
     // Fresh per attempt — collapses a double-click or retried request onto one payment
     // instead of posting it twice (server enforces this via a unique constraint).
     setPaymentIdempotencyKey(crypto.randomUUID());
@@ -2044,87 +1970,65 @@ export default function StaffFinance() {
 
   const paynowMethods = ["ecocash", "onemoney", "innbucks", "omari", "visa_mastercard"];
 
+  // Wrapped for PolicyPremiumReceiptDialog's onInitiatePaynow prop — same 2-step create-intent-
+  // then-initiate flow as before, but takes its inputs as an argument instead of reading closure
+  // state (the dialog now owns the resolved policy/amount/method/reference).
   const paynowInitiateMutation = useMutation({
-    mutationFn: async () => {
-      if (!receiptDialogPolicy) throw new Error("No policy selected");
-      const autoAmount = receiptDialogPolicy.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : paymentAmount;
-      // Step 1: Create intent
+    mutationFn: async (ctx: { policyId: string; clientId?: string; amount: string; currency: string; method: string; reference: string }) => {
       const intentRes = await apiRequest("POST", "/api/payment-intents", {
-        policyId: receiptDialogPolicy.id,
-        clientId: receiptDialogPolicy.clientId,
-        amount: autoAmount,
-        currency: paymentCurrency,
+        policyId: ctx.policyId,
+        clientId: ctx.clientId,
+        amount: ctx.amount,
+        currency: ctx.currency,
         purpose: "premium",
       });
       const intent = await intentRes.json();
       if (intent.message) throw new Error(intent.message);
       setPaynowIntentId(intent.id);
-      // Step 2: Initiate Paynow
       const initRes = await apiRequest("POST", `/api/payment-intents/${intent.id}/initiate`, {
-        method: paymentMethod,
-        payerPhone: ["ecocash", "onemoney", "innbucks", "omari"].includes(paymentMethod) ? paymentReference : undefined,
-        payerEmail: paymentMethod === "visa_mastercard" ? paymentReference : undefined,
+        method: ctx.method,
+        payerPhone: ["ecocash", "onemoney", "innbucks", "omari"].includes(ctx.method) ? ctx.reference : undefined,
+        payerEmail: ctx.method === "visa_mastercard" ? ctx.reference : undefined,
       });
-      return initRes.json() as Promise<{
+      const data = await initRes.json() as {
         redirectUrl?: string; pollUrl?: string; message?: string;
         innbucksCode?: string; innbucksExpiry?: string;
         omariOtpReference?: string; needsOtp?: boolean;
-      }>;
-    },
-    onSuccess: (data) => {
+      };
       if (data.message) {
         toast({ title: "Error", description: data.message, variant: "destructive" });
-        return;
-      }
-      setPaynowPhase("waiting");
-
-      if (paymentMethod === "innbucks" && data.innbucksCode) {
-        setPaynowInnbucksCode(data.innbucksCode);
-        setPaynowInnbucksExpiry(data.innbucksExpiry || "");
-        setPaynowPolling(true);
+      } else if (ctx.method === "innbucks" && data.innbucksCode) {
         toast({ title: "InnBucks code ready", description: "Give the client the authorization code shown." });
-        return;
-      }
-      if (paymentMethod === "omari" && data.needsOtp) {
-        setPaynowNeedsOtp(true);
-        setPaynowOtpRef(data.omariOtpReference || "");
+      } else if (ctx.method === "omari" && data.needsOtp) {
         toast({ title: "OTP sent", description: "Ask the client for the OTP sent to their phone." });
-        return;
-      }
-      if (data.redirectUrl) {
+      } else if (data.redirectUrl) {
         window.open(data.redirectUrl, "_blank");
-        setPaynowPolling(true);
         toast({ title: "Redirect opened", description: "Card payment page opened in new tab." });
-        return;
+      } else {
+        toast({ title: "USSD sent", description: "Client should receive a prompt on their phone to approve the payment." });
       }
-      setPaynowPolling(true);
-      toast({ title: "USSD sent", description: "Client should receive a prompt on their phone to approve the payment." });
+      return data;
     },
     onError: (e: Error) => toast({ title: "Payment failed", description: e.message, variant: "destructive" }),
   });
 
   const paynowOtpMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (otp: string) => {
       if (!paynowIntentId) throw new Error("No payment intent");
-      const res = await apiRequest("POST", `/api/payment-intents/${paynowIntentId}/otp`, { otp: paynowOtp });
-      return res.json() as Promise<{ paid?: boolean; message?: string }>;
-    },
-    onSuccess: (data) => {
+      const res = await apiRequest("POST", `/api/payment-intents/${paynowIntentId}/otp`, { otp });
+      const data = await res.json() as { paid?: boolean; message?: string };
       if (data.message) {
         toast({ title: "OTP error", description: data.message, variant: "destructive" });
-        return;
-      }
-      if (data.paid) {
+      } else if (data.paid) {
         queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
         queryClient.invalidateQueries({ queryKey: ["/api/payment-intents"] });
         setShowPaymentDialog(false);
         resetPaymentForm();
         toast({ title: "Payment successful", description: "Payment has been completed and receipt generated." });
       } else {
-        setPaynowPolling(true);
-        setPaynowNeedsOtp(false);
         toast({ title: "OTP accepted", description: "Payment is being processed..." });
       }
+      return data;
     },
     onError: (e: Error) => toast({ title: "OTP failed", description: e.message, variant: "destructive" }),
   });
@@ -2156,39 +2060,6 @@ export default function StaffFinance() {
       toast({ title: "Payment failed", description: "The payment was declined or cancelled.", variant: "destructive" });
     }
   }, [paynowPollData]);
-
-  const handleSubmitPayment = () => {
-    if (!receiptDialogPolicy) {
-      toast({ title: "Select a policy", description: "Search and select the policy you're receipting.", variant: "destructive" });
-      return;
-    }
-    const autoAmount = receiptDialogPolicy.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : paymentAmount;
-    if (!autoAmount || parseFloat(autoAmount) <= 0) {
-      toast({ title: "No premium", description: "Policy has no premium set.", variant: "destructive" });
-      return;
-    }
-
-    if (paymentMethod === "cash") {
-      createPaymentMutation.mutate({
-        policyId: receiptDialogPolicy.id,
-        clientId: receiptDialogPolicy.clientId,
-        amount: autoAmount,
-        currency: paymentCurrency,
-        paymentMethod: paymentMethod,
-        status: "cleared",
-        reference: paymentReference || undefined,
-        notes: paymentNotes || undefined,
-        idempotencyKey: paymentIdempotencyKey,
-      });
-    } else {
-      if (!paymentReference || paymentReference.trim().length < 5) {
-        const label = paymentMethod === "visa_mastercard" ? "email address" : "mobile number";
-        toast({ title: `Enter ${label}`, description: `Required for ${paymentMethod === "visa_mastercard" ? "card" : "mobile"} payment.`, variant: "destructive" });
-        return;
-      }
-      paynowInitiateMutation.mutate();
-    }
-  };
 
   const getClient = (clientId: string) => clientMap[clientId];
   const getPolicyNumber = (policyId: string) => {
@@ -2371,7 +2242,7 @@ export default function StaffFinance() {
               description="Online collection attempts and manual cash receipt logging."
               icon={Landmark}
               headerRight={!isAgent ? (
-                  <Button variant="outline" size="sm" onClick={() => { setShowCashReceiptDialog(true); setCashReceiptPolicySearch(""); setCashReceiptSelectedPolicy(null); setCashReceiptAmount(""); setCashReceiptCurrency("USD"); setCashReceiptNotes(""); }}>
+                  <Button variant="outline" size="sm" onClick={() => { setShowCashReceiptDialog(true); setCashReceiptCurrency("USD"); setCashReceiptNotes(""); }}>
                     Record cash receipt
                   </Button>
               ) : undefined}
@@ -3298,265 +3169,62 @@ export default function StaffFinance() {
         })()}
       </PageShell>
 
-      <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Receipt a Policy Payment</DialogTitle>
-          </DialogHeader>
+      <PolicyPremiumReceiptDialog
+        open={showPaymentDialog}
+        onOpenChange={(open) => { setShowPaymentDialog(open); if (!open) resetPaymentForm(); }}
+        policyMode="search"
+        onPolicyResolved={(p) => setPaymentDialogPolicyNumber(p?.policyNumber || "")}
+        getClientLabel={(clientId) => { const c = getClient(clientId); return c ? `${c.firstName} ${c.lastName}` : null; }}
+        currency={paymentCurrency} onCurrencyChange={setPaymentCurrency}
+        enablePaynow isAgent={isAgent}
+        paymentMethod={paymentMethod} onPaymentMethodChange={setPaymentMethod}
+        reference={paymentReference} onReferenceChange={setPaymentReference}
+        notes={paymentNotes} onNotesChange={setPaymentNotes}
+        onSubmitCash={(payload) => createPaymentMutation.mutate({
+          policyId: payload.policyId,
+          clientId: payload.clientId,
+          amount: payload.amount,
+          currency: payload.currency,
+          paymentMethod: "cash",
+          status: "cleared",
+          reference: payload.reference,
+          notes: payload.notes,
+          idempotencyKey: paymentIdempotencyKey,
+        })}
+        isSubmittingCash={createPaymentMutation.isPending}
+        onInitiatePaynow={(ctx) => paynowInitiateMutation.mutateAsync(ctx).catch((e: Error) => ({ message: e.message }))}
+        isInitiatingPaynow={paynowInitiateMutation.isPending}
+        onVerifyOtp={(otp) => paynowOtpMutation.mutateAsync(otp).catch((e: Error) => ({ message: e.message }))}
+        isVerifyingOtp={paynowOtpMutation.isPending}
+        pollStatus={paynowPollData ? { paid: paynowPollData.paid, status: paynowPollData.status } : null}
+        isPolling={paynowPolling}
+        onIsPollingChange={setPaynowPolling}
+        onValidationError={(title, description) => toast({ title, description, variant: "destructive" })}
+        title="Receipt a Policy Payment"
+      />
 
-          <div className="space-y-5">
-            <div>
-              <Label className="text-sm font-medium">Search Policy</Label>
-              <PolicySearchInput
-                value={selectedPolicyId}
-                onChange={(id, p) => {
-                  setSelectedPolicyId(id);
-                  setSelectedPolicy(p ? { id: p.id, policyNumber: p.policyNumber, clientId: p.clientId, status: p.status } : null);
-                }}
-                placeholder="Type policy number or client name..."
-                data-testid="input-policy-search"
-              />
-            </div>
-
-            {receiptDialogPolicy && (
-              <div className="rounded-lg bg-muted/40 border border-dashed p-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="font-mono font-semibold text-sm" data-testid="text-selected-policy">{receiptDialogPolicy.policyNumber}</p>
-                    {getClient(receiptDialogPolicy.clientId) && (
-                      <p className="text-sm text-muted-foreground">
-                        {getClient(receiptDialogPolicy.clientId).firstName} {getClient(receiptDialogPolicy.clientId).lastName}
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <Badge variant={receiptDialogPolicy.status === "active" ? "default" : "secondary"}>{receiptDialogPolicy.status}</Badge>
-                    {receiptDialogPolicy.premiumAmount && (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Premium: {formatAmount(receiptDialogPolicy.premiumAmount, receiptDialogPolicy.premiumCurrency)}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <Separator />
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="amount-auto-from-policy-premium">Amount (auto from policy premium)</Label>
-                <Input id="amount-auto-from-policy-premium"
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  value={receiptDialogPolicy?.premiumAmount ? parseFloat(receiptDialogPolicy.premiumAmount).toFixed(2) : paymentAmount}
-                  readOnly
-                  className="bg-muted cursor-not-allowed"
-                  data-testid="input-payment-amount"
-                />
-              </div>
-              <div>
-                <Label>Currency</Label>
-                <CurrencySelect value={paymentCurrency} onValueChange={setPaymentCurrency} />
-              </div>
-            </div>
-
-            <div>
-              <Label htmlFor="payment-method">Payment Method</Label>
-              <Select value={paymentMethod} onValueChange={setPaymentMethod}>
-                <SelectTrigger id="payment-method" data-testid="select-payment-method"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {!isAgent && <SelectItem value="cash">Cash</SelectItem>}
-                  <SelectItem value="ecocash">EcoCash</SelectItem>
-                  <SelectItem value="onemoney">OneMoney</SelectItem>
-                  <SelectItem value="innbucks">InnBucks</SelectItem>
-                  <SelectItem value="omari">O'Mari</SelectItem>
-                  <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {paynowPhase === "select" && (
-              <>
-                {(paymentMethod === "ecocash" || paymentMethod === "onemoney") && (
-                  <div>
-                    <Label htmlFor="payment-reference">Client's Mobile Number (EcoCash/OneMoney)</Label>
-                    <Input id="payment-reference" placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
-                    <p className="text-xs text-muted-foreground mt-1">EcoCash/OneMoney use USSD — a prompt is sent to this number. The client enters their PIN on their phone (no app push). Use the number registered with EcoCash/OneMoney.</p>
-                  </div>
-                )}
-                {paymentMethod === "innbucks" && (
-                  <div>
-                    <Label htmlFor="payment-reference-2">Client's Mobile Number</Label>
-                    <Input id="payment-reference-2" placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
-                    <p className="text-xs text-muted-foreground mt-1">An authorization code will be generated. The client enters it in their InnBucks app.</p>
-                  </div>
-                )}
-                {paymentMethod === "omari" && (
-                  <div>
-                    <Label htmlFor="payment-reference-3">Client's Mobile Number</Label>
-                    <Input id="payment-reference-3" placeholder="e.g. 0771234567" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
-                    <p className="text-xs text-muted-foreground mt-1">An OTP will be sent via SMS. You will need to enter the OTP the client receives.</p>
-                  </div>
-                )}
-                {paymentMethod === "visa_mastercard" && (
-                  <div>
-                    <Label htmlFor="payment-reference-4">Client's Email Address</Label>
-                    <Input id="payment-reference-4" type="email" placeholder="client@example.com" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
-                    <p className="text-xs text-muted-foreground mt-1">A secure payment page will open where the client enters card details.</p>
-                  </div>
-                )}
-                {paymentMethod === "cash" && (
-                  <div>
-                    <Label htmlFor="payment-reference-5">Notes (optional)</Label>
-                    <Input id="payment-reference-5" placeholder="e.g. Walk-in payment" value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} data-testid="input-payment-reference" />
-                    <p className="text-xs text-muted-foreground mt-1">Receipt number is auto-generated by the system.</p>
-                  </div>
-                )}
-
-                <div>
-                  <Label htmlFor="payment-notes">Notes (optional)</Label>
-                  <Input id="payment-notes" placeholder="Additional notes..." value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} data-testid="input-payment-notes" />
-                </div>
-              </>
-            )}
-
-            {paynowPhase === "waiting" && (
-              <>
-                {paynowInnbucksCode && (
-                  <div className="p-4 rounded-lg border-2 border-blue-300 bg-blue-50 space-y-3">
-                    <p className="font-semibold text-blue-900">InnBucks Authorization Code</p>
-                    <p className="text-3xl font-mono font-bold text-center tracking-widest text-blue-800">{paynowInnbucksCode}</p>
-                    {paynowInnbucksExpiry && <p className="text-xs text-blue-700 text-center">Expires: {paynowInnbucksExpiry}</p>}
-                    <div className="text-sm text-blue-800">
-                      <p className="font-medium">Give this code to the client:</p>
-                      <ol className="list-decimal list-inside space-y-1 mt-1">
-                        <li>Open the <strong>InnBucks</strong> app</li>
-                        <li>Go to <strong>Payments</strong></li>
-                        <li>Enter the code above</li>
-                        <li>Confirm the payment</li>
-                      </ol>
-                    </div>
-                    {paynowPolling && (
-                      <div className="flex items-center justify-center gap-2 text-sm text-blue-700">
-                        <Loader2 className="h-4 w-4 animate-spin" /> Waiting for payment confirmation...
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {paynowNeedsOtp && (
-                  <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 space-y-3">
-                    <p className="font-semibold text-amber-900">Enter O'Mari OTP</p>
-                    <p className="text-sm text-amber-800">Ask the client for the OTP sent to their phone via SMS.</p>
-                    {paynowOtpRef && <p className="text-xs text-amber-700">Reference: {paynowOtpRef}</p>}
-                    <Input
-                      placeholder="Enter OTP"
-                      value={paynowOtp}
-                      onChange={(e) => setPaynowOtp(e.target.value)}
-                      maxLength={10}
-                      className="text-center text-lg font-mono tracking-widest"
-                    />
-                    <Button
-                      className="w-full"
-                      disabled={!paynowOtp || paynowOtp.trim().length < 4 || paynowOtpMutation.isPending}
-                      onClick={() => paynowOtpMutation.mutate()}
-                    >
-                      {paynowOtpMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                      Verify OTP
-                    </Button>
-                  </div>
-                )}
-
-                {!paynowInnbucksCode && !paynowNeedsOtp && paynowPolling && (
-                  <div className="p-4 rounded-lg border-2 border-green-300 bg-green-50 space-y-3 text-center">
-                    <Loader2 className="h-8 w-8 animate-spin mx-auto text-green-700" />
-                    <p className="font-semibold text-green-900">
-                      {paymentMethod === "visa_mastercard" ? "Waiting for card payment..." : "Waiting for client to approve on their phone..."}
-                    </p>
-                    <p className="text-sm text-green-800">
-                      {paymentMethod === "visa_mastercard"
-                        ? "The client should complete payment in the card payment page that was opened."
-                        : "EcoCash/OneMoney use USSD — the client should see a prompt on their phone to enter their PIN. If nothing appears within 30 seconds, check the mobile number is correct (e.g. 0771234567) and try again."}
-                    </p>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          <DialogFooter className="mt-2">
-            <Button variant="outline" onClick={() => { setShowPaymentDialog(false); resetPaymentForm(); }}>Cancel</Button>
-            {paynowPhase === "select" && (
-              <Button
-                onClick={handleSubmitPayment}
-                disabled={
-                  !receiptDialogPolicy ||
-                  (!receiptDialogPolicy?.premiumAmount && !paymentAmount) ||
-                  createPaymentMutation.isPending ||
-                  paynowInitiateMutation.isPending ||
-                  (["ecocash", "onemoney"].includes(paymentMethod) && (!paymentReference || paymentReference.trim().replace(/\D/g, "").length < 9))
-                }
-                data-testid="button-submit-payment"
-              >
-                {(createPaymentMutation.isPending || paynowInitiateMutation.isPending) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                <Receipt className="h-4 w-4 mr-2" />
-                {paymentMethod === "cash" ? "Record Payment & Generate Receipt" : "Send Payment Request"}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showCashReceiptDialog} onOpenChange={setShowCashReceiptDialog}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Record cash receipt</DialogTitle>
-            <p className="text-sm text-muted-foreground">Record a manual cash payment and generate a receipt (no Paynow).</p>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Policy</Label>
-              <PolicySearchInput
-                value={cashReceiptSelectedPolicyId}
-                onChange={(id) => {
-                  setCashReceiptSelectedPolicyId(id);
-                  setCashReceiptSelectedPolicy(id ? { id } : null);
-                }}
-                placeholder="Search by policy number or client..."
-              />
-              {cashReceiptDialogPolicy && <p className="text-xs text-muted-foreground mt-1">Selected: {cashReceiptDialogPolicy.policyNumber}</p>}
-            </div>
-            <div>
-              <Label htmlFor="amount-auto-from-policy-premium-2">Amount (auto from policy premium)</Label>
-              <Input id="amount-auto-from-policy-premium-2" type="number" step="0.01" placeholder="0.00" value={cashReceiptDialogPolicy?.premiumAmount ? parseFloat(cashReceiptDialogPolicy.premiumAmount).toFixed(2) : cashReceiptAmount} readOnly className="bg-muted cursor-not-allowed" />
-            </div>
-            <div>
-              <Label>Currency</Label>
-              <CurrencySelect value={cashReceiptCurrency} onValueChange={setCashReceiptCurrency} />
-            </div>
-            <div>
-              <Label htmlFor="cash-receipt-notes">Notes (optional)</Label>
-              <Input id="cash-receipt-notes" placeholder="e.g. Cash at branch" value={cashReceiptNotes} onChange={(e) => setCashReceiptNotes(e.target.value)} />
-            </div>
-            <div>
-              <Label htmlFor="cash-receipt-received-at">Received at</Label>
-              <Input id="cash-receipt-received-at" type="datetime-local" value={cashReceiptReceivedAt} onChange={(e) => setCashReceiptReceivedAt(e.target.value)} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCashReceiptDialog(false)}>Cancel</Button>
-            <Button
-              disabled={!cashReceiptDialogPolicy || (!cashReceiptDialogPolicy.premiumAmount && (!cashReceiptAmount || parseFloat(cashReceiptAmount) <= 0)) || cashReceiptMutation.isPending}
-              onClick={() => cashReceiptMutation.mutate()}
-            >
-              {cashReceiptMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Record & generate receipt
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PolicyPremiumReceiptDialog
+        open={showCashReceiptDialog}
+        onOpenChange={setShowCashReceiptDialog}
+        policyMode="search"
+        policySearchPlaceholder="Search by policy number or client..."
+        policySummaryVariant="compact"
+        currency={cashReceiptCurrency} onCurrencyChange={setCashReceiptCurrency}
+        enablePaynow={false}
+        paymentMethod="cash" onPaymentMethodChange={() => {}}
+        reference="" onReferenceChange={() => {}}
+        notes={cashReceiptNotes} onNotesChange={setCashReceiptNotes}
+        receivedAt={cashReceiptReceivedAt} onReceivedAtChange={setCashReceiptReceivedAt}
+        onSubmitCash={(payload) => cashReceiptMutation.mutate({
+          policyId: payload.policyId, amount: payload.amount, currency: payload.currency,
+          notes: payload.notes, receivedAt: payload.receivedAt,
+        })}
+        isSubmittingCash={cashReceiptMutation.isPending}
+        title="Record cash receipt"
+        description="Record a manual cash payment and generate a receipt (no Paynow)."
+        submitLabel={{ cash: "Record & generate receipt" }}
+        submitIcon={null}
+      />
 
       <Dialog open={showRequisitionDialog} onOpenChange={(open) => { setShowRequisitionDialog(open); if (!open) resetRequisitionForm(); }}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">

@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ClientSearchInput } from "@/components/client-search-input";
 import { CurrencySelect } from "@/components/currency-select";
+import { PolicyPremiumReceiptDialog } from "@/components/policy-premium-receipt-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -66,11 +67,6 @@ function getStatusColor(status: string) {
     case "cancelled": return "bg-gray-500/15 text-gray-600 border-gray-200";
     default: return "bg-muted text-muted-foreground";
   }
-}
-
-function isPaynowPaidLike(s: string) {
-  const l = s.toLowerCase();
-  return l === "paid" || l === "sent" || l === "awaiting delivery" || l === "delivered";
 }
 
 const NATIONAL_ID_REGEX = /^\d+[A-Z]\d{2}$/;
@@ -138,12 +134,6 @@ export default function StaffPolicies() {
   const [pnPolling, setPnPolling] = useState(false);
   const [pnPollStartTime, setPnPollStartTime] = useState<number>(0);
   const [pnPollError, setPnPollError] = useState<string | null>(null);
-  const [pnInnbucksCode, setPnInnbucksCode] = useState("");
-  const [pnInnbucksExpiry, setPnInnbucksExpiry] = useState("");
-  const [pnNeedsOtp, setPnNeedsOtp] = useState(false);
-  const [pnOtpRef, setPnOtpRef] = useState("");
-  const [pnOtp, setPnOtp] = useState("");
-  const [pnPhase, setPnPhase] = useState<"select" | "waiting">("select");
   const [showEstatementViewer, setShowEstatementViewer] = useState(false);
   const [estatementViewerUrl, setEstatementViewerUrl] = useState<string>("");
   const [showPolicyDocViewer, setShowPolicyDocViewer] = useState(false);
@@ -1290,8 +1280,6 @@ export default function StaffPolicies() {
 
   const resetPnState = () => {
     setPnIntentId(null); setPnPolling(false); setPnPollStartTime(0); setPnPollError(null);
-    setPnInnbucksCode(""); setPnInnbucksExpiry("");
-    setPnNeedsOtp(false); setPnOtpRef(""); setPnOtp(""); setPnPhase("select");
     setInPolicyReceiptMethod("cash"); setInPolicyReceiptRef(""); setInPolicyReceiptNotes(""); setInPolicyReceiptMonths(1);
     setInPolicyReceiptAmountOverride(null); setInPolicyReceiptSubmitterNote("");
     setInPolicyReceiptIdempotencyKey(crypto.randomUUID());
@@ -1324,64 +1312,60 @@ export default function StaffPolicies() {
   });
 
   const pnInitiateMutation = useMutation({
-    mutationFn: async () => {
-      const dp = displayPolicy;
-      if (!dp) throw new Error("No policy");
-      const amt = dp.premiumAmount ? (parseFloat(dp.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0";
+    mutationFn: async (ctx: { policyId: string; clientId?: string; amount: string; currency: string; method: string; reference: string }) => {
       const intentRes = await apiRequest("POST", "/api/payment-intents", {
-        policyId: selectedPolicy.id, clientId: dp.clientId, amount: amt, currency: inPolicyReceiptCurrency, purpose: "premium",
+        policyId: ctx.policyId, clientId: ctx.clientId, amount: ctx.amount, currency: ctx.currency, purpose: "premium",
       });
       const intent = await intentRes.json();
       if (intent.message) throw new Error(intent.message);
+      setPnIntentId(intent.id);
+      setPnPollStartTime(Date.now());
+      setPnPollError(null);
       const initRes = await apiRequest("POST", `/api/payment-intents/${intent.id}/initiate`, {
-        method: inPolicyReceiptMethod,
-        payerPhone: ["ecocash", "onemoney", "innbucks", "omari"].includes(inPolicyReceiptMethod) ? inPolicyReceiptRef : undefined,
-        payerEmail: inPolicyReceiptMethod === "visa_mastercard" ? inPolicyReceiptRef : undefined,
+        method: ctx.method,
+        payerPhone: ["ecocash", "onemoney", "innbucks", "omari"].includes(ctx.method) ? ctx.reference : undefined,
+        payerEmail: ctx.method === "visa_mastercard" ? ctx.reference : undefined,
       });
-      return { intentId: intent.id as string, initData: await initRes.json() as {
+      const data = await initRes.json() as {
         redirectUrl?: string; pollUrl?: string; message?: string;
         innbucksCode?: string; innbucksExpiry?: string;
         omariOtpReference?: string; needsOtp?: boolean;
-      } };
-    },
-    onSuccess: (data) => {
-      setPnIntentId(data.intentId);
-      const initData = data.initData;
-      if (initData.message) { toast({ title: "Error", description: initData.message, variant: "destructive" }); return; }
-      setPnPhase("waiting");
-      setPnPollStartTime(Date.now());
-      setPnPollError(null);
-      if (inPolicyReceiptMethod === "innbucks" && initData.innbucksCode) {
-        setPnInnbucksCode(initData.innbucksCode); setPnInnbucksExpiry(initData.innbucksExpiry || ""); setPnPolling(true);
-        toast({ title: "InnBucks code ready" }); return;
+      };
+      if (data.message) {
+        toast({ title: "Error", description: data.message, variant: "destructive" });
+      } else if (ctx.method === "innbucks" && data.innbucksCode) {
+        toast({ title: "InnBucks code ready" });
+      } else if (ctx.method === "omari" && data.needsOtp) {
+        toast({ title: "OTP sent", description: "Ask the client for the OTP." });
+      } else if (data.redirectUrl) {
+        window.open(data.redirectUrl, "_blank");
+        toast({ title: "Card payment page opened" });
+      } else {
+        toast({ title: "USSD sent", description: "Client should receive a prompt on their phone." });
       }
-      if (inPolicyReceiptMethod === "omari" && initData.needsOtp) {
-        setPnNeedsOtp(true); setPnOtpRef(initData.omariOtpReference || "");
-        toast({ title: "OTP sent", description: "Ask the client for the OTP." }); return;
-      }
-      if (initData.redirectUrl) { window.open(initData.redirectUrl, "_blank"); setPnPolling(true); toast({ title: "Card payment page opened" }); return; }
-      setPnPolling(true);
-      toast({ title: "USSD sent", description: "Client should receive a prompt on their phone." });
+      return data;
     },
     onError: (e: Error) => toast({ title: "Payment failed", description: e.message, variant: "destructive" }),
   });
 
   const pnOtpMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (otp: string) => {
       if (!pnIntentId) throw new Error("No intent");
-      const res = await apiRequest("POST", `/api/payment-intents/${pnIntentId}/otp`, { otp: pnOtp });
-      return res.json() as Promise<{ paid?: boolean; message?: string }>;
-    },
-    onSuccess: (data) => {
-      if (data.message) { toast({ title: "OTP error", description: data.message, variant: "destructive" }); return; }
-      if (data.paid) {
+      const res = await apiRequest("POST", `/api/payment-intents/${pnIntentId}/otp`, { otp });
+      const data = await res.json() as { paid?: boolean; message?: string };
+      if (data.message) {
+        toast({ title: "OTP error", description: data.message, variant: "destructive" });
+      } else if (data.paid) {
         queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
         queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
         if (selectedPolicy) queryClient.invalidateQueries({ queryKey: ["/api/policies", selectedPolicy.id, "receipts"] });
         setShowInPolicyReceiptDialog(false); resetPnState();
         setReceiptSuccessData({ paynow: true, policyId: selectedPolicy?.id, policyNumber: displayPolicy?.policyNumber });
         setShowReceiptSuccess(true);
-      } else { setPnPolling(true); setPnNeedsOtp(false); toast({ title: "OTP accepted", description: "Processing..." }); }
+      } else {
+        toast({ title: "OTP accepted", description: "Processing..." });
+      }
+      return data;
     },
     onError: (e: Error) => toast({ title: "OTP failed", description: e.message, variant: "destructive" }),
   });
@@ -3337,230 +3321,49 @@ export default function StaffPolicies() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={showInPolicyReceiptDialog} onOpenChange={(open) => { setShowInPolicyReceiptDialog(open); if (!open) resetPnState(); }}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Receipt Payment</DialogTitle>
-              <DialogDescription>
-                Record a payment for policy <strong>{displayPolicy.policyNumber}</strong>
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <Label className="text-xs" htmlFor="months">Months</Label>
-                  <Select value={String(inPolicyReceiptMonths)} onValueChange={(v) => setInPolicyReceiptMonths(Number(v))} disabled={pnPhase !== "select"}>
-                    <SelectTrigger id="months"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                        <SelectItem key={m} value={String(m)}>{m} {m === 1 ? "month" : "months"}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label className="text-xs">Amount</Label>
-                  <Input
-                    type="number"
-                    value={inPolicyReceiptAmountOverride ?? (displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0.00")}
-                    onChange={canEditPremium ? (e) => setInPolicyReceiptAmountOverride(e.target.value) : undefined}
-                    readOnly={!canEditPremium}
-                    className={!canEditPremium ? "bg-muted cursor-not-allowed" : undefined}
-                    data-testid="input-in-policy-receipt-amount"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs">Currency</Label>
-                  <CurrencySelect value={inPolicyReceiptCurrency} onValueChange={setInPolicyReceiptCurrency} />
-                </div>
-              </div>
-              {(() => {
-                const systemAmount = displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths : 0;
-                const enteredAmount = inPolicyReceiptAmountOverride != null ? parseFloat(inPolicyReceiptAmountOverride) : systemAmount;
-                const isOverridden = canEditPremium && Number.isFinite(enteredAmount) && Math.abs(enteredAmount - systemAmount) >= 0.01;
-                if (!isOverridden) return null;
-                return (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 space-y-2">
-                    <p className="text-sm font-medium text-amber-800 dark:text-amber-400">
-                      Amount differs from system premium ({inPolicyReceiptCurrency} {systemAmount.toFixed(2)}) — this receipt will be held for approval and won't apply to the policy until approved.
-                    </p>
-                    <div className="space-y-1">
-                      <Label className="text-xs" htmlFor="in-policy-receipt-submitter-note">Notes for approver *</Label>
-                      <Textarea id="in-policy-receipt-submitter-note" value={inPolicyReceiptSubmitterNote} onChange={(e) => setInPolicyReceiptSubmitterNote(e.target.value)}
-                        placeholder="Explain why this amount differs from the system premium..." rows={2} className="text-sm" data-testid="textarea-in-policy-submitter-note" />
-                    </div>
-                  </div>
-                );
-              })()}
-              {inPolicyReceiptMonths > 1 && (
-                <p className="text-xs text-muted-foreground">
-                  {inPolicyReceiptMonths}× premium of {inPolicyReceiptCurrency} {displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount).toFixed(2) : "0.00"} = <strong>{inPolicyReceiptCurrency} {displayPolicy.premiumAmount ? (parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths).toFixed(2) : "0.00"}</strong>
-                </p>
-              )}
-              <div>
-                <Label className="text-xs" htmlFor="in-policy-receipt-method">Payment Method</Label>
-                <Select value={inPolicyReceiptMethod} onValueChange={setInPolicyReceiptMethod}>
-                  <SelectTrigger id="in-policy-receipt-method"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {!isAgent && <SelectItem value="cash">Cash</SelectItem>}
-                    <SelectItem value="ecocash">EcoCash</SelectItem>
-                    <SelectItem value="onemoney">OneMoney</SelectItem>
-                    <SelectItem value="innbucks">InnBucks</SelectItem>
-                    <SelectItem value="omari">O'Mari</SelectItem>
-                    <SelectItem value="visa_mastercard">Visa / Mastercard</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {pnPhase === "select" && (
-                <>
-                  {(inPolicyReceiptMethod === "ecocash" || inPolicyReceiptMethod === "onemoney") && (
-                    <div>
-                      <Label className="text-xs" htmlFor="in-policy-receipt-ref">Client's Mobile Number (EcoCash/OneMoney)</Label>
-                      <Input id="in-policy-receipt-ref" placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
-                      <p className="text-xs text-muted-foreground mt-1">EcoCash uses USSD — a prompt is sent to this number. The client enters their PIN on their phone (no app push). Use the number registered with EcoCash/OneMoney.</p>
-                    </div>
-                  )}
-                  {inPolicyReceiptMethod === "innbucks" && (
-                    <div>
-                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-2">Client's Mobile Number</Label>
-                      <Input id="in-policy-receipt-ref-2" placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
-                      <p className="text-xs text-muted-foreground mt-1">An authorization code will be generated for the InnBucks app.</p>
-                    </div>
-                  )}
-                  {inPolicyReceiptMethod === "omari" && (
-                    <div>
-                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-3">Client's Mobile Number</Label>
-                      <Input id="in-policy-receipt-ref-3" placeholder="e.g. 0771234567" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
-                      <p className="text-xs text-muted-foreground mt-1">An OTP will be sent via SMS. You'll enter it here.</p>
-                    </div>
-                  )}
-                  {inPolicyReceiptMethod === "visa_mastercard" && (
-                    <div>
-                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-4">Client's Email Address</Label>
-                      <Input id="in-policy-receipt-ref-4" type="email" placeholder="client@example.com" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
-                      <p className="text-xs text-muted-foreground mt-1">A secure card payment page will open.</p>
-                    </div>
-                  )}
-                  {inPolicyReceiptMethod === "cash" && (
-                    <div>
-                      <Label className="text-xs" htmlFor="in-policy-receipt-ref-5">Notes (optional)</Label>
-                      <Input id="in-policy-receipt-ref-5" placeholder="e.g. Walk-in payment" value={inPolicyReceiptRef} onChange={(e) => setInPolicyReceiptRef(e.target.value)} />
-                      <p className="text-xs text-muted-foreground mt-1">Receipt number is auto-generated.</p>
-                    </div>
-                  )}
-                  <div>
-                    <Label className="text-xs" htmlFor="in-policy-receipt-notes">Notes (optional)</Label>
-                    <Input id="in-policy-receipt-notes" placeholder="Additional notes..." value={inPolicyReceiptNotes} onChange={(e) => setInPolicyReceiptNotes(e.target.value)} />
-                  </div>
-                </>
-              )}
-
-              {pnPhase === "waiting" && (
-                <>
-                  {pnInnbucksCode && (
-                    <div className="p-4 rounded-lg border-2 border-blue-300 bg-blue-50 space-y-3">
-                      <p className="font-semibold text-blue-900">InnBucks Authorization Code</p>
-                      <p className="text-3xl font-mono font-bold text-center tracking-widest text-blue-800">{pnInnbucksCode}</p>
-                      {pnInnbucksExpiry && <p className="text-xs text-blue-700 text-center">Expires: {pnInnbucksExpiry}</p>}
-                      <p className="text-sm text-blue-800">Give this code to the client. They open InnBucks app and enter it.</p>
-                      {pnPolling && <div className="flex items-center justify-center gap-2 text-sm text-blue-700"><Loader2 className="h-4 w-4 animate-spin" /> Waiting for confirmation...</div>}
-                    </div>
-                  )}
-                  {pnNeedsOtp && (
-                    <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 space-y-3">
-                      <p className="font-semibold text-amber-900">Enter O'Mari OTP</p>
-                      <p className="text-sm text-amber-800">Ask the client for the OTP sent to their phone.</p>
-                      {pnOtpRef && <p className="text-xs text-amber-700">Reference: {pnOtpRef}</p>}
-                      <Input placeholder="Enter OTP" value={pnOtp} onChange={(e) => setPnOtp(e.target.value)} maxLength={10} className="text-center text-lg font-mono tracking-widest" />
-                      <Button className="w-full" disabled={!pnOtp || pnOtp.trim().length < 4 || pnOtpMutation.isPending} onClick={() => pnOtpMutation.mutate()}>
-                        {pnOtpMutation.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />} Verify OTP
-                      </Button>
-                    </div>
-                  )}
-                  {!pnInnbucksCode && !pnNeedsOtp && pnPolling && (
-                    <div className="p-4 rounded-lg border-2 border-green-300 bg-green-50 space-y-3 text-center">
-                      <Loader2 className="h-8 w-8 animate-spin mx-auto text-green-700" />
-                      <p className="font-semibold text-green-900">
-                        {pnPollData?.paynowStatus && isPaynowPaidLike(pnPollData.paynowStatus)
-                          ? "Payment received — recording transaction..."
-                          : inPolicyReceiptMethod === "visa_mastercard" ? "Waiting for card payment..." : "Waiting for client approval..."}
-                      </p>
-                      <p className="text-sm text-green-800">
-                        {pnPollData?.paynowStatus && isPaynowPaidLike(pnPollData.paynowStatus)
-                          ? "The payment gateway confirmed receipt. Finalising your receipt now..."
-                          : inPolicyReceiptMethod === "visa_mastercard"
-                            ? "Client should complete payment in the card page."
-                            : "EcoCash/OneMoney use USSD — the client should see a prompt on their phone to enter their PIN. If nothing appears within 30 seconds, check the mobile number is correct (e.g. 0771234567) and try again."}
-                      </p>
-                      {pnPollError && (
-                        <p className="text-xs text-amber-700 mt-1">{pnPollError}</p>
-                      )}
-                    </div>
-                  )}
-                  {!pnInnbucksCode && !pnNeedsOtp && !pnPolling && pnPhase === "waiting" && (
-                    <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 space-y-3 text-center">
-                      <p className="font-semibold text-amber-900">Confirmation timed out</p>
-                      <p className="text-sm text-amber-800">
-                        If the money was deducted, the payment will be recorded automatically once the gateway confirms. You can close this dialog and check back shortly.
-                      </p>
-                      <Button variant="outline" size="sm" onClick={() => { setPnPolling(true); setPnPollStartTime(Date.now()); setPnPollError(null); }}>
-                        Retry polling
-                      </Button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => { setShowInPolicyReceiptDialog(false); resetPnState(); }}>Cancel</Button>
-              {pnPhase === "select" && (
-                <Button
-                  onClick={() => {
-                    const paynowMethods = ["ecocash", "onemoney", "innbucks", "omari", "visa_mastercard"];
-                    if (inPolicyReceiptMethod === "cash") {
-                      const systemAmount = displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths : 0;
-                      const finalAmount = inPolicyReceiptAmountOverride != null ? parseFloat(inPolicyReceiptAmountOverride) : systemAmount;
-                      inPolicyReceiptMutation.mutate({
-                        policyId: selectedPolicy.id,
-                        clientId: displayPolicy.clientId,
-                        amount: Number.isFinite(finalAmount) ? finalAmount.toFixed(2) : systemAmount.toFixed(2),
-                        months: inPolicyReceiptMonths,
-                        currency: inPolicyReceiptCurrency,
-                        paymentMethod: inPolicyReceiptMethod,
-                        status: "cleared",
-                        reference: inPolicyReceiptRef || undefined,
-                        notes: inPolicyReceiptNotes || undefined,
-                        submitterNote: inPolicyReceiptSubmitterNote.trim() || undefined,
-                        idempotencyKey: inPolicyReceiptIdempotencyKey,
-                      });
-                    } else if (paynowMethods.includes(inPolicyReceiptMethod)) {
-                      if (!inPolicyReceiptRef || inPolicyReceiptRef.trim().length < 5) {
-                        const label = inPolicyReceiptMethod === "visa_mastercard" ? "email" : "mobile number";
-                        toast({ title: `Enter ${label}`, variant: "destructive" });
-                        return;
-                      }
-                      pnInitiateMutation.mutate();
-                    }
-                  }}
-                  disabled={
-                    !displayPolicy.premiumAmount ||
-                    inPolicyReceiptMutation.isPending ||
-                    pnInitiateMutation.isPending ||
-                    (["ecocash", "onemoney"].includes(inPolicyReceiptMethod) && (!inPolicyReceiptRef || inPolicyReceiptRef.trim().replace(/\D/g, "").length < 9)) ||
-                    (canEditPremium && inPolicyReceiptMethod === "cash" && inPolicyReceiptAmountOverride != null &&
-                      Math.abs(parseFloat(inPolicyReceiptAmountOverride) - (displayPolicy.premiumAmount ? parseFloat(displayPolicy.premiumAmount) * inPolicyReceiptMonths : 0)) >= 0.01 &&
-                      !inPolicyReceiptSubmitterNote.trim())
-                  }
-                >
-                  {(inPolicyReceiptMutation.isPending || pnInitiateMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  <Receipt className="h-4 w-4 mr-2" />
-                  {inPolicyReceiptMethod === "cash" ? "Record Payment" : "Send Payment Request"}
-                </Button>
-              )}
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <PolicyPremiumReceiptDialog
+          open={showInPolicyReceiptDialog}
+          onOpenChange={(open) => { setShowInPolicyReceiptDialog(open); if (!open) resetPnState(); }}
+          policyMode="fixed"
+          policy={displayPolicy}
+          policySummaryVariant="none"
+          currency={inPolicyReceiptCurrency} onCurrencyChange={setInPolicyReceiptCurrency}
+          months={inPolicyReceiptMonths} onMonthsChange={setInPolicyReceiptMonths} showMonths
+          allowAmountOverride={canEditPremium}
+          amountOverride={inPolicyReceiptAmountOverride} onAmountOverrideChange={setInPolicyReceiptAmountOverride}
+          submitterNote={inPolicyReceiptSubmitterNote} onSubmitterNoteChange={setInPolicyReceiptSubmitterNote}
+          enablePaynow isAgent={isAgent}
+          paymentMethod={inPolicyReceiptMethod} onPaymentMethodChange={setInPolicyReceiptMethod}
+          reference={inPolicyReceiptRef} onReferenceChange={setInPolicyReceiptRef}
+          notes={inPolicyReceiptNotes} onNotesChange={setInPolicyReceiptNotes}
+          onSubmitCash={(payload) => inPolicyReceiptMutation.mutate({
+            policyId: payload.policyId,
+            clientId: payload.clientId,
+            amount: payload.amount,
+            months: payload.months,
+            currency: payload.currency,
+            paymentMethod: inPolicyReceiptMethod,
+            status: "cleared",
+            reference: payload.reference,
+            notes: payload.notes,
+            submitterNote: payload.submitterNote,
+            idempotencyKey: inPolicyReceiptIdempotencyKey,
+          })}
+          isSubmittingCash={inPolicyReceiptMutation.isPending}
+          onInitiatePaynow={(ctx) => pnInitiateMutation.mutateAsync(ctx).catch((e: Error) => ({ message: e.message }))}
+          isInitiatingPaynow={pnInitiateMutation.isPending}
+          onVerifyOtp={(otp) => pnOtpMutation.mutateAsync(otp).catch((e: Error) => ({ message: e.message }))}
+          isVerifyingOtp={pnOtpMutation.isPending}
+          pollStatus={pnPollData ? { paid: pnPollData.paid, status: pnPollData.status, error: pnPollError ?? undefined, paynowStatus: pnPollData.paynowStatus } : null}
+          isPolling={pnPolling}
+          onIsPollingChange={setPnPolling}
+          pollTimedOut={!pnPolling && pnPollStartTime > 0}
+          onRetryPolling={() => { setPnPolling(true); setPnPollStartTime(Date.now()); setPnPollError(null); }}
+          onValidationError={(title, description) => toast({ title, description, variant: "destructive" })}
+          title="Receipt Payment"
+          description={<>Record a payment for policy <strong>{displayPolicy.policyNumber}</strong></>}
+          submitLabel={{ cash: "Record Payment" }}
+        />
 
         {/* Send Payment Link */}
         <Dialog open={showPaymentLinkDialog} onOpenChange={(open) => { setShowPaymentLinkDialog(open); if (!open) setGeneratedPaymentLink(null); }}>
