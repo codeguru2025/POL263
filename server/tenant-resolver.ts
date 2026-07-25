@@ -4,9 +4,11 @@
  * Resolves which tenant owns an incoming request and sets req.tenantId.
  * Resolution order (first match wins):
  *   1. X-Tenant-ID header   — internal/mobile calls that already know the tenant
- *   2. Subdomain            — acme.pol263.app → slug "acme"
- *   3. Custom domain        — portal.acme.co.zw → looked up in tenant_domains
- *   4. Authenticated session — req.user.organizationId (fallback for existing sessions)
+ *   2. Platform-admin host — controlpanel.pol263.app → sets req.isPlatformAdminHost,
+ *                             never resolves a tenant (dedicated platform-owner entry point)
+ *   3. Subdomain            — acme.pol263.app → slug "acme"
+ *   4. Custom domain        — portal.acme.co.zw → looked up in tenant_domains
+ *   5. Authenticated session — req.user.organizationId (fallback for existing sessions)
  *
  * This middleware NEVER blocks a request — routes that require a tenant call
  * requireTenant() themselves.
@@ -87,8 +89,15 @@ export async function tenantResolverMiddleware(
 
     const host = req.hostname?.toLowerCase();
     const BASE_DOMAIN = (process.env.APP_BASE_DOMAIN || "localhost").toLowerCase();
+    const PLATFORM_ADMIN_SUBDOMAIN = (process.env.PLATFORM_ADMIN_SUBDOMAIN || "controlpanel").toLowerCase();
 
-    // 2. Subdomain resolution
+    // 2. Platform-admin host — dedicated control-plane entry point, never resolves a tenant.
+    if (PLATFORM_ADMIN_SUBDOMAIN && host === `${PLATFORM_ADMIN_SUBDOMAIN}.${BASE_DOMAIN}`) {
+      (req as any).isPlatformAdminHost = true;
+      return next();
+    }
+
+    // 3. Subdomain resolution
     if (host && host !== BASE_DOMAIN && host.endsWith(`.${BASE_DOMAIN}`)) {
       const slug = host.slice(0, -(BASE_DOMAIN.length + 1));
       if (slug) {
@@ -100,7 +109,7 @@ export async function tenantResolverMiddleware(
       }
     }
 
-    // 3. Custom domain lookup (not the base domain itself)
+    // 4. Custom domain lookup (not the base domain itself)
     if (host && host !== BASE_DOMAIN && host !== `www.${BASE_DOMAIN}`) {
       const tenantId = await resolveByDomain(host);
       if (tenantId) {
@@ -109,7 +118,7 @@ export async function tenantResolverMiddleware(
       }
     }
 
-    // 4. Authenticated session fallback (existing sessions before domain routing)
+    // 5. Authenticated session fallback (existing sessions before domain routing)
     const user = (req as any).user;
     if (user?.organizationId) {
       (req as any).tenantId = user.organizationId;

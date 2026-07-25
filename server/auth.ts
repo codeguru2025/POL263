@@ -492,6 +492,20 @@ export function setupAuth(app: Express) {
             return res.redirect(homeWithReturn);
           }
 
+          // If the platform owner logged in NOT via a tenant subdomain (authTenantId unset,
+          // handled above) and isn't already on the dedicated control-plane subdomain, send
+          // them there. Mirrors the regular-staff → tenant-subdomain redirect just below, but
+          // for the platform owner — keeps pol263.com from serving the platform console too.
+          if (loggedInUser?.isPlatformOwner && baseUrl) {
+            const mainHost = new URL(baseUrl).hostname;
+            const adminSub = (process.env.PLATFORM_ADMIN_SUBDOMAIN || "controlpanel").toLowerCase();
+            const currentHost = req.get("host")?.split(":")[0]?.toLowerCase();
+            if (currentHost !== `${adminSub}.${mainHost}`) {
+              const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || "https";
+              return res.redirect(`${proto}://${adminSub}.${mainHost}/?returnTo=${encodeURIComponent(staffPath)}`);
+            }
+          }
+
           // If a regular staff member logged in from the main domain (no authTenantId
           // means they didn't come via a tenant subdomain), redirect them to their
           // tenant's subdomain. This prevents pol263.com from serving tenant dashboards

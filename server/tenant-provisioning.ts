@@ -19,6 +19,7 @@ import { seedTenantBranding } from "./tenant-branding-config";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { ROLE_PERMISSION_MAP } from "./constants";
+import { isReservedTenantSlug } from "./tenant-slug-policy";
 import type { Organization } from "@shared/schema";
 
 /** URL-safe slug for subdomain routing (tenant-resolver.ts), unique in the control plane. */
@@ -31,6 +32,11 @@ export async function generateUniqueTenantSlug(orgName: string): Promise<string>
   let candidate = base;
   let suffix = 1;
   while (true) {
+    if (isReservedTenantSlug(candidate)) {
+      suffix += 1;
+      candidate = `${base}-${suffix}`;
+      continue;
+    }
     const [existing] = await cpDb.select({ id: cpTenants.id }).from(cpTenants).where(eq(cpTenants.slug, candidate)).limit(1);
     if (!existing) return candidate;
     suffix += 1;

@@ -48,6 +48,7 @@ import * as objectStorage from "./object-storage";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS } from "./constants";
+import { isReservedTenantSlug } from "./tenant-slug-policy";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
@@ -1396,6 +1397,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (isPlatformOwner && key === "name") {
         sanitizedOrg.name = value;
         sanitizedTenant.name = value;
+      } else if (isPlatformOwner && key === "slug") {
+        const candidate = String(value).trim().toLowerCase();
+        if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(candidate) || isReservedTenantSlug(candidate)) {
+          return res.status(400).json({ message: `"${candidate}" is not a valid or available organisation slug.` });
+        }
+        sanitizedTenant.slug = candidate;
       } else if (isPlatformOwner && PLATFORM_ONLY_TENANT_REGISTRY_FIELDS.has(key)) {
         sanitizedTenant[key] = value;
       } else {
@@ -9748,6 +9755,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Returns the tenant the request is scoped to, based on subdomain/custom domain.
   // Used by the frontend to detect which tenant subdomain it's running on.
   app.get("/api/public/tenant-context", async (req, res) => {
+    if ((req as any).isPlatformAdminHost) return res.json({ isPlatformAdminHost: true });
     const tenantId = (req as any).tenantId as string | undefined;
     if (!tenantId) return res.json(null);
     try {
