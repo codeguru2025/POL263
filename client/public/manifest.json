@@ -5,18 +5,12 @@
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a0a0a",
-  "theme_color": "#0d9488",
+  "theme_color": "#0283b4",
   "orientation": "any",
   "icons": [
     {
-      "src": "/assets/logo.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/assets/logo.png",
-      "sizes": "512x512",
+      "src": "/favicon.png",
+      "sizes": "269x269",
       "type": "image/png",
       "purpose": "any maskable"
     }
