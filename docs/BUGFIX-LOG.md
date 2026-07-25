@@ -10,6 +10,64 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-25 — Backup Sync Health showing "Partial", 0 rows/0 tables, 100+ errors every night since 2026-07-14
+
+- **Symptom:** the platform-owner dashboard's Backup Sync Health panel showed every nightly
+  run as "Partial" with `totalRows: 0`, `tableCount: 0`, and an error count slowly climbing
+  (100 → 113 over 2026-07-19 through 2026-07-25) — i.e. the daily Supabase mirror has been
+  completely non-functional, every single run, for at least a week.
+- **Root cause:** confirmed by reading the actual stored `errors` array on `backup_sync_runs`
+  (not just the dashboard's truncated count) — every single table, across all three source
+  databases, fails with the identical `self-signed certificate in certificate chain` on the
+  upsert step into the Supabase backup pool. This is the exact same root cause already
+  diagnosed and left unresolved in the 2026-07-14 entry below: `getBackupPool()`
+  (`server/backup-sync.ts`) only ever read `SUPABASE_BACKUP_URL`, Supabase's Supavisor/pgbouncer
+  *pooler* endpoint (port 6543). Reproduced connecting to that same pooler URL, with the exact
+  same `ssl: { rejectUnauthorized: false }` config, from this machine (works cleanly) and could
+  not reproduce the failure outside DigitalOcean's network — confirming (again) it's a TLS
+  chain quirk specific to that pooler endpoint reachable only from DO's egress path, not a
+  code defect on its face. The missing piece the 2026-07-14 entry didn't have: `script/
+  full-sync-to-supabase.ts` (the manual equivalent of this job) already works around exactly
+  this by preferring `SUPABASE_BACKUP_DIRECT_URL` (direct port 5432) over `SUPABASE_BACKUP_URL`
+  — that env var was already provisioned for this purpose and sitting unused by the scheduled
+  job.
+- **Fix:** `getSupabaseUrl()` in `server/backup-sync.ts` now prefers `SUPABASE_BACKUP_DIRECT_URL`
+  and falls back to `SUPABASE_BACKUP_URL` only if the direct URL isn't set — bringing the
+  scheduled job in line with the manual script's already-working pattern. Also a better fit
+  independent of the TLS issue: this job holds a handful of long-lived connections for one run
+  a day and issues DDL (`reconcileSchemaForSource`), none of which benefits from a transaction
+  pooler designed for high-churn short connections.
+- **Verified:** confirmed the direct URL connects cleanly from this machine and that
+  `getSupabaseUrl()` now returns it when set; type-checked clean. **Could not verify this
+  resolves the actual production failure** — the failure only reproduces from DigitalOcean's
+  network, which this session has no access to. Needs confirmation via "Run Backup Now" on the
+  dashboard (or waiting for the next scheduled run) after this deploys; if the direct URL hits
+  the same TLS error in production, the issue is upstream of both endpoints (DO's egress path
+  itself, e.g. an intercepting proxy/firewall) and `script/test-backup-conn.ts` (already
+  present, built for exactly this) should be run directly on the production instance to compare
+  both URLs side by side.
+- **Also confirmed harmless while investigating:** ran the real `runBackupSync()` against
+  production databases from this machine to attempt a repro; it was still in flight after 3
+  minutes (vs. ~28s in production — network latency from here, not a hang) and was killed. The
+  advisory lock (`pg_try_advisory_lock(987654321)`) briefly appeared held afterward in
+  `pg_locks`, but re-checking with a single held connection showed it was actually free — a
+  stale read caused by DigitalOcean's connection pooler reusing backend PIDs across short-lived
+  connections, not a real stuck lock. No cleanup was needed.
+- **Files:** `server/backup-sync.ts`.
+- **Lesson for next time:** when an env var exists but is only consumed by one of two code
+  paths that do the same thing (`script/full-sync-to-supabase.ts` used
+  `SUPABASE_BACKUP_DIRECT_URL`, `server/backup-sync.ts` didn't), check whether the *other* path
+  already worked around a problem you're diagnosing before assuming it needs a fresh fix —
+  grep for the env var across the repo, not just the file you're debugging. Also: when
+  investigating a prod-only issue by connecting directly to production databases from a
+  local/dev machine, remember the connection pool is shared with production traffic and a
+  local script hanging or being killed can look like a stuck lock from the DB side — re-verify
+  with a live `pg_try_advisory_lock` probe rather than trusting a single `pg_locks` snapshot,
+  since PID reuse by a managed pooler can misattribute a lock to an unrelated, currently-idle
+  connection.
+
+---
+
 ## 2026-07-22 — `recalculatePolicyPremiumIfNeeded` could silently zero a policy's premium if its product version was orphaned
 
 - **Symptom:** none observed in production (Falakhe has zero policies with an orphaned

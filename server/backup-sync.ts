@@ -42,8 +42,20 @@
  * backup's structure up to match before every sync rather than assuming it
  * already does.
  *
- * ENV: SUPABASE_BACKUP_URL — the Supabase pooler connection string (port 6543).
- *      If not set, the backup is silently skipped.
+ * ENV: SUPABASE_BACKUP_DIRECT_URL — direct Supabase connection (port 5432), preferred.
+ *      SUPABASE_BACKUP_URL — Supabase pooler (Supavisor/pgbouncer, port 6543), used only
+ *      if the direct URL isn't set. If neither is set, the backup is silently skipped.
+ *
+ * Prefer the direct URL: production runs of this job have failed on 100% of tables, every
+ * night, with "self-signed certificate in certificate chain" on every upsert against the
+ * pooler — reproducible only from DigitalOcean's network, not locally, so it's a TLS chain
+ * quirk specific to the pooler endpoint (Supavisor terminates TLS differently from a direct
+ * `postgres` connection) rather than a code defect; see docs/BUGFIX-LOG.md, 2026-07-14 and
+ * 2026-07-25. `script/full-sync-to-supabase.ts`'s manual equivalent already prefers the direct
+ * URL for this same reason — this brings the scheduled job in line with it. A batch job like
+ * this (a handful of long-lived connections, one run/day, DDL via reconcileSchemaForSource)
+ * also has none of the high-connection-churn characteristics pgbouncer's transaction pooler
+ * exists for, so direct is the better fit independent of the TLS issue.
  */
 import pg from "pg";
 import { structuredLog } from "./logger";
@@ -58,7 +70,7 @@ const SYNC_EXCLUDE_TABLES = new Set(["schema_migrations"]);
 let backupTimer: ReturnType<typeof setTimeout> | null = null;
 
 function getSupabaseUrl(): string | null {
-  return process.env.SUPABASE_BACKUP_URL || null;
+  return process.env.SUPABASE_BACKUP_DIRECT_URL || process.env.SUPABASE_BACKUP_URL || null;
 }
 
 async function getBackupPool(): Promise<pg.Pool | null> {
