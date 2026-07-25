@@ -79,10 +79,6 @@ export default function Home() {
   });
 
   useEffect(() => {
-    if (isPlatformAdminHost) {
-      setLocation("/staff/login");
-      return;
-    }
     if (returnTo && returnTo !== "/") {
       if (returnTo.startsWith("/staff") && !staffAuthLoading && isAuthenticated) {
         window.history.replaceState(null, "", window.location.pathname || "/");
@@ -100,20 +96,27 @@ export default function Home() {
     }
     if (clientMeFetched && clientMe?.client) {
       setLocation("/client");
+      return;
+    }
+    // Anonymous visitor on the platform-admin host — only once we know they're NOT
+    // already an authenticated staff/platform-owner session (checked above first).
+    if (isPlatformAdminHost && !staffAuthLoading) {
+      setLocation("/staff/login");
     }
   }, [isPlatformAdminHost, returnTo, staffAuthLoading, isAuthenticated, clientMeFetched, clientMe, setLocation]);
 
   const isRedirecting =
-    isPlatformAdminHost ||
     (returnTo &&
       ((returnTo.startsWith("/staff") && !staffAuthLoading && isAuthenticated) ||
         (returnTo.startsWith("/client") && clientMeFetched && clientMe?.client))) ||
     (!returnTo && !staffAuthLoading && isAuthenticated) ||
-    (!returnTo && clientMeFetched && !!clientMe?.client);
+    (!returnTo && clientMeFetched && !!clientMe?.client) ||
+    (!returnTo && isPlatformAdminHost && !staffAuthLoading && !isAuthenticated);
 
   const isAuthPending =
     (returnTo?.startsWith("/staff") && staffAuthLoading) ||
-    (returnTo?.startsWith("/client") && !clientMeFetched);
+    (returnTo?.startsWith("/client") && !clientMeFetched) ||
+    (!returnTo && isPlatformAdminHost && staffAuthLoading);
 
   if (isRedirecting || isAuthPending) {
     return (
