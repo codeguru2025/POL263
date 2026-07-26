@@ -115,6 +115,8 @@ const ClientFeedback = lazy(() => retryLazy(() => import("@/pages/client/feedbac
 const JoinPage = lazy(() => retryLazy(() => import("@/pages/join")));
 const JoinRegisterPage = lazy(() => retryLazy(() => import("@/pages/join/register")));
 const VerifyPage = lazy(() => retryLazy(() => import("@/pages/verify")));
+const AmlPolicyPage = lazy(() => retryLazy(() => import("@/pages/legal/aml-policy")));
+const DataRetentionPolicyPage = lazy(() => retryLazy(() => import("@/pages/legal/data-retention-policy")));
 const AuthCallback = lazy(() => retryLazy(() => import("@/pages/auth-callback")));
 
 function PageLoader() {
@@ -257,6 +259,8 @@ function Router() {
       <SafeRoute path="/join/register" component={JoinRegisterPage} />
       <SafeRoute path="/join/:refCode" component={AgentCardPage} />
       <SafeRoute path="/verify" component={VerifyPage} />
+      <SafeRoute path="/legal/aml-policy" component={AmlPolicyPage} />
+      <SafeRoute path="/legal/data-retention-policy" component={DataRetentionPolicyPage} />
       
       <SafeRoute path="/client/login" component={ClientLogin} />
       <SafeRoute path="/client/claim" component={ClientClaim} />

@@ -1,5 +1,5 @@
 import { useState, useEffect, type ChangeEvent } from "react";
-import { useSearch, useLocation } from "wouter";
+import { useSearch, useLocation, Link } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Input } from "@/components/ui/input";
@@ -770,6 +770,29 @@ export default function StaffSettings() {
             <div className="mt-6">
               <FeatureFlagsCard />
             </div>
+
+            <CardSection
+              title="Compliance policies"
+              description="Platform-wide baselines POL263 operates under as the technology provider. Every tenant inherits these by default."
+              icon={Shield}
+              className="max-w-2xl mt-6"
+            >
+              <div className="space-y-3 text-sm">
+                <p>
+                  Suspicious payments (single or cumulative <strong>$1,000 USD-equivalent</strong> or more) should be
+                  escalated to <strong>compliance@pol263.com</strong> rather than processed as routine — see the AML
+                  policy for the full list of indicators and escalation steps.
+                </p>
+                <div className="flex flex-wrap gap-4">
+                  <Link href="/legal/aml-policy" className="text-primary underline underline-offset-2">
+                    AML &amp; Suspicious Transaction Policy →
+                  </Link>
+                  <Link href="/legal/data-retention-policy" className="text-primary underline underline-offset-2">
+                    Client Data Handling &amp; Retention Policy →
+                  </Link>
+                </div>
+              </div>
+            </CardSection>
           </TabsContent>
 
           {/* Terms */}
