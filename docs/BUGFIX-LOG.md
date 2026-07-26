@@ -10,6 +10,109 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-26 — Agents saw Fleet Tracking in the staff nav despite never having a vehicle to check out
+
+- **Symptom:** logging in as an agent (Pesuate Mhlanga) showed a "Fleet Tracking" item in the
+  staff sidebar, even though agents have no vehicle checkout/GPS-ping workflow of their own.
+- **Root cause:** `use:fleet` (`server/constants.ts:71`, "Check out/return a company vehicle
+  and report GPS location while driving it") was included in the `agent` role's
+  `ROLE_PERMISSION_MAP` template (`server/constants.ts:121`) — a copy-paste artifact from a
+  role list further up, not an intentional grant. The nav item was gated on
+  `["use:fleet", "read:fleet"]`, so having either permission was enough to show it.
+- **Fix:** Removed `use:fleet` from the `agent` entry in `server/constants.ts` (the seed
+  template for newly-provisioned tenants) and added an explicit comment (`server/
+  constants.ts:143`) recording that it was never intentional. Also added `agentHidden: true`
+  to both Fleet Tracking nav entries in `client/src/components/layout/staff-layout.tsx:325,490`
+  as defense in depth — belt-and-braces so an agent never sees the item even if a tenant's
+  live `role_permissions` still has a stray grant. Separately, revoked the permission live via
+  a direct SQL `DELETE` against `role_permissions` for the 7 already-provisioned orgs that had
+  it (template edits only affect newly-provisioned tenants, not existing ones).
+- **Verified:** confirmed via a targeted SQL count that all 7 affected orgs' `agent` role had
+  the `use:fleet` row deleted (7 → 0), and that the nav item disappears for an agent-role login
+  even before that DB fix, thanks to `agentHidden`.
+- **Files:** `server/constants.ts`, `client/src/components/layout/staff-layout.tsx`.
+- **Lesson for next time:** a permission-template fix (`ROLE_PERMISSION_MAP`) only changes
+  what *new* tenants get — it does nothing for tenants already provisioned. Any RBAC template
+  correction needs a paired live-data check (`SELECT`/`DELETE` against `role_permissions`)
+  across existing orgs, not just a code diff. Also, gating a nav item on `permissions: [...]`
+  (any-of) rather than a single specific permission makes a stray grant on an unrelated
+  permission in that list enough to leak the whole item — worth a quick grep of
+  `staff-layout.tsx` for other multi-permission nav gates when auditing role visibility.
+
+---
+
+## 2026-07-26 — Receipt PDF overstated "months paid for" (2 months shown for a 1-month payment, e.g. FLK00012)
+
+- **Symptom:** a client who paid exactly one month's premium ($10 on a $10/month policy,
+  covering 27 Jul–25 Aug) had their receipt read "2 months," overstating what they'd actually
+  paid for.
+- **Root cause:** `monthsFromPeriod` (previously duplicated locally in `server/receipt-pdf.ts`,
+  and separately as `calcMonths` in the "Months Paid For" report in `server/storage.ts`) computed
+  months as a calendar-month difference (`periodTo.getMonth() - periodFrom.getMonth() + 1`-style
+  arithmetic). But `advancePolicyCycle` (`server/policy-status-on-payment.ts`) anchors pay-cycles
+  to a fixed day-length per payment schedule (30/7/14/365 days) — not calendar months. A cycle
+  starting late in one calendar month and ending in the next (27 Jul → 25 Aug, 30 days, still one
+  cycle) crosses a month boundary, so calendar-month-diff arithmetic counted it as 2 months
+  when it was actually 1 full cycle.
+- **Fix:** Added a single exported `monthsFromPeriod(periodFrom, periodTo, paymentSchedule)` in
+  `server/policy-status-on-payment.ts:41` that instead divides the inclusive day-span by
+  `cycleDays(schedule)` (also exported, `:26`) and rounds — matching how `advancePolicyCycle`
+  itself defines a "month" for that schedule. `server/receipt-pdf.ts` now imports this shared
+  function instead of its own local copy (3 call sites updated to pass
+  `policy.paymentSchedule || "monthly"`), and `calcMonths` in the "Months Paid For" report
+  (`server/storage.ts`) now delegates to it too, with `paymentSchedule` added to that report's
+  underlying `SELECT`.
+- **Verified:** checked against real production data (Falakhe policy FLK00012: Jul27→Aug25
+  cycle, $10 paid on a $10/month premium) — now correctly computes 1 month. Added a
+  `monthsFromPeriod` describe block (4 tests) to `tests/unit/policy-billing.test.ts` covering
+  monthly/weekly/biweekly/yearly schedules and a boundary-crossing case.
+  All 289 tests pass.
+- **Files:** `server/policy-status-on-payment.ts`, `server/receipt-pdf.ts`, `server/storage.ts`,
+  `tests/unit/policy-billing.test.ts`.
+- **Lesson for next time:** anywhere a payment period gets translated into "how many months"
+  for display, the calculation must match the pay-cycle definition already used to *advance*
+  that period (`cycleDays()` in `server/policy-status-on-payment.ts`), not generic calendar-month
+  subtraction — the two silently disagree whenever a fixed-day cycle straddles a calendar-month
+  boundary. Grep for local reimplementations of "months between two dates" before assuming one
+  is correct; this bug existed as two separate, subtly different copies before being unified.
+
+---
+
+## 2026-07-26 — "Send payment link" returned Internal Server Error (and 2 related NOT-NULL FK routes)
+
+- **Symptom:** clicking "Send payment link" on a policy threw a 500. The same class of bug was
+  also live (not yet reported by a user) on the waiver-request and attendance off-site-dismiss
+  routes.
+- **Root cause:** all three routes resolved the acting user's id for the tenant's own database
+  with `resolveUserIdForOrgDatabase(...) ?? user.id` — but `resolveUserIdForOrgDatabase` can
+  return `null` (e.g. the staff member's mirrored row doesn't exist yet in a dedicated-database
+  org), and the `?? user.id` fallback then wrote the *raw platform-registry* id into a column
+  that is `NOT NULL` and FK'd to that tenant's own `users` table, violating the FK constraint.
+  `resolveOrSyncTenantUserId` exists specifically to avoid this — it actively creates/syncs the
+  mirrored row and never returns null — but these three call sites predated it and still used
+  the older, null-capable helper with an unsafe fallback.
+- **Fix:** Replaced `resolveUserIdForOrgDatabase(...) ?? user.id` with
+  `resolveOrSyncTenantUserId(user.organizationId, user.id)` at all three sites:
+  `POST /api/policies/:id/payment-links` (`server/routes.ts:4460`),
+  `POST /api/policies/:id/waiver-request` (`server/routes.ts:3197`), and
+  `POST /api/attendance/:id/dismiss-offsite` (`server/routes.ts:9436`). Left explanatory
+  comments at each site cross-referencing the others, since this is the same defect pattern
+  found and fixed at ~45 other call sites in the 2026-07-14 `resolveOrSyncTenantUserId` sweep
+  (see that entry below) — these three had simply been missed.
+- **Verified:** root-caused via the FK constraint definition and the helper's actual null-return
+  behavior (not a live repro); type-checked clean; consistent with every other already-fixed
+  call site of this exact pattern elsewhere in `routes.ts`.
+- **Files:** `server/routes.ts`.
+- **Lesson for next time:** `resolveUserIdForOrgDatabase(...) ?? user.id` is *always* wrong
+  wherever the target column is `NOT NULL`/FK'd to a tenant-local table — the `??` fallback
+  defeats the entire purpose of the null check by writing an id that doesn't exist in that
+  table. When the 2026-07-14 sweep entry below says a pattern was fixed "across ~45 sites,"
+  don't assume that was exhaustive — grep for `resolveUserIdForOrgDatabase(.*) ?? user.id`
+  (or `?? user\.id` generally) across the whole file before treating that class of bug as
+  closed.
+
+---
+
 ## 2026-07-25 — Backup Sync Health showing "Partial", 0 rows/0 tables, 100+ errors every night since 2026-07-14
 
 - **Symptom:** the platform-owner dashboard's Backup Sync Health panel showed every nightly
