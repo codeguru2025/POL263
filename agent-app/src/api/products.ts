@@ -13,10 +13,13 @@ export interface ProductVersion {
   version: number;
   premiumMonthlyUsd: string | null;
   premiumMonthlyZar: string | null;
+  premiumMonthlyZig: string | null;
   premiumWeeklyUsd: string | null;
   premiumWeeklyZar: string | null;
+  premiumWeeklyZig: string | null;
   premiumBiweeklyUsd: string | null;
   premiumBiweeklyZar: string | null;
+  premiumBiweeklyZig: string | null;
   eligibilityMinAge: number | null;
   eligibilityMaxAge: number | null;
 }

@@ -61,10 +61,13 @@ type ProductVersion = {
   effectiveTo: string | null;
   premiumMonthlyUsd: string | null;
   premiumMonthlyZar: string | null;
+  premiumMonthlyZig: string | null;
   premiumWeeklyUsd: string | null;
   premiumWeeklyZar: string | null;
+  premiumWeeklyZig: string | null;
   premiumBiweeklyUsd: string | null;
   premiumBiweeklyZar: string | null;
+  premiumBiweeklyZig: string | null;
   eligibilityMinAge: number | null;
   eligibilityMaxAge: number | null;
   dependentMaxAge: number | null;
@@ -85,14 +88,19 @@ type ProductVersion = {
   underwriterAdvanceMonths: number;
   additionalMemberPremiumMonthlyUsd: string | null;
   additionalMemberPremiumMonthlyZar: string | null;
+  additionalMemberPremiumMonthlyZig: string | null;
   additionalMemberRateChildUsd: string | null;
   additionalMemberRateChildZar: string | null;
+  additionalMemberRateChildZig: string | null;
   additionalMemberRate21To65Usd: string | null;
   additionalMemberRate21To65Zar: string | null;
+  additionalMemberRate21To65Zig: string | null;
   additionalMemberRate66To84Usd: string | null;
   additionalMemberRate66To84Zar: string | null;
+  additionalMemberRate66To84Zig: string | null;
   additionalMemberRate85PlusUsd: string | null;
   additionalMemberRate85PlusZar: string | null;
+  additionalMemberRate85PlusZig: string | null;
   reinstatementRequiresArrears: boolean | null;
   reinstatementNewWaitingPeriod: boolean | null;
   isActive: boolean;
@@ -742,12 +750,16 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                       <TableHead>Effective From</TableHead>
                       <TableHead>Monthly (USD)</TableHead>
                       <TableHead>Monthly (ZAR)</TableHead>
+                      <TableHead>Monthly (ZiG)</TableHead>
                       <TableHead>Weekly (USD)</TableHead>
                       <TableHead>Weekly (ZAR)</TableHead>
+                      <TableHead>Weekly (ZiG)</TableHead>
                       <TableHead>Bi-wk (USD)</TableHead>
                       <TableHead>Bi-wk (ZAR)</TableHead>
+                      <TableHead>Bi-wk (ZiG)</TableHead>
                       <TableHead>+Member/mo (USD)</TableHead>
                       <TableHead>+Member/mo (ZAR)</TableHead>
+                      <TableHead>+Member/mo (ZiG)</TableHead>
                       <TableHead>Waiting</TableHead>
                       <TableHead>Grace</TableHead>
                       <TableHead>Age Range</TableHead>
@@ -763,12 +775,16 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                         <TableCell>{v.effectiveFrom}</TableCell>
                         <TableCell className="font-semibold">{v.premiumMonthlyUsd ? formatAmount(v.premiumMonthlyUsd, "USD") : "—"}</TableCell>
                         <TableCell>{v.premiumMonthlyZar ? formatAmount(v.premiumMonthlyZar, "ZAR") : "—"}</TableCell>
+                        <TableCell>{v.premiumMonthlyZig ? formatAmount(v.premiumMonthlyZig, "ZIG") : "—"}</TableCell>
                         <TableCell>{v.premiumWeeklyUsd ? formatAmount(v.premiumWeeklyUsd, "USD") : "—"}</TableCell>
                         <TableCell>{v.premiumWeeklyZar ? formatAmount(v.premiumWeeklyZar, "ZAR") : "—"}</TableCell>
+                        <TableCell>{v.premiumWeeklyZig ? formatAmount(v.premiumWeeklyZig, "ZIG") : "—"}</TableCell>
                         <TableCell>{v.premiumBiweeklyUsd ? formatAmount(v.premiumBiweeklyUsd, "USD") : "—"}</TableCell>
                         <TableCell>{v.premiumBiweeklyZar ? formatAmount(v.premiumBiweeklyZar, "ZAR") : "—"}</TableCell>
+                        <TableCell>{v.premiumBiweeklyZig ? formatAmount(v.premiumBiweeklyZig, "ZIG") : "—"}</TableCell>
                         <TableCell className="text-xs">{v.additionalMemberPremiumMonthlyUsd ? formatAmount(v.additionalMemberPremiumMonthlyUsd, "USD") : "—"}</TableCell>
                         <TableCell className="text-xs">{v.additionalMemberPremiumMonthlyZar ? formatAmount(v.additionalMemberPremiumMonthlyZar, "ZAR") : "—"}</TableCell>
+                        <TableCell className="text-xs">{v.additionalMemberPremiumMonthlyZig ? formatAmount(v.additionalMemberPremiumMonthlyZig, "ZIG") : "—"}</TableCell>
                         <TableCell>{v.waitingPeriodDays != null ? `${v.waitingPeriodDays}d` : "—"}</TableCell>
                         <TableCell>{v.gracePeriodDays != null ? `${v.gracePeriodDays}d` : "—"}</TableCell>
                         <TableCell>{v.eligibilityMinAge ?? "—"} – {v.eligibilityMaxAge ?? "—"}</TableCell>
@@ -1112,9 +1128,9 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
 // as a toast, with no indication of which of the 35 fields was wrong.
 interface VersionFormValues {
   effectiveFrom: string;
-  premiumMonthlyUsd: string; premiumMonthlyZar: string;
-  premiumWeeklyUsd: string; premiumWeeklyZar: string;
-  premiumBiweeklyUsd: string; premiumBiweeklyZar: string;
+  premiumMonthlyUsd: string; premiumMonthlyZar: string; premiumMonthlyZig: string;
+  premiumWeeklyUsd: string; premiumWeeklyZar: string; premiumWeeklyZig: string;
+  premiumBiweeklyUsd: string; premiumBiweeklyZar: string; premiumBiweeklyZig: string;
   waitingPeriodDays: string; waitingAccidental: string; waitingSuicide: string;
   gracePeriodDays: string;
   eligibilityMinAge: string; eligibilityMaxAge: string; dependentMaxAge: string;
@@ -1124,20 +1140,23 @@ interface VersionFormValues {
   commClawback: string; commFuneralIncentive: string;
   underwriterAmountAdult: string; underwriterAmountChild: string;
   underwriterAdvanceMonths: string;
-  additionalMemberPremiumMonthlyUsd: string; additionalMemberPremiumMonthlyZar: string;
-  ageBandRateChildUsd: string; ageBandRateChildZar: string;
-  ageBandRate21To65Usd: string; ageBandRate21To65Zar: string;
-  ageBandRate66To84Usd: string; ageBandRate66To84Zar: string;
-  ageBandRate85PlusUsd: string; ageBandRate85PlusZar: string;
+  additionalMemberPremiumMonthlyUsd: string; additionalMemberPremiumMonthlyZar: string; additionalMemberPremiumMonthlyZig: string;
+  ageBandRateChildUsd: string; ageBandRateChildZar: string; ageBandRateChildZig: string;
+  ageBandRate21To65Usd: string; ageBandRate21To65Zar: string; ageBandRate21To65Zig: string;
+  ageBandRate66To84Usd: string; ageBandRate66To84Zar: string; ageBandRate66To84Zig: string;
+  ageBandRate85PlusUsd: string; ageBandRate85PlusZar: string; ageBandRate85PlusZig: string;
 }
 
 const VERSION_NUMERIC_FIELDS: { key: keyof VersionFormValues; label: string }[] = [
   { key: "premiumMonthlyUsd", label: "Monthly Premium (USD)" },
   { key: "premiumMonthlyZar", label: "Monthly Premium (ZAR)" },
+  { key: "premiumMonthlyZig", label: "Monthly Premium (ZiG)" },
   { key: "premiumWeeklyUsd", label: "Weekly Premium (USD)" },
   { key: "premiumWeeklyZar", label: "Weekly Premium (ZAR)" },
+  { key: "premiumWeeklyZig", label: "Weekly Premium (ZiG)" },
   { key: "premiumBiweeklyUsd", label: "Bi-weekly Premium (USD)" },
   { key: "premiumBiweeklyZar", label: "Bi-weekly Premium (ZAR)" },
+  { key: "premiumBiweeklyZig", label: "Bi-weekly Premium (ZiG)" },
   { key: "waitingPeriodDays", label: "Natural Death waiting period" },
   { key: "waitingAccidental", label: "Accidental Death waiting period" },
   { key: "waitingSuicide", label: "Suicide waiting period" },
@@ -1158,14 +1177,19 @@ const VERSION_NUMERIC_FIELDS: { key: keyof VersionFormValues; label: string }[] 
   { key: "underwriterAdvanceMonths", label: "Underwriter advance months" },
   { key: "additionalMemberPremiumMonthlyUsd", label: "Additional member premium (USD)" },
   { key: "additionalMemberPremiumMonthlyZar", label: "Additional member premium (ZAR)" },
+  { key: "additionalMemberPremiumMonthlyZig", label: "Additional member premium (ZiG)" },
   { key: "ageBandRateChildUsd", label: "Age band rate — child (USD)" },
   { key: "ageBandRateChildZar", label: "Age band rate — child (ZAR)" },
+  { key: "ageBandRateChildZig", label: "Age band rate — child (ZiG)" },
   { key: "ageBandRate21To65Usd", label: "Age band rate 21–65 (USD)" },
   { key: "ageBandRate21To65Zar", label: "Age band rate 21–65 (ZAR)" },
+  { key: "ageBandRate21To65Zig", label: "Age band rate 21–65 (ZiG)" },
   { key: "ageBandRate66To84Usd", label: "Age band rate 66–84 (USD)" },
   { key: "ageBandRate66To84Zar", label: "Age band rate 66–84 (ZAR)" },
+  { key: "ageBandRate66To84Zig", label: "Age band rate 66–84 (ZiG)" },
   { key: "ageBandRate85PlusUsd", label: "Age band rate 85+ (USD)" },
   { key: "ageBandRate85PlusZar", label: "Age band rate 85+ (ZAR)" },
+  { key: "ageBandRate85PlusZig", label: "Age band rate 85+ (ZiG)" },
 ];
 
 function validateVersionForm(v: VersionFormValues): Record<string, string> {
@@ -1181,8 +1205,9 @@ function validateVersionForm(v: VersionFormValues): Record<string, string> {
   }
 
   const hasAnyPremium = [
-    v.premiumMonthlyUsd, v.premiumMonthlyZar, v.premiumWeeklyUsd,
-    v.premiumWeeklyZar, v.premiumBiweeklyUsd, v.premiumBiweeklyZar,
+    v.premiumMonthlyUsd, v.premiumMonthlyZar, v.premiumMonthlyZig,
+    v.premiumWeeklyUsd, v.premiumWeeklyZar, v.premiumWeeklyZig,
+    v.premiumBiweeklyUsd, v.premiumBiweeklyZar, v.premiumBiweeklyZig,
   ].some((x) => x && x.trim() !== "");
   if (!hasAnyPremium && !errors.premiumMonthlyUsd) {
     errors.premiumMonthlyUsd = "Set at least one premium price for this version.";
@@ -1221,10 +1246,13 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [effectiveFrom, setEffectiveFrom] = useState("");
   const [premiumMonthlyUsd, setPremiumMonthlyUsd] = useState("");
   const [premiumMonthlyZar, setPremiumMonthlyZar] = useState("");
+  const [premiumMonthlyZig, setPremiumMonthlyZig] = useState("");
   const [premiumWeeklyUsd, setPremiumWeeklyUsd] = useState("");
   const [premiumWeeklyZar, setPremiumWeeklyZar] = useState("");
+  const [premiumWeeklyZig, setPremiumWeeklyZig] = useState("");
   const [premiumBiweeklyUsd, setPremiumBiweeklyUsd] = useState("");
   const [premiumBiweeklyZar, setPremiumBiweeklyZar] = useState("");
+  const [premiumBiweeklyZig, setPremiumBiweeklyZig] = useState("");
   const [waitingPeriodDays, setWaitingPeriodDays] = useState("90");
   const [waitingAccidental, setWaitingAccidental] = useState("0");
   const [waitingSuicide, setWaitingSuicide] = useState("0");
@@ -1248,27 +1276,32 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState("0");
   const [additionalMemberPremiumMonthlyUsd, setAdditionalMemberPremiumMonthlyUsd] = useState("");
   const [additionalMemberPremiumMonthlyZar, setAdditionalMemberPremiumMonthlyZar] = useState("");
+  const [additionalMemberPremiumMonthlyZig, setAdditionalMemberPremiumMonthlyZig] = useState("");
   const [ageBandRateChildUsd, setAgeBandRateChildUsd] = useState("");
   const [ageBandRateChildZar, setAgeBandRateChildZar] = useState("");
+  const [ageBandRateChildZig, setAgeBandRateChildZig] = useState("");
   const [ageBandRate21To65Usd, setAgeBandRate21To65Usd] = useState("");
   const [ageBandRate21To65Zar, setAgeBandRate21To65Zar] = useState("");
+  const [ageBandRate21To65Zig, setAgeBandRate21To65Zig] = useState("");
   const [ageBandRate66To84Usd, setAgeBandRate66To84Usd] = useState("");
   const [ageBandRate66To84Zar, setAgeBandRate66To84Zar] = useState("");
+  const [ageBandRate66To84Zig, setAgeBandRate66To84Zig] = useState("");
   const [ageBandRate85PlusUsd, setAgeBandRate85PlusUsd] = useState("");
   const [ageBandRate85PlusZar, setAgeBandRate85PlusZar] = useState("");
+  const [ageBandRate85PlusZig, setAgeBandRate85PlusZig] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const errors = validateVersionForm({
-      effectiveFrom, premiumMonthlyUsd, premiumMonthlyZar, premiumWeeklyUsd, premiumWeeklyZar,
-      premiumBiweeklyUsd, premiumBiweeklyZar, waitingPeriodDays, waitingAccidental, waitingSuicide,
+      effectiveFrom, premiumMonthlyUsd, premiumMonthlyZar, premiumMonthlyZig, premiumWeeklyUsd, premiumWeeklyZar, premiumWeeklyZig,
+      premiumBiweeklyUsd, premiumBiweeklyZar, premiumBiweeklyZig, waitingPeriodDays, waitingAccidental, waitingSuicide,
       gracePeriodDays, eligibilityMinAge, eligibilityMaxAge, dependentMaxAge, cashInLieuAdult, cashInLieuChild,
       commFirstMonths, commFirstRate, commRecurringStart, commRecurringRate, commClawback, commFuneralIncentive,
       underwriterAmountAdult, underwriterAmountChild, underwriterAdvanceMonths,
-      additionalMemberPremiumMonthlyUsd, additionalMemberPremiumMonthlyZar,
-      ageBandRateChildUsd, ageBandRateChildZar, ageBandRate21To65Usd, ageBandRate21To65Zar,
-      ageBandRate66To84Usd, ageBandRate66To84Zar, ageBandRate85PlusUsd, ageBandRate85PlusZar,
+      additionalMemberPremiumMonthlyUsd, additionalMemberPremiumMonthlyZar, additionalMemberPremiumMonthlyZig,
+      ageBandRateChildUsd, ageBandRateChildZar, ageBandRateChildZig, ageBandRate21To65Usd, ageBandRate21To65Zar, ageBandRate21To65Zig,
+      ageBandRate66To84Usd, ageBandRate66To84Zar, ageBandRate66To84Zig, ageBandRate85PlusUsd, ageBandRate85PlusZar, ageBandRate85PlusZig,
     });
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -1276,10 +1309,13 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       effectiveFrom,
       premiumMonthlyUsd: premiumMonthlyUsd || undefined,
       premiumMonthlyZar: premiumMonthlyZar || undefined,
+      premiumMonthlyZig: premiumMonthlyZig || undefined,
       premiumWeeklyUsd: premiumWeeklyUsd || undefined,
       premiumWeeklyZar: premiumWeeklyZar || undefined,
+      premiumWeeklyZig: premiumWeeklyZig || undefined,
       premiumBiweeklyUsd: premiumBiweeklyUsd || undefined,
       premiumBiweeklyZar: premiumBiweeklyZar || undefined,
+      premiumBiweeklyZig: premiumBiweeklyZig || undefined,
       waitingPeriodDays: waitingPeriodDays ? parseInt(waitingPeriodDays) : undefined,
       waitingPeriodAccidentalDeath: waitingAccidental ? parseInt(waitingAccidental) : undefined,
       waitingPeriodSuicide: waitingSuicide ? parseInt(waitingSuicide) : undefined,
@@ -1302,14 +1338,19 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
       additionalMemberPremiumMonthlyUsd: additionalMemberPremiumMonthlyUsd.trim() || undefined,
       additionalMemberPremiumMonthlyZar: additionalMemberPremiumMonthlyZar.trim() || undefined,
+      additionalMemberPremiumMonthlyZig: additionalMemberPremiumMonthlyZig.trim() || undefined,
       additionalMemberRateChildUsd: ageBandRateChildUsd.trim() || undefined,
       additionalMemberRateChildZar: ageBandRateChildZar.trim() || undefined,
+      additionalMemberRateChildZig: ageBandRateChildZig.trim() || undefined,
       additionalMemberRate21To65Usd: ageBandRate21To65Usd.trim() || undefined,
       additionalMemberRate21To65Zar: ageBandRate21To65Zar.trim() || undefined,
+      additionalMemberRate21To65Zig: ageBandRate21To65Zig.trim() || undefined,
       additionalMemberRate66To84Usd: ageBandRate66To84Usd.trim() || undefined,
       additionalMemberRate66To84Zar: ageBandRate66To84Zar.trim() || undefined,
+      additionalMemberRate66To84Zig: ageBandRate66To84Zig.trim() || undefined,
       additionalMemberRate85PlusUsd: ageBandRate85PlusUsd.trim() || undefined,
       additionalMemberRate85PlusZar: ageBandRate85PlusZar.trim() || undefined,
+      additionalMemberRate85PlusZig: ageBandRate85PlusZig.trim() || undefined,
     });
   };
 
@@ -1328,7 +1369,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Premium Pricing</h3>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="premium-monthly-usd">Monthly Premium (USD)</Label>
               <Input id="premium-monthly-usd" type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
@@ -1339,8 +1380,13 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Input id="premium-monthly-zar" type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="premium-monthly-zig">Monthly Premium (ZiG)</Label>
+              <Input id="premium-monthly-zig" type="number" step="0.01" value={premiumMonthlyZig} onChange={(e) => setPremiumMonthlyZig(e.target.value)} placeholder="e.g. 420.00" data-testid="input-version-premium-zig" className={cn(fieldErrors.premiumMonthlyZig && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumMonthlyZig} />
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="premium-weekly-usd">Weekly Premium (USD)</Label>
               <Input id="premium-weekly-usd" type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
@@ -1352,6 +1398,11 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <FieldError message={fieldErrors.premiumWeeklyZar} />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="premium-weekly-zig">Weekly Premium (ZiG)</Label>
+              <Input id="premium-weekly-zig" type="number" step="0.01" value={premiumWeeklyZig} onChange={(e) => setPremiumWeeklyZig(e.target.value)} placeholder="e.g. 105.00" className={cn(fieldErrors.premiumWeeklyZig && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumWeeklyZig} />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="premium-biweekly-usd">Bi-weekly Premium (USD)</Label>
               <Input id="premium-biweekly-usd" type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyUsd} />
@@ -1360,6 +1411,11 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Label htmlFor="premium-biweekly-zar">Bi-weekly Premium (ZAR)</Label>
               <Input id="premium-biweekly-zar" type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyZar} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="premium-biweekly-zig">Bi-weekly Premium (ZiG)</Label>
+              <Input id="premium-biweekly-zig" type="number" step="0.01" value={premiumBiweeklyZig} onChange={(e) => setPremiumBiweeklyZig(e.target.value)} placeholder="e.g. 210.00" className={cn(fieldErrors.premiumBiweeklyZig && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumBiweeklyZig} />
             </div>
           </div>
 
@@ -1514,7 +1570,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             Per-member premium charged for each member beyond the product's included count (max adults + max children + max extended).
             Leave blank if no extra charge applies.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="additional-member-premium-monthly-usd">Per additional member / month (USD)</Label>
               <Input id="additional-member-premium-monthly-usd" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-version-additional-member-usd" />
@@ -1523,13 +1579,17 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Label htmlFor="additional-member-premium-monthly-zar">Per additional member / month (ZAR)</Label>
               <Input id="additional-member-premium-monthly-zar" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-version-additional-member-zar" />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="additional-member-premium-monthly-zig">Per additional member / month (ZiG)</Label>
+              <Input id="additional-member-premium-monthly-zig" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZig} onChange={(e) => setAdditionalMemberPremiumMonthlyZig(e.target.value)} placeholder="e.g. 140.00" data-testid="input-version-additional-member-zig" />
+            </div>
           </div>
 
           <p className="text-sm text-muted-foreground">
             Optional: price additional members by age band instead of one flat rate above. Leave all blank to keep the flat rate.
             "Child" uses the dependent age cutoff set above; this does not affect any existing policy on this version until you fill these in.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="age-band-rate-child-usd">Child / month (USD)</Label>
               <Input id="age-band-rate-child-usd" type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-version-ageband-child-usd" />
@@ -1537,6 +1597,10 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             <div className="space-y-2">
               <Label htmlFor="age-band-rate-child-zar">Child / month (ZAR)</Label>
               <Input id="age-band-rate-child-zar" type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-version-ageband-child-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="age-band-rate-child-zig">Child / month (ZiG)</Label>
+              <Input id="age-band-rate-child-zig" type="number" step="0.01" min={0} value={ageBandRateChildZig} onChange={(e) => setAgeBandRateChildZig(e.target.value)} data-testid="input-version-ageband-child-zig" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="age-band-rate21-to65-usd">21–65 / month (USD)</Label>
@@ -1547,6 +1611,10 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Input id="age-band-rate21-to65-zar" type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-version-ageband-21-65-zar" />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="age-band-rate21-to65-zig">21–65 / month (ZiG)</Label>
+              <Input id="age-band-rate21-to65-zig" type="number" step="0.01" min={0} value={ageBandRate21To65Zig} onChange={(e) => setAgeBandRate21To65Zig(e.target.value)} data-testid="input-version-ageband-21-65-zig" />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="age-band-rate66-to84-usd">66–84 / month (USD)</Label>
               <Input id="age-band-rate66-to84-usd" type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-version-ageband-66-84-usd" />
             </div>
@@ -1555,12 +1623,20 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
               <Input id="age-band-rate66-to84-zar" type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-version-ageband-66-84-zar" />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="age-band-rate66-to84-zig">66–84 / month (ZiG)</Label>
+              <Input id="age-band-rate66-to84-zig" type="number" step="0.01" min={0} value={ageBandRate66To84Zig} onChange={(e) => setAgeBandRate66To84Zig(e.target.value)} data-testid="input-version-ageband-66-84-zig" />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="age-band-rate85-plus-usd">85+ / month (USD)</Label>
               <Input id="age-band-rate85-plus-usd" type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-version-ageband-85-plus-usd" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="age-band-rate85-plus-zar">85+ / month (ZAR)</Label>
               <Input id="age-band-rate85-plus-zar" type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-version-ageband-85-plus-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="age-band-rate85-plus-zig">85+ / month (ZiG)</Label>
+              <Input id="age-band-rate85-plus-zig" type="number" step="0.01" min={0} value={ageBandRate85PlusZig} onChange={(e) => setAgeBandRate85PlusZig(e.target.value)} data-testid="input-version-ageband-85-plus-zig" />
             </div>
           </div>
 
@@ -1582,10 +1658,13 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [effectiveFrom, setEffectiveFrom] = useState(version.effectiveFrom);
   const [premiumMonthlyUsd, setPremiumMonthlyUsd] = useState(version.premiumMonthlyUsd || "");
   const [premiumMonthlyZar, setPremiumMonthlyZar] = useState(version.premiumMonthlyZar || "");
+  const [premiumMonthlyZig, setPremiumMonthlyZig] = useState(version.premiumMonthlyZig || "");
   const [premiumWeeklyUsd, setPremiumWeeklyUsd] = useState(version.premiumWeeklyUsd || "");
   const [premiumWeeklyZar, setPremiumWeeklyZar] = useState(version.premiumWeeklyZar || "");
+  const [premiumWeeklyZig, setPremiumWeeklyZig] = useState(version.premiumWeeklyZig || "");
   const [premiumBiweeklyUsd, setPremiumBiweeklyUsd] = useState(version.premiumBiweeklyUsd || "");
   const [premiumBiweeklyZar, setPremiumBiweeklyZar] = useState(version.premiumBiweeklyZar || "");
+  const [premiumBiweeklyZig, setPremiumBiweeklyZig] = useState(version.premiumBiweeklyZig || "");
   const [waitingPeriodDays, setWaitingPeriodDays] = useState(String(version.waitingPeriodDays ?? "90"));
   const [waitingAccidental, setWaitingAccidental] = useState(String(version.waitingPeriodAccidentalDeath ?? "0"));
   const [waitingSuicide, setWaitingSuicide] = useState(String(version.waitingPeriodSuicide ?? "0"));
@@ -1608,14 +1687,19 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [underwriterAdvanceMonths, setUnderwriterAdvanceMonths] = useState(String(version.underwriterAdvanceMonths ?? 0));
   const [additionalMemberPremiumMonthlyUsd, setAdditionalMemberPremiumMonthlyUsd] = useState(version.additionalMemberPremiumMonthlyUsd || "");
   const [additionalMemberPremiumMonthlyZar, setAdditionalMemberPremiumMonthlyZar] = useState(version.additionalMemberPremiumMonthlyZar || "");
+  const [additionalMemberPremiumMonthlyZig, setAdditionalMemberPremiumMonthlyZig] = useState(version.additionalMemberPremiumMonthlyZig || "");
   const [ageBandRateChildUsd, setAgeBandRateChildUsd] = useState(version.additionalMemberRateChildUsd || "");
   const [ageBandRateChildZar, setAgeBandRateChildZar] = useState(version.additionalMemberRateChildZar || "");
+  const [ageBandRateChildZig, setAgeBandRateChildZig] = useState(version.additionalMemberRateChildZig || "");
   const [ageBandRate21To65Usd, setAgeBandRate21To65Usd] = useState(version.additionalMemberRate21To65Usd || "");
   const [ageBandRate21To65Zar, setAgeBandRate21To65Zar] = useState(version.additionalMemberRate21To65Zar || "");
+  const [ageBandRate21To65Zig, setAgeBandRate21To65Zig] = useState(version.additionalMemberRate21To65Zig || "");
   const [ageBandRate66To84Usd, setAgeBandRate66To84Usd] = useState(version.additionalMemberRate66To84Usd || "");
   const [ageBandRate66To84Zar, setAgeBandRate66To84Zar] = useState(version.additionalMemberRate66To84Zar || "");
+  const [ageBandRate66To84Zig, setAgeBandRate66To84Zig] = useState(version.additionalMemberRate66To84Zig || "");
   const [ageBandRate85PlusUsd, setAgeBandRate85PlusUsd] = useState(version.additionalMemberRate85PlusUsd || "");
   const [ageBandRate85PlusZar, setAgeBandRate85PlusZar] = useState(version.additionalMemberRate85PlusZar || "");
+  const [ageBandRate85PlusZig, setAgeBandRate85PlusZig] = useState(version.additionalMemberRate85PlusZig || "");
   const [reinstatementRequiresArrears, setReinstatementRequiresArrears] = useState(version.reinstatementRequiresArrears ?? true);
   const [reinstatementNewWaitingPeriod, setReinstatementNewWaitingPeriod] = useState(version.reinstatementNewWaitingPeriod ?? true);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -1623,14 +1707,14 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const errors = validateVersionForm({
-      effectiveFrom, premiumMonthlyUsd, premiumMonthlyZar, premiumWeeklyUsd, premiumWeeklyZar,
-      premiumBiweeklyUsd, premiumBiweeklyZar, waitingPeriodDays, waitingAccidental, waitingSuicide,
+      effectiveFrom, premiumMonthlyUsd, premiumMonthlyZar, premiumMonthlyZig, premiumWeeklyUsd, premiumWeeklyZar, premiumWeeklyZig,
+      premiumBiweeklyUsd, premiumBiweeklyZar, premiumBiweeklyZig, waitingPeriodDays, waitingAccidental, waitingSuicide,
       gracePeriodDays, eligibilityMinAge, eligibilityMaxAge, dependentMaxAge, cashInLieuAdult, cashInLieuChild,
       commFirstMonths, commFirstRate, commRecurringStart, commRecurringRate, commClawback, commFuneralIncentive,
       underwriterAmountAdult, underwriterAmountChild, underwriterAdvanceMonths,
-      additionalMemberPremiumMonthlyUsd, additionalMemberPremiumMonthlyZar,
-      ageBandRateChildUsd, ageBandRateChildZar, ageBandRate21To65Usd, ageBandRate21To65Zar,
-      ageBandRate66To84Usd, ageBandRate66To84Zar, ageBandRate85PlusUsd, ageBandRate85PlusZar,
+      additionalMemberPremiumMonthlyUsd, additionalMemberPremiumMonthlyZar, additionalMemberPremiumMonthlyZig,
+      ageBandRateChildUsd, ageBandRateChildZar, ageBandRateChildZig, ageBandRate21To65Usd, ageBandRate21To65Zar, ageBandRate21To65Zig,
+      ageBandRate66To84Usd, ageBandRate66To84Zar, ageBandRate66To84Zig, ageBandRate85PlusUsd, ageBandRate85PlusZar, ageBandRate85PlusZig,
     });
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -1638,10 +1722,13 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       effectiveFrom,
       premiumMonthlyUsd: premiumMonthlyUsd || null,
       premiumMonthlyZar: premiumMonthlyZar || null,
+      premiumMonthlyZig: premiumMonthlyZig || null,
       premiumWeeklyUsd: premiumWeeklyUsd || null,
       premiumWeeklyZar: premiumWeeklyZar || null,
+      premiumWeeklyZig: premiumWeeklyZig || null,
       premiumBiweeklyUsd: premiumBiweeklyUsd || null,
       premiumBiweeklyZar: premiumBiweeklyZar || null,
+      premiumBiweeklyZig: premiumBiweeklyZig || null,
       waitingPeriodDays: waitingPeriodDays ? parseInt(waitingPeriodDays) : null,
       waitingPeriodAccidentalDeath: waitingAccidental ? parseInt(waitingAccidental) : null,
       waitingPeriodSuicide: waitingSuicide ? parseInt(waitingSuicide) : null,
@@ -1665,14 +1752,19 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       underwriterAdvanceMonths: underwriterAdvanceMonths ? parseInt(underwriterAdvanceMonths) : 0,
       additionalMemberPremiumMonthlyUsd: additionalMemberPremiumMonthlyUsd.trim() || null,
       additionalMemberPremiumMonthlyZar: additionalMemberPremiumMonthlyZar.trim() || null,
+      additionalMemberPremiumMonthlyZig: additionalMemberPremiumMonthlyZig.trim() || null,
       additionalMemberRateChildUsd: ageBandRateChildUsd.trim() || null,
       additionalMemberRateChildZar: ageBandRateChildZar.trim() || null,
+      additionalMemberRateChildZig: ageBandRateChildZig.trim() || null,
       additionalMemberRate21To65Usd: ageBandRate21To65Usd.trim() || null,
       additionalMemberRate21To65Zar: ageBandRate21To65Zar.trim() || null,
+      additionalMemberRate21To65Zig: ageBandRate21To65Zig.trim() || null,
       additionalMemberRate66To84Usd: ageBandRate66To84Usd.trim() || null,
       additionalMemberRate66To84Zar: ageBandRate66To84Zar.trim() || null,
+      additionalMemberRate66To84Zig: ageBandRate66To84Zig.trim() || null,
       additionalMemberRate85PlusUsd: ageBandRate85PlusUsd.trim() || null,
       additionalMemberRate85PlusZar: ageBandRate85PlusZar.trim() || null,
+      additionalMemberRate85PlusZig: ageBandRate85PlusZig.trim() || null,
     });
   };
 
@@ -1697,7 +1789,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Premium Pricing</h3>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="premium-monthly-usd-2">Monthly Premium (USD)</Label>
               <Input id="premium-monthly-usd-2" type="number" step="0.01" value={premiumMonthlyUsd} onChange={(e) => setPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 15.00" data-testid="input-edit-version-premium-usd" className={cn(fieldErrors.premiumMonthlyUsd && "border-destructive")} />
@@ -1708,8 +1800,13 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Input id="premium-monthly-zar-2" type="number" step="0.01" value={premiumMonthlyZar} onChange={(e) => setPremiumMonthlyZar(e.target.value)} placeholder="e.g. 250.00" data-testid="input-edit-version-premium-zar" className={cn(fieldErrors.premiumMonthlyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumMonthlyZar} />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="premium-monthly-zig-2">Monthly Premium (ZiG)</Label>
+              <Input id="premium-monthly-zig-2" type="number" step="0.01" value={premiumMonthlyZig} onChange={(e) => setPremiumMonthlyZig(e.target.value)} placeholder="e.g. 420.00" data-testid="input-edit-version-premium-zig" className={cn(fieldErrors.premiumMonthlyZig && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumMonthlyZig} />
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="premium-weekly-usd-2">Weekly Premium (USD)</Label>
               <Input id="premium-weekly-usd-2" type="number" step="0.01" value={premiumWeeklyUsd} onChange={(e) => setPremiumWeeklyUsd(e.target.value)} placeholder="e.g. 4.00" data-testid="input-edit-version-premium-weekly" className={cn(fieldErrors.premiumWeeklyUsd && "border-destructive")} />
@@ -1721,6 +1818,11 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <FieldError message={fieldErrors.premiumWeeklyZar} />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="premium-weekly-zig-2">Weekly Premium (ZiG)</Label>
+              <Input id="premium-weekly-zig-2" type="number" step="0.01" value={premiumWeeklyZig} onChange={(e) => setPremiumWeeklyZig(e.target.value)} placeholder="e.g. 105.00" className={cn(fieldErrors.premiumWeeklyZig && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumWeeklyZig} />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="premium-biweekly-usd-2">Bi-weekly Premium (USD)</Label>
               <Input id="premium-biweekly-usd-2" type="number" step="0.01" value={premiumBiweeklyUsd} onChange={(e) => setPremiumBiweeklyUsd(e.target.value)} placeholder="e.g. 7.50" data-testid="input-edit-version-premium-biweekly" className={cn(fieldErrors.premiumBiweeklyUsd && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyUsd} />
@@ -1729,6 +1831,11 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Label htmlFor="premium-biweekly-zar-2">Bi-weekly Premium (ZAR)</Label>
               <Input id="premium-biweekly-zar-2" type="number" step="0.01" value={premiumBiweeklyZar} onChange={(e) => setPremiumBiweeklyZar(e.target.value)} placeholder="e.g. 140.00" className={cn(fieldErrors.premiumBiweeklyZar && "border-destructive")} />
               <FieldError message={fieldErrors.premiumBiweeklyZar} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="premium-biweekly-zig-2">Bi-weekly Premium (ZiG)</Label>
+              <Input id="premium-biweekly-zig-2" type="number" step="0.01" value={premiumBiweeklyZig} onChange={(e) => setPremiumBiweeklyZig(e.target.value)} placeholder="e.g. 210.00" className={cn(fieldErrors.premiumBiweeklyZig && "border-destructive")} />
+              <FieldError message={fieldErrors.premiumBiweeklyZig} />
             </div>
           </div>
 
@@ -1868,7 +1975,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
             Per-member premium charged for each member beyond the product's included count (max adults + max children + max extended).
             Leave blank if no extra charge applies.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="additional-member-premium-monthly-usd-2">Per additional member / month (USD)</Label>
               <Input id="additional-member-premium-monthly-usd-2" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyUsd} onChange={(e) => setAdditionalMemberPremiumMonthlyUsd(e.target.value)} placeholder="e.g. 5.00" data-testid="input-edit-version-additional-member-usd" />
@@ -1877,13 +1984,17 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Label htmlFor="additional-member-premium-monthly-zar-2">Per additional member / month (ZAR)</Label>
               <Input id="additional-member-premium-monthly-zar-2" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZar} onChange={(e) => setAdditionalMemberPremiumMonthlyZar(e.target.value)} placeholder="e.g. 90.00" data-testid="input-edit-version-additional-member-zar" />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="additional-member-premium-monthly-zig-2">Per additional member / month (ZiG)</Label>
+              <Input id="additional-member-premium-monthly-zig-2" type="number" step="0.01" min={0} value={additionalMemberPremiumMonthlyZig} onChange={(e) => setAdditionalMemberPremiumMonthlyZig(e.target.value)} placeholder="e.g. 140.00" data-testid="input-edit-version-additional-member-zig" />
+            </div>
           </div>
 
           <p className="text-sm text-muted-foreground">
             Optional: price additional members by age band instead of one flat rate above. Leave all blank to keep the flat rate.
             "Child" uses the dependent age cutoff set above; existing policies on this version are unaffected until you fill these in.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="age-band-rate-child-usd-2">Child / month (USD)</Label>
               <Input id="age-band-rate-child-usd-2" type="number" step="0.01" min={0} value={ageBandRateChildUsd} onChange={(e) => setAgeBandRateChildUsd(e.target.value)} data-testid="input-edit-version-ageband-child-usd" />
@@ -1891,6 +2002,10 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
             <div className="space-y-2">
               <Label htmlFor="age-band-rate-child-zar-2">Child / month (ZAR)</Label>
               <Input id="age-band-rate-child-zar-2" type="number" step="0.01" min={0} value={ageBandRateChildZar} onChange={(e) => setAgeBandRateChildZar(e.target.value)} data-testid="input-edit-version-ageband-child-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="age-band-rate-child-zig-2">Child / month (ZiG)</Label>
+              <Input id="age-band-rate-child-zig-2" type="number" step="0.01" min={0} value={ageBandRateChildZig} onChange={(e) => setAgeBandRateChildZig(e.target.value)} data-testid="input-edit-version-ageband-child-zig" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="age-band-rate21-to65-usd-2">21–65 / month (USD)</Label>
@@ -1901,6 +2016,10 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Input id="age-band-rate21-to65-zar-2" type="number" step="0.01" min={0} value={ageBandRate21To65Zar} onChange={(e) => setAgeBandRate21To65Zar(e.target.value)} data-testid="input-edit-version-ageband-21-65-zar" />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="age-band-rate21-to65-zig-2">21–65 / month (ZiG)</Label>
+              <Input id="age-band-rate21-to65-zig-2" type="number" step="0.01" min={0} value={ageBandRate21To65Zig} onChange={(e) => setAgeBandRate21To65Zig(e.target.value)} data-testid="input-edit-version-ageband-21-65-zig" />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="age-band-rate66-to84-usd-2">66–84 / month (USD)</Label>
               <Input id="age-band-rate66-to84-usd-2" type="number" step="0.01" min={0} value={ageBandRate66To84Usd} onChange={(e) => setAgeBandRate66To84Usd(e.target.value)} data-testid="input-edit-version-ageband-66-84-usd" />
             </div>
@@ -1909,12 +2028,20 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Input id="age-band-rate66-to84-zar-2" type="number" step="0.01" min={0} value={ageBandRate66To84Zar} onChange={(e) => setAgeBandRate66To84Zar(e.target.value)} data-testid="input-edit-version-ageband-66-84-zar" />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="age-band-rate66-to84-zig-2">66–84 / month (ZiG)</Label>
+              <Input id="age-band-rate66-to84-zig-2" type="number" step="0.01" min={0} value={ageBandRate66To84Zig} onChange={(e) => setAgeBandRate66To84Zig(e.target.value)} data-testid="input-edit-version-ageband-66-84-zig" />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="age-band-rate85-plus-usd-2">85+ / month (USD)</Label>
               <Input id="age-band-rate85-plus-usd-2" type="number" step="0.01" min={0} value={ageBandRate85PlusUsd} onChange={(e) => setAgeBandRate85PlusUsd(e.target.value)} data-testid="input-edit-version-ageband-85-plus-usd" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="age-band-rate85-plus-zar-2">85+ / month (ZAR)</Label>
               <Input id="age-band-rate85-plus-zar-2" type="number" step="0.01" min={0} value={ageBandRate85PlusZar} onChange={(e) => setAgeBandRate85PlusZar(e.target.value)} data-testid="input-edit-version-ageband-85-plus-zar" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="age-band-rate85-plus-zig-2">85+ / month (ZiG)</Label>
+              <Input id="age-band-rate85-plus-zig-2" type="number" step="0.01" min={0} value={ageBandRate85PlusZig} onChange={(e) => setAgeBandRate85PlusZig(e.target.value)} data-testid="input-edit-version-ageband-85-plus-zig" />
             </div>
           </div>
 

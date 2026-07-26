@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { isValidNationalId } from "@shared/validation";
-import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star } from "lucide-react";
+import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AppChrome } from "@/components/layout/app-chrome";
 
@@ -19,7 +19,16 @@ interface ProductWithVersions {
   id: string;
   name: string;
   code: string;
-  versions: { id: string; version: number; premiumMonthlyUsd?: string; premiumMonthlyZar?: string }[];
+  versions: { id: string; version: number; premiumMonthlyUsd?: string; premiumMonthlyZar?: string; premiumMonthlyZig?: string }[];
+}
+
+/** First configured monthly premium for a version, USD > ZAR > ZiG priority (matches this
+ *  page's pre-existing USD-first default when more than one currency is set). */
+function pickPremium(v: { premiumMonthlyUsd?: string; premiumMonthlyZar?: string; premiumMonthlyZig?: string } | undefined): { amount: string; currency: "USD" | "ZAR" | "ZIG" } {
+  if (v?.premiumMonthlyUsd) return { amount: v.premiumMonthlyUsd, currency: "USD" };
+  if (v?.premiumMonthlyZar) return { amount: v.premiumMonthlyZar, currency: "ZAR" };
+  if (v?.premiumMonthlyZig) return { amount: v.premiumMonthlyZig, currency: "ZIG" };
+  return { amount: "", currency: "USD" };
 }
 
 interface RegistrationOptions {
@@ -103,12 +112,13 @@ export default function JoinRegisterPage() {
           }
           const first = preselected?.product || data.products[0];
           const firstVersion = preselected?.version || first?.versions?.[0];
+          const firstPremium = pickPremium(firstVersion);
           setForm((f) => ({
             ...f,
             productId: first?.id || "",
             productVersionId: firstVersion?.id || "",
-            premiumAmount: firstVersion?.premiumMonthlyUsd || firstVersion?.premiumMonthlyZar || "",
-            premiumCurrency: firstVersion?.premiumMonthlyUsd ? "USD" : firstVersion?.premiumMonthlyZar ? "ZAR" : "USD",
+            premiumAmount: firstPremium.amount,
+            premiumCurrency: firstPremium.currency,
           }));
         } else {
           setOptions(null);
@@ -131,11 +141,12 @@ export default function JoinRegisterPage() {
     const currentValid = versions.some((v) => v.id === form.productVersionId);
     if (!currentValid) {
       const first = versions[0];
+      const premium = pickPremium(first);
       setForm((f) => ({
         ...f,
         productVersionId: first?.id || "",
-        premiumAmount: first?.premiumMonthlyUsd || first?.premiumMonthlyZar || "",
-        premiumCurrency: first?.premiumMonthlyUsd ? "USD" : first?.premiumMonthlyZar ? "ZAR" : "USD",
+        premiumAmount: premium.amount,
+        premiumCurrency: premium.currency,
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -297,9 +308,43 @@ export default function JoinRegisterPage() {
 
   if (!options) return null;
 
+  const heroSteps = [
+    { icon: UserPlus, label: "Enter your details" },
+    { icon: CheckCircle2, label: "Get your policy number" },
+    { icon: Star, label: "You're covered" },
+  ];
+
   return (
-    <AppChrome center={false} mainClassName="py-6 sm:py-8 flex justify-center">
-      <Card className="w-full max-w-lg shadow-lg">
+    <AppChrome center={false} mainClassName="py-6 sm:py-8 flex justify-center relative overflow-hidden">
+      {/* Decorative ambience — purely visual, does not affect layout flow or the form below. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+        <div className="absolute -top-24 -left-20 h-72 w-72 rounded-full bg-primary/15 blur-3xl" />
+        <div className="absolute top-1/3 -right-20 h-80 w-80 rounded-full bg-emerald-400/15 dark:bg-emerald-500/10 blur-3xl" />
+        <div className="absolute -bottom-24 left-1/4 h-64 w-64 rounded-full bg-sky-400/15 dark:bg-sky-500/10 blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-lg space-y-5">
+        <div className="text-center space-y-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full border bg-card/80 backdrop-blur px-3 py-1 text-xs font-medium text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" /> Takes about 2 minutes
+          </span>
+          {/* Animated "how it works" strip — stands in for a walkthrough video: each step
+              highlights in sequence on a loop so the flow is legible at a glance. */}
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            {heroSteps.map((s, i) => (
+              <div
+                key={s.label}
+                className="register-hero-step rounded-xl border bg-card/70 backdrop-blur px-2 py-3 flex flex-col items-center gap-1.5"
+                style={{ animationDelay: `${i * 1.1}s` }}
+              >
+                <s.icon className="h-5 w-5 text-primary" aria-hidden="true" />
+                <span className="text-[11px] font-medium text-muted-foreground leading-tight text-center">{s.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      <Card className="w-full shadow-lg">
         <CardHeader className="text-center">
           <div className="mx-auto h-14 w-14 bg-primary/10 text-primary rounded-xl flex items-center justify-center mb-4">
             <UserPlus size={28} />
@@ -420,11 +465,12 @@ export default function JoinRegisterPage() {
                   value={form.productVersionId}
                   onChange={(e) => {
                     const v = versions.find((x) => x.id === e.target.value);
+                    const premium = pickPremium(v);
                     setForm((f) => ({
                       ...f,
                       productVersionId: e.target.value,
-                      premiumAmount: v?.premiumMonthlyUsd || v?.premiumMonthlyZar || "",
-                      premiumCurrency: v?.premiumMonthlyUsd ? "USD" : v?.premiumMonthlyZar ? "ZAR" : "USD",
+                      premiumAmount: premium.amount,
+                      premiumCurrency: premium.currency,
                     }));
                   }}
                   required
@@ -436,7 +482,7 @@ export default function JoinRegisterPage() {
                   {versions.map((v) => (
                     <option key={v.id} value={v.id}>
                       Version {v.version}
-                      {([["USD", v.premiumMonthlyUsd], ["ZAR", v.premiumMonthlyZar]] as const)
+                      {([["USD", v.premiumMonthlyUsd], ["ZAR", v.premiumMonthlyZar], ["ZIG", v.premiumMonthlyZig]] as const)
                         .filter(([, val]) => val)
                         .map(([cur, val]) => ` — ${val} ${cur}/mo`)
                         .join("")}
@@ -628,6 +674,18 @@ export default function JoinRegisterPage() {
           </CardFooter>
         </form>
       </Card>
+      </div>
+
+      <style>{`
+        @keyframes registerHeroStepPulse {
+          0%, 76%, 100% { box-shadow: none; border-color: hsl(var(--border)); transform: scale(1); }
+          8%, 25% { box-shadow: 0 0 0 3px hsl(var(--primary) / 0.2); border-color: hsl(var(--primary) / 0.6); transform: scale(1.04); }
+        }
+        .register-hero-step { animation: registerHeroStepPulse 3.3s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .register-hero-step { animation: none; }
+        }
+      `}</style>
     </AppChrome>
   );
 }

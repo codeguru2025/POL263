@@ -23,7 +23,7 @@ interface AgentCard {
 
 interface RegistrationOptions {
   agentName: string;
-  products: { id: string; name: string; versions: { id: string; premiumMonthlyUsd?: string; premiumMonthlyZar?: string }[] }[];
+  products: { id: string; name: string; versions: { id: string; premiumMonthlyUsd?: string; premiumMonthlyZar?: string; premiumMonthlyZig?: string }[] }[];
 }
 
 function youtubeEmbedUrl(url: string): string | null {

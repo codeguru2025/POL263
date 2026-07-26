@@ -8,6 +8,7 @@
 import { and, eq, gte, lte, ne } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { claims, productVersions } from "@shared/schema";
+import { currencyField } from "@shared/premium-currency";
 
 /** Inclusive of both the admission and discharge day (a same-day admission+discharge counts
  *  as 1 day, matching how hospital cash plans conventionally count). */
@@ -72,9 +73,7 @@ export async function computeHospitalCashPayout(
   const [pv] = await tdb.select().from(productVersions).where(eq(productVersions.id, productVersionId)).limit(1);
   if (!pv) return { amount: "0.00", days: 0, cappedByPerClaim: false, cappedByPerYear: false };
 
-  const dailyRate = currency === "ZAR"
-    ? parseFloat(String((pv as any).dailyBenefitRateZar ?? 0))
-    : parseFloat(String((pv as any).dailyBenefitRateUsd ?? 0));
+  const dailyRate = currencyField(pv, currency, "dailyBenefitRate");
   const maxDaysPerClaim = (pv as any).maxDaysPerClaim ?? null;
   const maxDaysPerYear = (pv as any).maxDaysPerYear ?? null;
   const rawDays = daysBetweenInclusive(admissionDate, dischargeDate);

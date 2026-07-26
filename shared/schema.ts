@@ -654,10 +654,13 @@ export const productVersions = pgTable(
     effectiveTo: date("effective_to"),
     premiumMonthlyUsd: numeric("premium_monthly_usd"),
     premiumMonthlyZar: numeric("premium_monthly_zar"),
+    premiumMonthlyZig: numeric("premium_monthly_zig"),
     premiumWeeklyUsd: numeric("premium_weekly_usd"),
     premiumWeeklyZar: numeric("premium_weekly_zar"),
+    premiumWeeklyZig: numeric("premium_weekly_zig"),
     premiumBiweeklyUsd: numeric("premium_biweekly_usd"),
     premiumBiweeklyZar: numeric("premium_biweekly_zar"),
+    premiumBiweeklyZig: numeric("premium_biweekly_zig"),
     eligibilityMinAge: integer("eligibility_min_age").default(18),
     eligibilityMaxAge: integer("eligibility_max_age").default(70),
     dependentMaxAge: integer("dependent_max_age").default(20),
@@ -687,6 +690,8 @@ export const productVersions = pgTable(
     additionalMemberPremiumMonthlyUsd: numeric("additional_member_premium_monthly_usd"),
     /** Client-facing premium per additional member (per month, ZAR) for members beyond the product's included count. */
     additionalMemberPremiumMonthlyZar: numeric("additional_member_premium_monthly_zar"),
+    /** Client-facing premium per additional member (per month, ZiG) for members beyond the product's included count. */
+    additionalMemberPremiumMonthlyZig: numeric("additional_member_premium_monthly_zig"),
     /**
      * Optional age-band rates for additional (paying) members, on top of the flat rate above.
      * All nullable — a version with none of these set keeps using the flat rate untouched.
@@ -695,12 +700,16 @@ export const productVersions = pgTable(
      */
     additionalMemberRateChildUsd: numeric("additional_member_rate_child_usd"),
     additionalMemberRateChildZar: numeric("additional_member_rate_child_zar"),
+    additionalMemberRateChildZig: numeric("additional_member_rate_child_zig"),
     additionalMemberRate21To65Usd: numeric("additional_member_rate_21_65_usd"),
     additionalMemberRate21To65Zar: numeric("additional_member_rate_21_65_zar"),
+    additionalMemberRate21To65Zig: numeric("additional_member_rate_21_65_zig"),
     additionalMemberRate66To84Usd: numeric("additional_member_rate_66_84_usd"),
     additionalMemberRate66To84Zar: numeric("additional_member_rate_66_84_zar"),
+    additionalMemberRate66To84Zig: numeric("additional_member_rate_66_84_zig"),
     additionalMemberRate85PlusUsd: numeric("additional_member_rate_85_plus_usd"),
     additionalMemberRate85PlusZar: numeric("additional_member_rate_85_plus_zar"),
+    additionalMemberRate85PlusZig: numeric("additional_member_rate_85_plus_zig"),
     /**
      * Hospital cash benefit config (server/hospital-cash-claims.ts) — only relevant when the
      * parent product's benefitTrigger is 'hospitalization'; null/unused for the funeral cash-
@@ -710,6 +719,7 @@ export const productVersions = pgTable(
      */
     dailyBenefitRateUsd: numeric("daily_benefit_rate_usd"),
     dailyBenefitRateZar: numeric("daily_benefit_rate_zar"),
+    dailyBenefitRateZig: numeric("daily_benefit_rate_zig"),
     maxDaysPerClaim: integer("max_days_per_claim"),
     maxDaysPerYear: integer("max_days_per_year"),
     /**

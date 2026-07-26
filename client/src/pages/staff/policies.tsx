@@ -503,13 +503,16 @@ export default function StaffPolicies() {
   const calculatedPremium = useMemo(() => {
     if (!selectedVersion) return null;
     const { currency, paymentSchedule, memberAddOns } = createForm;
+    // Client-side preview only — the authoritative premium is computed server-side by
+    // computePolicyPremium (server/route-helpers.ts). Suffix picks USD/ZAR/ZiG the same way.
+    const suffix = currency === "ZAR" ? "Zar" : currency === "ZIG" ? "Zig" : "Usd";
     let base = 0;
     if (paymentSchedule === "monthly") {
-      base = currency === "ZAR" ? parseFloat(selectedVersion.premiumMonthlyZar || "0") : parseFloat(selectedVersion.premiumMonthlyUsd || "0");
+      base = parseFloat((selectedVersion as any)[`premiumMonthly${suffix}`] || "0");
     } else if (paymentSchedule === "weekly") {
-      base = currency === "ZAR" ? parseFloat((selectedVersion as any).premiumWeeklyZar || "0") : parseFloat(selectedVersion.premiumWeeklyUsd || "0");
+      base = parseFloat((selectedVersion as any)[`premiumWeekly${suffix}`] || "0");
     } else if (paymentSchedule === "biweekly") {
-      base = currency === "ZAR" ? parseFloat((selectedVersion as any).premiumBiweeklyZar || "0") : parseFloat(selectedVersion.premiumBiweeklyUsd || "0");
+      base = parseFloat((selectedVersion as any)[`premiumBiweekly${suffix}`] || "0");
     }
     if (base === 0) return null;
 
@@ -568,10 +571,9 @@ export default function StaffPolicies() {
 
     // Use the dedicated additional-member rate if set; otherwise fall back to
     // underwriter rates (mirrors the backend computePolicyPremium logic exactly).
+    const additionalMemberSuffix = createForm.currency === "ZAR" ? "Zar" : createForm.currency === "ZIG" ? "Zig" : "Usd";
     const additionalRateMonthly = parseFloat(String(
-      createForm.currency === "ZAR"
-        ? (selectedVersion as any).additionalMemberPremiumMonthlyZar || "0"
-        : (selectedVersion as any).additionalMemberPremiumMonthlyUsd || "0"
+      (selectedVersion as any)[`additionalMemberPremiumMonthly${additionalMemberSuffix}`] || "0"
     ));
 
     let dependantSurcharge = 0;
@@ -3150,6 +3152,7 @@ export default function StaffPolicies() {
                         v{v.version} · {[
                           v.premiumMonthlyUsd ? `USD ${Number(v.premiumMonthlyUsd).toFixed(2)}/mo` : null,
                           v.premiumMonthlyZar ? `ZAR ${Number(v.premiumMonthlyZar).toFixed(2)}/mo` : null,
+                          v.premiumMonthlyZig ? `ZiG ${Number(v.premiumMonthlyZig).toFixed(2)}/mo` : null,
                         ].filter(Boolean).join(" · ")}
                       </SelectItem>
                     ))}

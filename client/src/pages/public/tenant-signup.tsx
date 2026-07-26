@@ -4,7 +4,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, CheckCircle2, Receipt, Check, ArrowLeft, Copy, Clock } from "lucide-react";
+import { Loader2, CheckCircle2, Receipt, Check, ArrowLeft, Copy, Clock, Building2, Sparkles, Rocket } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import {
@@ -148,8 +148,47 @@ export default function TenantSignup() {
   const step2Valid = !!planId;
   const step3Valid = adminDisplayName.trim().length > 0 && /\S+@\S+\.\S+/.test(adminEmail) && adminPassword.length >= 8 && adminPassword === adminPasswordConfirm;
 
+  const signupHeroSteps = [
+    { icon: Building2, label: "Tell us about your business" },
+    { icon: Sparkles, label: "Pick a plan" },
+    { icon: Rocket, label: "Start your trial instantly" },
+  ];
+
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-b from-teal-50 via-gray-50 to-gray-50 flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Decorative ambience — purely visual. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+        <div className="absolute -top-24 -left-20 h-80 w-80 rounded-full bg-teal-300/25 blur-3xl" />
+        <div className="absolute top-1/4 -right-24 h-96 w-96 rounded-full bg-emerald-300/20 blur-3xl" />
+        <div className="absolute -bottom-28 left-1/3 h-72 w-72 rounded-full bg-cyan-300/20 blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-xl space-y-5 relative">
+        {step === 1 && (
+          <div className="text-center space-y-3">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-white/80 backdrop-blur px-3 py-1 text-xs font-medium text-teal-800">
+              <Clock className="h-3.5 w-3.5" /> 14-day free trial — no charge until it ends
+            </span>
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">
+              Run your book on POL263 in minutes
+            </h1>
+            {/* Animated "how it works" strip — stands in for a walkthrough video: each step
+                highlights in sequence on a loop so the flow is legible at a glance. */}
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 pt-1">
+              {signupHeroSteps.map((s, i) => (
+                <div
+                  key={s.label}
+                  className="signup-hero-step rounded-xl border border-gray-200 bg-white/70 backdrop-blur px-2 py-3 flex flex-col items-center gap-1.5"
+                  style={{ animationDelay: `${i * 1.1}s` }}
+                >
+                  <s.icon className="h-5 w-5 text-teal-700" aria-hidden="true" />
+                  <span className="text-[11px] font-medium text-gray-600 leading-tight text-center">{s.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       <div className="w-full max-w-xl bg-white rounded-2xl shadow-lg overflow-hidden">
         <div className="bg-teal-700 px-6 py-5 text-white">
           <p className="text-xs font-semibold uppercase tracking-widest opacity-80">Start your free trial</p>
@@ -449,6 +488,18 @@ export default function TenantSignup() {
           )}
         </div>
       </div>
+      </div>
+
+      <style>{`
+        @keyframes signupHeroStepPulse {
+          0%, 76%, 100% { box-shadow: none; border-color: rgb(229 231 235); transform: scale(1); }
+          8%, 25% { box-shadow: 0 0 0 3px rgb(13 148 136 / 0.2); border-color: rgb(13 148 136 / 0.6); transform: scale(1.04); }
+        }
+        .signup-hero-step { animation: signupHeroStepPulse 3.3s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .signup-hero-step { animation: none; }
+        }
+      `}</style>
     </div>
   );
 }

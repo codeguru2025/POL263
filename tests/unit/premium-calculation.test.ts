@@ -20,10 +20,13 @@ const BASE_VERSION: any = {
   productId: "prod1",
   premiumMonthlyUsd: "50.00",
   premiumMonthlyZar: "900.00",
+  premiumMonthlyZig: "2100.00",
   premiumWeeklyUsd: "12.50",
   premiumWeeklyZar: "230.00",
+  premiumWeeklyZig: "525.00",
   premiumBiweeklyUsd: "25.00",
   premiumBiweeklyZar: "460.00",
+  premiumBiweeklyZig: "1050.00",
   dependentMaxAge: "21",
   underwriterAmountAdult: "10.00",
   underwriterAmountChild: "5.00",
@@ -51,6 +54,11 @@ describe("computePolicyPremium — base premium", () => {
   it("returns base monthly ZAR premium", async () => {
     const result = await computePolicyPremium("org1", "pv1", "ZAR", "monthly", [], undefined, undefined, []);
     expect(result).toBe("900.00");
+  });
+
+  it("returns base monthly ZIG premium", async () => {
+    const result = await computePolicyPremium("org1", "pv1", "ZIG", "monthly", [], undefined, undefined, []);
+    expect(result).toBe("2100.00");
   });
 
   it("returns weekly USD premium", async () => {
@@ -210,6 +218,26 @@ describe("computePolicyPremium — age-band pricing", () => {
     const result = await computePolicyPremium("org1", "pv1", "ZAR", "monthly", [], undefined, undefined, dobs);
     // base (ZAR 900) + 0 (unconfigured ZAR age-band rate) = 900, not a thrown error
     expect(parseFloat(result)).toBeCloseTo(900.0, 2);
+  });
+
+  it("falls back to $0 (not a crash) when the age-band rate is unconfigured for ZIG specifically", async () => {
+    vi.mocked(storage.getProduct).mockResolvedValue(BASE_PRODUCT);
+    const dobs = ["1980-01-01", "1982-01-01"]; // 1 extra adult
+    // AGE_BAND_VERSION only has USD rates configured — ZIG fields are all undefined/null.
+    const result = await computePolicyPremium("org1", "pv1", "ZIG", "monthly", [], undefined, undefined, dobs);
+    // base (ZIG 2100) + 0 (unconfigured ZIG age-band rate) = 2100, not a thrown error
+    expect(parseFloat(result)).toBeCloseTo(2100.0, 2);
+  });
+
+  it("charges the ZIG age-band rate when configured, independently of USD/ZAR", async () => {
+    vi.mocked(storage.getProductVersion).mockResolvedValue({
+      ...AGE_BAND_VERSION,
+      additionalMemberRate21To65Zig: "20.00",
+    });
+    const dobs = ["1980-01-01", "1982-01-01"]; // 1 extra adult
+    const result = await computePolicyPremium("org1", "pv1", "ZIG", "monthly", [], undefined, undefined, dobs);
+    // base (ZIG 2100) + 1 extra adult * ZIG 20 = 2120
+    expect(parseFloat(result)).toBeCloseTo(2120.0, 2);
   });
 });
 

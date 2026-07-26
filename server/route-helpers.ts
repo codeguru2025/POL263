@@ -5,6 +5,9 @@ import { eq, and } from "drizzle-orm";
 import { commissionLedgerEntries } from "@shared/schema";
 import { notifyUser } from "./user-notifications";
 import { resolveOrSyncTenantUserId } from "./tenant-db";
+import { currencyField } from "@shared/premium-currency";
+
+export { currencyField };
 
 export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string) {
   const user = req.user as any;
@@ -73,16 +76,16 @@ function monthlyToScheduleFactor(paymentSchedule: string): number {
  * version's own dependentMaxAge cutoff; the rest split into 21-65 / 66-84 / 85+.
  */
 function ageBandRate(pv: any, currency: string, age: number | null, childThresholdAge: number): number {
-  // A product version with age-band pricing configured only in one currency previously priced
-  // every extra member in the OTHER currency at a silent $0 — no error, no warning, just an
+  // A product version with age-band pricing configured only in some currencies previously priced
+  // every extra member in an unconfigured currency at a silent $0 — no error, no warning, just an
   // unexplained revenue gap that only shows up as a shortfall weeks later. Deliberately NOT
-  // falling back to the other currency's raw number here — USD and ZAR rates aren't
-  // interchangeable 1:1 (no FX conversion happens in this function), so guessing a substitute
-  // value would trade an obviously-wrong $0 for a plausible-looking but still wrong charge,
-  // which is harder to notice, not easier. Surfacing it loudly is the fix; the real fix is an
-  // admin filling in the missing rate.
-  const pick = (usdField: string, zarField: string) => {
-    const field = currency === "ZAR" ? zarField : usdField;
+  // falling back to another currency's raw number here — USD/ZAR/ZIG rates aren't interchangeable
+  // 1:1 (no FX conversion happens in this function), so guessing a substitute value would trade an
+  // obviously-wrong $0 for a plausible-looking but still wrong charge, which is harder to notice,
+  // not easier. Surfacing it loudly is the fix; the real fix is an admin filling in the missing rate.
+  const pick = (baseField: string) => {
+    const suffix = currency === "ZAR" ? "Zar" : currency === "ZIG" ? "Zig" : "Usd";
+    const field = `${baseField}${suffix}`;
     const raw = pv[field];
     if (raw == null || String(raw).trim() === "") {
       structuredLog("warn", "Age-band rate unconfigured for this currency — pricing this member at $0", {
@@ -92,20 +95,18 @@ function ageBandRate(pv: any, currency: string, age: number | null, childThresho
     }
     return parseFloat(String(raw));
   };
-  if (age !== null && age < childThresholdAge) {
-    return pick("additionalMemberRateChildUsd", "additionalMemberRateChildZar");
-  }
-  if (age !== null && age >= 85) return pick("additionalMemberRate85PlusUsd", "additionalMemberRate85PlusZar");
-  if (age !== null && age >= 66) return pick("additionalMemberRate66To84Usd", "additionalMemberRate66To84Zar");
-  return pick("additionalMemberRate21To65Usd", "additionalMemberRate21To65Zar");
+  if (age !== null && age < childThresholdAge) return pick("additionalMemberRateChild");
+  if (age !== null && age >= 85) return pick("additionalMemberRate85Plus");
+  if (age !== null && age >= 66) return pick("additionalMemberRate66To84");
+  return pick("additionalMemberRate21To65");
 }
 
 function hasAgeBandRates(pv: any): boolean {
   return [
-    pv.additionalMemberRateChildUsd, pv.additionalMemberRateChildZar,
-    pv.additionalMemberRate21To65Usd, pv.additionalMemberRate21To65Zar,
-    pv.additionalMemberRate66To84Usd, pv.additionalMemberRate66To84Zar,
-    pv.additionalMemberRate85PlusUsd, pv.additionalMemberRate85PlusZar,
+    pv.additionalMemberRateChildUsd, pv.additionalMemberRateChildZar, pv.additionalMemberRateChildZig,
+    pv.additionalMemberRate21To65Usd, pv.additionalMemberRate21To65Zar, pv.additionalMemberRate21To65Zig,
+    pv.additionalMemberRate66To84Usd, pv.additionalMemberRate66To84Zar, pv.additionalMemberRate66To84Zig,
+    pv.additionalMemberRate85PlusUsd, pv.additionalMemberRate85PlusZar, pv.additionalMemberRate85PlusZig,
   ].some((v) => v != null);
 }
 
@@ -133,16 +134,16 @@ export async function computePolicyPremium(
   const product = preloaded?.product !== undefined ? preloaded.product : await storage.getProduct(pv.productId, orgId);
   let base = 0;
   if (paymentSchedule === "monthly") {
-    base = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
+    base = currencyField(pv, currency, "premiumMonthly");
   } else if (paymentSchedule === "weekly") {
-    base = currency === "ZAR" ? parseFloat(String((pv as any).premiumWeeklyZar ?? 0)) : parseFloat(String(pv.premiumWeeklyUsd ?? 0));
+    base = currencyField(pv, currency, "premiumWeekly");
   } else if (paymentSchedule === "biweekly") {
-    base = currency === "ZAR" ? parseFloat(String((pv as any).premiumBiweeklyZar ?? 0)) : parseFloat(String(pv.premiumBiweeklyUsd ?? 0));
+    base = currencyField(pv, currency, "premiumBiweekly");
   } else {
     // No dedicated quarterly/yearly premium field exists on product_versions — derive from the
     // monthly rate rather than silently leaving base at 0 for any schedule other than the three
     // handled above (this previously zeroed out the entire base premium for "yearly" policies).
-    const monthly = currency === "ZAR" ? parseFloat(String(pv.premiumMonthlyZar ?? 0)) : parseFloat(String(pv.premiumMonthlyUsd ?? 0));
+    const monthly = currencyField(pv, currency, "premiumMonthly");
     base = monthly * monthlyToScheduleFactor(paymentSchedule);
   }
 
@@ -189,10 +190,8 @@ export async function computePolicyPremium(
       else children += 1;
     }
 
-    // Dedicated client-facing additional-member rates (set by admin on product version)
-    const additionalRateUsd = parseFloat(String(pv.additionalMemberPremiumMonthlyUsd ?? 0));
-    const additionalRateZar = parseFloat(String(pv.additionalMemberPremiumMonthlyZar ?? 0));
-    const additionalRate = currency === "ZAR" ? additionalRateZar : additionalRateUsd;
+    // Dedicated client-facing additional-member rate (set by admin on product version)
+    const additionalRate = currencyField(pv, currency, "additionalMemberPremiumMonthly");
 
     if (hasAgeBandRates(pv)) {
       // Age-band behaviour: each member beyond the product's included count is priced
