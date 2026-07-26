@@ -3191,7 +3191,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Policy not found" });
     const existing = await storage.getWaiverForPolicy(policy.id, user.organizationId);
     if (existing && existing.status === "pending") return res.status(409).json({ message: "A waiver request is already pending for this policy." });
-    const requestedBy = await resolveUserIdForOrgDatabase(user.id, user.organizationId) ?? user.id;
+    // requestedBy is NOT NULL/FK'd to this org's own users table — see the payment-links route
+    // above for why resolveUserIdForOrgDatabase's null fallback to the raw registry id is unsafe.
+    const requestedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const waiver = await storage.createWaiverRequest({
       organizationId: user.organizationId,
       policyId: policy.id,
@@ -4449,7 +4451,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const client = await storage.getClient(policy.clientId, user.organizationId);
     if (!client) return res.status(404).json({ message: "Client not found" });
     const token = crypto.randomBytes(24).toString("base64url");
-    const createdByUserId = (await resolveUserIdForOrgDatabase(user.id, user.organizationId)) ?? user.id;
+    // createdByUserId is NOT NULL and FK'd to this org's own users table — must resolve to a
+    // real row there, not fall back to the raw registry id (resolveUserIdForOrgDatabase's null
+    // fallback would still violate the FK for any org on a dedicated database whose mirrored
+    // user row doesn't exist yet). See resolveOrSyncTenantUserId's other call sites for the
+    // same pattern.
+    const createdByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const link = await storage.createPaymentLink({
       organizationId: user.organizationId,
       policyId,
@@ -9422,9 +9429,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const existing = await storage.getAttendanceLogById(req.params.id as string, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Log not found" });
     if (!existing.clockInOffSite && !existing.clockOutOffSite) return res.status(409).json({ message: "No off-site flag to dismiss." });
-    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
-    const resolvedReviewer = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
-    const updated = await storage.dismissAttendanceOffSiteFlag(existing.id, user.organizationId, resolvedReviewer ?? user.id);
+    // offSiteReviewedBy is FK'd to this org's own users table — resolveOrSyncTenantUserId, not
+    // resolveUserIdForOrgDatabase's null fallback to the raw registry id (see the payment-links
+    // route for why that's unsafe for a dedicated-database org).
+    const resolvedReviewer = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const updated = await storage.dismissAttendanceOffSiteFlag(existing.id, user.organizationId, resolvedReviewer);
     await auditLog(req, "DISMISS_ATTENDANCE_OFFSITE", "AttendanceLog", existing.id, existing, updated);
     return res.json(updated);
   });

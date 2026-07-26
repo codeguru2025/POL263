@@ -61,6 +61,7 @@ import {
   RefreshCw,
   UserCircle,
   MessageSquare,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -321,7 +322,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
         { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
         { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
-        { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet" },
+        { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet", agentHidden: true },
         { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
         { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
         { href: "/staff/leads", label: "Quotations", icon: Target, permission: "read:lead" },
@@ -486,7 +487,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
         { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
             { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
-            { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet" },
+            { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet", agentHidden: true },
             { href: "/staff/pricebook", label: "Funeral Pricing", icon: BookOpen, permission: "write:product" },
             { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck, agentHidden: true },
           ]),
@@ -785,6 +786,26 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <div className="px-2 py-1.5 text-xs text-muted-foreground border-b mb-1 truncate">{user?.email}</div>
+                {user?.referralCode && (
+                  <>
+                    <DropdownMenuItem
+                      className="cursor-pointer"
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}/join/${user.referralCode}`);
+                        toast({ title: "Referral link copied" });
+                      }}
+                      data-testid="menuitem-copy-referral-link"
+                    >
+                      <Link2 className="h-4 w-4 mr-2" /> Copy my referral link
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <a href={`/join/${user.referralCode}`} target="_blank" rel="noopener noreferrer" className="cursor-pointer" data-testid="menuitem-view-vcard">
+                        <ExternalLink className="h-4 w-4 mr-2" /> View my vCard page
+                      </a>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem asChild>
                   <Link href="/staff/settings" className="cursor-pointer">Settings</Link>
                 </DropdownMenuItem>

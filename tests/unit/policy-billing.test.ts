@@ -7,6 +7,7 @@ vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 vi.mock("../../server/tenant-db", () => ({ resolveOrSyncTenantUserId: vi.fn((_orgId: string, userId: string) => Promise.resolve(userId)) }));
 
 import { periodsBetween, computePolicyOutstanding } from "../../server/route-helpers";
+import { monthsFromPeriod } from "../../server/policy-status-on-payment";
 
 const daysAgo = (n: number) => {
   const d = new Date();
@@ -98,5 +99,28 @@ describe("premium-change reconciliation math", () => {
 
   it("backdated downgrade ⇒ negative (credit)", () => {
     expect(recon(15, 10, daysAgo(61))).toBeCloseTo(-10, 2); // -5 × 2
+  });
+});
+
+// Regression coverage for the "months paid" bug: advancePolicyCycle anchors cycles to a fixed
+// day-length, not calendar months, so a single monthly cycle routinely crosses a calendar month
+// boundary (e.g. FLK00012's real period was 2026-07-27 to 2026-08-25 for one $10 payment on a
+// $10/mo premium) — calendar-month-diff arithmetic overcounted that as 2 months on the receipt.
+describe("monthsFromPeriod", () => {
+  it("counts a single monthly cycle as 1 month even when it crosses a calendar-month boundary", () => {
+    expect(monthsFromPeriod("2026-07-27", "2026-08-25", "monthly")).toBe(1);
+  });
+
+  it("counts a single monthly cycle as 1 month when it doesn't cross a boundary", () => {
+    expect(monthsFromPeriod("2026-07-01", "2026-07-30", "monthly")).toBe(1);
+  });
+
+  it("counts two consecutive monthly cycles as 2 months", () => {
+    expect(monthsFromPeriod("2026-07-27", "2026-09-24", "monthly")).toBe(2);
+  });
+
+  it("counts weekly and biweekly cycles by their own cycle length", () => {
+    expect(monthsFromPeriod("2026-07-01", "2026-07-07", "weekly")).toBe(1);
+    expect(monthsFromPeriod("2026-07-01", "2026-07-14", "biweekly")).toBe(1);
   });
 });

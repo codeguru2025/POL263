@@ -140,7 +140,10 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:report",
     "read:finance",
     "receipt:mobile", "receipt:transfer",
-    "use:fleet",
+    // use:fleet was never intentional here — it's for self-service vehicle checkout/GPS-ping
+    // (drivers, fleet_ops, mortuary_attendant), and its narrow original purpose is also
+    // overloaded to gate the full Fleet Tracking dashboard nav link/page. Sales agents have no
+    // reason to check out company vehicles or see fleet-wide tracking data.
   ],
   claims_officer: [
     "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",

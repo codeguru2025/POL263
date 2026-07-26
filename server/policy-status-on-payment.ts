@@ -23,11 +23,26 @@ function daysBetween(aStr: string, bStr: string): number {
   );
 }
 
-function cycleDays(schedule: string): number {
+export function cycleDays(schedule: string): number {
   if (schedule === "weekly") return 7;
   if (schedule === "biweekly") return 14;
   if (schedule === "yearly") return 365;
   return 30; // monthly
+}
+
+/**
+ * Number of pay-cycles covered by an inclusive [periodFrom, periodTo] range, e.g. one produced
+ * by advancePolicyCycle below. Cycles are anchored to a fixed length in days, not calendar
+ * months, so a single cycle routinely spans two different calendar months (a cycle starting the
+ * 15th ends the 13th of the next month) — callers must derive the count from the day-span divided
+ * by the cycle length, not calendar-month arithmetic, or a single month's payment overcounts as
+ * two whenever the cycle happens to cross a month boundary.
+ */
+export function monthsFromPeriod(periodFrom: string, periodTo: string, paymentSchedule: string): number {
+  const f = new Date(periodFrom + "T00:00:00");
+  const t = new Date(periodTo + "T00:00:00");
+  const inclusiveDays = Math.round((t.getTime() - f.getTime()) / 86400000) + 1;
+  return Math.max(1, Math.round(inclusiveDays / cycleDays(paymentSchedule)));
 }
 
 /**

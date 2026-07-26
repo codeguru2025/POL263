@@ -8,6 +8,7 @@ import { cpDb } from "./control-plane-db";
 import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
 import { todayInHarare } from "./date-utils";
+import { monthsFromPeriod } from "./policy-status-on-payment";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
@@ -3862,6 +3863,7 @@ export class DatabaseStorage implements IStorage {
         policyNumber: policies.policyNumber,
         policyPremium: policies.premiumAmount,
         policyStatus: policies.status,
+        paymentSchedule: policies.paymentSchedule,
         agentDisplayName: users.displayName,
         agentEmail: users.email,
         policyBranchName: policyBranches.name,
@@ -3898,11 +3900,8 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    const calcMonths = (from: string | null, to: string | null): number => {
-      if (!from || !to) return 1;
-      const d1 = new Date(from), d2 = new Date(to);
-      return Math.max(1, Math.round((d2.getTime() - d1.getTime()) / (30 * 24 * 60 * 60 * 1000)) + 1);
-    };
+    const calcMonths = (from: string | null, to: string | null, paymentSchedule: string | null): number =>
+      from && to ? monthsFromPeriod(from, to, paymentSchedule || "monthly") : 1;
 
     return rows.map((r) => ({
       receiptId: r.receiptId,
@@ -3919,7 +3918,7 @@ export class DatabaseStorage implements IStorage {
       commissionPayable: r.commissionAmount ?? null,
       commissionType: r.commissionType ?? null,
       agentName: (r.agentDisplayName || r.agentEmail || "").trim(),
-      monthsPaidFor: calcMonths(r.periodFrom, r.periodTo),
+      monthsPaidFor: calcMonths(r.periodFrom, r.periodTo, r.paymentSchedule),
       receiptCount: totalReceiptCounts[r.policyId] ?? 0,
       policyBranch: r.policyBranchName || "",
       paymentBranch: r.paymentBranchName || "",

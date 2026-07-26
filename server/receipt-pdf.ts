@@ -18,6 +18,7 @@ import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
 import { buildVerifyUrl, buildEnrollUrl, buildVerifyQrBuffer, drawCompanyStamp, drawVerifyQrPanel } from "./pdf-utils";
 import { getDbForOrg } from "./tenant-db";
+import { monthsFromPeriod } from "./policy-status-on-payment";
 import { sql } from "drizzle-orm";
 
 /** Exported for tests. */
@@ -71,12 +72,6 @@ function fmtDateTime(d: Date): string {
 }
 
 /** Number of calendar months a receipt covers (e.g. "01 Jun 2026 – 30 Jun 2026" → 1). */
-function monthsFromPeriod(from: string, to: string): number {
-  const f = new Date(from + "T00:00:00");
-  const t = new Date(to + "T00:00:00");
-  return Math.max(1, (t.getFullYear() - f.getFullYear()) * 12 + (t.getMonth() - f.getMonth()) + 1);
-}
-
 async function loadReceiptContext(receipt: any, orgId: string) {
   const [policy, client, org, activeAdvert] = await Promise.all([
     storage.getPolicy(receipt.policyId, orgId),
@@ -290,7 +285,7 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     const meta = receipt.metadataJson as Record<string, string> | null;
     if (receipt.periodFrom && receipt.periodTo) {
       const pfmt = (s: string) => fmtDate(new Date(s + "T00:00:00"));
-      const months = monthsFromPeriod(receipt.periodFrom, receipt.periodTo);
+      const months = monthsFromPeriod(receipt.periodFrom, receipt.periodTo, policy.paymentSchedule || "monthly");
       row("Cover Period", `${pfmt(receipt.periodFrom)} – ${pfmt(receipt.periodTo)}`);
       row("Months Paid", `${months} ${months === 1 ? "month" : "months"}`);
     }
@@ -426,7 +421,7 @@ export async function streamReceiptToResponse(
     const meta = receipt.metadataJson as Record<string, string> | null;
     if (receipt.periodFrom && receipt.periodTo) {
       const pfmt2 = (s: string) => fmtDate(new Date(s + "T00:00:00"));
-      const months2 = monthsFromPeriod(receipt.periodFrom, receipt.periodTo);
+      const months2 = monthsFromPeriod(receipt.periodFrom, receipt.periodTo, policy.paymentSchedule || "monthly");
       row("Cover Period", `${pfmt2(receipt.periodFrom)} – ${pfmt2(receipt.periodTo)}`);
       row("Months Paid", `${months2} ${months2 === 1 ? "month" : "months"}`);
     }
@@ -583,7 +578,7 @@ export async function streamThermalReceiptToResponse(
     const meta = receipt.metadataJson as Record<string, string> | null;
     if (receipt.periodFrom && receipt.periodTo) {
       const pfmtT = (s: string) => fmtDate(new Date(s + "T00:00:00"));
-      const monthsT = monthsFromPeriod(receipt.periodFrom, receipt.periodTo);
+      const monthsT = monthsFromPeriod(receipt.periodFrom, receipt.periodTo, policy.paymentSchedule || "monthly");
       gap(2);
       lft("Period:", `${pfmtT(receipt.periodFrom)} –`);
       lft("", `${pfmtT(receipt.periodTo)}`);
