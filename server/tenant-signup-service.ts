@@ -14,7 +14,7 @@ import { eq } from "drizzle-orm";
 import crypto from "crypto";
 import argon2 from "argon2";
 import { cpDb } from "./control-plane-db";
-import { pendingTenantSignups, type PendingTenantSignup } from "@shared/control-plane-schema";
+import { pendingTenantSignups, tenants as cpTenants, type PendingTenantSignup } from "@shared/control-plane-schema";
 import { getPaynowConfig } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
@@ -207,8 +207,8 @@ export async function initiatePendingSignupPaynow(input: InitiatePendingSignupPa
  * call (a duplicate poll, or the webhook firing after the poll already succeeded) is a no-op
  * rather than double-provisioning.
  */
-async function provisionFromPending(pending: PendingTenantSignup): Promise<void> {
-  if (pending.provisionedTenantId) return; // already provisioned — idempotent no-op
+async function provisionFromPending(pending: PendingTenantSignup): Promise<{ tenantId: string }> {
+  if (pending.provisionedTenantId) return { tenantId: pending.provisionedTenantId }; // already provisioned — idempotent no-op
 
   const org = await storage.createOrganization({
     name: pending.businessName,
@@ -239,6 +239,7 @@ async function provisionFromPending(pending: PendingTenantSignup): Promise<void>
     await cpDb.update(pendingTenantSignups).set({
       status: "provisioned", provisionedTenantId: org.id, updatedAt: new Date(),
     }).where(eq(pendingTenantSignups.id, pending.id));
+    return { tenantId: org.id };
   } catch (err) {
     await rollbackFailedProvisioning(org.id, pending.businessName);
     await cpDb.update(pendingTenantSignups).set({ status: "failed", updatedAt: new Date() }).where(eq(pendingTenantSignups.id, pending.id));
@@ -247,10 +248,18 @@ async function provisionFromPending(pending: PendingTenantSignup): Promise<void>
   }
 }
 
-export async function pollPendingSignupStatus(pendingId: string): Promise<{ status: string; provisioned?: boolean; error?: string }> {
+async function getTenantSlug(tenantId: string): Promise<string | undefined> {
+  const [row] = await cpDb.select({ slug: cpTenants.slug }).from(cpTenants).where(eq(cpTenants.id, tenantId)).limit(1);
+  return row?.slug;
+}
+
+export async function pollPendingSignupStatus(pendingId: string): Promise<{ status: string; provisioned?: boolean; error?: string; slug?: string }> {
   const [pending] = await cpDb.select().from(pendingTenantSignups).where(eq(pendingTenantSignups.id, pendingId)).limit(1);
   if (!pending) return { status: "unknown", error: "Signup not found" };
-  if (pending.status === "provisioned") return { status: "provisioned", provisioned: true };
+  if (pending.status === "provisioned") {
+    const slug = pending.provisionedTenantId ? await getTenantSlug(pending.provisionedTenantId) : undefined;
+    return { status: "provisioned", provisioned: true, slug };
+  }
   if (!pending.paynowPollUrl) return { status: pending.status, error: "No poll URL — initiate a payment first" };
 
   try {
@@ -265,8 +274,9 @@ export async function pollPendingSignupStatus(pendingId: string): Promise<{ stat
     await cpDb.update(pendingTenantSignups).set({ paynowStatus: status, updatedAt: new Date() }).where(eq(pendingTenantSignups.id, pendingId));
 
     if (isPaynowPaidStatus(status)) {
-      await provisionFromPending(pending);
-      return { status: "provisioned", provisioned: true };
+      const { tenantId } = await provisionFromPending(pending);
+      const slug = await getTenantSlug(tenantId);
+      return { status: "provisioned", provisioned: true, slug };
     }
     if (isPaynowFailedStatus(status)) return { status: "failed" };
     return { status: pending.status };

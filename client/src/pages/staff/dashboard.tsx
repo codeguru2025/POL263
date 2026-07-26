@@ -32,6 +32,9 @@ import {
   Database,
   RefreshCw,
   Globe,
+  Clock,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +53,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useMemo } from "react";
 import {
@@ -105,6 +112,8 @@ interface ControlPlaneTenantMetrics {
   isActive: boolean;
   createdAt: string;
   logoUrl?: string | null;
+  domainCommissioned: boolean;
+  domainCommissionedAt: string | null;
   usersCount: number;
   policiesCount: number;
   activePoliciesCount: number;
@@ -417,6 +426,106 @@ function BackupHealthSection() {
   );
 }
 
+// ─── Pending Domain Commissioning (platform owner) ─────────────────────────
+function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneTenantMetrics[] }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [confirmTarget, setConfirmTarget] = useState<ControlPlaneTenantMetrics | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const commissionMutation = useMutation({
+    mutationFn: async (tenantId: string) => {
+      const res = await apiRequest("POST", `/api/platform/tenants/${tenantId}/commission-domain`, {});
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.message || "Failed to mark as commissioned");
+      return j;
+    },
+    onSuccess: () => {
+      toast({ title: "Domain commissioned", description: "This tenant's subdomain is marked as live." });
+      setConfirmTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/dashboard"] });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  if (tenants.length === 0) return null;
+
+  const subdomainFor = (t: ControlPlaneTenantMetrics) => `${t.slug}.${window.location.hostname}`;
+
+  function copySubdomain(t: ControlPlaneTenantMetrics) {
+    navigator.clipboard.writeText(subdomainFor(t));
+    setCopiedId(t.id);
+    setTimeout(() => setCopiedId((cur) => (cur === t.id ? null : cur)), 2000);
+  }
+
+  return (
+    <>
+      <CardSection
+        title="Pending domain commissioning"
+        description="New tenants whose subdomain still needs to be added to DigitalOcean's Domains list before it resolves."
+        icon={Clock}
+      >
+        <div className="space-y-3">
+          {tenants.map((t) => (
+            <div key={t.id} className="border border-amber-300 bg-amber-50 dark:bg-amber-900/10 rounded-lg p-4 flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="font-medium truncate">{t.name}</p>
+                <div className="flex items-center gap-1 mt-1.5">
+                  <span className="text-xs font-mono bg-white dark:bg-background border rounded px-2 py-0.5 truncate" data-testid={`text-pending-subdomain-${t.id}`}>
+                    {subdomainFor(t)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 shrink-0"
+                    onClick={() => copySubdomain(t)}
+                    aria-label={copiedId === t.id ? "Copied to clipboard" : "Copy subdomain"}
+                    data-testid={`button-copy-pending-subdomain-${t.id}`}
+                  >
+                    {copiedId === t.id ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={() => setConfirmTarget(t)}
+                data-testid={`button-commission-domain-${t.id}`}
+              >
+                Mark as commissioned
+              </Button>
+            </div>
+          ))}
+        </div>
+      </CardSection>
+
+      <AlertDialog open={!!confirmTarget} onOpenChange={(open) => { if (!open) setConfirmTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm domain commissioned</AlertDialogTitle>
+            <AlertDialogDescription>
+              Confirm you've added <span className="font-mono">{confirmTarget ? subdomainFor(confirmTarget) : ""}</span> to
+              the DigitalOcean App Platform Domains list for this app. This can't be auto-verified — only confirm once
+              DO shows the domain as Active.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => confirmTarget && commissionMutation.mutate(confirmTarget.id)}
+              disabled={commissionMutation.isPending}
+            >
+              {commissionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 const FUNNEL_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#ddd6fe", "#ede9fe"];
 const STATUS_COLORS: Record<string, string> = {
   inactive: "#3b82f6",
@@ -718,6 +827,7 @@ export default function StaffDashboard() {
   if (isControlPlaneMode) {
     const summary = controlPlaneData?.summary;
     const tenants = controlPlaneData?.tenants ?? [];
+    const pendingCommission = tenants.filter((t) => !t.domainCommissioned);
     return (
       <StaffLayout>
         <PageShell>
@@ -795,6 +905,8 @@ export default function StaffDashboard() {
                 </div>
               )}
           </CardSection>
+
+          <PendingDomainCommissioningSection tenants={pendingCommission} />
 
           <BackupHealthSection />
 

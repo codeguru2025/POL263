@@ -1222,6 +1222,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         isActive: cpTenants.isActive,
         createdAt: cpTenants.createdAt,
         logoUrl: cpTenantBranding.logoUrl,
+        domainCommissioned: cpTenants.domainCommissioned,
+        domainCommissionedAt: cpTenants.domainCommissionedAt,
       })
       .from(cpTenants)
       .leftJoin(cpTenantBranding, eq(cpTenantBranding.tenantId, cpTenants.id))

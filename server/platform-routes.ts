@@ -89,10 +89,11 @@ export function registerPlatformRoutes(app: Express): void {
             isActive: tenant.isActive,
             licenseStatus: tenant.licenseStatus,
             provisioningState: tenant.provisioningState,
+            domainCommissioned: tenant.domainCommissioned,
             suspendedAt: tenant.suspendedAt,
             suspendReason: tenant.suspendReason,
           }
-        : { slug: null, isActive: true, licenseStatus: "active", provisioningState: "ready", suspendedAt: null, suspendReason: null },
+        : { slug: null, isActive: true, licenseStatus: "active", provisioningState: "ready", domainCommissioned: true, suspendedAt: null, suspendReason: null },
       branding: {
         logoUrl: org.logoUrl,
         signatureUrl: org.signatureUrl,
@@ -398,6 +399,22 @@ export function registerPlatformRoutes(app: Express): void {
     await cpDb.delete(tenantDomains).where(and(eq(tenantDomains.tenantId, id), eq(tenantDomains.id, domainId)));
     await auditLog(req, "REMOVE_TENANT_DOMAIN", "TenantDomain", id, { domainId }, null, id);
     return res.status(204).send();
+  });
+
+  // ── Domain commissioning ─────────────────────────────────────────
+  // Marks the tenant's default subdomain as manually added to DigitalOcean App Platform's
+  // Domains list — see docs on tenants.domainCommissioned in shared/control-plane-schema.ts.
+  app.post("/api/platform/tenants/:id/commission-domain", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const [before] = await cpDb.select().from(cpTenants).where(eq(cpTenants.id, id)).limit(1);
+    if (before?.domainCommissioned) {
+      return res.json({ slug: before.slug, domainCommissioned: true, domainCommissionedAt: before.domainCommissionedAt });
+    }
+    await cpDb.update(cpTenants).set({ domainCommissioned: true, domainCommissionedAt: new Date() }).where(eq(cpTenants.id, id));
+    const [after] = await cpDb.select().from(cpTenants).where(eq(cpTenants.id, id)).limit(1);
+    await auditLog(req, "COMMISSION_TENANT_DOMAIN", "Tenant", id, before, after, id);
+    return res.json({ slug: after?.slug, domainCommissioned: after?.domainCommissioned, domainCommissionedAt: after?.domainCommissionedAt });
   });
 
   // ── Database routing ────────────────────────────────────────────

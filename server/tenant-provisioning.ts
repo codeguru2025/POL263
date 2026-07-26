@@ -80,6 +80,10 @@ export async function provisionTenantCore(org: Organization, opts: ProvisionTena
     isActive: true,
     licenseStatus: "trial",
     provisioningState: "ready",
+    // New tenant's subdomain isn't reachable yet — it still needs to be manually added to
+    // DigitalOcean App Platform's Domains list before DO will route/issue a cert for it.
+    // See POST /api/platform/tenants/:id/commission-domain.
+    domainCommissioned: false,
   });
   await seedTenantBranding(org.id, {
     logoUrl: org.logoUrl,

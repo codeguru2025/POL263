@@ -37,6 +37,14 @@ export const tenants = pgTable(
     licenseStatus: text("license_status").default("active").notNull(),
     /** provisioning | ready | migrating | suspended */
     provisioningState: text("provisioning_state").default("ready").notNull(),
+    /**
+     * Whether this tenant's default subdomain ({slug}.pol263.com) has been added to
+     * DigitalOcean App Platform's Domains list — required before DO will route traffic
+     * or issue a cert for it. Defaults true (safe for all existing, already-working
+     * tenants); provisionTenantCore explicitly sets this false for newly created ones.
+     */
+    domainCommissioned: boolean("domain_commissioned").default(true).notNull(),
+    domainCommissionedAt: timestamp("domain_commissioned_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     suspendedAt: timestamp("suspended_at"),
     suspendReason: text("suspend_reason"),

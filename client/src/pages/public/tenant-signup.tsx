@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, CheckCircle2, Receipt, Check, ArrowLeft } from "lucide-react";
+import { Loader2, CheckCircle2, Receipt, Check, ArrowLeft, Copy, Clock } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import {
@@ -56,6 +56,9 @@ export default function TenantSignup() {
   const [payerEmail, setPayerEmail] = useState("");
   const [polling, setPolling] = useState(false);
   const [provisioned, setProvisioned] = useState(false);
+  const [tenantSlug, setTenantSlug] = useState("");
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileMethods = ["ecocash", "onemoney"];
 
   const { data: plansData, isLoading: plansLoading } = useQuery<{ plans: PublicPlan[] }>({
@@ -107,15 +110,32 @@ export default function TenantSignup() {
     queryKey: [`/api/public/tenant-signup/${token}/poll`, polling],
     queryFn: async () => {
       const res = await apiRequest("POST", `/api/public/tenant-signup/${token}/poll`);
-      return res.json() as Promise<{ status: string; provisioned?: boolean }>;
+      return res.json() as Promise<{ status: string; provisioned?: boolean; slug?: string }>;
     },
     enabled: !!token && polling,
     refetchInterval: 5000,
   });
 
   useEffect(() => {
-    if (pollData?.provisioned) { setPolling(false); setProvisioned(true); }
+    if (pollData?.provisioned) {
+      setPolling(false);
+      setProvisioned(true);
+      if (pollData.slug) setTenantSlug(pollData.slug);
+    }
   }, [pollData]);
+
+  useEffect(() => () => {
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+  }, []);
+
+  const subdomain = tenantSlug ? `${tenantSlug}.${window.location.hostname}` : "";
+  function copySubdomain() {
+    if (!subdomain) return;
+    navigator.clipboard.writeText(subdomain);
+    setCopied(true);
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+  }
 
   const canInitiate = method === "visa_mastercard" ? payerEmail.trim().length > 3 : payerPhone.trim().length >= 9;
   const selectedPlan = plans.find((p) => p.id === planId);
@@ -322,11 +342,54 @@ export default function TenantSignup() {
 
           {step === 4 && (
             provisioned ? (
-              <div className="flex flex-col items-center gap-3 text-center py-6">
+              <div className="flex flex-col items-center gap-4 text-center py-6">
                 <CheckCircle2 className="w-10 h-10 text-emerald-600" />
                 <p className="font-semibold">Your trial is live</p>
-                <p className="text-sm text-gray-500">14 days, no further charge until it ends. Log in to get started.</p>
-                <Button className="mt-2" onClick={() => { window.location.href = "/staff"; }}>Go to login</Button>
+                <p className="text-sm text-gray-500">14 days, no further charge until it ends.</p>
+
+                {subdomain && (
+                  <div className="w-full rounded-xl border-2 border-amber-400 bg-amber-50 p-4 text-left space-y-3">
+                    <div className="flex items-center gap-2 text-amber-800">
+                      <Clock className="h-4 w-4 shrink-0" />
+                      <p className="text-sm font-bold">
+                        Your workspace will be live at this address within 24 hours, after we verify your account.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <input
+                        readOnly
+                        value={subdomain}
+                        className="flex-1 text-sm bg-white border border-amber-300 rounded px-2 py-1.5 font-mono truncate"
+                        data-testid="input-tenant-subdomain"
+                        aria-label="Your organisation's address"
+                        onClick={(e) => (e.target as HTMLInputElement).select()}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 shrink-0"
+                        onClick={copySubdomain}
+                        data-testid="button-copy-tenant-subdomain"
+                        aria-label={copied ? "Copied to clipboard" : "Copy address"}
+                      >
+                        {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-amber-700">
+                      Save this address — it's how you and your team will reach your dashboard.
+                    </p>
+                  </div>
+                )}
+
+                <Button className="mt-2 w-full" onClick={() => { window.location.href = "/"; }}>Done</Button>
+                <button
+                  type="button"
+                  className="text-xs text-gray-400 hover:text-gray-600 underline"
+                  onClick={() => { window.location.href = "/staff"; }}
+                >
+                  Already commissioned and want to try now? Go to login
+                </button>
               </div>
             ) : (
               <div className="space-y-5">

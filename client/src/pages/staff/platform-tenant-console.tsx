@@ -41,6 +41,7 @@ interface TenantConfig {
   name: string;
   lifecycle: {
     slug: string | null; isActive: boolean; licenseStatus: string; provisioningState: string;
+    domainCommissioned: boolean;
     suspendedAt: string | null; suspendReason: string | null;
   };
   branding: {
@@ -859,6 +860,12 @@ function LifecycleTab({ tenantId, lifecycle, onSaved }: { tenantId: string; life
           <p><span className="text-muted-foreground">Slug:</span> <span className="font-mono">{lifecycle.slug ?? "—"}</span></p>
           <p><span className="text-muted-foreground">Access:</span> {lifecycle.isActive ? "Active" : "Suspended"}</p>
           <p><span className="text-muted-foreground">Provisioning:</span> <span className="capitalize">{lifecycle.provisioningState}</span></p>
+          <p>
+            <span className="text-muted-foreground">Domain:</span>{" "}
+            {lifecycle.domainCommissioned
+              ? <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Commissioned</Badge>
+              : <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30">Pending DO setup</Badge>}
+          </p>
           {lifecycle.suspendedAt && (
             <p><span className="text-muted-foreground">Suspended at:</span> {new Date(lifecycle.suspendedAt).toLocaleString()}</p>
           )}
