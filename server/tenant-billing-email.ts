@@ -127,6 +127,16 @@ export async function sendRestoredEmail(orgId: string): Promise<void> {
   );
 }
 
+export async function sendInfrastructureReadyEmail(orgId: string): Promise<void> {
+  const name = await tenantName(orgId);
+  await send(
+    orgId,
+    `${name}: dedicated infrastructure provisioned`,
+    `<p>Your POL263 account has been moved onto dedicated, isolated infrastructure — no action needed, everything continues to work exactly as before.</p>`,
+    `Your POL263 account has been moved onto dedicated, isolated infrastructure — no action needed.`,
+  );
+}
+
 /** Resolves the latest open invoice for a tenant, used by sweep steps that only have a subscription/tenantId in hand. */
 export async function getLatestOpenInvoice(tenantId: string): Promise<TenantInvoice | undefined> {
   const [row] = await cpDb.select().from(tenantInvoices).where(and(eq(tenantInvoices.tenantId, tenantId), eq(tenantInvoices.status, "open"))).limit(1);

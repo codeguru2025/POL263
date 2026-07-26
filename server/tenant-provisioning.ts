@@ -20,6 +20,7 @@ import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { ROLE_PERMISSION_MAP } from "./constants";
 import { isReservedTenantSlug } from "./tenant-slug-policy";
+import { commissionTenantDomainOnDO } from "./do-app-domains";
 import type { Organization } from "@shared/schema";
 
 /** URL-safe slug for subdomain routing (tenant-resolver.ts), unique in the control plane. */
@@ -73,6 +74,14 @@ export async function provisionTenantCore(org: Organization, opts: ProvisionTena
   // (see POST /api/platform/tenants/:id/commission-database) flips this to "active" once
   // a real database has been provisioned and their data migrated onto it.
   const slug = await generateUniqueTenantSlug(org.name);
+  // Best-effort: try to add this tenant's subdomain to DO's Domains list automatically. Never
+  // throws — a failure here (no API token configured, DO API error, etc.) just means the tenant
+  // falls into the manual "Pending domain commissioning" queue on the platform dashboard
+  // instead, which remains fully functional either way. See server/do-app-domains.ts.
+  const baseDomain = process.env.APP_BASE_DOMAIN || "localhost";
+  const autoCommissioned = baseDomain !== "localhost"
+    ? await commissionTenantDomainOnDO(`${slug}.${baseDomain}`)
+    : false;
   await cpDb.insert(cpTenants).values({
     id: org.id,
     name: org.name,
@@ -80,10 +89,11 @@ export async function provisionTenantCore(org: Organization, opts: ProvisionTena
     isActive: true,
     licenseStatus: "trial",
     provisioningState: "ready",
-    // New tenant's subdomain isn't reachable yet — it still needs to be manually added to
-    // DigitalOcean App Platform's Domains list before DO will route/issue a cert for it.
-    // See POST /api/platform/tenants/:id/commission-domain.
-    domainCommissioned: false,
+    // Whether this tenant's subdomain is already reachable. If DO commissioning above
+    // succeeded, it's true immediately; otherwise it needs the manual step — see
+    // POST /api/platform/tenants/:id/commission-domain.
+    domainCommissioned: autoCommissioned,
+    domainCommissionedAt: autoCommissioned ? new Date() : null,
   });
   await seedTenantBranding(org.id, {
     logoUrl: org.logoUrl,

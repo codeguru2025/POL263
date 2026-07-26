@@ -57,6 +57,7 @@ export default function TenantSignup() {
   const [polling, setPolling] = useState(false);
   const [provisioned, setProvisioned] = useState(false);
   const [tenantSlug, setTenantSlug] = useState("");
+  const [domainCommissioned, setDomainCommissioned] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileMethods = ["ecocash", "onemoney"];
@@ -110,7 +111,7 @@ export default function TenantSignup() {
     queryKey: [`/api/public/tenant-signup/${token}/poll`, polling],
     queryFn: async () => {
       const res = await apiRequest("POST", `/api/public/tenant-signup/${token}/poll`);
-      return res.json() as Promise<{ status: string; provisioned?: boolean; slug?: string }>;
+      return res.json() as Promise<{ status: string; provisioned?: boolean; slug?: string; domainCommissioned?: boolean }>;
     },
     enabled: !!token && polling,
     refetchInterval: 5000,
@@ -121,6 +122,7 @@ export default function TenantSignup() {
       setPolling(false);
       setProvisioned(true);
       if (pollData.slug) setTenantSlug(pollData.slug);
+      setDomainCommissioned(!!pollData.domainCommissioned);
     }
   }, [pollData]);
 
@@ -348,18 +350,20 @@ export default function TenantSignup() {
                 <p className="text-sm text-gray-500">14 days, no further charge until it ends.</p>
 
                 {subdomain && (
-                  <div className="w-full rounded-xl border-2 border-amber-400 bg-amber-50 p-4 text-left space-y-3">
-                    <div className="flex items-center gap-2 text-amber-800">
-                      <Clock className="h-4 w-4 shrink-0" />
+                  <div className={`w-full rounded-xl border-2 p-4 text-left space-y-3 ${domainCommissioned ? "border-emerald-400 bg-emerald-50" : "border-amber-400 bg-amber-50"}`}>
+                    <div className={`flex items-center gap-2 ${domainCommissioned ? "text-emerald-800" : "text-amber-800"}`}>
+                      {domainCommissioned ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <Clock className="h-4 w-4 shrink-0" />}
                       <p className="text-sm font-bold">
-                        Your workspace will be live at this address within 24 hours, after we verify your account.
+                        {domainCommissioned
+                          ? "Your workspace is ready right now at this address."
+                          : "Your workspace will be live at this address within 24 hours, after we verify your account."}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">
                       <input
                         readOnly
                         value={subdomain}
-                        className="flex-1 text-sm bg-white border border-amber-300 rounded px-2 py-1.5 font-mono truncate"
+                        className={`flex-1 text-sm bg-white rounded px-2 py-1.5 font-mono truncate border ${domainCommissioned ? "border-emerald-300" : "border-amber-300"}`}
                         data-testid="input-tenant-subdomain"
                         aria-label="Your organisation's address"
                         onClick={(e) => (e.target as HTMLInputElement).select()}
@@ -376,20 +380,26 @@ export default function TenantSignup() {
                         {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
                       </Button>
                     </div>
-                    <p className="text-xs text-amber-700">
+                    <p className={`text-xs ${domainCommissioned ? "text-emerald-700" : "text-amber-700"}`}>
                       Save this address — it's how you and your team will reach your dashboard.
                     </p>
                   </div>
                 )}
 
-                <Button className="mt-2 w-full" onClick={() => { window.location.href = "/"; }}>Done</Button>
-                <button
-                  type="button"
-                  className="text-xs text-gray-400 hover:text-gray-600 underline"
-                  onClick={() => { window.location.href = "/staff"; }}
-                >
-                  Already commissioned and want to try now? Go to login
-                </button>
+                {domainCommissioned ? (
+                  <Button className="mt-2 w-full" onClick={() => { window.location.href = "/staff"; }}>Go to login</Button>
+                ) : (
+                  <>
+                    <Button className="mt-2 w-full" onClick={() => { window.location.href = "/"; }}>Done</Button>
+                    <button
+                      type="button"
+                      className="text-xs text-gray-400 hover:text-gray-600 underline"
+                      onClick={() => { window.location.href = "/staff"; }}
+                    >
+                      Already commissioned and want to try now? Go to login
+                    </button>
+                  </>
+                )}
               </div>
             ) : (
               <div className="space-y-5">

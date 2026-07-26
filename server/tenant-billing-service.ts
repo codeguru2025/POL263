@@ -30,6 +30,7 @@ import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache } from "./module-gate";
 import { structuredLog } from "./logger";
 import { sendRestoredEmail } from "./tenant-billing-email";
+import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
 const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
@@ -161,16 +162,31 @@ export async function applyTenantInvoicePayment(
         detail: { source: opts.source, actorId: opts.actorId ?? null, newPeriodEnd: cycleEnd },
       });
 
-      return { ok: true as const, tenantId: subscription.tenantId, wasSuspended: subscription.status === "suspended" };
+      return {
+        ok: true as const,
+        tenantId: subscription.tenantId,
+        wasSuspended: subscription.status === "suspended",
+        priorStatus: subscription.status,
+      };
     });
 
     if (!result.ok || (result as any).alreadyPaid) return { ok: result.ok, error: (result as any).error };
 
     const tenantId = (result as any).tenantId as string;
+    const priorStatus = (result as any).priorStatus as string;
     invalidateTenantActiveCache(tenantId);
     invalidateTenantModuleCache(tenantId);
 
     sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
+
+    // First-ever conversion from trial to a paid subscription — commission dedicated
+    // infrastructure. Gated strictly on "trialing" (not "past_due"/"suspended") so renewals and
+    // grace-period recoveries never re-trigger this; fire-and-forget, never allowed to affect
+    // the payment response — see server/tenant-db-commissioning.ts for the full safety net.
+    if (priorStatus === "trialing") {
+      commissionDedicatedTenantDatabase(tenantId).catch((err) =>
+        structuredLog("error", "commissionDedicatedTenantDatabase failed", { tenantId, error: (err as Error).message }));
+    }
 
     return { ok: true };
   } catch (err) {

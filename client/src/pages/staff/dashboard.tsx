@@ -114,6 +114,8 @@ interface ControlPlaneTenantMetrics {
   logoUrl?: string | null;
   domainCommissioned: boolean;
   domainCommissionedAt: string | null;
+  dbMigrationState: string | null;
+  hasDedicatedDb: boolean;
   usersCount: number;
   policiesCount: number;
   activePoliciesCount: number;
@@ -526,6 +528,69 @@ function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneT
   );
 }
 
+// ─── Pending Database Provisioning (platform owner) ────────────────────────
+function PendingDatabaseProvisioningSection({ tenants }: { tenants: ControlPlaneTenantMetrics[] }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const provisionMutation = useMutation({
+    mutationFn: async (tenantId: string) => {
+      const res = await apiRequest("POST", `/api/platform/tenants/${tenantId}/commission-database`, {});
+      const j = await res.json();
+      if (!res.ok || j?.ok === false) throw new Error(j.reason || j.message || "Failed to provision dedicated database");
+      return j;
+    },
+    onSuccess: () => {
+      toast({ title: "Database provisioning", description: "Started — this tenant's dashboard entry will update once it completes." });
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/dashboard"] });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  if (tenants.length === 0) return null;
+
+  return (
+    <CardSection
+      title="Pending dedicated database provisioning"
+      description="Tenants whose subscription is active but haven't been moved onto a dedicated database yet."
+      icon={Database}
+    >
+      <div className="space-y-3">
+        {tenants.map((t) => {
+          const isFailed = t.dbMigrationState === "failed";
+          const isRunning = t.dbMigrationState === "running";
+          return (
+            <div
+              key={t.id}
+              className={`border rounded-lg p-4 flex items-center justify-between gap-4 ${
+                isFailed ? "border-destructive/40 bg-destructive/5" : "border-amber-300 bg-amber-50 dark:bg-amber-900/10"
+              }`}
+            >
+              <div className="min-w-0">
+                <p className="font-medium truncate">{t.name}</p>
+                <p className="text-xs text-muted-foreground mt-1 capitalize">
+                  {isRunning ? "Provisioning in progress…" : isFailed ? "Provisioning failed" : "Not yet provisioned"}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant={isFailed ? "destructive" : "outline"}
+                className="shrink-0"
+                onClick={() => provisionMutation.mutate(t.id)}
+                disabled={provisionMutation.isPending || isRunning}
+                data-testid={`button-commission-database-${t.id}`}
+              >
+                {provisionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : null}
+                {isFailed ? "Retry" : "Provision now"}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </CardSection>
+  );
+}
+
 const FUNNEL_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#ddd6fe", "#ede9fe"];
 const STATUS_COLORS: Record<string, string> = {
   inactive: "#3b82f6",
@@ -828,6 +893,7 @@ export default function StaffDashboard() {
     const summary = controlPlaneData?.summary;
     const tenants = controlPlaneData?.tenants ?? [];
     const pendingCommission = tenants.filter((t) => !t.domainCommissioned);
+    const pendingDbProvisioning = tenants.filter((t) => !t.hasDedicatedDb && (t.dbMigrationState === "pending" || t.dbMigrationState === "failed" || t.dbMigrationState === "running"));
     return (
       <StaffLayout>
         <PageShell>
@@ -907,6 +973,8 @@ export default function StaffDashboard() {
           </CardSection>
 
           <PendingDomainCommissioningSection tenants={pendingCommission} />
+
+          <PendingDatabaseProvisioningSection tenants={pendingDbProvisioning} />
 
           <BackupHealthSection />
 

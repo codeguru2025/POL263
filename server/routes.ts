@@ -50,7 +50,7 @@ import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS } from "./constants";
 import { isReservedTenantSlug } from "./tenant-slug-policy";
 import { cpDb } from "./control-plane-db";
-import { tenants as cpTenants, tenantBranding as cpTenantBranding } from "@shared/control-plane-schema";
+import { tenants as cpTenants, tenantBranding as cpTenantBranding, tenantDatabases as cpTenantDatabases } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
 import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount } from "../shared/validation";
@@ -1224,9 +1224,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         logoUrl: cpTenantBranding.logoUrl,
         domainCommissioned: cpTenants.domainCommissioned,
         domainCommissionedAt: cpTenants.domainCommissionedAt,
+        dbMigrationState: cpTenantDatabases.migrationState,
+        hasDedicatedDb: sql<boolean>`${cpTenantDatabases.databaseUrl} IS NOT NULL`,
       })
       .from(cpTenants)
       .leftJoin(cpTenantBranding, eq(cpTenantBranding.tenantId, cpTenants.id))
+      .leftJoin(cpTenantDatabases, eq(cpTenantDatabases.tenantId, cpTenants.id))
       .where(and(eq(cpTenants.isActive, true), sql`${cpTenants.name} NOT LIKE '%(deleted)'`));
 
     const DASHBOARD_BATCH = 5;

@@ -248,17 +248,20 @@ async function provisionFromPending(pending: PendingTenantSignup): Promise<{ ten
   }
 }
 
-async function getTenantSlug(tenantId: string): Promise<string | undefined> {
-  const [row] = await cpDb.select({ slug: cpTenants.slug }).from(cpTenants).where(eq(cpTenants.id, tenantId)).limit(1);
-  return row?.slug;
+async function getTenantSlugAndCommission(tenantId: string): Promise<{ slug?: string; domainCommissioned?: boolean }> {
+  const [row] = await cpDb.select({ slug: cpTenants.slug, domainCommissioned: cpTenants.domainCommissioned })
+    .from(cpTenants).where(eq(cpTenants.id, tenantId)).limit(1);
+  return row ? { slug: row.slug, domainCommissioned: row.domainCommissioned } : {};
 }
 
-export async function pollPendingSignupStatus(pendingId: string): Promise<{ status: string; provisioned?: boolean; error?: string; slug?: string }> {
+export async function pollPendingSignupStatus(pendingId: string): Promise<{ status: string; provisioned?: boolean; error?: string; slug?: string; domainCommissioned?: boolean }> {
   const [pending] = await cpDb.select().from(pendingTenantSignups).where(eq(pendingTenantSignups.id, pendingId)).limit(1);
   if (!pending) return { status: "unknown", error: "Signup not found" };
   if (pending.status === "provisioned") {
-    const slug = pending.provisionedTenantId ? await getTenantSlug(pending.provisionedTenantId) : undefined;
-    return { status: "provisioned", provisioned: true, slug };
+    const { slug, domainCommissioned } = pending.provisionedTenantId
+      ? await getTenantSlugAndCommission(pending.provisionedTenantId)
+      : {};
+    return { status: "provisioned", provisioned: true, slug, domainCommissioned };
   }
   if (!pending.paynowPollUrl) return { status: pending.status, error: "No poll URL — initiate a payment first" };
 
@@ -275,8 +278,8 @@ export async function pollPendingSignupStatus(pendingId: string): Promise<{ stat
 
     if (isPaynowPaidStatus(status)) {
       const { tenantId } = await provisionFromPending(pending);
-      const slug = await getTenantSlug(tenantId);
-      return { status: "provisioned", provisioned: true, slug };
+      const { slug, domainCommissioned } = await getTenantSlugAndCommission(tenantId);
+      return { status: "provisioned", provisioned: true, slug, domainCommissioned };
     }
     if (isPaynowFailedStatus(status)) return { status: "failed" };
     return { status: pending.status };

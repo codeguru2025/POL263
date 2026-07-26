@@ -30,6 +30,8 @@ import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
 import { auditLog } from "./route-helpers";
 import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
+import { upsertTenantDatabaseRouting } from "./tenant-data-migration";
+import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
 
 const KNOWN_FEATURE_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications"];
 
@@ -425,22 +427,27 @@ export function registerPlatformRoutes(app: Express): void {
     if (databaseUrl !== undefined && databaseUrl !== null && typeof databaseUrl !== "string") {
       return res.status(400).json({ message: "databaseUrl must be a string or null" });
     }
-    const [existing] = await cpDb.select({ tenantId: tenantDatabases.tenantId }).from(tenantDatabases)
-      .where(eq(tenantDatabases.tenantId, id)).limit(1);
     const patch = {
       databaseUrl: databaseUrl || null,
       databaseDirectUrl: databaseDirectUrl || null,
       migrationState: migrationState || "current",
-      lastMigratedAt: new Date(),
     };
-    if (existing) {
-      await cpDb.update(tenantDatabases).set(patch).where(eq(tenantDatabases.tenantId, id));
-    } else {
-      await cpDb.insert(tenantDatabases).values({ tenantId: id, ...patch });
-    }
+    await upsertTenantDatabaseRouting(cpDb, id, patch);
     structuredLog("warn", "Tenant database routing changed by platform owner", { tenantId: id, hasDatabaseUrl: !!patch.databaseUrl });
     await auditLog(req, "SET_TENANT_DATABASE_ROUTING", "TenantDatabase", id, null, { hasDatabaseUrl: !!patch.databaseUrl }, id);
     return res.json({ hasDatabaseUrl: !!patch.databaseUrl, migrationState: patch.migrationState });
+  });
+
+  // ── Automatic database commissioning (manual trigger / retry) ──────
+  // Platform-owner equivalent of the automatic trial→paid trigger in
+  // server/tenant-billing-service.ts — lets the owner (re)try provisioning on demand,
+  // e.g. from the dashboard's "Pending dedicated database provisioning" section.
+  app.post("/api/platform/tenants/:id/commission-database", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const result = await commissionDedicatedTenantDatabase(id);
+    await auditLog(req, "COMMISSION_TENANT_DATABASE", "Tenant", id, null, result, id);
+    return res.json(result);
   });
 
   // ── Storage routing ─────────────────────────────────────────────
