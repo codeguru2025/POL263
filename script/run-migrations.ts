@@ -20,11 +20,11 @@ import * as cpSchema from "@shared/control-plane-schema";
 
 const migrationsDir = path.resolve(process.cwd(), "migrations");
 
-function normalizeConn(s: string): string {
+export function normalizeConn(s: string): string {
   return s.trim();
 }
 
-async function connectPool(connectionString: string): Promise<pg.Pool> {
+export async function connectPool(connectionString: string): Promise<pg.Pool> {
   let cs = normalizeConn(connectionString);
   const acceptSelfSigned =
     process.env.DB_ACCEPT_SELF_SIGNED === "true" ||
@@ -69,7 +69,28 @@ async function connectPool(connectionString: string): Promise<pg.Pool> {
   return pool;
 }
 
-async function migrateOneDatabase(label: string, pool: pg.Pool): Promise<number> {
+export interface MigrateOneDatabaseOpts {
+  /** Defaults to migrations/ — pass migrations/control-plane (etc.) for a different schema stream. */
+  migrationsDir?: string;
+  /** Table used to sanity-check the base schema already exists. Defaults to "organizations". */
+  baseTable?: string;
+  /** Hint shown if baseTable is missing. Defaults to the db:push guidance for the main schema. */
+  baseTableHint?: string;
+  /** Skip the baseTable existence check entirely — for schema streams whose first migration
+   *  file (e.g. migrations/control-plane/0000_*.sql) is itself a full CREATE TABLE baseline
+   *  capable of bootstrapping a brand-new, empty database. */
+  skipBaseTableCheck?: boolean;
+}
+
+export async function migrateOneDatabase(label: string, pool: pg.Pool, opts: MigrateOneDatabaseOpts = {}): Promise<number> {
+  const dir = opts.migrationsDir ?? migrationsDir;
+  const baseTable = opts.baseTable ?? "organizations";
+  const baseTableHint = opts.baseTableHint ?? (
+    /ondigitalocean\.com/i.test(process.env.DATABASE_URL || "")
+      ? "Run npm run db:push:do (DigitalOcean) or npm run db:push, then run migrations again."
+      : "Run npm run db:push (or npm run db:push:do if SSL fails), then run migrations again."
+  );
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       filename TEXT PRIMARY KEY,
@@ -77,18 +98,16 @@ async function migrateOneDatabase(label: string, pool: pg.Pool): Promise<number>
     )
   `);
 
-  const { rows: tableCheck } = await pool.query<{ exists: boolean }>(`
-    SELECT EXISTS (
-      SELECT 1 FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = 'organizations'
-    ) AS exists
-  `);
-  if (!tableCheck[0]?.exists) {
-    const isDo = /ondigitalocean\.com/i.test(process.env.DATABASE_URL || "");
-    const hint = isDo
-      ? "Run npm run db:push:do (DigitalOcean) or npm run db:push, then run migrations again."
-      : "Run npm run db:push (or npm run db:push:do if SSL fails), then run migrations again.";
-    throw new Error(`[${label}] Base schema missing: public.organizations does not exist. ${hint}`);
+  if (!opts.skipBaseTableCheck) {
+    const { rows: tableCheck } = await pool.query<{ exists: boolean }>(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = $1
+      ) AS exists
+    `, [baseTable]);
+    if (!tableCheck[0]?.exists) {
+      throw new Error(`[${label}] Base schema missing: public.${baseTable} does not exist. ${baseTableHint}`);
+    }
   }
 
   const { rows: applied } = await pool.query<{ filename: string }>(
@@ -97,18 +116,18 @@ async function migrateOneDatabase(label: string, pool: pg.Pool): Promise<number>
   const appliedSet = new Set(applied.map((r) => r.filename));
 
   const files = fs
-    .readdirSync(migrationsDir)
+    .readdirSync(dir)
     .filter((f) => f.endsWith(".sql"))
     .sort();
   if (files.length === 0) {
-    console.log(`[${label}] No .sql files in migrations/`);
+    console.log(`[${label}] No .sql files in ${dir}`);
     return 0;
   }
 
   let ran = 0;
   for (const file of files) {
     if (appliedSet.has(file)) continue;
-    const filePath = path.join(migrationsDir, file);
+    const filePath = path.join(dir, file);
     const sql = fs.readFileSync(filePath, "utf-8");
     try {
       await pool.query(sql);
@@ -215,7 +234,32 @@ async function run() {
     throw err;
   }
 
-  // 2. Discover every tenant that has a dedicated database by reading the
+  // 2. Migrate the control-plane database (separate DB — tenant registry, billing,
+  //    DB routing) if a dedicated one is configured. Its first migration file
+  //    (migrations/control-plane/0000_*.sql) is a full CREATE TABLE baseline, so a
+  //    brand-new control-plane DB can be bootstrapped by this alone — see
+  //    skipBaseTableCheck below. Falls back to npm run db:push:cp if unset, same as
+  //    before this script knew about the control plane.
+  const cpUrl = (process.env.CONTROL_PLANE_DIRECT_URL || process.env.CONTROL_PLANE_DATABASE_URL)?.trim();
+  if (cpUrl && normalizeConn(cpUrl) !== mainUrl) {
+    console.log(`\nMigrating control-plane DB…`);
+    let cpMigratePool: pg.Pool | undefined;
+    try {
+      cpMigratePool = await connectPool(cpUrl);
+      await migrateOneDatabase("CONTROL_PLANE", cpMigratePool, {
+        migrationsDir: path.resolve(process.cwd(), "migrations", "control-plane"),
+        skipBaseTableCheck: true,
+      });
+    } catch (err: any) {
+      console.warn(`  [CONTROL_PLANE] WARNING: skipped — ${err?.message || err}`);
+    } finally {
+      await cpMigratePool?.end().catch(() => {});
+    }
+  } else if (!cpUrl) {
+    console.log("\nCONTROL_PLANE_DATABASE_URL/CONTROL_PLANE_DIRECT_URL not set — skipping control-plane migration (using shared DATABASE_URL for control plane).");
+  }
+
+  // 3. Discover every tenant that has a dedicated database by reading the
   //    organizations table — no per-tenant env vars needed.
   const tenants = await loadTenantUrls(mainPool);
   await mainPool.end();
@@ -227,7 +271,7 @@ async function run() {
     }
   }
 
-  // 3. DATABASE_URL_TENANT — backward-compat for CI / manual overrides.
+  // 4. DATABASE_URL_TENANT — backward-compat for CI / manual overrides.
   const tenantRaw = process.env.DATABASE_URL_TENANT?.trim();
   if (tenantRaw) {
     const alreadyCovered = tenants.some((t) => normalizeConn(t.url) === normalizeConn(tenantRaw));
@@ -236,7 +280,7 @@ async function run() {
     }
   }
 
-  // 4. SUPABASE_BACKUP_URL — optional off-site backup DB.
+  // 5. SUPABASE_BACKUP_URL — optional off-site backup DB.
   const backupRaw = process.env.SUPABASE_BACKUP_URL?.trim();
   if (backupRaw) {
     await migrateWithPool("SUPABASE_BACKUP_URL (backup)", backupRaw, mainUrl);
