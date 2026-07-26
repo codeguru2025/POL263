@@ -104,6 +104,10 @@ export async function provisionLogicalTenantDatabase(tenantId: string): Promise<
         await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}'`);
       } catch (err: any) {
         if (err?.code !== "42710") throw err; // 42710 = role already exists — idempotent retry
+        // Role survived from an earlier partial attempt, but its password is unknown to us
+        // now (never persisted anywhere) — rotate it to the one we just generated so the
+        // connection string we're about to return is actually valid.
+        await adminPool.query(`ALTER ROLE ${roleName} WITH PASSWORD '${rolePassword}'`);
       }
       await adminPool.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO ${roleName}`);
       await adminPool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT,INSERT,UPDATE,DELETE ON TABLES TO ${roleName}`);

@@ -179,11 +179,16 @@ export async function applyTenantInvoicePayment(
 
     sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
 
-    // First-ever conversion from trial to a paid subscription — commission dedicated
-    // infrastructure. Gated strictly on "trialing" (not "past_due"/"suspended") so renewals and
-    // grace-period recoveries never re-trigger this; fire-and-forget, never allowed to affect
-    // the payment response — see server/tenant-db-commissioning.ts for the full safety net.
-    if (priorStatus === "trialing") {
+    // First-ever conversion to a paid, working subscription — commission dedicated
+    // infrastructure. NOT gated on priorStatus === "trialing" alone: the billing sweep moves a
+    // subscription trialing → past_due → suspended before a late-but-still-within-grace-period
+    // payment lands, so a tenant who pays a few days late would otherwise never trip this at
+    // all. Gating on "not already active" instead covers trial-into-paid, late-within-grace, and
+    // recovered-after-suspension alike, while still skipping ordinary renewals (priorStatus
+    // already "active") — and commissionDedicatedTenantDatabase's own databaseUrl check makes it
+    // a cheap, safe no-op if a dedicated database was already provisioned. Fire-and-forget, never
+    // allowed to affect the payment response — see server/tenant-db-commissioning.ts.
+    if (priorStatus !== "active") {
       commissionDedicatedTenantDatabase(tenantId).catch((err) =>
         structuredLog("error", "commissionDedicatedTenantDatabase failed", { tenantId, error: (err as Error).message }));
     }

@@ -445,9 +445,14 @@ export function registerPlatformRoutes(app: Express): void {
   app.post("/api/platform/tenants/:id/commission-database", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
     if (!(await requireTenant(id, res))) return;
-    const result = await commissionDedicatedTenantDatabase(id);
-    await auditLog(req, "COMMISSION_TENANT_DATABASE", "Tenant", id, null, result, id);
-    return res.json(result);
+    // Fire-and-forget: the full migration (schema build, ~90-table copy, verification, cutover)
+    // can run well past any HTTP gateway timeout for a tenant with real data volume. Respond
+    // immediately and let the dashboard's existing migrationState polling reflect progress —
+    // same pattern as the automatic trial→paid trigger in tenant-billing-service.ts.
+    commissionDedicatedTenantDatabase(id)
+      .then((result) => auditLog(req, "COMMISSION_TENANT_DATABASE", "Tenant", id, null, result, id))
+      .catch((err) => structuredLog("error", "commissionDedicatedTenantDatabase (manual trigger) failed", { tenantId: id, error: (err as Error).message }));
+    return res.json({ started: true });
   });
 
   // ── Storage routing ─────────────────────────────────────────────

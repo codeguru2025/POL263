@@ -9,15 +9,19 @@
  *
  * DO App Platform has no dedicated "add a domain" endpoint — the only way to change an app's
  * domain list is to PUT the app's *entire* spec back with the domains array modified
- * (https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps/operation/apps_update).
- * Protected by a Postgres advisory lock (same pattern as backup-sync.ts's getBackupPool lock)
- * so two tenants provisioning at nearly the same moment can't race a read-modify-write of the
- * shared spec and clobber each other's domain addition.
+ * (https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps/operation/apps_update),
+ * and doing so redeploys the app (observed in practice: a full build+deploy cycle, several
+ * minutes). Calls are debounced and batched into one spec PUT (and therefore one deploy) instead
+ * of one per signup, so a burst of signups doesn't redeploy production once per tenant. Protected
+ * by a Postgres advisory lock (same pattern as backup-sync.ts's getBackupPool lock) so two app
+ * instances flushing at nearly the same moment can't race a read-modify-write of the shared spec.
  */
 import { structuredLog } from "./logger";
 
 const DO_API_BASE = "https://api.digitalocean.com/v2";
 const LOCK_KEY = 987654322;
+/** How long to wait for more signups to land before PUT-ing the batch. */
+const FLUSH_DELAY_MS = 5_000;
 
 let cachedAppId: string | null = null;
 
@@ -70,21 +74,58 @@ async function getDoAppId(): Promise<string | null> {
   }
 }
 
+interface PendingWaiter {
+  subdomain: string;
+  resolve: (ok: boolean) => void;
+}
+
+let pendingSubdomains: string[] = [];
+let pendingWaiters: PendingWaiter[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
- * Adds `subdomain` to the app's DO Domains list (type ALIAS). Returns true only once DO has
- * confirmed the updated spec; false for any failure (token missing, app not found, API error,
- * lock contention) — callers must treat false as "fell back to manual commissioning," not an
- * error to surface to the signing-up tenant.
+ * Queues `subdomain` to be added to the app's DO Domains list (type ALIAS), batched with any
+ * other subdomains queued within the next FLUSH_DELAY_MS into a single spec PUT. Resolves true
+ * once that batch's PUT is confirmed (or the domain was already present); false for any failure
+ * (token missing, app not found, API error, lock contention) — callers must treat false as
+ * "fell back to manual commissioning," not an error to surface to the signing-up tenant.
+ *
+ * Worst case on a missed flush (e.g. the process restarts mid-debounce-window) is identical to
+ * any other failure path here: the tenant falls into the manual dashboard queue.
  */
 export async function commissionTenantDomainOnDO(subdomain: string): Promise<boolean> {
   if (!getToken()) return false;
+  return new Promise<boolean>((resolve) => {
+    pendingSubdomains.push(subdomain);
+    pendingWaiters.push({ subdomain, resolve });
+    if (!flushTimer) {
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        void flushPendingDomains();
+      }, FLUSH_DELAY_MS);
+      flushTimer.unref?.();
+    }
+  });
+}
 
+async function flushPendingDomains(): Promise<void> {
+  const subdomains = Array.from(new Set(pendingSubdomains));
+  const waiters = pendingWaiters;
+  pendingSubdomains = [];
+  pendingWaiters = [];
+  if (subdomains.length === 0) return;
+
+  const ok = await addSubdomainsToDO(subdomains);
+  for (const w of waiters) w.resolve(ok);
+}
+
+async function addSubdomainsToDO(subdomains: string[]): Promise<boolean> {
   const { pool: mainPool } = await import("./db");
   const lockClient = await mainPool.connect();
   try {
     const lockResult = await lockClient.query("SELECT pg_try_advisory_lock($1) as acquired", [LOCK_KEY]);
     if (!lockResult.rows[0]?.acquired) {
-      structuredLog("warn", "DO domain automation: another instance holds the lock, skipping", { subdomain });
+      structuredLog("warn", "DO domain automation: another instance holds the lock, skipping", { subdomains });
       return false;
     }
 
@@ -93,18 +134,19 @@ export async function commissionTenantDomainOnDO(subdomain: string): Promise<boo
 
     const { app } = await doApiRequest(`/apps/${appId}`);
     const spec = app.spec;
-    const domains: any[] = spec.domains || [];
-    if (domains.some((d) => (d.domain || "").toLowerCase() === subdomain.toLowerCase())) {
-      return true; // already there — idempotent
-    }
-    spec.domains = [...domains, { domain: subdomain, type: "ALIAS" }];
+    const existing: any[] = spec.domains || [];
+    const existingLower = new Set(existing.map((d) => (d.domain || "").toLowerCase()));
+    const toAdd = subdomains.filter((s) => !existingLower.has(s.toLowerCase()));
+    if (toAdd.length === 0) return true; // all already there — idempotent
+
+    spec.domains = [...existing, ...toAdd.map((domain) => ({ domain, type: "ALIAS" }))];
 
     await doApiRequest(`/apps/${appId}`, { method: "PUT", body: JSON.stringify({ spec }) });
-    structuredLog("info", "DO domain automation: subdomain added to app Domains list", { subdomain });
+    structuredLog("info", "DO domain automation: subdomains added to app Domains list", { subdomains: toAdd });
     return true;
   } catch (err) {
     structuredLog("warn", "DO domain automation failed, falling back to manual commissioning", {
-      subdomain, error: (err as Error).message,
+      subdomains, error: (err as Error).message,
     });
     return false;
   } finally {

@@ -27,7 +27,7 @@ import pg from "pg";
 const TENANT_DB_PROVISIONING_LOCK_CLASS = 9_002_630_005;
 
 /** Deterministic string→int32 hash for the per-tenant advisory-lock key. Collisions only cause
- *  harmless retried lock contention — correctness comes from the migrationState check below,
+ *  harmless retried lock contention — correctness comes from the databaseUrl check below,
  *  not from this hash being collision-free. */
 function tenantLockKey(tenantId: string): number {
   let hash = 0;
@@ -53,10 +53,16 @@ export async function commissionDedicatedTenantDatabase(tenantId: string): Promi
   try {
     await withAdvisoryLock(TENANT_DB_PROVISIONING_LOCK_CLASS, tenantLockKey(tenantId), async () => {
       const [existing] = await cpDb.select().from(tenantDatabases).where(eq(tenantDatabases.tenantId, tenantId)).limit(1);
-      if (existing?.databaseUrl || existing?.migrationState === "running") {
-        outcome = { ok: true, reason: "already commissioned or in progress" };
+      if (existing?.databaseUrl) {
+        outcome = { ok: true, reason: "already commissioned" };
         return;
       }
+      // Deliberately NOT short-circuiting on a stale migrationState === "running" here — if a
+      // previous attempt's process died mid-commission (e.g. a deploy restarting the app), the
+      // row would be stuck at "running" forever with nothing left holding the advisory lock,
+      // and every future retry (automatic or the dashboard's "Retry" button) would silently
+      // no-op against it. The advisory lock below is what actually prevents two concurrent
+      // attempts; row state doesn't need to duplicate that.
 
       if (!process.env.DIGITALOCEAN_TENANT_DB_CLUSTER_ID || !process.env.DIGITALOCEAN_API_TOKEN) {
         await setMigrationState(tenantId, "pending");

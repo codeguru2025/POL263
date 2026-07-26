@@ -209,32 +209,27 @@ export function buildTenantCopyPlan(tenantId: string): Array<{ table: string; wh
   ];
 }
 
-/** Extracted row-count verification block — same fixed subset of key tables as before. */
+/**
+ * Verifies every table in the copy plan, not a hand-picked subset — this used to check only 11
+ * of the ~90 copied tables, which was tolerable when a human was watching the CLI's per-table
+ * output as it ran. Now that this same function gates an *unattended* automatic cutover (see
+ * server/tenant-db-commissioning.ts), a copy bug in any of the unchecked tables would have
+ * silently promoted an incomplete migration to "success" with nobody watching. Reuses
+ * buildTenantCopyPlan as the single source of truth for which tables/filters matter, so a table
+ * added there is automatically verified too — no second list to keep in sync.
+ */
 export async function verifyTenantRowCounts(
   src: pg.Pool,
   dst: pg.Pool,
   tenantId: string,
   opts: { dryRun: boolean },
 ): Promise<{ allMatch: boolean; results: Array<{ table: string; srcCount: number; dstCount: number; match: boolean }> }> {
-  const orgFilter = `organization_id = '${tenantId}'`;
-  const checks: [string, string][] = [
-    ["organizations", `id = '${tenantId}'`],
-    ["branches", orgFilter],
-    ["users", orgFilter],
-    ["clients", orgFilter],
-    ["products", orgFilter],
-    ["policies", orgFilter],
-    ["payment_intents", orgFilter],
-    ["payment_receipts", orgFilter],
-    ["claims", orgFilter],
-    ["funeral_cases", orgFilter],
-    ["audit_logs", orgFilter],
-  ];
+  const checks = buildTenantCopyPlan(tenantId);
   let allMatch = true;
   const results: Array<{ table: string; srcCount: number; dstCount: number; match: boolean }> = [];
-  for (const [table, where] of checks) {
-    const srcCount = await rowCount(src, table, where);
-    const dstCount = opts.dryRun ? srcCount : await rowCount(dst, table, where);
+  for (const { table, where } of checks) {
+    const srcCount = await rowCount(src, table, where ?? "");
+    const dstCount = opts.dryRun ? srcCount : await rowCount(dst, table, where ?? "");
     const match = opts.dryRun || srcCount === dstCount;
     if (!match) allMatch = false;
     results.push({ table, srcCount, dstCount, match });
