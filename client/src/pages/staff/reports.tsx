@@ -831,7 +831,7 @@ export default function StaffReports() {
                   <SelectItem value="rejected">Rejected</SelectItem>
                 </SelectContent>
               </Select>
-            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "ledger", "balance-sheet", "funerals", "payments"].includes(activeReport) ? (
+            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "ledger", "balance-sheet", "funerals", "payments", "actuarial"].includes(activeReport) ? (
               <Select value={statusFilter || "__all__"} onValueChange={(v) => setStatusFilter(v === "__all__" ? "" : v)}>
                 <SelectTrigger className="w-44 h-9"><SelectValue placeholder="All statuses" /></SelectTrigger>
                 <SelectContent>
@@ -2465,6 +2465,45 @@ export default function StaffReports() {
                   </TableBody>
                 </Table>
               )}
+            </CardSection>
+          </TabsContent>
+
+          <TabsContent value="actuarial">
+            <CardSection
+              title="Actuarial data export"
+              icon={FileText}
+              description="Clean exports for an external actuary's SFCR/ORSA prep — insured-lives exposure by product and age band, balance sheet, plus premium/payment and claims history."
+            >
+              <div className="p-4 space-y-3">
+                <div className="flex items-center justify-between border rounded-lg p-3">
+                  <div>
+                    <p className="font-medium text-sm">Insured-lives exposure</p>
+                    <p className="text-xs text-muted-foreground">Active member counts by product and age band (0-17 / 18-65 / 66-84 / 85+).</p>
+                  </div>
+                  <ExportButton reportType="actuarial-exposure" filters={filters} />
+                </div>
+                <div className="flex items-center justify-between border rounded-lg p-3">
+                  <div>
+                    <p className="font-medium text-sm">Balance sheet</p>
+                    <p className="text-xs text-muted-foreground">All recorded balance sheet entries — assets, liabilities, equity.</p>
+                  </div>
+                  <ExportButton reportType="actuarial-balance-sheet" filters={filters} />
+                </div>
+                <div className="flex items-center justify-between border rounded-lg p-3">
+                  <div>
+                    <p className="font-medium text-sm">Premium &amp; payment history</p>
+                    <p className="text-xs text-muted-foreground">Every recorded payment — reference, amount, currency, method, date.</p>
+                  </div>
+                  <ExportButton reportType="payments" filters={filters} />
+                </div>
+                <div className="flex items-center justify-between border rounded-lg p-3">
+                  <div>
+                    <p className="font-medium text-sm">Claims history</p>
+                    <p className="text-xs text-muted-foreground">Every claim — type, status, approved amount, currency, date.</p>
+                  </div>
+                  <ExportButton reportType="claims" filters={filters} />
+                </div>
+              </div>
             </CardSection>
           </TabsContent>
 

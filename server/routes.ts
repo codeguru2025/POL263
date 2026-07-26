@@ -17,6 +17,7 @@ import { requireAuth, requirePermission, requireAnyPermission, requireTenantScop
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { withClaimAging } from "./claims-sla";
+import { withComplaintAging } from "./complaints-sla";
 import { withAdvisoryLock } from "./advisory-lock";
 import { todayInHarare, harareLocalToUtcDate } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, fxMapFor } from "./financial-statements";
@@ -10838,7 +10839,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     const type = typeof req.query.type === "string" ? req.query.type : undefined;
     const result = await storage.getFeedbackByOrg(user.organizationId, limit, offset, { search, status, type });
-    return res.json(result);
+    return res.json({ ...result, rows: result.rows.map((r) => withComplaintAging(r)) });
   });
 
   app.patch("/api/feedback/:id/status", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
@@ -10847,10 +10848,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!["open", "acknowledged", "in_progress", "resolved", "closed"].includes(status)) {
       return res.status(400).json({ message: "Invalid status. Must be one of: open, acknowledged, in_progress, resolved, closed" });
     }
-    const updated = await storage.updateFeedbackStatus(req.params.id as string, status, user.organizationId);
+    const isResolving = status === "resolved" || status === "closed";
+    if (isResolving && !(typeof req.body.resolutionNotes === "string" && req.body.resolutionNotes.trim())) {
+      return res.status(400).json({ message: "Resolution notes are required when marking a complaint resolved or closed." });
+    }
+    const resolvedByUserId = isResolving ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
+    const updated = await storage.updateFeedbackStatus(req.params.id as string, status, user.organizationId, {
+      resolutionNotes: isResolving ? req.body.resolutionNotes.trim() : undefined,
+      resolvedByUserId,
+    });
     if (!updated) return res.status(404).json({ message: "Feedback not found" });
     await auditLog(req, "UPDATE_FEEDBACK_STATUS", "ClientFeedback", updated.id, null, { status });
-    return res.json(updated);
+    return res.json(withComplaintAging(updated));
+  });
+
+  app.post("/api/feedback/:id/escalate", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
+    const user = req.user as any;
+    const escalatedToUserId = typeof req.body.escalatedToUserId === "string" ? req.body.escalatedToUserId.trim() : "";
+    if (!escalatedToUserId) return res.status(400).json({ message: "escalatedToUserId is required" });
+    const targetUser = await storage.getUser(escalatedToUserId, user.organizationId);
+    if (!targetUser) return res.status(400).json({ message: "escalatedToUserId must be a user in this organisation" });
+    const updated = await storage.escalateFeedback(req.params.id as string, user.organizationId, escalatedToUserId);
+    if (!updated) return res.status(404).json({ message: "Feedback not found" });
+    await auditLog(req, "ESCALATE_FEEDBACK", "ClientFeedback", updated.id, null, { escalatedToUserId });
+    return res.json(withComplaintAging(updated));
   });
 
   // ─── Diagnostics ────────────────────────────────────────
@@ -12273,6 +12294,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             b.name, b.active, b.lapsed, b.grace,
             ...CURRENCIES.map((c) => (b.premiumByCurrency[c] ? b.premiumByCurrency[c].toFixed(2) : "")),
           ]);
+          break;
+        }
+        case "actuarial-exposure": {
+          const summary = await storage.getActuarialExposureSummary(user.organizationId);
+          headers = ["Product", "Age Band", "Insured Members"];
+          rows = summary.map((r) => [r.productName, r.ageBand, r.memberCount]);
+          break;
+        }
+        case "actuarial-balance-sheet": {
+          const entries = await storage.getBalanceSheetEntries(user.organizationId);
+          headers = ["Section", "Subsection", "Label", "Amount", "Currency", ...currencyHeaders("Amount"), "As Of Date"];
+          currencyTotals = { Amount: {} };
+          rows = entries.map((e: any) => {
+            const c = (e.currency || "USD").toUpperCase();
+            const amt = parseFloat(String(e.amount ?? 0)) || 0;
+            currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
+            return [e.section, e.subsection || "", e.label, e.amount, e.currency || "USD", ...currencyAmounts(e.amount, e.currency), e.asOfDate || ""];
+          });
           break;
         }
         default:

@@ -76,6 +76,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "expenditures", label: "Expenditure", testId: "tab-expenditures-report" },
     { value: "cashups", label: "Cashups", testId: "tab-cashups-report" },
     { value: "platform", label: "POL263 revenue", testId: "tab-platform-report" },
+    { value: "actuarial", label: "Actuarial Export", testId: "tab-actuarial-export" },
   ],
   agents: [
     { value: "agent-portfolio", label: "Agent portfolio", testId: "tab-agent-portfolio" },

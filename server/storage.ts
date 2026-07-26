@@ -509,7 +509,8 @@ export interface IStorage {
   getFeedbackByClient(clientId: string, orgId: string): Promise<ClientFeedback[]>;
   createFeedback(feedback: InsertClientFeedback): Promise<ClientFeedback>;
   getFeedbackByOrg(orgId: string, limit?: number, offset?: number, filters?: { search?: string; status?: string; type?: string }): Promise<{ rows: ClientFeedback[]; total: number }>;
-  updateFeedbackStatus(id: string, status: string, orgId: string): Promise<ClientFeedback | undefined>;
+  updateFeedbackStatus(id: string, status: string, orgId: string, resolution?: { resolutionNotes?: string | null; resolvedByUserId?: string | null }): Promise<ClientFeedback | undefined>;
+  escalateFeedback(id: string, orgId: string, escalatedToUserId: string): Promise<ClientFeedback | undefined>;
   getFuneralCasesByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<FuneralCase[]>;
   getFuneralCase(id: string, orgId: string): Promise<FuneralCase | undefined>;
   getFuneralCaseByCaseNumber(caseNumber: string, orgId: string): Promise<FuneralCase | undefined>;
@@ -696,6 +697,7 @@ export interface IStorage {
   getBankStatementBalances(orgId: string, bankAccountId?: string): Promise<BankStatementBalance[]>;
   createBankStatementBalance(data: InsertBankStatementBalance): Promise<BankStatementBalance>;
   getAdminCashPosition(orgId: string, asOf?: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>>;
+  getActuarialExposureSummary(orgId: string): Promise<{ productName: string; ageBand: string; memberCount: number }[]>;
   getBalanceSheetEntries(orgId: string, filters?: { section?: string; asOfDate?: string }): Promise<BalanceSheetEntry[]>;
   getBalanceSheetEntry(id: string, orgId: string): Promise<BalanceSheetEntry | undefined>;
   createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry>;
@@ -3519,10 +3521,28 @@ export class DatabaseStorage implements IStorage {
     return { rows, total: count };
   }
 
-  async updateFeedbackStatus(id: string, status: string, orgId: string): Promise<ClientFeedback | undefined> {
+  async updateFeedbackStatus(id: string, status: string, orgId: string, resolution?: { resolutionNotes?: string | null; resolvedByUserId?: string | null }): Promise<ClientFeedback | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const isResolving = status === "resolved" || status === "closed";
+    const [updated] = await tdb.update(clientFeedback)
+      .set({
+        status,
+        updatedAt: new Date(),
+        ...(isResolving && {
+          resolvedAt: new Date(),
+          resolutionNotes: resolution?.resolutionNotes ?? undefined,
+          resolvedByUserId: resolution?.resolvedByUserId ?? undefined,
+        }),
+      })
+      .where(and(eq(clientFeedback.id, id), eq(clientFeedback.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+
+  async escalateFeedback(id: string, orgId: string, escalatedToUserId: string): Promise<ClientFeedback | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(clientFeedback)
-      .set({ status, updatedAt: new Date() })
+      .set({ escalated: true, escalatedAt: new Date(), escalatedToUserId, updatedAt: new Date() })
       .where(and(eq(clientFeedback.id, id), eq(clientFeedback.organizationId, orgId)))
       .returning();
     return updated;
@@ -5474,6 +5494,51 @@ export class DatabaseStorage implements IStorage {
       }
     });
     return Object.values(positions).filter(p => p.totalCollected > 0 || p.totalDeposited > 0);
+  }
+
+  /**
+   * Insured-lives exposure by product and age band — the one thing an external actuary needs
+   * that nothing in the existing reports export already produces (premium/payment history and
+   * claims history already have clean CSV exports; see server/routes.ts's "payments"/"claims"
+   * report types). Age bands here are fixed and org-wide (0-17/18-65/66-84/85+), independent of
+   * any one product version's own dependentMaxAge pricing cutoff — an actuary wants one
+   * consistent banding across the whole book, not each product's idiosyncratic pricing tiers.
+   */
+  async getActuarialExposureSummary(orgId: string): Promise<{ productName: string; ageBand: string; memberCount: number }[]> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      WITH member_ages AS (
+        SELECT
+          p.id AS policy_id,
+          pv.product_id,
+          COALESCE(c.date_of_birth, d.date_of_birth) AS date_of_birth
+        FROM policy_members pm
+        JOIN policies p ON p.id = pm.policy_id
+        JOIN product_versions pv ON pv.id = p.product_version_id
+        LEFT JOIN clients c ON c.id = pm.client_id
+        LEFT JOIN dependents d ON d.id = pm.dependent_id
+        WHERE pm.organization_id = ${orgId}
+          AND pm.is_active = true
+          AND p.organization_id = ${orgId}
+          AND p.status = 'active'
+      )
+      SELECT
+        prod.name AS product_name,
+        CASE
+          WHEN ma.date_of_birth IS NULL THEN 'Unknown'
+          WHEN age(ma.date_of_birth::date) < interval '18 years' THEN '0-17'
+          WHEN age(ma.date_of_birth::date) < interval '66 years' THEN '18-65'
+          WHEN age(ma.date_of_birth::date) < interval '85 years' THEN '66-84'
+          ELSE '85+'
+        END AS age_band,
+        count(*)::int AS member_count
+      FROM member_ages ma
+      JOIN products prod ON prod.id = ma.product_id
+      GROUP BY prod.name, age_band
+      ORDER BY prod.name, age_band
+    `);
+    const rows = (result as unknown as { rows?: { product_name: string; age_band: string; member_count: number }[] }).rows ?? [];
+    return rows.map((r) => ({ productName: r.product_name, ageBand: r.age_band, memberCount: r.member_count }));
   }
 
   // ── Balance sheet manual entries ──────────────────────────

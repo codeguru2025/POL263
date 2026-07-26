@@ -2613,7 +2613,19 @@ export const clientFeedback = pgTable(
     type: text("type").notNull(), // 'complaint' | 'feedback'
     subject: text("subject").notNull(),
     message: text("message").notNull(),
-    status: text("status").default("open").notNull(), // open | acknowledged | closed
+    status: text("status").default("open").notNull(), // open | acknowledged | in_progress | resolved | closed
+    /**
+     * Resolution + escalation record (2026-07-26, IPEC compliance review) — a complaint reaching
+     * "resolved"/"closed" previously left no trace of what was actually done about it or who
+     * did it, which is the exact gap consumer-protection review expects filled. Mirrors claims'
+     * existing aging/SLA treatment (server/claims-sla.ts) rather than inventing a new pattern.
+     */
+    resolvedAt: timestamp("resolved_at"),
+    resolutionNotes: text("resolution_notes"),
+    resolvedByUserId: uuid("resolved_by_user_id").references(() => users.id),
+    escalated: boolean("escalated").default(false).notNull(),
+    escalatedAt: timestamp("escalated_at"),
+    escalatedToUserId: uuid("escalated_to_user_id").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
