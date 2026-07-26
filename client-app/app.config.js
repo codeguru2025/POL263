@@ -16,6 +16,7 @@ module.exports = {
       supportsTablet: true,
     },
     android: {
+      package: "com.pol263.clientapp",
       adaptiveIcon: {
         backgroundColor: "#E6F4FE",
         foregroundImage: "./assets/android-icon-foreground.png",
@@ -26,6 +27,11 @@ module.exports = {
     },
     web: {
       favicon: "./assets/favicon.png",
+    },
+    extra: {
+      eas: {
+        projectId: "1deb4d81-c0b6-4d12-99c6-1ba60156f7b5",
+      },
     },
     plugins: ["expo-router", "expo-splash-screen"],
   },

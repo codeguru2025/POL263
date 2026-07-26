@@ -4,7 +4,7 @@
  * No same-origin fallback here (unlike web): a native app never shares an origin
  * with the API, so this must always point somewhere real.
  */
-export const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "http://192.168.9.138:5000";
+export const API_BASE = process.env.EXPO_PUBLIC_API_BASE || "http://192.168.1.119:5000";
 
 /** Must match capacitor's old scheme and the server's existing OAuth deep-link handoff
  *  (server/auth.ts redirects to `${DEEP_LINK_SCHEME}://auth/callback?token=...`). */
