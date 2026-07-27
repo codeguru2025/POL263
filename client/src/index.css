@@ -6,6 +6,7 @@
    THEME: Insurance Teal — cool gray neutrals, deep teal primary
    (Stripe / Linear inspired density; tuned for policy admin UI)
    ═══════════════════════════════════════════════════════════ */
+:root,
 [data-theme="insurance-teal"] {
   --background: 210 18% 97%;
   --foreground: 222 22% 11%;
@@ -55,7 +56,6 @@
 /* ═══════════════════════════════════════════════════════════
    THEME: Obsidian Gold — dark bg, gold accents
    ═══════════════════════════════════════════════════════════ */
-:root,
 [data-theme="obsidian-gold"] {
   --background: 0 0% 6%;
   --foreground: 43 30% 95%;
