@@ -79,6 +79,7 @@ interface AuditLogRow {
 const ENTITY_TYPE_OPTIONS = [
   { value: "client", label: "Clients / Members" },
   { value: "policy", label: "Policies" },
+  { value: "dependent", label: "Dependants" },
   { value: "payment", label: "Payments / Receipts" },
   { value: "claim", label: "Claims" },
 ];

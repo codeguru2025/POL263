@@ -62,11 +62,23 @@ const legacyImportUpload = multer({
 });
 
 // Extended as more entity types gain a field spec/commit path (see legacy-import.ts).
-const SUPPORTED_IMPORT_ENTITY_TYPES: ImportEntityType[] = ["client", "policy", "payment", "claim"];
+const SUPPORTED_IMPORT_ENTITY_TYPES: ImportEntityType[] = ["client", "policy", "payment", "claim", "dependent"];
 
 function importDependencyMessage(entityType: ImportEntityType): string {
   const dependsOn = entityType === "policy" ? "clients" : "policies";
   return `Importing ${entityType} data requires existing ${dependsOn} (or a committed ${dependsOn.slice(0, -1)} import) first.`;
+}
+
+/** Which already-imported parent entities a row must reference, and by which field — "dependent"
+ *  is the only type with two (a client for household, a policy for the actual membership). */
+function parentChecksFor(entityType: ImportEntityType): { parentType: ImportEntityType; field: string }[] {
+  if (entityType === "policy") return [{ parentType: "client", field: "clientExternalKey" }];
+  if (entityType === "payment" || entityType === "claim") return [{ parentType: "policy", field: "policyExternalKey" }];
+  if (entityType === "dependent") return [
+    { parentType: "client", field: "clientExternalKey" },
+    { parentType: "policy", field: "policyExternalKey" },
+  ];
+  return [];
 }
 
 function handleUploadError(err: any, _req: any, res: any, next: any) {
@@ -599,12 +611,16 @@ export function registerPlatformRoutes(app: Express): void {
 
     try {
       const existingKeys = await storage.getExistingImportExternalKeys(id, entityType);
-      // Policies/payments/claims reference an already-imported parent by legacy id — validate
-      // that reference exists now (at preview time) so the admin gets an immediate, specific
-      // error instead of a wall of "not found" failures at commit.
-      const parentEntityType: ImportEntityType | null =
-        entityType === "policy" ? "client" : entityType === "payment" || entityType === "claim" ? "policy" : null;
-      const parentKeys = parentEntityType ? await storage.getExistingImportExternalKeys(id, parentEntityType) : null;
+      // Policies/payments/claims/dependants reference an already-imported parent by legacy id —
+      // validate that reference exists now (at preview time) so the admin gets an immediate,
+      // specific error instead of a wall of "not found" failures at commit.
+      const parentChecks = parentChecksFor(entityType);
+      const parentKeysByType = new Map<ImportEntityType, Set<string>>();
+      for (const pc of parentChecks) {
+        if (!parentKeysByType.has(pc.parentType)) {
+          parentKeysByType.set(pc.parentType, await storage.getExistingImportExternalKeys(id, pc.parentType));
+        }
+      }
 
       // The real DB-unique business key each entity actually enforces (distinct from the legacy
       // externalKey above, which is only this feature's own bookkeeping) — checked here too so a
@@ -629,11 +645,10 @@ export function registerPlatformRoutes(app: Express): void {
           errorReport.push({ rowIndex: idx, field: "externalKey", message: `Legacy ID "${externalKey}" is already imported or duplicated in this file` });
           return;
         }
-        if (parentKeys) {
-          const parentField = entityType === "policy" ? "clientExternalKey" : "policyExternalKey";
-          const parentKey = result.value[parentField];
-          if (!parentKeys.has(parentKey)) {
-            errorReport.push({ rowIndex: idx, field: parentField, message: `Legacy ${parentEntityType} ID "${parentKey}" was not found among imported ${parentEntityType}s` });
+        for (const pc of parentChecks) {
+          const parentKey = result.value[pc.field];
+          if (!parentKeysByType.get(pc.parentType)!.has(parentKey)) {
+            errorReport.push({ rowIndex: idx, field: pc.field, message: `Legacy ${pc.parentType} ID "${parentKey}" was not found among imported ${pc.parentType}s` });
             return;
           }
         }

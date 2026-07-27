@@ -2748,7 +2748,7 @@ export const auditLogs = pgTable(
 // flexible (no fixed source schema); import_records cross-references legacy ids to the
 // POL263 rows created for them so later imports (e.g. policies referencing clients imported
 // in an earlier session) can resolve foreign keys.
-export const IMPORT_ENTITY_TYPES = ["client", "policy", "payment", "claim"] as const;
+export const IMPORT_ENTITY_TYPES = ["client", "policy", "payment", "claim", "dependent"] as const;
 export type ImportEntityType = (typeof IMPORT_ENTITY_TYPES)[number];
 
 export const importBatches = pgTable(
@@ -2758,7 +2758,7 @@ export const importBatches = pgTable(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id),
-    entityType: text("entity_type").notNull(), // client | policy | payment | claim
+    entityType: text("entity_type").notNull(), // client | policy | payment | claim | dependent
     sourceSystemLabel: text("source_system_label"),
     fileName: text("file_name").notNull(),
     columnMapping: jsonb("column_mapping").notNull(),

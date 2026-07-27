@@ -6,10 +6,10 @@
 import { parse as parseCsvSync } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import { randomUUID } from "crypto";
-import { eq, and, inArray, count, isNull } from "drizzle-orm";
+import { eq, and, inArray, count, isNull, isNotNull } from "drizzle-orm";
 import { normalizeNationalId, toUpperTrim, normalizeCurrency, parsePositiveAmount, type SupportedCurrency } from "../shared/validation";
 import {
-  products, productVersions, importRecords, policies, paymentReceipts, claims,
+  products, productVersions, importRecords, policies, paymentReceipts, claims, policyMembers,
   POLICY_STATUSES, type PolicyStatus, CLAIM_STATUSES, type ClaimStatus, type ImportEntityType,
 } from "../shared/schema";
 
@@ -172,6 +172,7 @@ export function getFieldSpec(entityType: ImportEntityType): ImportFieldSpec[] {
         { field: "beneficiaryLastName", label: "Beneficiary last name", required: false, type: "text" },
         { field: "beneficiaryRelationship", label: "Beneficiary relationship", required: false, type: "text" },
         { field: "beneficiaryPhone", label: "Beneficiary phone", required: false, type: "text" },
+        { field: "agentEmail", label: "Agent email (must match an existing staff/agent user) — optional", required: false, type: "text" },
       ];
     case "payment":
       // No "period covered" fields — commit replays each policy's payments through the same
@@ -199,6 +200,22 @@ export function getFieldSpec(entityType: ImportEntityType): ImportFieldSpec[] {
         { field: "causeOfDeath", label: "Cause of death", required: false, type: "text" },
         { field: "cashInLieuAmount", label: "Cash-in-lieu amount", required: false, type: "number" },
         { field: "currency", label: "Currency (USD/ZAR/ZIG)", required: false, type: "text" },
+      ];
+    case "dependent":
+      // Covered family members on a policy — distinct from the free-text beneficiary fields on
+      // "policy" (those are just a payout-instruction record, not a person with their own
+      // policy_members/member-card row). Requires both a client and a policy already imported:
+      // the dependent belongs to the client's household, and is added onto one specific policy.
+      return [
+        { field: "externalKey", label: "Legacy dependant ID", required: true, type: "text" },
+        { field: "clientExternalKey", label: "Legacy client ID (must match a client already imported)", required: true, type: "text" },
+        { field: "policyExternalKey", label: "Legacy policy ID (must match a policy already imported)", required: true, type: "text" },
+        { field: "firstName", label: "First name", required: true, type: "text" },
+        { field: "lastName", label: "Last name", required: true, type: "text" },
+        { field: "relationship", label: "Relationship to policyholder (e.g. spouse, child, parent)", required: true, type: "text" },
+        { field: "nationalId", label: "National ID", required: false, type: "text" },
+        { field: "dateOfBirth", label: "Date of birth", required: false, type: "date" },
+        { field: "gender", label: "Gender", required: false, type: "text" },
       ];
     default:
       throw new Error(`No field spec implemented yet for entity type: ${entityType}`);
@@ -257,6 +274,8 @@ export function transformAndValidateRow(
       return transformPaymentRow(rawRow, rowIndex, columnMapping);
     case "claim":
       return transformClaimRow(rawRow, rowIndex, columnMapping);
+    case "dependent":
+      return transformDependentRow(rawRow, rowIndex, columnMapping);
     default:
       return { errors: [{ rowIndex, field: "_row", message: `Import not yet supported for: ${entityType}` }] };
   }
@@ -320,6 +339,7 @@ export interface TransformedPolicyRow {
   beneficiaryLastName: string | null;
   beneficiaryRelationship: string | null;
   beneficiaryPhone: string | null;
+  agentEmail: string | null;
 }
 
 function transformPolicyRow(
@@ -381,6 +401,7 @@ function transformPolicyRow(
       beneficiaryLastName: mappedValue(rawRow, columnMapping, "beneficiaryLastName") || null,
       beneficiaryRelationship: mappedValue(rawRow, columnMapping, "beneficiaryRelationship") || null,
       beneficiaryPhone: mappedValue(rawRow, columnMapping, "beneficiaryPhone") || null,
+      agentEmail: (mappedValue(rawRow, columnMapping, "agentEmail") || null)?.toLowerCase() ?? null,
     },
   };
 }
@@ -513,6 +534,70 @@ function transformClaimRow(
   };
 }
 
+export interface TransformedDependentRow {
+  externalKey: string;
+  clientExternalKey: string;
+  policyExternalKey: string;
+  firstName: string;
+  lastName: string;
+  relationship: string;
+  nationalId: string | null;
+  dateOfBirth: string | null;
+  gender: string | null;
+}
+
+function transformDependentRow(
+  rawRow: Record<string, string>,
+  rowIndex: number,
+  columnMapping: Record<string, string>
+): TransformResult<TransformedDependentRow> {
+  const errors: RowError[] = [];
+
+  const externalKey = mappedValue(rawRow, columnMapping, "externalKey");
+  if (!externalKey) errors.push({ rowIndex, field: "externalKey", message: "Legacy dependant ID is required" });
+
+  const clientExternalKey = mappedValue(rawRow, columnMapping, "clientExternalKey");
+  if (!clientExternalKey) errors.push({ rowIndex, field: "clientExternalKey", message: "Legacy client ID is required" });
+
+  const policyExternalKey = mappedValue(rawRow, columnMapping, "policyExternalKey");
+  if (!policyExternalKey) errors.push({ rowIndex, field: "policyExternalKey", message: "Legacy policy ID is required" });
+
+  const firstName = mappedValue(rawRow, columnMapping, "firstName");
+  if (!firstName) errors.push({ rowIndex, field: "firstName", message: "First name is required" });
+
+  const lastName = mappedValue(rawRow, columnMapping, "lastName");
+  if (!lastName) errors.push({ rowIndex, field: "lastName", message: "Last name is required" });
+
+  const relationship = mappedValue(rawRow, columnMapping, "relationship");
+  if (!relationship) errors.push({ rowIndex, field: "relationship", message: "Relationship is required" });
+
+  const dobRaw = mappedValue(rawRow, columnMapping, "dateOfBirth");
+  let dateOfBirth: string | null = null;
+  if (dobRaw) {
+    dateOfBirth = parseFlexibleDate(dobRaw);
+    if (!dateOfBirth) errors.push({ rowIndex, field: "dateOfBirth", message: `Could not parse date: "${dobRaw}"` });
+  }
+
+  if (errors.length > 0) return { errors };
+
+  const nationalIdRaw = mappedValue(rawRow, columnMapping, "nationalId");
+
+  return {
+    errors: [],
+    value: {
+      externalKey,
+      clientExternalKey,
+      policyExternalKey,
+      firstName: toUpperTrim(firstName, false)!,
+      lastName: toUpperTrim(lastName, false)!,
+      relationship: relationship.trim().toLowerCase(),
+      nationalId: nationalIdRaw ? normalizeNationalId(nationalIdRaw) : null,
+      dateOfBirth,
+      gender: mappedValue(rawRow, columnMapping, "gender") || null,
+    },
+  };
+}
+
 /** Resolves a legacy external key to the POL263 row created for it (via import_records) —
  *  used at commit time, inside the same transaction, to turn e.g. a policy row's
  *  `clientExternalKey` into a real `clientId`. */
@@ -574,6 +659,7 @@ export const AUDIT_ENTITY_TYPE_LABEL: Record<ImportEntityType, string> = {
   policy: "Policy",
   payment: "PaymentReceipt",
   claim: "Claim",
+  dependent: "Dependent",
 };
 
 /** Whether a batch's imported rows still have live references pointing at them from outside the
@@ -602,21 +688,32 @@ export async function checkRollbackBlockers(
       .where(and(eq(paymentReceipts.organizationId, orgId), inArray(paymentReceipts.policyId, entityIds), isNull(paymentReceipts.deletedAt)));
     const [claimRow] = await tx.select({ c: count() }).from(claims)
       .where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, entityIds)));
+    // A policy row's cascade delete would take its policy_members rows down with it — including
+    // any imported dependant's membership — but not the dependents row itself (only referenced
+    // via that membership), leaving an orphaned dependant with no policy link. Roll back the
+    // dependant import first instead.
+    const [depMemberRow] = await tx.select({ c: count() }).from(policyMembers)
+      .where(and(eq(policyMembers.organizationId, orgId), inArray(policyMembers.policyId, entityIds), isNotNull(policyMembers.dependentId)));
     const receiptCnt = receiptRow?.c ?? 0;
     const claimCnt = claimRow?.c ?? 0;
-    if (receiptCnt > 0 || claimCnt > 0) {
+    const depCnt = depMemberRow?.c ?? 0;
+    if (receiptCnt > 0 || claimCnt > 0 || depCnt > 0) {
       const parts: string[] = [];
       if (receiptCnt > 0) parts.push(`${receiptCnt} payment receipt(s)`);
       if (claimCnt > 0) parts.push(`${claimCnt} claim(s)`);
+      if (depCnt > 0) parts.push(`${depCnt} dependant(s) (roll back the dependant import first)`);
       return { blocked: true, reason: `${parts.join(" and ")} still reference these policies — cannot roll back.` };
     }
     return { blocked: false };
   }
 
   return { blocked: false }; // claim: no downstream FK dependents in v1 scope.
-  // ("payment" never reaches this function — server/storage.ts special-cases payment-batch
-  // rollback into rollbackPaymentReplay's snapshot-compare, since replay mutates policy state
-  // rather than just inserting rows a simple reference-count check could reason about.)
+  // ("payment" and "dependent" never reach this function — server/storage.ts special-cases both:
+  // payment-batch rollback into rollbackPaymentReplay's snapshot-compare, since replay mutates
+  // policy state rather than just inserting rows a simple reference-count check could reason
+  // about; dependent-batch rollback deletes its own policy_members row first, then relies on the
+  // dependents→policy_members FK to naturally block if the dependent was added to another policy
+  // since import — see the outer catch in rollbackImportBatch.)
 }
 
 /** Builds a synthesized historical audit_log row for one imported record. Deliberately bypasses

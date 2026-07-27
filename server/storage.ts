@@ -7021,7 +7021,9 @@ export class DatabaseStorage implements IStorage {
    *  have real (non-imported) data. */
   async hasImportableDependency(orgId: string, entityType: ImportEntityType): Promise<boolean> {
     const tdb = await getDbForOrg(orgId);
-    const dependsOnLiveTable = entityType === "policy" ? clients : entityType === "payment" || entityType === "claim" ? policies : null;
+    const dependsOnLiveTable = entityType === "policy" ? clients
+      : entityType === "payment" || entityType === "claim" || entityType === "dependent" ? policies
+      : null;
     if (!dependsOnLiveTable) return true; // "client" has no import dependency
     const dependsOnEntityType: ImportEntityType = entityType === "policy" ? "client" : "policy";
     const [liveCount] = await tdb.select({ c: count() }).from(dependsOnLiveTable).where(eq((dependsOnLiveTable as any).organizationId, orgId));
@@ -7029,6 +7031,20 @@ export class DatabaseStorage implements IStorage {
     const [batchCount] = await tdb.select({ c: count() }).from(importBatches)
       .where(and(eq(importBatches.organizationId, orgId), eq(importBatches.entityType, dependsOnEntityType), eq(importBatches.status, "committed")));
     return (batchCount?.c ?? 0) > 0;
+  }
+  /** Tx-scoped equivalent of `getNextMemberNumber` — same org_member_sequences upsert-increment
+   *  (and same MEM-###### format) as the live app's createPolicyWithInitialSetup/createDependent,
+   *  but participating in the caller's transaction instead of opening its own connection. Used by
+   *  the import commit path so imported policy_members/dependents rows get real, collision-free
+   *  member numbers from the same counter a native policy/dependent would draw from. */
+  private async getNextMemberNumberInTx(tx: any, orgId: string): Promise<string> {
+    const result = await tx.execute(sql`
+      INSERT INTO org_member_sequences (organization_id, member_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET member_next = org_member_sequences.member_next + 1
+      RETURNING member_next
+    `);
+    const nextVal = (result as unknown as { rows?: { member_next: number }[] }).rows?.[0]?.member_next ?? 1;
+    return `MEM-${String(nextVal).padStart(6, "0")}`;
   }
   /** Commits a previewed import batch: re-reads `previewSnapshot`, inserts the target rows plus
    *  their `import_records` cross-reference and a synthesized historical `audit_logs` entry per
@@ -7070,10 +7086,20 @@ export class DatabaseStorage implements IStorage {
           }));
           successRows++;
         } else if (batch.entityType === "policy") {
-          const { __rowIndex, externalKey, clientExternalKey, planName, ...policyFields } = row;
+          const { __rowIndex, externalKey, clientExternalKey, planName, agentEmail, ...policyFields } = row;
           const clientId = await resolveExternalRef(orgId, "client", clientExternalKey, tx);
           if (!clientId) {
             throw new Error(`Row ${__rowIndex + 1}: legacy client ID "${clientExternalKey}" was not found — re-run preview after importing that client.`);
+          }
+
+          let agentId: string | null = null;
+          if (agentEmail) {
+            const [agentUser] = await tx.select({ id: users.id }).from(users)
+              .where(and(eq(users.organizationId, orgId), eq(users.email, agentEmail)));
+            if (!agentUser) {
+              throw new Error(`Row ${__rowIndex + 1}: agent email "${agentEmail}" was not found among this organization's staff/agent users.`);
+            }
+            agentId = agentUser.id;
           }
 
           let productVersionId: string | undefined;
@@ -7089,11 +7115,24 @@ export class DatabaseStorage implements IStorage {
           const [policy] = await tx.insert(policies).values({
             organizationId: orgId,
             clientId,
+            agentId,
             productVersionId,
             isLegacy: true,
             externalReference: externalKey,
             ...policyFields,
           }).returning();
+
+          // Same policy_members row a native policy gets from createPolicyWithInitialSetup — an
+          // imported policy with zero members would be invisible to member-card/pricing code that
+          // reads policy_members rather than policies.clientId directly.
+          const holderMemberNumber = await this.getNextMemberNumberInTx(tx, orgId);
+          await tx.insert(policyMembers).values({
+            organizationId: orgId,
+            policyId: policy.id,
+            clientId,
+            role: "policy_holder",
+            memberNumber: holderMemberNumber,
+          });
 
           await tx.insert(importRecords).values({
             batchId, organizationId: orgId, entityType: "policy",
@@ -7103,6 +7142,43 @@ export class DatabaseStorage implements IStorage {
             organizationId: orgId, entityType: AUDIT_ENTITY_TYPE_LABEL.policy, entityId: policy.id,
             after: policy, historicalDate: policy.effectiveDate ? new Date(policy.effectiveDate) : null,
             sourceSystemLabel: batch.sourceSystemLabel,
+          }));
+          successRows++;
+        } else if (batch.entityType === "dependent") {
+          const { __rowIndex, externalKey, clientExternalKey, policyExternalKey, ...dependentFields } = row;
+          const clientId = await resolveExternalRef(orgId, "client", clientExternalKey, tx);
+          if (!clientId) {
+            throw new Error(`Row ${__rowIndex + 1}: legacy client ID "${clientExternalKey}" was not found — re-run preview after importing that client.`);
+          }
+          const policyId = await resolveExternalRef(orgId, "policy", policyExternalKey, tx);
+          if (!policyId) {
+            throw new Error(`Row ${__rowIndex + 1}: legacy policy ID "${policyExternalKey}" was not found — re-run preview after importing that policy.`);
+          }
+
+          const depMemberNumber = await this.getNextMemberNumberInTx(tx, orgId);
+          const [dependent] = await tx.insert(dependents).values({
+            organizationId: orgId,
+            clientId,
+            memberNumber: depMemberNumber,
+            ...dependentFields,
+          }).returning();
+
+          const membershipNumber = await this.getNextMemberNumberInTx(tx, orgId);
+          await tx.insert(policyMembers).values({
+            organizationId: orgId,
+            policyId,
+            dependentId: dependent.id,
+            role: "dependent",
+            memberNumber: membershipNumber,
+          });
+
+          await tx.insert(importRecords).values({
+            batchId, organizationId: orgId, entityType: "dependent",
+            externalKey, entityId: dependent.id, sourceRowIndex: __rowIndex,
+          });
+          await tx.insert(auditLogs).values(buildLegacyAuditLogRow({
+            organizationId: orgId, entityType: AUDIT_ENTITY_TYPE_LABEL.dependent, entityId: dependent.id,
+            after: dependent, historicalDate: null, sourceSystemLabel: batch.sourceSystemLabel,
           }));
           successRows++;
         } else if (batch.entityType === "claim") {
@@ -7373,6 +7449,42 @@ export class DatabaseStorage implements IStorage {
             ));
             await tx.delete(paymentReceipts).where(inArray(paymentReceipts.id, entityIds));
             if (transactionIds.length > 0) await tx.delete(paymentTransactions).where(inArray(paymentTransactions.id, transactionIds));
+            await tx.delete(importRecords).where(eq(importRecords.batchId, batchId));
+          }
+          await tx.delete(auditLogs).where(and(
+            eq(auditLogs.organizationId, orgId), eq(auditLogs.entityId, batchId), eq(auditLogs.action, "bulk_import"),
+          ));
+          await tx.update(importBatches).set({
+            status: "rolled_back", rolledBackAt: new Date(), rolledBackByUserId: actor.userId, rollbackBlockedReason: null,
+          }).where(eq(importBatches.id, batchId));
+          return { ok: true };
+        }
+
+        if (batch.entityType === "dependent") {
+          // Deletes exactly the policy_members row this batch created for each dependent (the
+          // policy it was originally imported onto) before deleting the dependents row itself.
+          // If the dependent was since added to ANOTHER policy by staff, a policy_members row
+          // referencing it survives, and dependents→policy_members' FK (no cascade) blocks the
+          // delete below — caught by the outer catch as "further activity since import," the same
+          // safety net documented on rollbackImportBatch.
+          const rows = ((batch.previewSnapshot as any[]) || []);
+          const rowsByIndex = new Map<number, any>(rows.map((r) => [r.__rowIndex, r]));
+          for (const record of records as ImportRecord[]) {
+            const row = rowsByIndex.get(record.sourceRowIndex ?? -1);
+            const policyId = row ? await resolveExternalRef(orgId, "policy", row.policyExternalKey, tx) : undefined;
+            if (policyId) {
+              await tx.delete(policyMembers).where(and(
+                eq(policyMembers.organizationId, orgId),
+                eq(policyMembers.dependentId, record.entityId),
+                eq(policyMembers.policyId, policyId),
+              ));
+            }
+          }
+          if (entityIds.length > 0) {
+            await tx.delete(auditLogs).where(and(
+              eq(auditLogs.organizationId, orgId), inArray(auditLogs.entityId, entityIds), eq(auditLogs.action, "legacy_migrated_create"),
+            ));
+            await tx.delete(dependents).where(inArray(dependents.id, entityIds));
             await tx.delete(importRecords).where(eq(importRecords.batchId, batchId));
           }
           await tx.delete(auditLogs).where(and(

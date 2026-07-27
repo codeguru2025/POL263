@@ -59,9 +59,14 @@ export function AppChrome({
       >
         {sideImage ? (
           <>
-            <div className="hidden md:block md:w-[42%] lg:w-1/2 relative shrink-0">
+            <div className="hidden md:block md:w-[42%] lg:w-1/2 relative shrink-0 overflow-hidden">
               <img src={sideImage.src} alt={sideImage.alt} className="absolute inset-0 h-full w-full object-cover" />
-              <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/45 via-black/5 to-transparent" />
+              {/* Brand color-multiply pass first (tints the photo toward the active theme's
+                  primary hue, so it reads as designed rather than a raw stock photo), then the
+                  usual dark gradient on top for depth/contrast at the edges. */}
+              <div aria-hidden className="absolute inset-0 bg-primary/35 mix-blend-multiply" />
+              <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/10" />
+              <div aria-hidden className="absolute inset-0 bg-gradient-to-r from-transparent via-transparent to-background/25" />
             </div>
             <div className="flex-1 min-w-0 flex flex-col items-center justify-center px-3 py-8 sm:px-6 overflow-y-auto">
               {children}
