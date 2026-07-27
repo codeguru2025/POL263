@@ -82,7 +82,7 @@ export default function AgentLogin() {
   }
 
   return (
-    <AppChrome center>
+    <AppChrome center sideImage={{ src: "/assets/signup-agent-portrait.jpg", alt: "An agent using a smartphone" }}>
         <Card className="w-full max-w-md rounded-xl border-border/70 shadow-lg shadow-primary/5">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto px-4 py-3 bg-white rounded-2xl flex items-center justify-center mb-6 ring-1 ring-border max-w-full">

@@ -166,6 +166,11 @@ export default function TenantSignup() {
       <div className="w-full max-w-xl space-y-5 relative">
         {step === 1 && (
           <div className="text-center space-y-3">
+            <img
+              src="/assets/signup-business-owner.jpg"
+              alt="A small business owner running her book on POL263"
+              className="mx-auto h-28 w-28 sm:h-32 sm:w-32 rounded-full object-cover shadow-lg ring-4 ring-white"
+            />
             <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-white/80 backdrop-blur px-3 py-1 text-xs font-medium text-teal-800">
               <Clock className="h-3.5 w-3.5" /> 14-day free trial — no charge until it ends
             </span>

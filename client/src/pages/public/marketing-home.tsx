@@ -123,8 +123,15 @@ export default function MarketingHome() {
 
   return (
     <AppChrome center={false} mainClassName="flex flex-col flex-1 p-0">
-      {/* ── Hero — navy gradient ─────────────────────────────── */}
+      {/* ── Hero — navy gradient over a real office photo ───── */}
       <section className={cn(heroBg, "w-full text-white relative overflow-hidden")}>
+        <img
+          src="/assets/marketing-hero-office.jpg"
+          alt="A business team collaborating in an African office"
+          aria-hidden
+          className="absolute inset-0 h-full w-full object-cover opacity-[0.22] mix-blend-luminosity"
+          fetchPriority="high"
+        />
         <div
           aria-hidden
           className="absolute inset-0 opacity-[0.07]"
@@ -200,6 +207,11 @@ export default function MarketingHome() {
         <div className={cn(APP_SHELL_MAX, "px-4 py-16 sm:py-20 grid md:grid-cols-2 gap-10 items-start")}>
           <div>
             <h2 className="text-2xl sm:text-3xl font-display font-bold mb-4" style={{ color: NAVY }}>About POL263</h2>
+            <img
+              src="/assets/marketing-about-handshake.jpg"
+              alt="A business partnership deal being agreed in an office"
+              className="w-full h-48 sm:h-56 object-cover rounded-2xl mb-5"
+            />
             <p className="text-slate-600 leading-relaxed">
               POL263 is a digital insurance policy management platform designed to simplify,
               centralize, and modernize how insurance services are accessed, managed, and
@@ -300,7 +312,13 @@ export default function MarketingHome() {
               ))}
             </ul>
           </div>
-          <div className="rounded-2xl p-6 border-2" style={{ borderColor: `${GOLD}33` }}>
+          <div className="rounded-2xl border-2 overflow-hidden" style={{ borderColor: `${GOLD}33` }}>
+            <img
+              src="/assets/signup-advisor-meeting.jpg"
+              alt="A family meeting with their insurance advisor"
+              className="w-full h-36 object-cover"
+            />
+            <div className="p-6">
             <IconBadge icon={Globe2} accent="gold" />
             <h3 className="font-display font-semibold text-lg mb-3" style={{ color: NAVY }}>Secondary users</h3>
             <ul className="text-sm text-slate-600 space-y-2">
@@ -310,6 +328,7 @@ export default function MarketingHome() {
                 </li>
               ))}
             </ul>
+            </div>
           </div>
         </div>
       </section>

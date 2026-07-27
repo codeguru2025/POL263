@@ -14,6 +14,9 @@ type AppChromeProps = {
   /** Optional left side of the top bar (default: POL263 home link). */
   headerStart?: React.ReactNode;
   hideFooter?: boolean;
+  /** Optional full-bleed photo alongside the centered content (login/register pages) — hidden
+   *  below md, since a login form needs the vertical space more than the photo on a small screen. */
+  sideImage?: { src: string; alt: string };
 };
 
 /**
@@ -26,6 +29,7 @@ export function AppChrome({
   mainClassName,
   headerStart,
   hideFooter,
+  sideImage,
 }: AppChromeProps) {
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground overflow-x-hidden">
@@ -47,12 +51,25 @@ export function AppChrome({
       <main
         className={cn(
           "flex-1 min-h-0 overflow-x-hidden overflow-y-auto",
-          center && "flex flex-col items-center justify-center px-3 py-8 sm:px-6",
-          !center && "px-3 py-6 sm:px-6",
+          !sideImage && center && "flex flex-col items-center justify-center px-3 py-8 sm:px-6",
+          !sideImage && !center && "px-3 py-6 sm:px-6",
+          sideImage && "flex",
           mainClassName,
         )}
       >
-        {children}
+        {sideImage ? (
+          <>
+            <div className="hidden md:block md:w-[42%] lg:w-1/2 relative shrink-0">
+              <img src={sideImage.src} alt={sideImage.alt} className="absolute inset-0 h-full w-full object-cover" />
+              <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/45 via-black/5 to-transparent" />
+            </div>
+            <div className="flex-1 min-w-0 flex flex-col items-center justify-center px-3 py-8 sm:px-6 overflow-y-auto">
+              {children}
+            </div>
+          </>
+        ) : (
+          children
+        )}
       </main>
       {!hideFooter && <AppFooter />}
     </div>

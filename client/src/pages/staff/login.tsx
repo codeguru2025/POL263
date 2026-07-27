@@ -111,7 +111,7 @@ export default function StaffLogin() {
   const showDemo = authConfig?.demoLoginEnabled === true && authConfig?.googleConfigured !== true;
 
   return (
-    <AppChrome center>
+    <AppChrome center sideImage={{ src: "/assets/signup-team-meeting.jpg", alt: "A team collaborating in an office" }}>
         <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-8">
           <div className="mx-auto px-4 py-3 bg-white rounded-2xl flex items-center justify-center mb-6 ring-1 ring-border max-w-full">

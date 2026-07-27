@@ -226,7 +226,7 @@ export default function JoinRegisterPage() {
 
   if (!refCode && !orgCode) {
     return (
-      <AppChrome center>
+      <AppChrome center sideImage={{ src: "/assets/signup-advisor-meeting.jpg", alt: "A client meeting with their advisor" }}>
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Invalid link</CardTitle>
@@ -242,7 +242,7 @@ export default function JoinRegisterPage() {
 
   if (loading || (!options && !loadError)) {
     return (
-      <AppChrome center>
+      <AppChrome center sideImage={{ src: "/assets/signup-advisor-meeting.jpg", alt: "A client meeting with their advisor" }}>
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           <p className="text-muted-foreground">Loading...</p>
@@ -253,7 +253,7 @@ export default function JoinRegisterPage() {
 
   if (loadError) {
     return (
-      <AppChrome center>
+      <AppChrome center sideImage={{ src: "/assets/signup-advisor-meeting.jpg", alt: "A client meeting with their advisor" }}>
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Unable to load registration</CardTitle>
@@ -270,7 +270,7 @@ export default function JoinRegisterPage() {
 
   if (result) {
     return (
-      <AppChrome center>
+      <AppChrome center sideImage={{ src: "/assets/signup-advisor-meeting.jpg", alt: "A client meeting with their advisor" }}>
         <Card className="w-full max-w-lg shadow-lg">
           <CardHeader className="text-center">
             <div className="mx-auto h-14 w-14 bg-green-100 text-green-600 rounded-xl flex items-center justify-center mb-4">

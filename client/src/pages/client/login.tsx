@@ -48,7 +48,7 @@ export default function ClientLogin() {
   };
 
   return (
-    <AppChrome center>
+    <AppChrome center sideImage={{ src: "/assets/signup-advisor-meeting.jpg", alt: "A client meeting with their advisor" }}>
         <Card className="w-full max-w-md border-border/50 shadow-lg">
         <CardHeader className="text-center pb-6">
           <div className="mx-auto px-4 py-3 bg-white rounded-2xl flex items-center justify-center mb-6 ring-1 ring-border max-w-full">
