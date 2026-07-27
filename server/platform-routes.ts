@@ -32,6 +32,11 @@ import { auditLog } from "./route-helpers";
 import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
 import { upsertTenantDatabaseRouting } from "./tenant-data-migration";
 import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
+import { IMPORT_ENTITY_TYPES, type ImportEntityType } from "@shared/schema";
+import {
+  parseUploadedFile, MAX_IMPORT_ROWS, getFieldSpec, transformAndValidateRow,
+  cacheParsedUpload, getCachedUpload, AUDIT_ENTITY_TYPE_LABEL,
+} from "./legacy-import";
 
 const KNOWN_FEATURE_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications"];
 
@@ -45,6 +50,24 @@ const brandingUpload = multer({
     else cb(new Error("Logo/signature must be PNG, JPG, or WebP"));
   },
 });
+
+const legacyImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = /\.(csv|xlsx|xls)$/i;
+    if (allowed.test(path.extname(file.originalname))) cb(null, true);
+    else cb(new Error("File must be .csv, .xlsx, or .xls"));
+  },
+});
+
+// Extended as more entity types gain a field spec/commit path (see legacy-import.ts).
+const SUPPORTED_IMPORT_ENTITY_TYPES: ImportEntityType[] = ["client", "policy", "payment", "claim"];
+
+function importDependencyMessage(entityType: ImportEntityType): string {
+  const dependsOn = entityType === "policy" ? "clients" : "policies";
+  return `Importing ${entityType} data requires existing ${dependsOn} (or a committed ${dependsOn.slice(0, -1)} import) first.`;
+}
 
 function handleUploadError(err: any, _req: any, res: any, next: any) {
   if (err instanceof multer.MulterError) {
@@ -488,5 +511,237 @@ export function registerPlatformRoutes(app: Express): void {
 
     await auditLog(req, "SET_TENANT_STORAGE_ROUTING", "TenantStorage", id, null, { ...patch, secretChanged: !!secretAccessKey }, id);
     return res.json({ ...patch, hasSecretAccessKey: !!secretAccessKey || undefined });
+  });
+
+  // ── Legacy data import (bulk-import a tenant's history from POL360/Easipol/etc) ──
+  // Feeds the "map legacy plan name → real product version" value-mapping step for policy imports.
+  app.get("/api/platform/tenants/:id/import/product-versions", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const versions = await storage.getAllProductVersions(id);
+    return res.json(versions.map((v) => ({ id: v.id, version: v.version, productName: v.productName })));
+  });
+
+  app.post("/api/platform/tenants/:id/import/upload", requireAuth, requirePlatformOwner, legacyImportUpload.single("file"), async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const entityType = String(req.body.entityType || "") as ImportEntityType;
+    if (!SUPPORTED_IMPORT_ENTITY_TYPES.includes(entityType)) {
+      return res.status(400).json({ message: `Import not yet supported for entity type: ${entityType || "(none)"}` });
+    }
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    try {
+      if (!(await storage.hasImportableDependency(id, entityType))) {
+        return res.status(400).json({ message: importDependencyMessage(entityType) });
+      }
+      const parsed = await parseUploadedFile(req.file.buffer, req.file.originalname);
+      if (parsed.rows.length === 0) return res.status(400).json({ message: "File has no data rows" });
+      if (parsed.rows.length > MAX_IMPORT_ROWS) {
+        return res.status(400).json({ message: `File has ${parsed.rows.length} rows — split into files of ${MAX_IMPORT_ROWS} or fewer.` });
+      }
+      const fieldSpec = getFieldSpec(entityType);
+      const suggestedMapping: Record<string, string> = {};
+      for (const spec of fieldSpec) {
+        const normalize = (s: string) => s.trim().toLowerCase().replace(/[\s_-]/g, "");
+        const match = parsed.headers.find((h) => normalize(h) === normalize(spec.field) || normalize(h) === normalize(spec.label));
+        if (match) suggestedMapping[spec.field] = match;
+      }
+      const uploadToken = cacheParsedUpload(id, req.file.originalname, parsed);
+      return res.json({
+        uploadToken,
+        headers: parsed.headers,
+        sampleRows: parsed.rows.slice(0, 20),
+        totalRows: parsed.rows.length,
+        suggestedMapping,
+        fieldSpec,
+      });
+    } catch (err: any) {
+      return res.status(400).json({ message: err?.message || "Failed to parse file" });
+    }
+  });
+  app.use("/api/platform/tenants/:id/import/upload", handleUploadError);
+
+  // Distinct values for a mapped source column — feeds the "map legacy plan name → real product
+  // version" value-mapping step (only the mapping step knows which column is "plan name", so this
+  // can't be precomputed at upload time).
+  app.post("/api/platform/tenants/:id/import/distinct-values", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const { uploadToken, column } = req.body || {};
+    const cached = getCachedUpload(String(uploadToken || ""), id);
+    if (!cached) return res.status(400).json({ message: "Upload expired or not found — please re-upload the file" });
+    if (!column || typeof column !== "string") return res.status(400).json({ message: "column is required" });
+    const values = new Set<string>();
+    for (const row of cached.rows) {
+      const v = (row[column] ?? "").toString().trim();
+      if (v) values.add(v);
+      if (values.size >= 200) break;
+    }
+    return res.json({ values: Array.from(values).sort() });
+  });
+
+  app.post("/api/platform/tenants/:id/import/preview", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const user = req.user as any;
+    const { uploadToken, entityType, columnMapping, valueMappings, sourceSystemLabel } = req.body || {};
+    if (!SUPPORTED_IMPORT_ENTITY_TYPES.includes(entityType)) {
+      return res.status(400).json({ message: `Import not yet supported for entity type: ${entityType}` });
+    }
+    if (!columnMapping || typeof columnMapping !== "object") {
+      return res.status(400).json({ message: "columnMapping is required" });
+    }
+    const cached = getCachedUpload(String(uploadToken || ""), id);
+    if (!cached) return res.status(400).json({ message: "Upload expired or not found — please re-upload the file" });
+    if (!(await storage.hasImportableDependency(id, entityType))) {
+      return res.status(400).json({ message: importDependencyMessage(entityType) });
+    }
+
+    try {
+      const existingKeys = await storage.getExistingImportExternalKeys(id, entityType);
+      // Policies/payments/claims reference an already-imported parent by legacy id — validate
+      // that reference exists now (at preview time) so the admin gets an immediate, specific
+      // error instead of a wall of "not found" failures at commit.
+      const parentEntityType: ImportEntityType | null =
+        entityType === "policy" ? "client" : entityType === "payment" || entityType === "claim" ? "policy" : null;
+      const parentKeys = parentEntityType ? await storage.getExistingImportExternalKeys(id, parentEntityType) : null;
+
+      // The real DB-unique business key each entity actually enforces (distinct from the legacy
+      // externalKey above, which is only this feature's own bookkeeping) — checked here too so a
+      // colliding policyNumber/claimNumber/receiptNumber is caught with a clear message now,
+      // rather than aborting the whole commit on a raw unique-constraint violation later.
+      const businessKeyField = entityType === "policy" ? "policyNumber" : entityType === "claim" ? "claimNumber" : entityType === "payment" ? "receiptNumber" : null;
+      const existingBusinessKeys = businessKeyField ? await storage.getExistingBusinessKeys(id, entityType) : null;
+      const seenBusinessKeysInFile = new Set<string>();
+
+      const seenInFile = new Set<string>();
+      const validRows: any[] = [];
+      const errorReport: { rowIndex: number; field: string; message: string }[] = [];
+
+      cached.rows.forEach((rawRow, idx) => {
+        const result = transformAndValidateRow(entityType, rawRow, idx, columnMapping);
+        if (result.errors.length > 0) {
+          errorReport.push(...result.errors);
+          return;
+        }
+        const externalKey = result.value.externalKey;
+        if (existingKeys.has(externalKey) || seenInFile.has(externalKey)) {
+          errorReport.push({ rowIndex: idx, field: "externalKey", message: `Legacy ID "${externalKey}" is already imported or duplicated in this file` });
+          return;
+        }
+        if (parentKeys) {
+          const parentField = entityType === "policy" ? "clientExternalKey" : "policyExternalKey";
+          const parentKey = result.value[parentField];
+          if (!parentKeys.has(parentKey)) {
+            errorReport.push({ rowIndex: idx, field: parentField, message: `Legacy ${parentEntityType} ID "${parentKey}" was not found among imported ${parentEntityType}s` });
+            return;
+          }
+        }
+        if (businessKeyField && existingBusinessKeys) {
+          const bkValue = result.value[businessKeyField];
+          if (existingBusinessKeys.has(bkValue) || seenBusinessKeysInFile.has(bkValue)) {
+            errorReport.push({ rowIndex: idx, field: businessKeyField, message: `${businessKeyField} "${bkValue}" is already in use or duplicated in this file` });
+            return;
+          }
+          seenBusinessKeysInFile.add(bkValue);
+        }
+        seenInFile.add(externalKey);
+        validRows.push({ ...result.value, __rowIndex: idx });
+      });
+
+      const batch = await storage.createImportBatch({
+        organizationId: id,
+        entityType,
+        sourceSystemLabel: sourceSystemLabel || null,
+        fileName: cached.fileName,
+        columnMapping,
+        valueMappings: valueMappings || null,
+        status: "previewed",
+        totalRows: cached.rows.length,
+        successRows: validRows.length,
+        errorRows: errorReport.length,
+        previewSnapshot: validRows,
+        errorReport,
+        createdByUserId: user.id,
+      });
+
+      return res.status(201).json({
+        batchId: batch.id,
+        totalRows: batch.totalRows,
+        successRows: batch.successRows,
+        errorRows: batch.errorRows,
+        sampleErrors: errorReport.slice(0, 50),
+      });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/platform/tenants/:id/import/preview failed", { error: err?.message, orgId: id });
+      return res.status(500).json({ message: err?.message || "Preview failed" });
+    }
+  });
+
+  app.get("/api/platform/tenants/:id/import/batches", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const entityType = (req.query.entityType as ImportEntityType | undefined) || undefined;
+    const batches = await storage.listImportBatches(id, entityType);
+    return res.json(batches.map(({ previewSnapshot, ...rest }) => rest));
+  });
+
+  app.get("/api/platform/tenants/:id/import/batches/:batchId", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const batch = await storage.getImportBatch(req.params.batchId as string, id);
+    if (!batch) return res.status(404).json({ message: "Import batch not found" });
+    const { previewSnapshot, ...rest } = batch;
+    return res.json(rest);
+  });
+
+  app.get("/api/platform/tenants/:id/import/batches/:batchId/audit-log", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const batch = await storage.getImportBatch(req.params.batchId as string, id);
+    if (!batch) return res.status(404).json({ message: "Import batch not found" });
+    const rows = await storage.getImportBatchAuditLog(id, batch.id);
+    return res.json(rows);
+  });
+
+  app.post("/api/platform/tenants/:id/import/batches/:batchId/commit", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    const batchId = req.params.batchId as string;
+    if (!(await requireTenant(id, res))) return;
+    const user = req.user as any;
+    try {
+      const batch = await storage.getImportBatch(batchId, id);
+      if (!batch) return res.status(404).json({ message: "Import batch not found" });
+      if (batch.status !== "previewed") return res.status(400).json({ message: `Batch is already ${batch.status}` });
+      if (batch.successRows === 0) return res.status(400).json({ message: "No valid rows to import" });
+
+      const result = await storage.commitImportBatch(id, batchId, { userId: user.id });
+      await auditLog(req, "bulk_import", AUDIT_ENTITY_TYPE_LABEL[batch.entityType as ImportEntityType], batchId, null, result, id);
+      return res.json(result);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/platform/tenants/:id/import/batches/:batchId/commit failed", { error: err?.message, batchId });
+      return res.status(500).json({ message: err?.message || "Import commit failed" });
+    }
+  });
+
+  app.post("/api/platform/tenants/:id/import/batches/:batchId/rollback", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    const batchId = req.params.batchId as string;
+    if (!(await requireTenant(id, res))) return;
+    const user = req.user as any;
+    try {
+      const batch = await storage.getImportBatch(batchId, id);
+      if (!batch) return res.status(404).json({ message: "Import batch not found" });
+      if (batch.status !== "committed") return res.status(400).json({ message: `Batch is ${batch.status}, not committed — nothing to roll back.` });
+
+      const result = await storage.rollbackImportBatch(id, batchId, { userId: user.id });
+      if (!result.ok) return res.status(409).json({ message: result.reason });
+
+      await auditLog(req, "rollback_import", AUDIT_ENTITY_TYPE_LABEL[batch.entityType as ImportEntityType], batchId, null, { rolledBack: true }, id);
+      return res.json(result);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/platform/tenants/:id/import/batches/:batchId/rollback failed", { error: err?.message, batchId });
+      return res.status(500).json({ message: err?.message || "Rollback failed" });
+    }
   });
 }

@@ -10,13 +10,23 @@ import type { Policy } from "@shared/schema";
 
 // ─── Cycle helpers ───────────────────────────────────────────
 
+/** Adds `n` days to a YYYY-MM-DD date-only string. Must do the arithmetic in UTC, not local
+ *  time: `new Date(dateStr + "T00:00:00")` constructs local midnight, and if the host's local
+ *  timezone is ahead of UTC (e.g. Africa/Harare, UTC+2 — this app's own tenant timezone),
+ *  `.toISOString()` converting that back to UTC lands on 22:00 the *previous* UTC day, silently
+ *  returning a date one day earlier than intended on every call. Since every subsequent cycle's
+ *  `periodFrom` is derived from the previous cycle's `addDays` output, the error compounds by a
+ *  full extra day per payment cycle rather than staying a one-off off-by-one.  */
 function addDays(dateStr: string, n: number): string {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split("T")[0];
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const utc = new Date(Date.UTC(y, m - 1, d));
+  utc.setUTCDate(utc.getUTCDate() + n);
+  return utc.toISOString().split("T")[0];
 }
 
-/** Signed days: positive = b is after a */
+/** Signed days: positive = b is after a. Safe as-is despite the same local-midnight construction
+ *  `addDays` had to be fixed for: this only ever takes the *difference* of two such timestamps,
+ *  so a host timezone offset shifts both terms by the same amount and cancels out exactly. */
 function daysBetween(aStr: string, bStr: string): number {
   return Math.round(
     (new Date(bStr + "T00:00:00").getTime() - new Date(aStr + "T00:00:00").getTime()) / 86400000

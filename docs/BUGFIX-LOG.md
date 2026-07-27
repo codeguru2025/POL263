@@ -10,6 +10,91 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-27 — Policy cycle dates silently off by a day per cycle on hosts with a positive UTC offset
+
+- **Symptom:** discovered while building/verifying the legacy-import payment-replay feature — a
+  policy that had received 3 monthly payments ended up with `currentCycleStart`/`currentCycleEnd`/
+  `graceEndDate` 4-5 calendar days earlier than hand-computed expected values, with the drift
+  growing by roughly one extra day per payment cycle. Not specific to import: `advancePolicyCycle`
+  (`server/policy-status-on-payment.ts`) is the exact function every real PayNow/cash/group payment
+  calls, so this is a live bug affecting any real tenant policy with more than one payment cycle —
+  wherever the app server's local timezone is ahead of UTC (which includes `Africa/Harare`, this
+  app's own tenant timezone, referenced elsewhere in the codebase — `server/date-utils.ts`).
+- **Root cause:** `addDays(dateStr, n)` built `new Date(dateStr + "T00:00:00")` (parsed as LOCAL
+  midnight per the ECMAScript date-time-string spec) then serialized the result via
+  `.toISOString()` (always UTC). On a host with local time ahead of UTC, local midnight is earlier
+  in UTC terms than the calendar date suggests, so `.toISOString().split("T")[0]` silently returns
+  the **previous** calendar day on every single call. Since each cycle's `periodFrom` is derived
+  from the *previous* cycle's `addDays` output (`dueDate = addDays(currentCycleEnd, 1)`), each
+  fresh call reintroduces its own fresh −1-day error — the drift compounds by one full day per
+  chained call (one call for cycle 1, two for cycle 2, and so on), not a one-off off-by-one.
+  `daysBetween` in the same file uses the identical local-midnight construction but is unaffected:
+  it only takes the *difference* of two such timestamps, so a constant host-timezone offset cancels
+  out of the subtraction exactly. The same buggy `addDays` was independently copy-pasted into
+  `server/policy-lapse-sweep.ts` (the scheduled job that ages active policies into grace/lapsed).
+- **Fix:** rewrote `addDays` in both files to do the arithmetic entirely in UTC —
+  `Date.UTC(y, m-1, d)` + `setUTCDate`/`getUTCDate` — instead of local-time Date construction, so
+  the result no longer depends on the host's local timezone setting at all.
+- **Verified:** a throwaway script (against the sandbox "TEST TENANT" org, cleaned up after)
+  replayed 3 payments (2020-03-01, 2020-03-31, 2020-06-14 — the last ~45 days late) through
+  `advancePolicyCycle`/`applyPolicyStatusForClearedPayment` and asserted every resulting date
+  field against hand-computed values (`currentCycleStart`, `currentCycleEnd`, `graceUsedDays`
+  capped at 30, `graceEndDate`) — all matched exactly after the fix, versus a consistent 4-5 day
+  drift before it. Confirmed the host this session runs on has `getTimezoneOffset() === -120`
+  (UTC+2), which is exactly the condition that triggers the bug.
+- **Files:** `server/policy-status-on-payment.ts`, `server/policy-lapse-sweep.ts`.
+- **Lesson for next time:** `new Date(dateOnlyStr + "T00:00:00")` is a landmine — adding an
+  explicit time-of-day to a date-only string forces local-timezone parsing, whereas
+  `new Date(dateOnlyStr)` alone (no time component) parses as UTC per spec. Grep for
+  `T00:00:00.*setDate\|setDate.*T00:00:00` (or just `addDays`/date-math helpers) across the
+  codebase before trusting any hand-rolled date-arithmetic helper — `routes.ts`,
+  `route-helpers.ts`, and `policy-document.ts` all had similar-looking `setDate`/`getDate` patterns
+  checked during this fix, but used the safer date-only (no explicit time) construction and were
+  left alone; only the two files above had the dangerous variant. A day-level drift that grows by
+  exactly one day per chained call, only reproducing on non-UTC-hosted environments, is the
+  signature of this exact bug class — don't assume "it works in prod" rules it out if prod's host
+  timezone isn't explicitly pinned to UTC somewhere.
+
+---
+
+## 2026-07-27 — App-wide: default text nearly invisible (light-on-light) anywhere colors weren't hardcoded
+
+- **Symptom:** on the public tenant-signup page (`/signup`), form labels, unselected product
+  badges, and select placeholders rendered as barely-visible pale text on white/light card
+  backgrounds — only elements with explicit `text-gray-900`-style classes (like the h1) were
+  legible.
+- **Root cause:** `client/src/index.css` defines five theme palettes, each scoped to
+  `[data-theme="..."]`. The "Obsidian Gold" block was written as `:root, [data-theme="obsidian-
+  gold"] { ... }` — pairing the dark theme's variables directly to `:root`. `:root` always
+  matches `<html>` unconditionally, with the same CSS specificity (0,1,0) as any
+  `[data-theme="x"]` attribute selector. Because that block appeared *after* the
+  `[data-theme="insurance-teal"]` block in source order, and equal-specificity ties go to the
+  later rule, Obsidian Gold's light-cream `--foreground` (43 30% 95%) silently won as the
+  effective default for `<html>` **regardless of which `data-theme` attribute was actually set**
+  — including the app's real default, `insurance-teal` (set by `ThemeProvider`,
+  `client/src/components/theme-provider.tsx:23`). Any element relying on the unstyled default
+  (`text-foreground`/`text-muted-foreground` tokens — used by `Label`, outline `Badge`, Select
+  placeholders, etc.) got near-white text. This was invisible on most authenticated pages
+  because they hardcode Tailwind gray-scale classes instead of the theme tokens, but the public
+  signup page leans on the token defaults and sits on explicit light backgrounds, so the bug was
+  fully exposed there.
+- **Fix:** Moved `:root,` off the Obsidian Gold block and onto the Insurance Teal block instead
+  (`client/src/index.css:9-10, 59`), so the CSS default now matches the JS/`ThemeProvider`
+  default. Obsidian Gold now only applies when `data-theme="obsidian-gold"` is explicitly set.
+- **Verified:** loaded `/signup` in-browser before and after — labels, badges, and placeholders
+  went from invisible pale text to fully legible dark text on the white card, with no other
+  visual regressions.
+- **Files:** `client/src/index.css`.
+- **Lesson for next time:** never pair `:root` with a *non-default* themed selector in a
+  multi-theme CSS-variable setup — `:root` has the same specificity as any attribute selector
+  and always matches, so whichever themed block it's attached to silently becomes the tie-
+  breaking default everywhere, independent of which theme is actually active. If a "why is this
+  text invisible" bug only shows up on pages that lean on token-based classes (`text-foreground`,
+  `text-muted-foreground`) rather than hardcoded Tailwind colors, check `index.css` for stray
+  `:root` pairings before assuming it's a per-component issue.
+
+---
+
 ## 2026-07-26 — Agents saw Fleet Tracking in the staff nav despite never having a vehicle to check out
 
 - **Symptom:** logging in as an agent (Pesuate Mhlanga) showed a "Fleet Tracking" item in the

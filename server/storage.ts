@@ -7,8 +7,9 @@ import { structuredLog } from "./logger";
 import { cpDb } from "./control-plane-db";
 import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
+import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
 import { todayInHarare } from "./date-utils";
-import { monthsFromPeriod } from "./policy-status-on-payment";
+import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
@@ -150,6 +151,8 @@ import {
   type CountryFlagSettings, type InsertCountryFlagSettings,
   type UserNotification, type InsertUserNotification,
   type UserDeviceToken,
+  importBatches, importRecords,
+  type ImportBatch, type InsertImportBatch, type ImportRecord, type ImportEntityType,
 } from "@shared/schema";
 
 /** Drizzle handle for this org's data database (shared `DATABASE_URL` pool or isolated tenant Postgres). */
@@ -772,6 +775,17 @@ export interface IStorage {
   getAllUserDeviceTokensByOrg(orgId: string): Promise<{ id: string; userId: string; token: string; platform: string }[]>;
   upsertUserDeviceToken(orgId: string, userId: string, token: string, platform: string): Promise<void>;
   removeUserDeviceToken(token: string): Promise<void>;
+  // ── Legacy data import (control-panel-only bulk import from POL360/Easipol/etc) ──
+  createImportBatch(batch: InsertImportBatch): Promise<ImportBatch>;
+  getImportBatch(id: string, orgId: string): Promise<ImportBatch | undefined>;
+  listImportBatches(orgId: string, entityType?: ImportEntityType): Promise<ImportBatch[]>;
+  updateImportBatch(id: string, orgId: string, data: Partial<InsertImportBatch>): Promise<ImportBatch | undefined>;
+  hasImportableDependency(orgId: string, entityType: ImportEntityType): Promise<boolean>;
+  getExistingImportExternalKeys(orgId: string, entityType: ImportEntityType): Promise<Set<string>>;
+  getExistingBusinessKeys(orgId: string, entityType: ImportEntityType): Promise<Set<string>>;
+  getImportBatchAuditLog(orgId: string, batchId: string): Promise<AuditLog[]>;
+  rollbackImportBatch(orgId: string, batchId: string, actor: { userId: string }): Promise<{ ok: boolean; reason?: string }>;
+  commitImportBatch(orgId: string, batchId: string, actor: { userId: string }): Promise<{ successRows: number; errorRows: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -6931,6 +6945,485 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(vehicleTripLogs.id, id), eq(vehicleTripLogs.organizationId, orgId)))
       .returning();
     return updated;
+  }
+
+  // ── Legacy data import (control-panel-only bulk import from POL360/Easipol/etc) ──
+  async createImportBatch(batch: InsertImportBatch): Promise<ImportBatch> {
+    const tdb = await getDbForOrg(batch.organizationId);
+    const [created] = await tdb.insert(importBatches).values(batch).returning();
+    return created;
+  }
+  async getImportBatch(id: string, orgId: string): Promise<ImportBatch | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(importBatches)
+      .where(and(eq(importBatches.id, id), eq(importBatches.organizationId, orgId)));
+    return row;
+  }
+  async listImportBatches(orgId: string, entityType?: ImportEntityType): Promise<ImportBatch[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conditions = entityType
+      ? and(eq(importBatches.organizationId, orgId), eq(importBatches.entityType, entityType))
+      : eq(importBatches.organizationId, orgId);
+    return tdb.select().from(importBatches).where(conditions).orderBy(desc(importBatches.createdAt));
+  }
+  async updateImportBatch(id: string, orgId: string, data: Partial<InsertImportBatch>): Promise<ImportBatch | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(importBatches).set(data)
+      .where(and(eq(importBatches.id, id), eq(importBatches.organizationId, orgId)))
+      .returning();
+    return updated;
+  }
+  /** All audit_logs rows a committed batch produced: the per-row synthesized
+   *  `legacy_migrated_create` entries (keyed by each import_records.entityId) plus the one
+   *  `bulk_import` summary entry (keyed by the batch id itself) — lets a platform admin verify
+   *  the historical audit trail without impersonating the tenant. */
+  async getImportBatchAuditLog(orgId: string, batchId: string): Promise<AuditLog[]> {
+    const tdb = await getDbForOrg(orgId);
+    const records = await tdb.select({ entityId: importRecords.entityId }).from(importRecords).where(eq(importRecords.batchId, batchId));
+    const entityIds = records.map((r) => r.entityId);
+    const entityIdMatch = entityIds.length > 0 ? or(inArray(auditLogs.entityId, entityIds), eq(auditLogs.entityId, batchId)) : eq(auditLogs.entityId, batchId);
+    return tdb.select().from(auditLogs)
+      .where(and(eq(auditLogs.organizationId, orgId), entityIdMatch))
+      .orderBy(desc(auditLogs.timestamp));
+  }
+  async getExistingImportExternalKeys(orgId: string, entityType: ImportEntityType): Promise<Set<string>> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select({ externalKey: importRecords.externalKey }).from(importRecords)
+      .where(and(eq(importRecords.organizationId, orgId), eq(importRecords.entityType, entityType)));
+    return new Set(rows.map((r) => r.externalKey));
+  }
+  /** Values already used for the *real*, DB-unique business key each entity type actually
+   *  enforces (policies.policyNumber, claims.claimNumber, paymentReceipts.receiptNumber) — a
+   *  distinct check from `getExistingImportExternalKeys`, which only tracks *this feature's own*
+   *  legacy-id bookkeeping. Without this, two rows with different legacy ids but a colliding real
+   *  business key pass preview cleanly and only fail at commit, aborting the whole batch on a
+   *  raw unique-constraint violation instead of a clear per-row preview error. "client" has no
+   *  such business key, so it always returns an empty set. */
+  async getExistingBusinessKeys(orgId: string, entityType: ImportEntityType): Promise<Set<string>> {
+    const tdb = await getDbForOrg(orgId);
+    if (entityType === "policy") {
+      const rows = await tdb.select({ v: policies.policyNumber }).from(policies).where(eq(policies.organizationId, orgId));
+      return new Set(rows.map((r) => r.v));
+    }
+    if (entityType === "claim") {
+      const rows = await tdb.select({ v: claims.claimNumber }).from(claims).where(eq(claims.organizationId, orgId));
+      return new Set(rows.map((r) => r.v));
+    }
+    if (entityType === "payment") {
+      const rows = await tdb.select({ v: paymentReceipts.receiptNumber }).from(paymentReceipts).where(eq(paymentReceipts.organizationId, orgId));
+      return new Set(rows.map((r) => r.v));
+    }
+    return new Set();
+  }
+  /** Whether `orgId` already has data for the entity type that `entityType` depends on (e.g.
+   *  "policy" imports need clients to already exist, from a normal client or a prior import
+   *  batch) — checked live rather than trusting import history alone, since a tenant may already
+   *  have real (non-imported) data. */
+  async hasImportableDependency(orgId: string, entityType: ImportEntityType): Promise<boolean> {
+    const tdb = await getDbForOrg(orgId);
+    const dependsOnLiveTable = entityType === "policy" ? clients : entityType === "payment" || entityType === "claim" ? policies : null;
+    if (!dependsOnLiveTable) return true; // "client" has no import dependency
+    const dependsOnEntityType: ImportEntityType = entityType === "policy" ? "client" : "policy";
+    const [liveCount] = await tdb.select({ c: count() }).from(dependsOnLiveTable).where(eq((dependsOnLiveTable as any).organizationId, orgId));
+    if ((liveCount?.c ?? 0) > 0) return true;
+    const [batchCount] = await tdb.select({ c: count() }).from(importBatches)
+      .where(and(eq(importBatches.organizationId, orgId), eq(importBatches.entityType, dependsOnEntityType), eq(importBatches.status, "committed")));
+    return (batchCount?.c ?? 0) > 0;
+  }
+  /** Commits a previewed import batch: re-reads `previewSnapshot`, inserts the target rows plus
+   *  their `import_records` cross-reference and a synthesized historical `audit_logs` entry per
+   *  row, all in one transaction (all rows or none) — see storage.bulkImportGroupMembers for the
+   *  same pattern at smaller scale. */
+  async commitImportBatch(orgId: string, batchId: string, actor: { userId: string }): Promise<{ successRows: number; errorRows: number }> {
+    return withOrgTransaction(orgId, async (tx) => {
+      const [batch] = await tx.select().from(importBatches)
+        .where(and(eq(importBatches.id, batchId), eq(importBatches.organizationId, orgId)));
+      if (!batch) throw new Error("Import batch not found");
+      if (batch.status !== "previewed") throw new Error(`Batch is already ${batch.status}`);
+
+      const rows = ((batch.previewSnapshot as any[]) || []);
+      let successRows = 0;
+
+      if (batch.entityType === "payment") {
+        const replay = await this.commitPaymentReplay(orgId, tx, batchId, batch, rows);
+        await tx.update(importBatches).set({
+          status: "committed", successRows: replay.successRows, committedAt: new Date(),
+          replaySnapshots: replay.replaySnapshots,
+        }).where(eq(importBatches.id, batchId));
+        return { successRows: replay.successRows, errorRows: batch.errorRows };
+      }
+
+      for (const row of rows) {
+        if (batch.entityType === "client") {
+          const { __rowIndex, externalKey, ...clientFields } = row;
+          const [client] = await tx.insert(clients).values({
+            organizationId: orgId,
+            ...clientFields,
+          }).returning();
+          await tx.insert(importRecords).values({
+            batchId, organizationId: orgId, entityType: "client",
+            externalKey, entityId: client.id, sourceRowIndex: __rowIndex,
+          });
+          await tx.insert(auditLogs).values(buildLegacyAuditLogRow({
+            organizationId: orgId, entityType: AUDIT_ENTITY_TYPE_LABEL.client, entityId: client.id,
+            after: client, historicalDate: null, sourceSystemLabel: batch.sourceSystemLabel,
+          }));
+          successRows++;
+        } else if (batch.entityType === "policy") {
+          const { __rowIndex, externalKey, clientExternalKey, planName, ...policyFields } = row;
+          const clientId = await resolveExternalRef(orgId, "client", clientExternalKey, tx);
+          if (!clientId) {
+            throw new Error(`Row ${__rowIndex + 1}: legacy client ID "${clientExternalKey}" was not found — re-run preview after importing that client.`);
+          }
+
+          let productVersionId: string | undefined;
+          const valueMappings = (batch.valueMappings as any) || {};
+          const planMapping = valueMappings.planName || {};
+          if (planName && planMapping[planName]) {
+            const [pv] = await tx.select({ id: productVersions.id }).from(productVersions)
+              .where(and(eq(productVersions.id, planMapping[planName]), eq(productVersions.organizationId, orgId)));
+            productVersionId = pv?.id;
+          }
+          if (!productVersionId) productVersionId = await getOrCreateLegacyProductVersion(orgId, tx);
+
+          const [policy] = await tx.insert(policies).values({
+            organizationId: orgId,
+            clientId,
+            productVersionId,
+            isLegacy: true,
+            externalReference: externalKey,
+            ...policyFields,
+          }).returning();
+
+          await tx.insert(importRecords).values({
+            batchId, organizationId: orgId, entityType: "policy",
+            externalKey, entityId: policy.id, sourceRowIndex: __rowIndex,
+          });
+          await tx.insert(auditLogs).values(buildLegacyAuditLogRow({
+            organizationId: orgId, entityType: AUDIT_ENTITY_TYPE_LABEL.policy, entityId: policy.id,
+            after: policy, historicalDate: policy.effectiveDate ? new Date(policy.effectiveDate) : null,
+            sourceSystemLabel: batch.sourceSystemLabel,
+          }));
+          successRows++;
+        } else if (batch.entityType === "claim") {
+          const { __rowIndex, externalKey, policyExternalKey, dateOfDeath, ...claimFields } = row;
+          const policyId = await resolveExternalRef(orgId, "policy", policyExternalKey, tx);
+          if (!policyId) {
+            throw new Error(`Row ${__rowIndex + 1}: legacy policy ID "${policyExternalKey}" was not found — re-run preview after importing that policy.`);
+          }
+          const [policyRow] = await tx.select({ clientId: policies.clientId }).from(policies).where(eq(policies.id, policyId));
+          if (!policyRow) throw new Error(`Row ${__rowIndex + 1}: resolved policy no longer exists.`);
+
+          const [claim] = await tx.insert(claims).values({
+            organizationId: orgId,
+            policyId,
+            clientId: policyRow.clientId,
+            dateOfDeath,
+            ...claimFields,
+          }).returning();
+
+          await tx.insert(importRecords).values({
+            batchId, organizationId: orgId, entityType: "claim",
+            externalKey, entityId: claim.id, sourceRowIndex: __rowIndex,
+          });
+          await tx.insert(auditLogs).values(buildLegacyAuditLogRow({
+            organizationId: orgId, entityType: AUDIT_ENTITY_TYPE_LABEL.claim, entityId: claim.id,
+            after: claim, historicalDate: dateOfDeath ? new Date(dateOfDeath) : null,
+            sourceSystemLabel: batch.sourceSystemLabel,
+          }));
+          successRows++;
+        } else {
+          throw new Error(`Commit not yet implemented for entity type: ${batch.entityType}`);
+        }
+      }
+
+      await tx.update(importBatches).set({
+        status: "committed", successRows, committedAt: new Date(),
+      }).where(eq(importBatches.id, batchId));
+
+      return { successRows, errorRows: batch.errorRows };
+    });
+  }
+
+  /** Policy fields that fully describe its "current cycle state" for rollback snapshotting. */
+  private static readonly REPLAY_SNAPSHOT_FIELDS = [
+    "status", "effectiveDate", "inceptionDate", "currentCycleStart", "currentCycleEnd",
+    "graceEndDate", "graceUsedDays", "version",
+  ] as const;
+
+  private snapshotPolicyReplayFields(policy: any): Record<string, unknown> {
+    const snap: Record<string, unknown> = {};
+    for (const field of DatabaseStorage.REPLAY_SNAPSHOT_FIELDS) snap[field] = policy[field];
+    return snap;
+  }
+
+  /** policy_credit_balances has at most one row per policy — "0" (not fetched) when absent, so
+   *  it snapshots/compares the same way whether or not a credit balance row exists yet. */
+  private async getPolicyCreditBalanceValue(tx: any, orgId: string, policyId: string): Promise<string> {
+    const [row] = await tx.select({ balance: policyCreditBalances.balance }).from(policyCreditBalances)
+      .where(and(eq(policyCreditBalances.organizationId, orgId), eq(policyCreditBalances.policyId, policyId)));
+    return row?.balance ?? "0";
+  }
+
+  /** Payment-import commit path: replays each policy's payments, in chronological order, through
+   *  the exact same functions a live PayNow/cash payment uses (advancePolicyCycle,
+   *  applyPolicyStatusForClearedPayment — see server/policy-status-on-payment.ts and their real
+   *  call sites in server/payment-service.ts), so an imported policy's grace/lapsed status and
+   *  next-due-date come out identical to a native one instead of being left blank. Deliberately
+   *  does NOT call insertOutboxMessageInTx — that's what triggers commission (recordAgentCommission),
+   *  receipt PDFs, and notifications on a live payment, none of which are wanted for a historical
+   *  bulk import. Captures a before/after field snapshot per touched policy into
+   *  `replaySnapshots` so rollback can detect whether anything else has touched the policy since,
+   *  before it's safe to revert. */
+  private async commitPaymentReplay(
+    orgId: string, tx: any, batchId: string, batch: ImportBatch, rows: any[],
+  ): Promise<{ successRows: number; replaySnapshots: Record<string, any> }> {
+    const grouped = new Map<string, any[]>();
+    for (const row of rows) {
+      const policyId = await resolveExternalRef(orgId, "policy", row.policyExternalKey, tx);
+      if (!policyId) {
+        throw new Error(`Row ${row.__rowIndex + 1}: legacy policy ID "${row.policyExternalKey}" was not found — re-run preview after importing that policy.`);
+      }
+      if (!grouped.has(policyId)) grouped.set(policyId, []);
+      grouped.get(policyId)!.push(row);
+    }
+
+    const replaySnapshots: Record<string, any> = {};
+    let successRows = 0;
+
+    for (const [policyId, policyRows] of Array.from(grouped)) {
+      policyRows.sort((a, b) => String(a.paymentDate).localeCompare(String(b.paymentDate)));
+
+      let [currentSnap] = await tx.select().from(policies).where(eq(policies.id, policyId));
+      if (!currentSnap) throw new Error(`Policy ${policyId} no longer exists.`);
+      const before = this.snapshotPolicyReplayFields(currentSnap);
+      const creditBefore = await this.getPolicyCreditBalanceValue(tx, orgId, policyId);
+
+      for (const row of policyRows) {
+        const { __rowIndex, externalKey, policyExternalKey, paymentDate, ...paymentFields } = row;
+
+        // Mirrors payment-service.ts's multi-month lump-sum inference exactly, so a payment
+        // covering several premiums replays into several advanced cycles, same as it would live.
+        const premiumAmt = currentSnap.premiumAmount ? parseFloat(String(currentSnap.premiumAmount)) : 0;
+        const paidAmt = parseFloat(String(paymentFields.amount));
+        const monthCount = (premiumAmt > 0 && Number.isFinite(paidAmt / premiumAmt))
+          ? Math.min(12, Math.max(1, Math.round(paidAmt / premiumAmt)))
+          : 1;
+
+        let periodFrom = paymentDate;
+        let periodTo = paymentDate;
+        for (let m = 0; m < monthCount; m++) {
+          const period = await advancePolicyCycle(tx, policyId, currentSnap, paymentDate);
+          if (m === 0) periodFrom = period.periodFrom;
+          periodTo = period.periodTo;
+          if (m < monthCount - 1) {
+            const [refreshed] = await tx.select().from(policies).where(eq(policies.id, policyId));
+            if (refreshed) currentSnap = refreshed;
+          }
+        }
+
+        // Mirrors payment-service.ts:758-766 — anything paid beyond the monthCount cycles just
+        // advanced didn't buy another whole period; bank it as credit instead of dropping it.
+        if (premiumAmt > 0) {
+          const excess = paidAmt - monthCount * premiumAmt;
+          if (excess > 0.01) {
+            await this.addPolicyCreditBalanceInTx(tx, orgId, policyId, excess.toFixed(2), paymentFields.currency);
+          }
+        }
+
+        const [txnRow] = await tx.insert(paymentTransactions).values({
+          organizationId: orgId,
+          policyId,
+          clientId: currentSnap.clientId,
+          amount: paymentFields.amount,
+          currency: paymentFields.currency,
+          paymentMethod: "legacy_import",
+          status: "cleared",
+          postedDate: paymentDate,
+          valueDate: paymentDate,
+          periodFrom,
+          periodTo,
+        }).returning();
+
+        // metadataJson.transactionId mirrors the real payment flow's own receipt<->transaction
+        // link (payment-service.ts) — reused here so rollback can find and remove exactly this
+        // batch's paymentTransactions row without a separate cross-reference mechanism.
+        const [receipt] = await tx.insert(paymentReceipts).values({
+          organizationId: orgId,
+          policyId,
+          clientId: currentSnap.clientId,
+          backdatedDate: paymentDate,
+          ...paymentFields,
+          periodFrom,
+          periodTo,
+          metadataJson: { transactionId: txnRow.id },
+        }).returning();
+
+        await applyPolicyStatusForClearedPayment(tx, policyId, currentSnap, paymentDate, " (legacy import)", undefined);
+        const [refreshedAfterStatus] = await tx.select().from(policies).where(eq(policies.id, policyId));
+        if (refreshedAfterStatus) currentSnap = refreshedAfterStatus;
+
+        await tx.insert(importRecords).values({
+          batchId, organizationId: orgId, entityType: "payment",
+          externalKey, entityId: receipt.id, sourceRowIndex: __rowIndex,
+        });
+        await tx.insert(auditLogs).values(buildLegacyAuditLogRow({
+          organizationId: orgId, entityType: AUDIT_ENTITY_TYPE_LABEL.payment, entityId: receipt.id,
+          after: receipt, historicalDate: new Date(paymentDate), sourceSystemLabel: batch.sourceSystemLabel,
+        }));
+        successRows++;
+      }
+
+      replaySnapshots[policyId] = {
+        before,
+        after: this.snapshotPolicyReplayFields(currentSnap),
+        creditBefore,
+        creditAfter: await this.getPolicyCreditBalanceValue(tx, orgId, policyId),
+      };
+    }
+
+    return { successRows, replaySnapshots };
+  }
+
+  /** Payment-batch rollback safety check: since replay mutates each touched policy's live
+   *  cycle/status fields (not just inserts isolated rows), a plain FK/reference check isn't
+   *  enough — verifies every touched policy's CURRENT state still matches exactly what this
+   *  batch's replay left it in (the "after" snapshot). If anything else has touched it since (a
+   *  real payment, another import), blocks rather than risk reverting over top of that activity. */
+  private async rollbackPaymentReplay(orgId: string, tx: any, batch: ImportBatch): Promise<{ ok: boolean; reason?: string }> {
+    const snapshots = (batch.replaySnapshots as Record<string, any>) || {};
+    const policyIds = Object.keys(snapshots);
+
+    for (const policyId of policyIds) {
+      const [current] = await tx.select().from(policies).where(eq(policies.id, policyId));
+      if (!current) continue; // policy itself is gone some other way — nothing left to protect
+      const currentSnap = this.snapshotPolicyReplayFields(current);
+      const expectedAfter = snapshots[policyId].after;
+      for (const field of DatabaseStorage.REPLAY_SNAPSHOT_FIELDS) {
+        if (String(currentSnap[field] ?? "") !== String(expectedAfter[field] ?? "")) {
+          return {
+            ok: false,
+            reason: "This policy has had further activity since this import (a payment or another change) — cannot automatically roll back.",
+          };
+        }
+      }
+      // Excess lump-sum payments bank into policy_credit_balances (a single running total per
+      // policy, not a per-payment row) — if it's moved since this batch's replay (e.g. spent by a
+      // real payment), reverting to the pre-replay balance would silently erase that activity.
+      const currentCredit = await this.getPolicyCreditBalanceValue(tx, orgId, policyId);
+      if (currentCredit !== (snapshots[policyId].creditAfter ?? "0")) {
+        return {
+          ok: false,
+          reason: "This policy's credit balance has changed since this import — cannot automatically roll back.",
+        };
+      }
+    }
+
+    for (const policyId of policyIds) {
+      const snap = snapshots[policyId];
+      await tx.update(policies).set(snap.before).where(eq(policies.id, policyId));
+      // Postgres's now()/defaultNow() is pinned to transaction START, not per-statement — every
+      // row inserted during commit's replay loop gets the SAME createdAt, so a wall-clock window
+      // captured in JS can't distinguish "created by this batch" from "created a moment earlier
+      // in the same transaction." Match on the reason suffix applyPolicyStatusForClearedPayment
+      // was called with instead (" (legacy import)", passed only from replay, never by a live
+      // payment) — precise regardless of transaction timing.
+      await tx.delete(policyStatusHistory).where(and(
+        eq(policyStatusHistory.policyId, policyId),
+        ilike(policyStatusHistory.reason, "%(legacy import)%"),
+      ));
+      await tx.update(policyCreditBalances).set({ balance: snap.creditBefore ?? "0", updatedAt: new Date() })
+        .where(and(eq(policyCreditBalances.organizationId, orgId), eq(policyCreditBalances.policyId, policyId)));
+    }
+
+    return { ok: true };
+  }
+
+  /** Reverses a committed batch: deletes everything it created plus its `import_records` and
+   *  synthesized `audit_logs` rows, all in one transaction — blocked if anything outside the
+   *  batch now has a live reference into it. `checkRollbackBlockers` gives a fast, specific
+   *  message for the common cases (policies/claims); payment batches use snapshot-compare instead
+   *  (see `rollbackPaymentReplay`) since replay mutates policy state rather than just inserting
+   *  rows. The outer catch below is a safety net for any other table this feature doesn't know to
+   *  pre-check (e.g. a client document or dependent added after import) — a real Postgres FK
+   *  violation there is treated as "blocked," not a 500, since the transaction rolls back cleanly
+   *  either way. */
+  async rollbackImportBatch(orgId: string, batchId: string, actor: { userId: string }): Promise<{ ok: boolean; reason?: string }> {
+    try {
+      return await withOrgTransaction(orgId, async (tx) => {
+        const [batch] = await tx.select().from(importBatches)
+          .where(and(eq(importBatches.id, batchId), eq(importBatches.organizationId, orgId)));
+        if (!batch) throw new Error("Import batch not found");
+        if (batch.status !== "committed") throw new Error(`Batch is ${batch.status}, not committed — nothing to roll back.`);
+
+        const records = await tx.select().from(importRecords).where(eq(importRecords.batchId, batchId));
+        const entityIds = records.map((r: ImportRecord) => r.entityId);
+
+        if (batch.entityType === "payment") {
+          const replayCheck = await this.rollbackPaymentReplay(orgId, tx, batch);
+          if (!replayCheck.ok) {
+            await tx.update(importBatches).set({ rollbackBlockedReason: replayCheck.reason }).where(eq(importBatches.id, batchId));
+            return { ok: false, reason: replayCheck.reason };
+          }
+          if (entityIds.length > 0) {
+            const receiptRows = await tx.select().from(paymentReceipts).where(inArray(paymentReceipts.id, entityIds));
+            const transactionIds = receiptRows.map((r: any) => r.metadataJson?.transactionId).filter(Boolean);
+            await tx.delete(auditLogs).where(and(
+              eq(auditLogs.organizationId, orgId), inArray(auditLogs.entityId, entityIds), eq(auditLogs.action, "legacy_migrated_create"),
+            ));
+            await tx.delete(paymentReceipts).where(inArray(paymentReceipts.id, entityIds));
+            if (transactionIds.length > 0) await tx.delete(paymentTransactions).where(inArray(paymentTransactions.id, transactionIds));
+            await tx.delete(importRecords).where(eq(importRecords.batchId, batchId));
+          }
+          await tx.delete(auditLogs).where(and(
+            eq(auditLogs.organizationId, orgId), eq(auditLogs.entityId, batchId), eq(auditLogs.action, "bulk_import"),
+          ));
+          await tx.update(importBatches).set({
+            status: "rolled_back", rolledBackAt: new Date(), rolledBackByUserId: actor.userId, rollbackBlockedReason: null,
+          }).where(eq(importBatches.id, batchId));
+          return { ok: true };
+        }
+
+        const blockCheck = await checkRollbackBlockers(orgId, batch.entityType as ImportEntityType, entityIds, tx);
+        if (blockCheck.blocked) {
+          await tx.update(importBatches).set({ rollbackBlockedReason: blockCheck.reason }).where(eq(importBatches.id, batchId));
+          return { ok: false, reason: blockCheck.reason };
+        }
+
+        if (entityIds.length > 0) {
+          await tx.delete(auditLogs).where(and(
+            eq(auditLogs.organizationId, orgId), inArray(auditLogs.entityId, entityIds), eq(auditLogs.action, "legacy_migrated_create"),
+          ));
+          if (batch.entityType === "client") {
+            await tx.delete(clients).where(inArray(clients.id, entityIds));
+          } else if (batch.entityType === "policy") {
+            await tx.delete(policies).where(inArray(policies.id, entityIds));
+          } else if (batch.entityType === "claim") {
+            await tx.delete(claims).where(inArray(claims.id, entityIds));
+          }
+          await tx.delete(importRecords).where(eq(importRecords.batchId, batchId));
+        }
+
+        await tx.delete(auditLogs).where(and(
+          eq(auditLogs.organizationId, orgId), eq(auditLogs.entityId, batchId), eq(auditLogs.action, "bulk_import"),
+        ));
+
+        await tx.update(importBatches).set({
+          status: "rolled_back", rolledBackAt: new Date(), rolledBackByUserId: actor.userId, rollbackBlockedReason: null,
+        }).where(eq(importBatches.id, batchId));
+
+        return { ok: true };
+      });
+    } catch (err: any) {
+      if (err?.code === "23503") {
+        const reason = "Cannot roll back — other records (added after import, or outside what this tool pre-checks) still reference this data.";
+        const tdb = await getDbForOrg(orgId);
+        await tdb.update(importBatches).set({ rollbackBlockedReason: reason })
+          .where(and(eq(importBatches.id, batchId), eq(importBatches.organizationId, orgId)));
+        return { ok: false, reason };
+      }
+      throw err;
+    }
   }
 }
 

@@ -2742,6 +2742,82 @@ export const auditLogs = pgTable(
   ]
 );
 
+// ─── LEGACY DATA IMPORT ─────────────────────────────────────
+// Control-panel-only bulk import of a tenant's historical data from legacy systems
+// (POL360, Easipol, etc.) — see docs/BUGFIX-LOG.md-adjacent plan notes. Column mapping is
+// flexible (no fixed source schema); import_records cross-references legacy ids to the
+// POL263 rows created for them so later imports (e.g. policies referencing clients imported
+// in an earlier session) can resolve foreign keys.
+export const IMPORT_ENTITY_TYPES = ["client", "policy", "payment", "claim"] as const;
+export type ImportEntityType = (typeof IMPORT_ENTITY_TYPES)[number];
+
+export const importBatches = pgTable(
+  "import_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    entityType: text("entity_type").notNull(), // client | policy | payment | claim
+    sourceSystemLabel: text("source_system_label"),
+    fileName: text("file_name").notNull(),
+    columnMapping: jsonb("column_mapping").notNull(),
+    valueMappings: jsonb("value_mappings"),
+    status: text("status").default("previewed").notNull(), // previewed | committed | rolled_back | failed
+    totalRows: integer("total_rows").default(0).notNull(),
+    successRows: integer("success_rows").default(0).notNull(),
+    errorRows: integer("error_rows").default(0).notNull(),
+    /** Fully parsed+transformed+validated rows, persisted so commit doesn't require re-upload. */
+    previewSnapshot: jsonb("preview_snapshot"),
+    errorReport: jsonb("error_report"), // [{rowIndex, field, message}]
+    /** Payment batches only: per-policy-id { before, after } cycle/status field snapshots,
+     *  captured so rollback can detect "nothing else has touched this policy since" before
+     *  reverting cycle/status replay. */
+    replaySnapshots: jsonb("replay_snapshots"),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    committedAt: timestamp("committed_at"),
+    rolledBackAt: timestamp("rolled_back_at"),
+    rolledBackByUserId: uuid("rolled_back_by_user_id").references(() => users.id),
+    rollbackBlockedReason: text("rollback_blocked_reason"),
+  },
+  (t) => [
+    index("import_batches_org_idx").on(t.organizationId),
+    index("import_batches_org_entity_idx").on(t.organizationId, t.entityType),
+  ]
+);
+
+export const importRecords = pgTable(
+  "import_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => importBatches.id),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    entityType: text("entity_type").notNull(),
+    /** The legacy system's own id/number for this row — e.g. "POL360:1234". */
+    externalKey: text("external_key").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    sourceRowIndex: integer("source_row_index"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("import_records_batch_idx").on(t.batchId),
+    // Also the idempotency guard: re-importing the same legacy id is a row-level error, not a dupe.
+    uniqueIndex("import_records_lookup_idx").on(t.organizationId, t.entityType, t.externalKey),
+  ]
+);
+
+export const insertImportBatchSchema = createInsertSchema(importBatches).omit({ id: true, createdAt: true });
+export type ImportBatch = typeof importBatches.$inferSelect;
+export type InsertImportBatch = z.infer<typeof insertImportBatchSchema>;
+export type ImportRecord = typeof importRecords.$inferSelect;
+
 // ─── SESSIONS ───────────────────────────────────────────────
 
 export const sessions = pgTable("sessions", {

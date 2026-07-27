@@ -32,6 +32,7 @@ import {
   DISTRIBUTION_CHANNELS, DISTRIBUTION_CHANNEL_LABELS,
 } from "@shared/org-profile";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ImportWizard } from "@/components/legacy-import/ImportWizard";
 
 const SWATCHES = ["#0d9488","#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"];
 const KNOWN_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications"];
@@ -125,6 +126,7 @@ export default function PlatformTenantConsole() {
               <TabsTrigger value="storage">Storage</TabsTrigger>
               <TabsTrigger value="lifecycle">Lifecycle</TabsTrigger>
               <TabsTrigger value="billing">Billing</TabsTrigger>
+              <TabsTrigger value="import">Data Import</TabsTrigger>
               <TabsTrigger value="danger">Danger Zone</TabsTrigger>
             </TabsList>
 
@@ -154,6 +156,9 @@ export default function PlatformTenantConsole() {
             </TabsContent>
             <TabsContent value="billing" className="mt-6">
               <BillingTab tenantId={id} />
+            </TabsContent>
+            <TabsContent value="import" className="mt-6">
+              <ImportWizard orgId={id} />
             </TabsContent>
             <TabsContent value="danger" className="mt-6">
               <DangerZoneTab tenantId={id} tenantName={config.name} />

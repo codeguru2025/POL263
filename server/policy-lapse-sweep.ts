@@ -31,10 +31,15 @@ const POLICY_LAPSE_SWEEP_LOCK_KEY = 9_002_630_004;
 
 const DEFAULT_GRACE_PERIOD_DAYS = 30; // matches advancePolicyCycle's fallback
 
+// Must do the arithmetic in UTC, not local time — see the matching fix/comment on addDays in
+// server/policy-status-on-payment.ts for why `new Date(dateStr + "T00:00:00")` + toISOString()
+// silently returns a date one day early on any host whose local timezone is ahead of UTC
+// (e.g. Africa/Harare, this app's own tenant timezone).
 function addDays(dateStr: string, n: number): string {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split("T")[0];
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const utc = new Date(Date.UTC(y, m - 1, d));
+  utc.setUTCDate(utc.getUTCDate() + n);
+  return utc.toISOString().split("T")[0];
 }
 
 export interface PolicyLapseSweepResult {
