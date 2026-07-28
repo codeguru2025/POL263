@@ -148,9 +148,26 @@ if (enableCsrf) {
     max: process.env.NODE_ENV === "production" ? 20 : 200,
     message: { message: "Too many authentication attempts, please try again later" },
   });
-  app.use("/api/auth", authLimiter);
-  app.use("/api/agent-auth", authLimiter);
-  app.use("/api/client-auth", authLimiter);
+  // Scoped to actual login/credential endpoints only — NOT the whole prefix. Both
+  // /api/client-auth and /api/agent-auth also serve dozens of authenticated data routes
+  // (policies, payments, notifications, etc.) that a logged-in session hits continuously;
+  // mounting authLimiter on the full prefix meant every real session got 429'd within
+  // minutes (e.g. the client portal's 15s unread-count poll alone exhausts 20 req/15min).
+  app.use(
+    ["/api/auth/google", "/api/auth/google/callback", "/api/auth/mobile-exchange", "/api/auth/demo-login"],
+    authLimiter
+  );
+  app.use("/api/agent-auth/login", authLimiter);
+  app.use(
+    [
+      "/api/client-auth/login",
+      "/api/client-auth/enroll",
+      "/api/client-auth/claim",
+      "/api/client-auth/reset-password",
+      "/api/client-auth/change-password",
+    ],
+    authLimiter
+  );
   app.use("/api/security-questions", authLimiter);
   app.use("/api/agents/by-referral", authLimiter);
 

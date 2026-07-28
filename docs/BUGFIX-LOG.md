@@ -10,6 +10,180 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-28 — Public registration silently dropped every dependent; agent lead-access scoping gap
+
+Found while reviewing the same-session vCard/quote-engine build for bugs before continuing.
+
+### 1. Every dependent submitted through public self-registration was silently discarded
+- **Symptom:** none observed yet — found by code review. Would have surfaced as "I added my kids
+  as dependents during signup but they're not on the policy," with no error anywhere in the flow.
+- **Root cause:** `handlePublicPolicyRegistration` (`server/routes.ts`, shared by
+  `/api/public/register-policy` and `/api/public/walkin-register`) required `dGender` and `dDob`
+  to be truthy for each submitted dependent, silently `continue`-ing (skipping creation, no error
+  returned) otherwise. But `dependents.dateOfBirth`/`dependents.gender` are both nullable columns
+  (`shared/schema.ts`), and the actual public registration UI
+  (`client/src/pages/join/register.tsx`) never collects a dependent's gender at all — only
+  firstName/lastName/relationship/dateOfBirth/nationalId. Every dependent added through this form,
+  by every user, always failed the `!dGender` check and was quietly dropped.
+- **Fix:** relaxed the skip condition to only require `dFirst`, `dLast`, `dRel` — matching what the
+  UI actually collects and what the schema actually requires. DOB/gender now pass through as
+  `null` when absent, same as the nullable columns already allow, and `computePolicyPremium`
+  already treats a null DOB as an adult (`ageAt(null)`), so this doesn't introduce a new pricing
+  gap either.
+- **Verified:** `npm run check` clean, `npm run test` 298/298 passing.
+- **Files:** `server/routes.ts`.
+- **Lesson for next time:** a validation `continue`/skip with no error surfaced to the caller is
+  much more dangerous than a hard failure — it looks like success. When a required-field check
+  sits between "the UI collects this" and "the schema requires this," verify both, don't add a
+  requirement that matches neither.
+
+### 2. Agent-scoped users could view/quote any lead in their org, not just their own
+- **Symptom:** none observed yet — found by code review while adding `GET /api/leads/:id` and
+  `GET /api/leads/:id/quote` (new routes, same session) and comparing them against the existing
+  `PATCH /api/leads/:id`, which has an explicit ownership check the new GET routes lacked.
+- **Root cause:** the `agent` role holds `read:lead`/`write:lead` (`server/constants.ts`), and the
+  existing `GET /api/leads` list route and `PATCH /api/leads/:id` both explicitly restrict an
+  agent-scoped caller to leads where `lead.agentId` matches their own resolved id — but the two new
+  routes (and the `leadId` path in `POST /api/quote`) only checked `requirePermission("read:lead")`
+  and org membership, not per-agent ownership. Any agent could read, quote, or (via `/api/quote`)
+  mutate another agent's lead by ID.
+- **Fix:** added the same `isAgentScoped(userRoles) && lead.agentId !== resolveOrSyncTenantUserId(...)`
+  → 403 check already used by `PATCH /api/leads/:id`, to `GET /api/leads/:id`,
+  `GET /api/leads/:id/quote`, and the `leadId` validation branch in `POST /api/quote`.
+- **Verified:** `npm run check` clean, `npm run test` 298/298 passing.
+- **Files:** `server/routes.ts`.
+- **Lesson for next time:** when adding a new route alongside an existing resource that already has
+  an established ownership-scoping convention (list/update routes here), explicitly diff the new
+  route's guards against a sibling route's guards — don't assume `requirePermission` alone is
+  equivalent to the resource-level scoping a sibling route enforces.
+
+---
+
+## 2026-07-28 — Five bugs found via a 4-way parallel codebase audit (auth/RBAC, payments, core domain, frontend)
+
+Ran a full read-only audit split across auth/RBAC/multi-tenancy, payments/financial, core
+policy/claims/product CRUD, and frontend API contracts (fork agents, each required to cite
+file:line and say "not found" rather than guess). Five findings were fixed same session;
+four more (PII-enumeration risk in a client lookup endpoint, no dedicated lockout on the
+security-question reset path, 365-day yearly-cycle leap-year drift, a low-probability
+duplicate-product race in legacy import) were reported but deliberately left unfixed —
+each needs a product decision or touches a wider blast radius than a mechanical fix covers.
+
+### 1. Underpayment silently granted a full billing cycle of cover (revenue integrity)
+- **Symptom:** none observed yet — found by code audit, not a user report.
+- **Root cause:** `monthCount` (how many premium cycles a payment buys) was computed as
+  `Math.min(12, Math.max(1, Math.round(paidAmt / premiumAmt)))` in three places
+  (`server/payment-service.ts`, `server/routes.ts`'s manual-receipt route, and
+  `server/storage.ts`'s legacy payment-replay). `Math.max(1, …)` floored the result at 1
+  cycle *no matter how small the payment*, and `Math.round` (not `floor`) could also grant an
+  extra half-cycle on a moderate overpayment. `advancePolicyCycle` then unconditionally
+  extended `currentCycleEnd` by one full cycle length — it has no partial-period concept.
+  Nothing upstream tied a payment's amount to the policy's actual premium, so a $1 payment on
+  a $30/month policy extended cover by a full 30 days.
+- **Fix:** changed all three sites to `Math.min(12, Math.max(0, Math.floor(paidAmt / premiumAmt)))`
+  — floor (never round up past what was actually paid), and allow `0` so an underpayment
+  advances nothing. The existing excess-payment credit-balance mechanism already banks
+  `paidAmt - monthCount * premiumAmt`; with `monthCount` now allowed to be 0, that same code
+  path correctly banks the *entire* underpayment as credit instead of silently granting a
+  cycle. Also gated the three `applyPolicyStatusForClearedPayment` calls that sit next to
+  each of these on `monthCount > 0` — without that guard, a token underpayment would still
+  flip a lapsed/inactive policy to "active" while leaving `currentCycleEnd` stale or unset,
+  which is worse than the original bug.
+- **Verified:** `npm run check` (clean) and `npm run test` (289/289 passing, including
+  `payment-service.test.ts`, `policy-billing.test.ts`).
+- **Files:** `server/payment-service.ts`, `server/routes.ts`, `server/storage.ts`.
+- **Lesson for next time:** any `Math.max(1, …)` floor on a computed count derived from a
+  user-controlled amount is worth a second look — it silently converts "less than the
+  minimum" into "exactly the minimum" instead of "zero/reject." Grep for `Math.max(1,` near
+  payment or billing math specifically.
+
+### 2. Auth rate limiter 429'd every real client-portal session within ~5 minutes
+- **Symptom:** none observed yet — found by code audit, not a user report, but would have
+  surfaced as clients getting logged out / blocked with "Too many authentication attempts"
+  during completely normal use.
+- **Root cause:** `server/index.ts` mounted the strict `authLimiter` (20 req/15min in
+  production) on the *entire* `/api/client-auth` prefix, not just the login/credential
+  routes. That prefix also serves 30+ authenticated data routes (policies, payments,
+  receipts, notifications, etc.), and `client-layout.tsx` polls
+  `/api/client-auth/notifications/unread-count` every 15 seconds for the whole session —
+  which alone exhausts the 20-request budget in 5 minutes.
+- **Fix:** scoped `authLimiter` to only the actual credential endpoints
+  (`/login`, `/enroll`, `/claim`, `/reset-password`, `/change-password` for client-auth; the
+  equivalent narrow set for `/api/auth` and `/api/agent-auth`). Everything else under those
+  prefixes now falls under the general `/api` limiter (200/min).
+- **Verified:** `npm run check` clean; behavior reasoned through against the actual route
+  list (`server/client-auth.ts`) rather than reproduced live.
+- **Files:** `server/index.ts`.
+- **Lesson for next time:** a rate limiter mounted with `app.use(prefix, limiter)` applies to
+  *every* route under that prefix, not just the ones it was designed for — check what else
+  shares the prefix before assuming a limiter only affects login attempts.
+
+### 3. `user_permission_overrides` had no organization scope — could leak across tenants
+- **Symptom:** none observed yet — found by code audit.
+- **Root cause:** `getUserEffectivePermissions` (`server/storage.ts`) correctly scopes
+  **roles** to the effective org, but merged in **permission overrides** via
+  `getUserPermissionOverrides(userId)` filtered by `userId` alone — the table
+  (`shared/schema.ts`) had no `organization_id` column at all. A user whose registry row is
+  reassigned between organizations (or reused across tenant DBs) would carry any override
+  ever granted at one org into whatever org they're currently scoped to.
+- **Fix:** added a nullable `organization_id` column to `user_permission_overrides`
+  (migration `migrations/0095_permission_override_tenant_scope.sql`, backfilled from each
+  existing row's user's current `organization_id`), and threaded `orgId` through
+  `getUserPermissionOverrides`/`setUserPermissionOverride`/`removeUserPermissionOverride` and
+  their three route call sites in `server/routes.ts` so every read/write is scoped by
+  `(userId, organizationId)` rather than `userId` alone.
+- **Verified:** `npm run check` clean; `npm run test` 289/289 passing.
+- **Files:** `shared/schema.ts`, `server/storage.ts`, `server/routes.ts`,
+  `migrations/0095_permission_override_tenant_scope.sql`.
+- **Not yet done:** the migration file is written but has **not been run** — apply it with
+  `npm run db:migrate` before this fix takes effect against a real database.
+- **Lesson for next time:** when auditing multi-tenant permission logic, check that *every*
+  table feeding into the effective-permissions computation carries an org column — it's easy
+  to scope roles correctly and miss that overrides (or any other per-user side table) don't.
+
+### 4. Legacy payment-import rollback could delete an unrelated, still-committed batch's audit trail
+- **Symptom:** none observed yet — found by code audit; only reachable if a policy has been
+  the target of two separate legacy payment-import batches.
+- **Root cause:** `rollbackPaymentReplay` (`server/storage.ts`) deleted
+  `policy_status_history` rows by matching `reason ILIKE '%(legacy import)%'` — a
+  policy-scoped but *not* batch-scoped match, since the table has no batch-id column. Rolling
+  back the most recent of two batches on the same policy deleted every `(legacy import)`
+  -tagged history row, including ones from an earlier, still-committed batch that was never
+  rolled back.
+- **Fix:** tagged each replayed status-history row with the specific batch's id
+  (`" (legacy import ${batchId})"` instead of a generic `" (legacy import)"`), and changed the
+  rollback delete to match that batch-specific tag. Batches committed *before* this fix still
+  carry the old generic tag and won't match the new per-batch pattern — rolling one of those
+  back will leave its old-format history rows in place rather than deleting them, which is a
+  safe fail-static (extra data left over) rather than the previous fail-unsafe (real data
+  deleted).
+- **Verified:** `npm run check` clean; `npm run test` 289/289 passing.
+- **Files:** `server/storage.ts`.
+- **Lesson for next time:** a `LIKE`/`ILIKE` match used as a deletion filter needs to be as
+  specific as the narrowest thing that could ever share that pattern — "tagged with a feature
+  name" is not the same as "tagged with this specific invocation of that feature."
+
+### 5. A real server outage during session-check was indistinguishable from "logged out"
+- **Symptom:** none observed yet — found by code audit.
+- **Root cause:** `fetchAuthSession` (`client/src/hooks/use-auth.ts`) wrapped its whole body
+  in try/catch and returned `null` for *every* failure mode — a genuine 500, a network drop,
+  and a real 401 all produced identical output, so `useAuth()`'s `isError` could never
+  become `true`. `staff-layout.tsx` already had a branch to redirect with
+  `?error=session` when `authError` is set, and `staff/login.tsx` already knew how to render
+  that message — the branch was correctly built but permanently unreachable.
+- **Fix:** rewrote `fetchAuthSession` to return `null` only for 401/403 (genuinely logged
+  out) and `throw` for network failures or any other non-OK status, so `useQuery`'s
+  `isError`/`error` now reflect a real outage. No changes needed to `staff-layout.tsx` or
+  `staff/login.tsx` — the consuming code was already correct, just never reachable.
+- **Verified:** `npm run check` clean.
+- **Files:** `client/src/hooks/use-auth.ts`.
+- **Lesson for next time:** a blanket `try { … } catch { return null }` around a fetch is a
+  common way to accidentally make a "handle the expected failure case" function also swallow
+  every *unexpected* failure case identically — check whether downstream code already has a
+  branch for the unexpected case before assuming there's nothing to wire up.
+
+---
+
 ## 2026-07-27 — Policy cycle dates silently off by a day per cycle on hosts with a positive UTC offset
 
 - **Symptom:** discovered while building/verifying the legacy-import payment-replay feature — a

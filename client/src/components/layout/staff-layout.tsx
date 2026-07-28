@@ -799,9 +799,14 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                       <Link2 className="h-4 w-4 mr-2" /> Copy my referral link
                     </DropdownMenuItem>
                     <DropdownMenuItem asChild>
-                      <a href={`/join/${user.referralCode}`} target="_blank" rel="noopener noreferrer" className="cursor-pointer" data-testid="menuitem-view-vcard">
+                      <a href={`/card/${user.referralCode}`} target="_blank" rel="noopener noreferrer" className="cursor-pointer" data-testid="menuitem-view-vcard">
                         <ExternalLink className="h-4 w-4 mr-2" /> View my vCard page
                       </a>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link href="/staff/my-vcard" className="cursor-pointer" data-testid="menuitem-manage-vcard">
+                        <ExternalLink className="h-4 w-4 mr-2" /> Manage my vCard
+                      </Link>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>

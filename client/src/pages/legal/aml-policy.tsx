@@ -23,7 +23,7 @@ export default function AmlPolicyPage() {
         <CardContent className="p-6 sm:p-10">
           <div className="flex items-center gap-2 flex-wrap mb-4">
             <Badge variant="outline" className="font-mono text-[0.68rem] uppercase tracking-wide">
-              Ready for Sign-off
+              Pending Sign-off
             </Badge>
             <span className="font-mono text-xs text-muted-foreground">POL-AML-01 · v1.1</span>
           </div>
@@ -33,34 +33,22 @@ export default function AmlPolicyPage() {
           </h1>
           <p className="text-muted-foreground max-w-[58ch] mb-6">
             Governs how staff at the funeral parlours and insurers running on POL263 review and escalate unusual
-            premium payments, claims payouts, and account activity — until an automated screening capability exists.
+            premium payments, claims payouts, and account activity, pending an automated screening capability.
           </p>
-
-          <div className="flex gap-3 rounded-lg border bg-accent/40 p-4 mb-8 text-sm">
-            <span className="font-display font-bold text-primary">i</span>
-            <p className="text-foreground">
-              <strong>How to use this document.</strong> All decisions below were confirmed by the platform owner on
-              26 July 2026. It's ready to sign — the one item worth a legal-counsel check before treating this as
-              final is the exact FIU reporting reference in §4. Until the sign-off block at the end is dated and
-              signed, this remains a confirmed draft, not adopted policy.
-            </p>
-          </div>
 
           <Clause num="1" title="Purpose & scope">
             <p>
-              <strong>POL263 is the engine, not the insurer.</strong> It's the technology platform that powers each
-              tenant's own branded funeral-assurance or insurance operation. POL263 doesn't underwrite, sell, or own
+              <strong>POL263 is the engine, not the insurer.</strong> It is the technology platform that powers each
+              tenant's own branded funeral-assurance or insurance operation. POL263 does not underwrite, sell, or own
               any insurance product — each tenant (a funeral parlour, burial society, or insurer running on POL263)
               does, under its own registration or license, with its own clients and its own regulatory standing. What
               POL263 owns is the infrastructure those transactions run on, and this policy: a shared baseline every
-              tenant's business runs under by default.
+              tenant's business operates under by default.
             </p>
             <p>
-              This policy exists because POL263 currently has <strong>no automated AML or sanctions-screening
-              capability</strong> — confirmed absent in the platform's July 2026 compliance review. Every premium
-              payment, claim payout, and refund across every tenant is, today, reviewed only by whatever manual
-              attention staff choose to give it. This document makes that manual review deliberate, consistent, and
-              evidenced, rather than accidental.
+              This policy governs manual review of activity in the absence of an automated AML or sanctions-screening
+              capability. Every premium payment, claim payout, and refund across every tenant is subject to the review
+              procedure set out below.
             </p>
             <p>
               It applies to every payment channel POL263 tenants use: EcoCash, OneMoney, InnBucks, O'Mari, card
@@ -114,7 +102,7 @@ export default function AmlPolicyPage() {
                   </tr>
                   <tr className="border-b align-top">
                     <td className="py-2 pr-3 font-medium whitespace-nowrap">AML Officer</td>
-                    <td className="py-2"><strong>Augustus Siziba, Platform Owner</strong> — reviews every escalation across every tenant within <strong>1 business day</strong>, decides accept / hold / decline / report, acting on tenants' behalf under this shared arrangement. (May be delegated to a named lead per tenant as the platform grows, or where a tenant's own license conditions require it.)</td>
+                    <td className="py-2">Reviews every escalation across every tenant within <strong>1 business day</strong>, decides accept / hold / decline / report, acting on tenants' behalf under this shared arrangement. May be delegated to a named lead per tenant as the platform grows, or where a tenant's own license conditions require it.</td>
                   </tr>
                   <tr className="align-top">
                     <td className="py-2 pr-3 font-medium whitespace-nowrap">POL263 (the platform)</td>
@@ -137,10 +125,9 @@ export default function AmlPolicyPage() {
                   fiu.co.zw
                 </a>
                 ), per the Money Laundering and Proceeds of Crime Act (Chapter 9:24). Because POL263 is one platform
-                behind several separately-licensed tenants, confirm with legal counsel whether a report is filed in
-                the affected tenant's name (as the regulated entity) or by POL263 acting as its appointed agent — and
-                have that arrangement written into each tenant's services agreement, not assumed from this policy
-                alone.
+                behind several separately-licensed tenants, whether a report is filed in the affected tenant's name
+                (as the regulated entity) or by POL263 acting as its appointed agent is confirmed with legal counsel
+                and set out in each tenant's services agreement.
               </li>
               <li>The decision and its reasoning are logged against the client/policy record so a later reviewer or auditor can see what happened and why.</li>
             </ol>
@@ -161,9 +148,9 @@ export default function AmlPolicyPage() {
 
           <Clause num="6" title="Review">
             <p>
-              This policy should be reviewed at least annually, and immediately after any escalation that exposes a
-              gap in it. Automating any part of §2's indicators is a future improvement, not a precondition for this
-              policy taking effect — a documented manual process today is materially better than no posture at all.
+              This policy is reviewed at least annually, and immediately after any escalation that exposes a gap in
+              it. Automating any part of §2's indicators is a planned future improvement and does not affect this
+              policy's current effect.
             </p>
           </Clause>
 
@@ -180,9 +167,7 @@ export default function AmlPolicyPage() {
           </div>
 
           <footer className="mt-8 pt-4 border-t text-xs text-muted-foreground">
-            Drafted 26 July 2026 as part of the IPEC compliance review follow-up; thresholds and roles confirmed by
-            the platform owner the same day. Signing the block above is what puts this process into force — until
-            then, treat it as confirmed but not yet adopted.
+            This policy takes effect upon signature in the block above.
           </footer>
         </CardContent>
       </Card>

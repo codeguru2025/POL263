@@ -12,6 +12,12 @@ interface AuthUser {
   isActive: boolean;
   referralCode: string | null;
   isPlatformOwner?: boolean;
+  phone?: string | null;
+  bio?: string | null;
+  whatsapp?: string | null;
+  facebookUrl?: string | null;
+  instagramUrl?: string | null;
+  websiteUrl?: string | null;
 }
 
 interface AuthSession {
@@ -20,18 +26,21 @@ interface AuthSession {
   permissions: string[];
 }
 
-/** Auth/me never throws so reload in production does not hit the Error Boundary (e.g. on 500 or network). */
+/** Only 401/403 mean "not logged in" (returns null). A real outage — network failure or a
+ *  5xx from the server — throws instead, so callers (see staff-layout.tsx's authError branch)
+ *  can tell "your session expired" apart from "the server is down" rather than bouncing both
+ *  to the same plain login page with no explanation. */
 async function fetchAuthSession(): Promise<AuthSession | null> {
+  const url = getApiBase() + "/api/auth/me";
+  let res: Response;
   try {
-    const url = getApiBase() + "/api/auth/me";
-    const res = await fetch(url, { credentials: "include" });
-    if (res.status === 401 || res.status === 403) return null;
-    if (res.status >= 500) throw new Error("Server unavailable. Please try again.");
-    if (!res.ok) throw new Error("Auth check failed");
-    return await res.json();
+    res = await fetch(url, { credentials: "include" });
   } catch {
-    return null;
+    throw new Error("Server unavailable. Please try again.");
   }
+  if (res.status === 401 || res.status === 403) return null;
+  if (!res.ok) throw new Error("Server unavailable. Please try again.");
+  return await res.json();
 }
 
 export function useAuth() {

@@ -133,6 +133,43 @@ export default function JoinRegisterPage() {
       .finally(() => setLoading(false));
   }, [refCode, orgCode, toast]);
 
+  // Carries over the name/DOB/contact/dependents already collected on the vCard's quote step
+  // (client/src/pages/public/agent-vcard.tsx) so none of it has to be re-typed here — same-tab
+  // handoff only (sessionStorage), since a quote opened fresh via its shareable /quote/:id link
+  // on a different device has no prior session to read from and falls back to a normal blank form.
+  useEffect(() => {
+    const raw = sessionStorage.getItem("vcard_prefill");
+    if (!raw) return;
+    sessionStorage.removeItem("vcard_prefill");
+    try {
+      const data = JSON.parse(raw);
+      const [firstName, ...rest] = String(data.policyholderName || "").trim().split(/\s+/);
+      if (firstName) {
+        setForm((f) => ({
+          ...f,
+          firstName,
+          lastName: rest.join(" ") || f.lastName,
+          dateOfBirth: data.policyholderDateOfBirth || f.dateOfBirth,
+          phone: data.phone || f.phone,
+          email: data.email || f.email,
+        }));
+      }
+      if (Array.isArray(data.dependents) && data.dependents.length > 0) {
+        setDependentsList(data.dependents
+          .filter((d: any) => d.firstName?.trim() && d.lastName?.trim() && (d.dateOfBirth || d.estimatedAge))
+          .map((d: any) => ({
+            firstName: d.firstName,
+            lastName: d.lastName,
+            relationship: "",
+            dateOfBirth: d.dateOfBirth || "",
+            nationalId: "",
+          })));
+      }
+    } catch {
+      // Malformed/stale sessionStorage value — ignore, just leave the form blank as normal.
+    }
+  }, []);
+
   const selectedProduct = options?.products?.find((p) => p.id === form.productId);
   const versions = selectedProduct?.versions || [];
 

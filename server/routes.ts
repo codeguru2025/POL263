@@ -26,6 +26,7 @@ import { enhanceNote, generateInsights } from "./ai-service";
 import { buildAiInsightContext, buildNoteEnhanceContext, AI_SURFACE_PERMISSION, type AiSurface } from "./ai-context";
 import { generateRequisitionPdf } from "./requisition-pdf";
 import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
+import { recommendProducts, signQuoteToken, verifyQuoteToken } from "./quote-engine";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -920,6 +921,156 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // ─── Public Agent vCard (marketing hub) — diverges from /api/public/agent-card above, which
+  // stays the referral/join-funnel page unchanged. Adds the agent's self-edited contact fields. ──
+  app.get("/api/public/agent-vcard/:refCode", async (req, res) => {
+    const refCode = req.params.refCode as string;
+    const agent = await storage.getUserByReferralCode(refCode);
+    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
+    const org = await storage.getOrganization(agent.organizationId);
+    const posts = await storage.getAgentContentPosts(agent.organizationId, true);
+    return res.json({
+      displayName: agent.displayName || agent.email,
+      avatarUrl: agent.avatarUrl,
+      bio: agent.bio,
+      phone: agent.phone,
+      whatsapp: agent.whatsapp,
+      facebookUrl: agent.facebookUrl,
+      instagramUrl: agent.instagramUrl,
+      websiteUrl: agent.websiteUrl,
+      org: org ? { name: org.name, logoUrl: org.logoUrl, primaryColor: org.primaryColor } : null,
+      posts,
+    });
+  });
+
+  // vCard usage analytics (server/schema.ts agentCardEvents) — fire-and-forget from the public
+  // page, never blocks the visitor's experience on a write succeeding.
+  app.post("/api/public/agent-vcard/:refCode/track", async (req, res) => {
+    const refCode = req.params.refCode as string;
+    const { eventType, payload } = req.body;
+    if (eventType !== "page_view" && eventType !== "quote_request") {
+      return res.status(400).json({ message: "Invalid eventType" });
+    }
+    const agent = await storage.getUserByReferralCode(refCode);
+    if (!agent || !agent.organizationId) return res.status(204).end();
+    await storage.createAgentCardEvent({
+      organizationId: agent.organizationId,
+      agentId: agent.id,
+      refCode,
+      eventType,
+      payloadJson: payload && typeof payload === "object" ? payload : null,
+    });
+    return res.status(204).end();
+  });
+
+  // Captures a quote-requester's details as a lead (existing Leads pipeline, source "vcard_quote"
+  // — a new source value; `leads.source` is plain text with no enum/allowlist constraint, so this
+  // needs no migration), persists the quote itself (so it's shareable via /quote/:id and staff can
+  // convert the lead straight into a pre-filled policy later), and records the matching
+  // "quote_request" analytics event — all in one call.
+  app.post("/api/public/agent-vcard/:refCode/quote-lead", async (req, res) => {
+    const refCode = req.params.refCode as string;
+    const { firstName, lastName, phone, email, productInterest, quote } = req.body;
+    if (typeof firstName !== "string" || !firstName.trim() || typeof lastName !== "string" || !lastName.trim()) {
+      return res.status(400).json({ message: "First and last name are required" });
+    }
+    if (typeof phone !== "string" || !phone.trim()) {
+      return res.status(400).json({ message: "Phone number is required" });
+    }
+    const agent = await storage.getUserByReferralCode(refCode);
+    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
+    const lead = await storage.createLead({
+      organizationId: agent.organizationId,
+      agentId: agent.id,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      phone: phone.trim(),
+      email: typeof email === "string" && email.trim() ? email.trim() : null,
+      source: "vcard_quote",
+      stage: "captured",
+      productInterest: typeof productInterest === "string" ? productInterest : null,
+    });
+    let quoteId: string | null = null;
+    if (quote && typeof quote === "object" && quote.policyholderName && quote.policyholderDateOfBirth) {
+      const saved = await storage.createQuote({
+        organizationId: agent.organizationId,
+        agentId: agent.id,
+        leadId: lead.id,
+        refCode,
+        policyholderName: String(quote.policyholderName),
+        policyholderDateOfBirth: String(quote.policyholderDateOfBirth),
+        dependentsJson: Array.isArray(quote.dependents) ? quote.dependents : [],
+        recommendedProductId: quote.recommended?.productId ?? null,
+        recommendedProductVersionId: quote.recommended?.productVersionId ?? null,
+        recommendedProductName: quote.recommended?.productName ?? null,
+        recommendedPremium: quote.recommended?.premium ?? null,
+        currency: quote.recommended?.currency || "USD",
+        paymentSchedule: quote.recommended?.paymentSchedule || "monthly",
+        // Strip quoteToken (short-lived, not meaningful once persisted) before storing the
+        // comparison snapshot.
+        alternativesJson: Array.isArray(quote.alternatives)
+          ? quote.alternatives.map(({ quoteToken: _t, ...c }: any) => c)
+          : [],
+      });
+      quoteId = saved.id;
+    }
+    await storage.createAgentCardEvent({
+      organizationId: agent.organizationId,
+      agentId: agent.id,
+      refCode,
+      eventType: "quote_request",
+      payloadJson: { leadId: lead.id, quoteId },
+    });
+    return res.status(201).json({ leadId: lead.id, quoteId });
+  });
+
+  // Public, unauthenticated shareable quote — resolves org via the central quote_tokens pointer
+  // first (same pattern as /api/public/pay/:token), then fetches the persisted snapshot from that
+  // org's own database. Shows the comparison exactly as it was at quote time, not re-priced live.
+  app.get("/api/public/quote/:id", async (req, res) => {
+    const id = req.params.id as string;
+    const orgId = await storage.resolveOrgIdForQuoteToken(id);
+    if (!orgId) return res.status(404).json({ message: "Quote not found" });
+    const quote = await storage.getQuote(id, orgId);
+    if (!quote) return res.status(404).json({ message: "Quote not found" });
+    if (quote.expiresAt.getTime() < Date.now()) return res.status(410).json({ message: "This quote has expired." });
+    const org = await storage.getOrganization(orgId);
+    const agent = quote.agentId ? await storage.getUser(quote.agentId, orgId) : null;
+    return res.json({
+      policyholderName: quote.policyholderName,
+      recommended: quote.recommendedProductVersionId ? {
+        productVersionId: quote.recommendedProductVersionId,
+        productName: quote.recommendedProductName,
+        premium: quote.recommendedPremium,
+        currency: quote.currency,
+        paymentSchedule: quote.paymentSchedule,
+      } : null,
+      alternatives: quote.alternativesJson,
+      refCode: quote.refCode,
+      agentName: agent?.displayName || agent?.email || null,
+      org: org ? { name: org.name, logoUrl: org.logoUrl, primaryColor: org.primaryColor } : null,
+      expiresAt: quote.expiresAt,
+    });
+  });
+
+  // ─── Authenticated "My vCard" (agent-facing analytics + their own captured leads) ──
+  app.get("/api/my-vcard/stats", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    return res.json(await storage.getAgentCardEventStats(agentId, user.organizationId));
+  });
+
+  app.get("/api/my-vcard/leads", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const leads = (await storage.getLeadsByAgent(agentId, user.organizationId)).filter((l) => l.source === "vcard_quote");
+    const withQuotes = await Promise.all(leads.map(async (l) => {
+      const quote = await storage.getQuoteByLeadId(l.id, user.organizationId);
+      return { ...l, quoteId: quote?.id ?? null };
+    }));
+    return res.json(withQuotes);
+  });
+
   app.get("/api/public/agent-card/:refCode/manifest.json", async (req, res) => {
     const refCode = req.params.refCode as string;
     const agent = await storage.getUserByReferralCode(refCode);
@@ -941,14 +1092,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Instant, read-only premium quote — no client/policy record created. Reuses the exact same
   // computePolicyPremium function policy creation uses, so a quote can never drift from reality.
+  // When productVersionId is omitted and a policyholderDateOfBirth is supplied instead, returns a
+  // ranked product recommendation (server/quote-engine.ts) rather than a single plan's price —
+  // this is the vCard's "suggest the most appropriate product" flow.
   app.post("/api/public/quote", async (req, res) => {
-    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths } = req.body;
+    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths, policyholderDateOfBirth } = req.body;
     if (typeof refCode !== "string" || !refCode.trim()) return res.status(400).json({ message: "refCode is required" });
-    if (typeof productVersionId !== "string" || !productVersionId.trim()) return res.status(400).json({ message: "productVersionId is required" });
     const agent = await storage.getUserByReferralCode(refCode.trim());
     if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
+    const orgId = agent.organizationId;
     const resolvedCurrency = typeof currency === "string" && currency ? currency : "USD";
     const resolvedSchedule = typeof paymentSchedule === "string" && paymentSchedule ? paymentSchedule : "monthly";
+
+    if (!productVersionId) {
+      if (typeof policyholderDateOfBirth !== "string" || !policyholderDateOfBirth.trim()) {
+        return res.status(400).json({ message: "productVersionId, or policyholderDateOfBirth for a recommendation, is required" });
+      }
+      const ranked = await recommendProducts(orgId, {
+        policyholderDateOfBirth,
+        dependentDateOfBirths: Array.isArray(dependentDateOfBirths) ? dependentDateOfBirths : [],
+        currency: resolvedCurrency,
+        paymentSchedule: resolvedSchedule,
+      });
+      const withTokens = ranked.map((c) => ({ ...c, quoteToken: signQuoteToken(orgId, c.productVersionId) }));
+      return res.json({ recommended: withTokens[0] ?? null, alternatives: withTokens.slice(1) });
+    }
     // computePolicyPremium's dependant-surcharge logic (age-band rates, flat additional-member
     // rate, and legacy underwriter rates alike) is driven entirely by dependentDateOfBirths.length,
     // not by a raw member count — passing memberCount alone here would silently price every quote
@@ -962,7 +1130,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       resolvedDobs = Array(Math.min(memberCount - 1, 50)).fill(null);
     }
     const premium = await computePolicyPremium(
-      agent.organizationId,
+      orgId,
       productVersionId,
       resolvedCurrency,
       resolvedSchedule,
@@ -971,7 +1139,80 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       typeof memberCount === "number" ? memberCount : undefined,
       resolvedDobs,
     );
-    return res.json({ premium, currency: resolvedCurrency, paymentSchedule: resolvedSchedule });
+    return res.json({
+      premium,
+      currency: resolvedCurrency,
+      paymentSchedule: resolvedSchedule,
+      quoteToken: signQuoteToken(orgId, productVersionId),
+    });
+  });
+
+  // Authenticated equivalent of POST /api/public/quote's recommendation mode, for the internal
+  // staff "Issue New Policy" wizard (server/quote-engine.ts is the shared engine behind both).
+  app.post("/api/quote", requireAuth, requireTenantScope, async (req, res) => {
+    const user = req.user as any;
+    const { policyholderName, policyholderDateOfBirth, dependents, dependentDateOfBirths, currency, paymentSchedule, leadId } = req.body;
+    if (typeof policyholderDateOfBirth !== "string" || !policyholderDateOfBirth.trim()) {
+      return res.status(400).json({ message: "policyholderDateOfBirth is required" });
+    }
+    let validatedLeadId: string | null = null;
+    if (typeof leadId === "string" && leadId.trim()) {
+      const lead = await storage.getLead(leadId, user.organizationId);
+      if (!lead || lead.organizationId !== user.organizationId) return res.status(404).json({ message: "Lead not found" });
+      const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+      if (isAgentScoped(userRoles) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      validatedLeadId = lead.id;
+    }
+    const resolvedCurrency = typeof currency === "string" && currency ? currency : "USD";
+    const resolvedSchedule = typeof paymentSchedule === "string" && paymentSchedule ? paymentSchedule : "monthly";
+    const dobs = Array.isArray(dependentDateOfBirths) ? dependentDateOfBirths : [];
+    const ranked = await recommendProducts(user.organizationId, {
+      policyholderDateOfBirth,
+      dependentDateOfBirths: dobs,
+      currency: resolvedCurrency,
+      paymentSchedule: resolvedSchedule,
+    });
+    const withTokens = ranked.map((c) => ({ ...c, quoteToken: signQuoteToken(user.organizationId, c.productVersionId) }));
+    const recommended = withTokens[0] ?? null;
+    // Persisted so this quote is shareable (/quote/:id) — a staff member can text/WhatsApp it to
+    // the client rather than reading numbers off their screen. Best-effort: a persistence failure
+    // shouldn't block staff from seeing the recommendation itself.
+    let quoteId: string | null = null;
+    if (recommended && typeof policyholderName === "string" && policyholderName.trim()) {
+      try {
+        const agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+        const saved = await storage.createQuote({
+          organizationId: user.organizationId,
+          agentId,
+          leadId: validatedLeadId,
+          refCode: null,
+          policyholderName: policyholderName.trim(),
+          policyholderDateOfBirth,
+          dependentsJson: Array.isArray(dependents) ? dependents : [],
+          recommendedProductId: recommended.productId,
+          recommendedProductVersionId: recommended.productVersionId,
+          recommendedProductName: recommended.productName,
+          recommendedPremium: recommended.premium,
+          currency: recommended.currency,
+          paymentSchedule: recommended.paymentSchedule,
+          alternativesJson: withTokens.slice(1).map(({ quoteToken: _t, ...c }) => c),
+        });
+        quoteId = saved.id;
+        // Advance the lead into the "Quoted" pipeline stage — but never move it backwards out of
+        // a later stage it's already reached (e.g. re-quoting a lead already converted or lost).
+        if (validatedLeadId) {
+          const lead = await storage.getLead(validatedLeadId, user.organizationId);
+          if (lead && !["converted", "activated", "lost"].includes(lead.stage)) {
+            await storage.updateLead(validatedLeadId, { stage: "quoted" }, user.organizationId);
+          }
+        }
+      } catch (err) {
+        structuredLog("warn", "Failed to persist shareable quote", { error: (err as Error).message, userId: user?.id });
+      }
+    }
+    return res.json({ recommended, alternatives: withTokens.slice(1), quoteId });
   });
 
   // ─── Country Flag Settings (tenant-configurable cross-border flagging) ──────
@@ -1765,7 +2006,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(404).json({ message: "User not found" });
     }
     const [overrides, effectivePermissions] = await Promise.all([
-      storage.getUserPermissionOverrides(target.id),
+      storage.getUserPermissionOverrides(target.id, user.organizationId),
       storage.getUserEffectivePermissions(target.id, user.organizationId),
     ]);
     return res.json({ overrides, effectivePermissions });
@@ -1783,7 +2024,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const permissionName = req.params.permissionName as string;
     try {
-      await storage.setUserPermissionOverride(target.id, permissionName, isGranted);
+      await storage.setUserPermissionOverride(target.id, permissionName, isGranted, user.organizationId);
     } catch (err: any) {
       return res.status(400).json({ message: safeError(err) });
     }
@@ -1798,7 +2039,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(404).json({ message: "User not found" });
     }
     const permissionName = req.params.permissionName as string;
-    await storage.removeUserPermissionOverride(target.id, permissionName);
+    await storage.removeUserPermissionOverride(target.id, permissionName, user.organizationId);
     await auditLog(req, "REMOVE_USER_PERMISSION_OVERRIDE", "User", target.id, { permissionName }, null);
     return res.json({ ok: true });
   });
@@ -3020,6 +3261,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    // Every non-legacy policy must have gone through the quote/recommend step (server/quote-engine.ts)
+    // first. Exempt: the "pre-existing policy" checkbox (req.body.isLegacy) and Legacy Individual/
+    // Group product issuance (isCustomPremiumProduct) — both represent pre-existing business with
+    // its own historical premium, not a fresh sale a recommendation should apply to.
+    if (!req.body.isLegacy && !isCustomPremiumProduct) {
+      const quoteToken = req.body.quoteToken;
+      if (quoteToken) {
+        if (!verifyQuoteToken(quoteToken, user.organizationId, parsed.productVersionId)) {
+          structuredLog("warn", "POST /api/policies 400", { reason: "invalid or expired quote token", userId: user?.id, orgId: user?.organizationId });
+          return res.status(400).json({ message: "This quote has expired or doesn't match the selected plan — please get a new quote and try again." });
+        }
+      } else {
+        // Permissive fallback, logged not rejected: a caller not yet updated to the quote-first
+        // flow (the separate Expo agent-app mobile client, agent-app/, currently posts here
+        // directly with no quoteToken) shouldn't start hard-failing the moment this ships. The
+        // staff web wizard is updated to always send quoteToken or isLegacy.
+        structuredLog("warn", "POST /api/policies created without a quote token", { userId: user?.id, orgId: user?.organizationId, productVersionId: parsed.productVersionId });
+      }
+    }
+
     // Prevent duplicate policies: same client + same product version (unless existing is cancelled)
     const existingForClient = await storage.getPoliciesByClient(policyInsert.clientId, user.organizationId);
     const duplicate = existingForClient.find(
@@ -4187,7 +4448,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const prem = parseFloat(String(policy.premiumAmount));
           const amt = parseFloat(String(req.body.amount ?? 0));
           if (prem > 0 && amt > 0 && Number.isFinite(amt)) {
-            return Math.min(12, Math.max(1, Math.floor(amt / prem)));
+            // 0 is valid: a payment under one premium doesn't advance the cycle — it gets
+            // banked as credit below instead of granting a free period.
+            return Math.min(12, Math.max(0, Math.floor(amt / prem)));
           }
         }
         return 1;
@@ -4251,7 +4514,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         to: "active";
         reason: string;
       } | null = null;
-      if (tx.status === "cleared" && tx.policyId && policy) {
+      // Only reinstate/activate if the payment actually covered a full cycle above — otherwise
+      // status would flip to "active" while currentCycleEnd stays stale/unset (monthCount === 0).
+      if (tx.status === "cleared" && tx.policyId && policy && monthCount > 0) {
         const todayDate = todayInHarare();
         const updated = await applyPolicyStatusForClearedPayment(txDb, tx.policyId, policy, todayDate, " (recorded)", recordedByForLedger ?? undefined);
         policyStatusChange = updated
@@ -7238,6 +7503,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(list);
   });
 
+  app.get("/api/leads/:id", requireAuth, requireTenantScope, requirePermission("read:lead"), async (req, res) => {
+    const user = req.user as any;
+    const lead = await storage.getLead(req.params.id as string, user.organizationId);
+    if (!lead || lead.organizationId !== user.organizationId) return res.status(404).json({ message: "Lead not found" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    if (isAgentScoped(userRoles) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    return res.json(lead);
+  });
+
+  // For the "convert lead to policy" deep link (client/src/pages/staff/policies.tsx, ?leadId=) —
+  // the quote persisted when this lead was captured (see POST /api/public/agent-vcard/:refCode/quote-lead).
+  app.get("/api/leads/:id/quote", requireAuth, requireTenantScope, requirePermission("read:lead"), async (req, res) => {
+    const user = req.user as any;
+    const lead = await storage.getLead(req.params.id as string, user.organizationId);
+    if (!lead || lead.organizationId !== user.organizationId) return res.status(404).json({ message: "Lead not found" });
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    if (isAgentScoped(userRoles) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const quote = await storage.getQuoteByLeadId(lead.id, user.organizationId);
+    if (!quote) return res.status(404).json({ message: "No quote found for this lead" });
+    return res.json(quote);
+  });
+
   app.post("/api/leads", requireAuth, requireTenantScope, requirePermission("write:lead"), async (req, res) => {
     const user = req.user as any;
     try {
@@ -9900,7 +10191,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const dDob = d.dateOfBirth ? String(d.dateOfBirth).trim() : null;
         const dGender = d.gender ? toUpperTrim(d.gender, false) : null;
         const dNationalId = d.nationalId ? normalizeNationalId(d.nationalId) : null;
-        if (!dFirst || !dLast || !dRel || !dDob || !dGender) continue;
+        // dateOfBirth/gender are nullable on the dependents table (shared/schema.ts) and
+        // ageAt(null) already treats a missing DOB as an adult in computePolicyPremium — this
+        // used to also require dDob/dGender truthy, which silently dropped every dependent
+        // submitted through this form: the public registration UI (client/src/pages/join/
+        // register.tsx) never even collects gender, so every dependent failed this check with
+        // no error shown to the registrant. Only name + relationship are genuinely required.
+        if (!dFirst || !dLast || !dRel) continue;
         if (dNationalId && !isValidNationalId(dNationalId)) continue;
         createdDeps.push(await storage.createDependent({
           organizationId: orgId,

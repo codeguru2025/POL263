@@ -802,6 +802,34 @@ export function setupAuth(app: Express) {
     return res.json({ message: "Password updated" });
   });
 
+  // Self-edit of vCard contact fields — mirrors change-password above: requireAuth only, always
+  // operates on req.user.id, no write:user permission needed. Deliberately whitelists a small,
+  // fixed set of fields — NOT displayName/email/referralCode/department etc., which stay
+  // admin-only via PATCH /api/users/:id.
+  app.patch("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { phone, whatsapp, facebookUrl, instagramUrl, websiteUrl, bio, avatarUrl } = req.body;
+    const data: Record<string, any> = {};
+    if (phone === null || typeof phone === "string") data.phone = phone;
+    if (whatsapp === null || typeof whatsapp === "string") data.whatsapp = whatsapp;
+    if (facebookUrl === null || typeof facebookUrl === "string") data.facebookUrl = facebookUrl;
+    if (instagramUrl === null || typeof instagramUrl === "string") data.instagramUrl = instagramUrl;
+    if (websiteUrl === null || typeof websiteUrl === "string") data.websiteUrl = websiteUrl;
+    if (bio === null || typeof bio === "string") data.bio = bio;
+    if (avatarUrl === null || typeof avatarUrl === "string") data.avatarUrl = avatarUrl;
+    const updated = await storage.updateUser(user.id, data);
+    if (!updated) return res.status(404).json({ message: "User not found" });
+    return res.json({
+      phone: updated.phone,
+      whatsapp: updated.whatsapp,
+      facebookUrl: updated.facebookUrl,
+      instagramUrl: updated.instagramUrl,
+      websiteUrl: updated.websiteUrl,
+      bio: updated.bio,
+      avatarUrl: updated.avatarUrl,
+    });
+  });
+
   app.post("/api/users/:id/reset-password", requireAuth, requireTenantScope, async (req: Request, res: Response) => {
     const admin = req.user as any;
     const { newPassword } = req.body;
@@ -880,6 +908,12 @@ function sanitizeUser(user: any) {
     isActive: user.isActive,
     referralCode: user.referralCode,
     isPlatformOwner: user.isPlatformOwner || false,
+    phone: user.phone ?? null,
+    bio: user.bio ?? null,
+    whatsapp: user.whatsapp ?? null,
+    facebookUrl: user.facebookUrl ?? null,
+    instagramUrl: user.instagramUrl ?? null,
+    websiteUrl: user.websiteUrl ?? null,
   };
 }
 

@@ -78,6 +78,16 @@ export const paymentLinkTokens = pgTable("payment_link_tokens", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+/** Same bootstrapping role as payment_link_tokens above, for the public shareable-quote page
+ *  (/quote/:id, server/quote-engine.ts) — resolves which org's database holds the real `quotes`
+ *  row before a session/tenant context exists. `quotes.id` is generated as this same value at
+ *  creation time (see storage.createQuote), not independently. */
+export const quoteTokens = pgTable("quote_tokens", {
+  token: text("token").primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const branches = pgTable(
   "branches",
   {
@@ -192,6 +202,13 @@ export const users = pgTable(
     department: text("department"),
     /** Short bio shown on the agent's public vCard page (/join/:refCode). */
     bio: text("bio"),
+    /** Agent-editable vCard contact fields (client/src/pages/public/agent-vcard.tsx) — separate
+     *  from `phone` above since a WhatsApp number can differ from the primary contact number.
+     *  Self-edited via PATCH /api/auth/me, unlike the rest of this row which is admin-only. */
+    whatsapp: text("whatsapp"),
+    facebookUrl: text("facebook_url"),
+    instagramUrl: text("instagram_url"),
+    websiteUrl: text("website_url"),
     /** DB-backed login lockout (agent email/password login, server/auth.ts) — mirrors
      *  clients.failedLoginAttempts/lockedUntil above. Only ever set once a real user row has
      *  been located; an unrecognized login email has no row to lock. */
@@ -226,6 +243,29 @@ export const agentContentPosts = pgTable(
 export const insertAgentContentPostSchema = createInsertSchema(agentContentPosts).omit({ id: true, createdAt: true });
 export type AgentContentPost = typeof agentContentPosts.$inferSelect;
 export type InsertAgentContentPost = z.infer<typeof insertAgentContentPostSchema>;
+
+export const AGENT_CARD_EVENT_TYPES = ["page_view", "quote_request"] as const;
+
+/** vCard usage analytics (page views, quote requests) — a new, dedicated append-only event log,
+ *  structurally modeled on payment_events rather than audit_logs (which is purpose-built for
+ *  staff-action compliance audit trail and not designed for high-volume unauthenticated writes
+ *  from a public page). Distinct from an agent's existing "My Clients" view. */
+export const agentCardEvents = pgTable(
+  "agent_card_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    agentId: uuid("agent_id").notNull().references(() => users.id),
+    refCode: text("ref_code").notNull(),
+    eventType: text("event_type").notNull(), // page_view | quote_request
+    payloadJson: jsonb("payload_json"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("ace_agent_created_idx").on(t.agentId, t.createdAt)]
+);
+export const insertAgentCardEventSchema = createInsertSchema(agentCardEvents).omit({ id: true, createdAt: true });
+export type AgentCardEvent = typeof agentCardEvents.$inferSelect;
+export type InsertAgentCardEvent = z.infer<typeof insertAgentCardEventSchema>;
 
 // ─── RBAC ───────────────────────────────────────────────────
 
@@ -292,8 +332,16 @@ export const userPermissionOverrides = pgTable(
       .notNull()
       .references(() => permissions.id, { onDelete: "cascade" }),
     isGranted: boolean("is_granted").notNull(),
+    // Nullable for backward compatibility with rows predating this column (backfilled by
+    // migration 0095 from the user's organization at that time). Every new read/write scopes by
+    // this — without it, an override granted/revoked for a user at one org silently followed
+    // them to any other org their registry row is later associated with.
+    organizationId: uuid("organization_id").references(() => organizations.id),
   },
-  (t) => [index("upo_user_idx").on(t.userId)]
+  (t) => [
+    index("upo_user_idx").on(t.userId),
+    index("upo_user_org_idx").on(t.userId, t.organizationId),
+  ]
 );
 
 // ─── CLIENTS (POLICYHOLDERS) ────────────────────────────────
@@ -2597,6 +2645,44 @@ export const leads = pgTable(
     index("leads_client_idx").on(t.clientId),
   ]
 );
+
+/** Persisted, shareable snapshot of a product recommendation (server/quote-engine.ts). Distinct
+ *  from the signed quoteToken used to gate policy creation (which is stateless and deliberately
+ *  not persisted) — this exists specifically so a quote can be reopened later, on any device, via
+ *  a link (/quote/:id), and so staff can convert a lead straight into a pre-filled policy without
+ *  re-running the recommendation or re-entering names/DOBs. `id` is generated up front (not
+ *  defaultRandom) so it can double as the quote_tokens central-pointer value — see storage.ts. */
+export const quotes = pgTable(
+  "quotes",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    agentId: uuid("agent_id").references(() => users.id),
+    leadId: uuid("lead_id").references(() => leads.id),
+    refCode: text("ref_code"),
+    policyholderName: text("policyholder_name").notNull(),
+    policyholderDateOfBirth: date("policyholder_date_of_birth").notNull(),
+    dependentsJson: jsonb("dependents_json").$type<{ firstName: string; lastName: string; dateOfBirth: string }[]>().notNull().default([]),
+    recommendedProductId: uuid("recommended_product_id"),
+    recommendedProductVersionId: uuid("recommended_product_version_id"),
+    recommendedProductName: text("recommended_product_name"),
+    recommendedPremium: numeric("recommended_premium"),
+    currency: text("currency").notNull().default("USD"),
+    paymentSchedule: text("payment_schedule").notNull().default("monthly"),
+    /** Comparison-list snapshot at quote time — shown as-is when reopened, never re-priced live,
+     *  so a shared quote can't silently change after the fact if rates are edited later. */
+    alternativesJson: jsonb("alternatives_json").$type<{ productId: string; productVersionId: string; productName: string; premium: string; currency: string; paymentSchedule: string }[]>().notNull().default([]),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+  },
+  (t) => [
+    index("quotes_org_idx").on(t.organizationId),
+    index("quotes_lead_idx").on(t.leadId),
+  ]
+);
+export const insertQuoteSchema = createInsertSchema(quotes).omit({ createdAt: true });
+export type Quote = typeof quotes.$inferSelect;
+export type InsertQuote = z.infer<typeof insertQuoteSchema>;
 
 // ─── CLIENT FEEDBACK & COMPLAINTS ─────────────────────────────
 

@@ -23,7 +23,7 @@ export default function DataRetentionPolicyPage() {
         <CardContent className="p-6 sm:p-10">
           <div className="flex items-center gap-2 flex-wrap mb-4">
             <Badge variant="outline" className="font-mono text-[0.68rem] uppercase tracking-wide">
-              Ready for Sign-off
+              Pending Sign-off
             </Badge>
             <span className="font-mono text-xs text-muted-foreground">POL-DATA-01 · v1.1</span>
           </div>
@@ -32,31 +32,19 @@ export default function DataRetentionPolicyPage() {
             Client Data Handling &amp; Retention Policy
           </h1>
           <p className="text-muted-foreground max-w-[58ch] mb-6">
-            What tenants running on POL263 collect about their clients, why, how long it's kept, and how someone can
-            ask what's held about them.
+            What tenants running on POL263 collect about their clients, why, how long it is kept, and how a client
+            can request what is held about them.
           </p>
-
-          <div className="flex gap-3 rounded-lg border bg-accent/40 p-4 mb-8 text-sm">
-            <span className="font-display font-bold text-primary">i</span>
-            <p className="text-foreground">
-              <strong>How to use this document.</strong> All decisions below were confirmed by the platform owner on
-              26 July 2026. Zimbabwe doesn't yet have a fully enforced data-protection act the way South Africa's
-              POPIA does, so none of this is a hard legal requirement today — but a national-ID-linked funeral
-              platform with no stated data policy is a foreseeable question in an IPEC sandbox review, not just a
-              future project. Until the sign-off block at the end is dated and signed, this remains a confirmed
-              draft, not adopted policy.
-            </p>
-          </div>
 
           <Clause num="1" title="Whose data this is">
             <p>
               <strong>POL263 is the engine, not the owner.</strong> Each tenant — a funeral parlour, burial society,
-              or insurer — owns its own client relationships and its own products; POL263 doesn't sell insurance and
-              doesn't own any client relationship itself. What POL263 does is store and process that data on each
-              tenant's behalf, as the platform their business runs on. In the language data-protection law usually
-              uses: the tenant is the <em>controller</em> of its clients' data, and POL263 is the <em>processor</em>.
-              This policy is the shared baseline POL263 operates under as processor, and the default every tenant
-              inherits as controller unless they adopt something stricter of their own.
+              or insurer — owns its own client relationships and its own products; POL263 does not sell insurance and
+              does not own any client relationship itself. POL263 stores and processes that data on each tenant's
+              behalf, as the platform their business runs on. In the language data-protection law usually uses: the
+              tenant is the <em>controller</em> of its clients' data, and POL263 is the <em>processor</em>. This
+              policy is the shared baseline POL263 operates under as processor, and the default every tenant inherits
+              as controller unless it adopts something stricter of its own.
             </p>
           </Clause>
 
@@ -90,9 +78,8 @@ export default function DataRetentionPolicyPage() {
           <Clause num="3" title="How long it's kept">
             <p>
               Insurance records generally need to survive well past a policy's end — a claim can be raised, or
-              disputed, years later. The platform owner has set a conservative <strong>10-year</strong> retention
-              period across the board, favouring protection against a late claim or audit over minimizing how long
-              data is held.
+              disputed, years later. POL263 applies a conservative <strong>10-year</strong> retention period across
+              the board, favouring protection against a late claim or audit over minimizing how long data is held.
             </p>
             <div className="overflow-x-auto not-prose">
               <table className="w-full text-sm border-collapse">
@@ -159,9 +146,7 @@ export default function DataRetentionPolicyPage() {
           </div>
 
           <footer className="mt-8 pt-4 border-t text-xs text-muted-foreground">
-            Drafted 26 July 2026 as part of the IPEC compliance review follow-up; retention periods and contact
-            confirmed by the platform owner the same day. Signing the block above is what puts this policy into
-            force — until then, treat it as confirmed but not yet adopted.
+            This policy takes effect upon signature in the block above.
           </footer>
         </CardContent>
       </Card>

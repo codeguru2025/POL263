@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, apiFetch, getApiBase } from "@/lib/queryClient";
+import { resolveDobForQuote } from "@/lib/estimated-dob";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Plus, Search, Filter, MoreHorizontal, FileText, ArrowRightLeft, Users, User, CreditCard, Loader2, ChevronLeft, Eye, Download, UserPlus, X, CalendarDays, ShieldCheck, Clock, Receipt, Printer, Share2, CheckCircle2, Pencil, Trash2, Phone, Mail, IdCard, MapPin, ScrollText, FileDown, ChevronDown, AlertTriangle, Send, Copy } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
@@ -210,6 +211,26 @@ export default function StaffPolicies() {
   });
   const [createStep, setCreateStep] = useState(1);
   const [clientMode, setClientMode] = useState<"search" | "new">("search");
+  // Mandatory quote-and-recommend (server/quote-engine.ts) — every non-legacy policy issuance
+  // must have gone through this. Kept separate from createForm rather than merged into it: the
+  // token is only valid for the exact productVersionId it was issued for, so tracking them as a
+  // pair here means changing the product manually in Step 2 naturally invalidates a stale token
+  // (it just won't match createForm.productVersionId at submit time) instead of needing an effect
+  // to actively clear it.
+  const [quoteResult, setQuoteResult] = useState<{
+    recommended: { productId: string; productVersionId: string; productName: string; premium: string; currency: string; paymentSchedule: string; quoteToken: string } | null;
+    alternatives: { productId: string; productVersionId: string; productName: string; premium: string; currency: string; paymentSchedule: string; quoteToken: string }[];
+    quoteId?: string | null;
+  } | null>(null);
+  const [quoteLinkCopied, setQuoteLinkCopied] = useState(false);
+  const [quoting, setQuoting] = useState(false);
+  const [quoteApiError, setQuoteApiError] = useState<string | null>(null);
+  // A brand-new client has no on-file dependents yet (unlike an existing client, whose real
+  // dependents already feed the recommendation via the `dependents` query below) — this captures
+  // just enough to price accurately: name + either an exact DOB or an estimated age. Not wired
+  // into Step 3's actual "add dependent" form; staff still enters the real record there, with a
+  // real DOB required as it already is today.
+  const [quoteDependents, setQuoteDependents] = useState<{ firstName: string; lastName: string; dateOfBirth: string; estimatedAge: string }[]>([]);
 
   const searchString = useSearch();
   const openPolicyConsumed = useRef<string | null>(null);
@@ -222,6 +243,56 @@ export default function StaffPolicies() {
       setCreateForm((f) => ({ ...f, clientId, groupId }));
       if (clientId) setClientMode("search");
     }
+  }, [searchString]);
+
+  // "Convert to policy" from a vCard-captured lead (client/src/pages/staff/my-vcard.tsx) —
+  // pre-fills the new-client fields and, if a quote was persisted for this lead, the
+  // recommended product + comparison too, so staff don't re-enter or re-run anything.
+  const leadIdConsumed = useRef<string | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    const leadId = params.get("leadId");
+    if (!leadId || leadIdConsumed.current === leadId) return;
+    leadIdConsumed.current = leadId;
+    (async () => {
+      try {
+        const leadRes = await apiRequest("GET", `/api/leads/${leadId}`);
+        const lead = await leadRes.json();
+        setClientMode("new");
+        setCreateForm((f) => ({
+          ...f,
+          newClient: { ...f.newClient, firstName: lead.firstName || "", lastName: lead.lastName || "", phone: lead.phone || "", email: lead.email || "" },
+        }));
+        const quoteRes = await apiRequest("GET", `/api/leads/${leadId}/quote`).catch(() => null);
+        if (quoteRes?.ok) {
+          const quote = await quoteRes.json();
+          setCreateForm((f) => ({
+            ...f,
+            newClient: { ...f.newClient, dateOfBirth: quote.policyholderDateOfBirth || f.newClient.dateOfBirth },
+            selectedProductId: quote.recommendedProductId || f.selectedProductId,
+            productVersionId: quote.recommendedProductVersionId || f.productVersionId,
+          }));
+          setQuoteDependents((quote.dependentsJson || []).map((d: any) => ({ firstName: d.firstName || "", lastName: d.lastName || "", dateOfBirth: d.dateOfBirth || "", estimatedAge: "" })));
+          if (quote.recommendedProductVersionId) {
+            setQuoteResult({
+              recommended: {
+                productId: quote.recommendedProductId || "",
+                productVersionId: quote.recommendedProductVersionId,
+                productName: quote.recommendedProductName || "",
+                premium: quote.recommendedPremium || "0",
+                currency: quote.currency,
+                paymentSchedule: quote.paymentSchedule,
+                quoteToken: "", // stale/not re-verifiable from a converted lead — staff re-runs "Get recommendation" to submit
+              },
+              alternatives: quote.alternativesJson || [],
+            });
+          }
+        }
+        setShowCreateDialog(true);
+      } catch {
+        toast({ title: "Couldn't load this lead", variant: "destructive" });
+      }
+    })();
   }, [searchString]);
 
   useEffect(() => {
@@ -874,6 +945,12 @@ export default function StaffPolicies() {
       }
 
       try {
+        // Only sent when it matches the product actually being submitted — if the product was
+        // changed manually after a recommendation was fetched for a different one, the token is
+        // simply omitted rather than sent stale (see quoteResult's comment above).
+        const quoteToken = quoteResult?.recommended?.productVersionId === data.productVersionId
+          ? quoteResult.recommended.quoteToken
+          : quoteResult?.alternatives.find((a) => a.productVersionId === data.productVersionId)?.quoteToken;
         const res = await apiRequest("POST", "/api/policies", {
           clientId,
           agentId: data.agentId || undefined,
@@ -891,6 +968,7 @@ export default function StaffPolicies() {
           isSouthAfrica: (data as any).isSouthAfrica || undefined,
           externalReference: (data as any).externalReference?.trim() || undefined,
           branchId: (data as any).branchId || undefined,
+          quoteToken,
         });
         return res.json();
       } catch (err) {
@@ -908,6 +986,9 @@ export default function StaffPolicies() {
       setShowCreateDialog(false);
       setCreateStep(1);
       setClientMode("search");
+      setQuoteResult(null);
+      setQuoteApiError(null);
+      setQuoteDependents([]);
       setCreateForm({
         clientId: "",
         agentId: isAgent && user?.id ? user.id : "",
@@ -3897,6 +3978,28 @@ export default function StaffPolicies() {
           <div className={"space-y-4 " + (policyWizardFlag ? "overflow-y-auto flex-1 pr-1" : "")}>
             {createStep === 1 && (
               <>
+                {canEditPremium && (
+                  <div className="flex items-start gap-3 border rounded-md p-3 bg-amber-50/50 dark:bg-amber-950/20">
+                    <Checkbox
+                      id="create-legacy-flag"
+                      checked={createForm.isLegacy}
+                      onCheckedChange={(v) => setCreateForm({ ...createForm, isLegacy: !!v })}
+                      data-testid="checkbox-is-legacy"
+                    />
+                    <div className="space-y-1 leading-none">
+                      <label htmlFor="create-legacy-flag" className="text-sm font-medium cursor-pointer">Mark as legacy / pre-existing policy</label>
+                      <p className="text-xs text-muted-foreground">This policy was captured from a prior system. It will be automatically activated with no waiting period, and skips the quote/recommendation step below.</p>
+                    </div>
+                  </div>
+                )}
+                <CountryFlagFields
+                  settings={countryFlagSettings}
+                  idPrefix="create-policy"
+                  checked={createForm.isSouthAfrica}
+                  reference={createForm.externalReference}
+                  onCheckedChange={(v) => setCreateForm({ ...createForm, isSouthAfrica: v })}
+                  onReferenceChange={(v) => setCreateForm({ ...createForm, externalReference: v })}
+                />
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <Label>Policy holder</Label>
@@ -4251,6 +4354,140 @@ export default function StaffPolicies() {
                     )}
                   </div>
                 )}
+                {!createForm.isLegacy && (() => {
+                  const policyholderDob = clientMode === "search" ? selectedClient?.dateOfBirth : createForm.newClient.dateOfBirth;
+                  // Existing client: their on-file dependents (already fetched above for the
+                  // beneficiary picker) already have real DOBs. A brand-new client has no
+                  // dependent records yet — quoteDependents captures just enough to price
+                  // accurately (name + exact DOB or an estimated age) without duplicating Step 3's
+                  // real "add dependent" form; the real record with a real DOB is still required
+                  // there, same as today.
+                  const dependentDobsForQuote = clientMode === "search"
+                    ? (dependents || []).map((d: any) => d.dateOfBirth)
+                    : quoteDependents.map((d) => resolveDobForQuote(d.dateOfBirth, d.estimatedAge)).filter((d): d is string => !!d);
+                  const dependentsForQuote = clientMode === "search"
+                    ? (dependents || []).map((d: any) => ({ firstName: d.firstName, lastName: d.lastName, dateOfBirth: d.dateOfBirth }))
+                    : quoteDependents.map((d) => ({ firstName: d.firstName, lastName: d.lastName, dateOfBirth: resolveDobForQuote(d.dateOfBirth, d.estimatedAge) || "" }));
+                  const policyholderName = clientMode === "search"
+                    ? (selectedClient ? `${selectedClient.firstName} ${selectedClient.lastName}` : "")
+                    : `${createForm.newClient.firstName} ${createForm.newClient.lastName}`.trim();
+                  const usedEstimatedAge = clientMode === "new" && quoteDependents.some((d) => !d.dateOfBirth && d.estimatedAge);
+                  const addQuoteDependent = () => setQuoteDependents((d) => [...d, { firstName: "", lastName: "", dateOfBirth: "", estimatedAge: "" }]);
+                  const removeQuoteDependent = (i: number) => setQuoteDependents((d) => d.filter((_, idx) => idx !== i));
+                  const updateQuoteDependent = (i: number, field: "firstName" | "lastName" | "dateOfBirth" | "estimatedAge", value: string) =>
+                    setQuoteDependents((d) => d.map((dep, idx) => (idx === i ? { ...dep, [field]: value } : dep)));
+                  const getRecommendation = async () => {
+                    if (!policyholderDob) return;
+                    setQuoting(true);
+                    setQuoteApiError(null);
+                    try {
+                      const res = await apiRequest("POST", "/api/quote", {
+                        policyholderName,
+                        policyholderDateOfBirth: policyholderDob,
+                        dependents: dependentsForQuote,
+                        dependentDateOfBirths: dependentDobsForQuote,
+                      });
+                      const data = await res.json();
+                      setQuoteResult(data);
+                      if (data.recommended) {
+                        setCreateForm((f) => ({ ...f, selectedProductId: data.recommended.productId, productVersionId: data.recommended.productVersionId }));
+                      }
+                    } catch {
+                      setQuoteApiError("Couldn't get a recommendation right now — you can still pick a product manually on the next step.");
+                    } finally {
+                      setQuoting(false);
+                    }
+                  };
+                  const useCandidate = (c: { productId: string; productVersionId: string }) =>
+                    setCreateForm((f) => ({ ...f, selectedProductId: c.productId, productVersionId: c.productVersionId }));
+                  return (
+                    <div className="border rounded-md p-3 space-y-3 bg-muted/20">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium">Product recommendation</p>
+                        <Button type="button" size="sm" variant="outline" disabled={!policyholderDob || quoting} onClick={getRecommendation} data-testid="button-get-recommendation">
+                          {quoting && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                          Get recommendation
+                        </Button>
+                      </div>
+                      {!policyholderDob && (
+                        <p className="text-xs text-muted-foreground">Enter the policy holder's date of birth above to get a suggested product and premium.</p>
+                      )}
+                      {clientMode === "new" && (
+                        <div className="space-y-2">
+                          <p className="text-xs text-muted-foreground">Dependants to cover, for an accurate quote (their full details are still captured properly in a later step):</p>
+                          {quoteDependents.map((dep, i) => (
+                            <div key={i} className="rounded-md border p-2 space-y-1.5 relative bg-background">
+                              <Button type="button" variant="ghost" size="icon" className="h-5 w-5 absolute top-1.5 right-1.5" onClick={() => removeQuoteDependent(i)}>
+                                <X className="h-3 w-3" />
+                              </Button>
+                              <div className="grid grid-cols-2 gap-1.5 pr-6">
+                                <Input className="h-8 text-xs" placeholder="First name" value={dep.firstName} onChange={(e) => updateQuoteDependent(i, "firstName", e.target.value)} />
+                                <Input className="h-8 text-xs" placeholder="Last name" value={dep.lastName} onChange={(e) => updateQuoteDependent(i, "lastName", e.target.value)} />
+                              </div>
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <Input className="h-8 text-xs" type="date" value={dep.dateOfBirth} onChange={(e) => updateQuoteDependent(i, "dateOfBirth", e.target.value)} />
+                                {!dep.dateOfBirth && (
+                                  <Input className="h-8 text-xs" type="number" min="0" max="120" placeholder="Est. age if DOB unknown" value={dep.estimatedAge} onChange={(e) => updateQuoteDependent(i, "estimatedAge", e.target.value)} />
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={addQuoteDependent}>
+                            <Plus className="h-3 w-3" /> Add a dependant
+                          </Button>
+                        </div>
+                      )}
+                      {quoteApiError && <p className="text-xs text-destructive">{quoteApiError}</p>}
+                      {usedEstimatedAge && (
+                        <p className="text-xs text-muted-foreground">Using estimated ages for one or more dependants — this will be re-priced exactly once their real dates of birth are captured.</p>
+                      )}
+                      {quoteResult?.recommended && (
+                        <div className="space-y-2">
+                          <div className={"flex items-center justify-between rounded-md border p-2 " + (createForm.productVersionId === quoteResult.recommended.productVersionId ? "border-primary bg-primary/5" : "")}>
+                            <div>
+                              <p className="text-sm font-medium">{quoteResult.recommended.productName} <Badge variant="outline" className="ml-1 text-[10px]">Recommended</Badge></p>
+                              <p className="text-xs text-muted-foreground tabular-nums">{quoteResult.recommended.currency} {parseFloat(quoteResult.recommended.premium).toFixed(2)} / {quoteResult.recommended.paymentSchedule}</p>
+                            </div>
+                            {createForm.productVersionId !== quoteResult.recommended.productVersionId && (
+                              <Button type="button" size="sm" variant="ghost" onClick={() => useCandidate(quoteResult.recommended!)}>Use this</Button>
+                            )}
+                          </div>
+                          {quoteResult.alternatives.length > 0 && (
+                            <div className="space-y-1.5 pt-1">
+                              <p className="text-xs text-muted-foreground">Compared to other plans:</p>
+                              {quoteResult.alternatives.map((alt) => (
+                                <div key={alt.productVersionId} className={"flex items-center justify-between rounded-md border p-2 " + (createForm.productVersionId === alt.productVersionId ? "border-primary bg-primary/5" : "")}>
+                                  <div>
+                                    <p className="text-xs font-medium">{alt.productName}</p>
+                                    <p className="text-xs text-muted-foreground tabular-nums">{alt.currency} {parseFloat(alt.premium).toFixed(2)} / {alt.paymentSchedule}</p>
+                                  </div>
+                                  {createForm.productVersionId !== alt.productVersionId && (
+                                    <Button type="button" size="sm" variant="ghost" onClick={() => useCandidate(alt)}>Use this</Button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {quoteResult.quoteId && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="w-full gap-1.5"
+                              onClick={() => {
+                                navigator.clipboard.writeText(`${window.location.origin}/quote/${quoteResult.quoteId}`);
+                                setQuoteLinkCopied(true);
+                                setTimeout(() => setQuoteLinkCopied(false), 2000);
+                              }}
+                            >
+                              <Share2 className="h-3.5 w-3.5" /> {quoteLinkCopied ? "Link copied" : "Copy shareable link for client"}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </>
             )}
             {createStep === 2 && (
@@ -4458,28 +4695,6 @@ export default function StaffPolicies() {
                     </SelectContent>
                   </Select>
                 </div>
-                {canEditPremium && (
-                  <div className="flex items-start gap-3 border rounded-md p-3 bg-amber-50/50 dark:bg-amber-950/20">
-                    <Checkbox
-                      id="create-legacy-flag"
-                      checked={createForm.isLegacy}
-                      onCheckedChange={(v) => setCreateForm({ ...createForm, isLegacy: !!v })}
-                      data-testid="checkbox-is-legacy"
-                    />
-                    <div className="space-y-1 leading-none">
-                      <label htmlFor="create-legacy-flag" className="text-sm font-medium cursor-pointer">Mark as legacy / pre-existing policy</label>
-                      <p className="text-xs text-muted-foreground">This policy was captured from a prior system. It will be automatically activated with no waiting period.</p>
-                    </div>
-                  </div>
-                )}
-                <CountryFlagFields
-                  settings={countryFlagSettings}
-                  idPrefix="create-policy"
-                  checked={createForm.isSouthAfrica}
-                  reference={createForm.externalReference}
-                  onCheckedChange={(v) => setCreateForm({ ...createForm, isSouthAfrica: v })}
-                  onReferenceChange={(v) => setCreateForm({ ...createForm, externalReference: v })}
-                />
                 <div className="space-y-3 border rounded-md p-3">
                   <p className="text-sm font-medium">Saved mobile wallet (automation)</p>
                   <p className="text-xs text-muted-foreground">When automation runs for overdue balances, we use this number so the client can approve on their phone. Stored cards are not used for recurring collection.</p>

@@ -58,6 +58,9 @@ const PayInvoice = lazy(() => retryLazy(() => import("@/pages/public/pay-invoice
 const TenantSignup = lazy(() => retryLazy(() => import("@/pages/public/tenant-signup")));
 const PayPolicyLink = lazy(() => retryLazy(() => import("@/pages/public/pay-policy")));
 const AgentCardPage = lazy(() => retryLazy(() => import("@/pages/public/agent-card")));
+const AgentVCardPage = lazy(() => retryLazy(() => import("@/pages/public/agent-vcard")));
+const QuoteViewPage = lazy(() => retryLazy(() => import("@/pages/public/quote-view")));
+const StaffMyVCard = lazy(() => retryLazy(() => import("@/pages/staff/my-vcard")));
 const PlatformTenantConsole = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-console")));
 const PlatformBilling = lazy(() => retryLazy(() => import("@/pages/staff/platform-billing")));
 const PlatformTenantHealth = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-health")));
@@ -188,6 +191,7 @@ function Router() {
       <SafeRoute path="/staff/" component={StaffDashboard} />
       <SafeRoute path="/staff/audit" component={AuditLogs} />
       <SafeRoute path="/staff/settings" component={StaffSettings} />
+      <SafeRoute path="/staff/my-vcard" component={StaffMyVCard} />
       <SafeRoute path="/staff/billing" component={StaffBilling} />
       <SafeRoute path="/staff/settings/" component={StaffSettings} />
       <SafeRoute path="/staff/products" component={ProductBuilder} />
@@ -258,6 +262,8 @@ function Router() {
       <SafeRoute path="/join" component={JoinPage} />
       <SafeRoute path="/join/register" component={JoinRegisterPage} />
       <SafeRoute path="/join/:refCode" component={AgentCardPage} />
+      <SafeRoute path="/card/:refCode" component={AgentVCardPage} />
+      <SafeRoute path="/quote/:id" component={QuoteViewPage} />
       <SafeRoute path="/verify" component={VerifyPage} />
       <SafeRoute path="/legal/aml-policy" component={AmlPolicyPage} />
       <SafeRoute path="/legal/data-retention-policy" component={DataRetentionPolicyPage} />

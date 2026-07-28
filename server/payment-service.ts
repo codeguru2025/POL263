@@ -741,8 +741,11 @@ export async function applyPaymentToPolicy(
       // Advance the policy cycle N times — infer months from amount/premium ratio
       const premiumAmt = policy.premiumAmount ? parseFloat(String(policy.premiumAmount)) : 0;
       const paidAmt = parseFloat(String(intent.amount));
+      // Math.max(0, ...): a payment under one premium must NOT advance the cycle — it gets
+      // banked below as credit instead. Flooring (not rounding) so an overpayment just under
+      // 2x a premium doesn't grant a free extra cycle either.
       const monthCount = (premiumAmt > 0 && Number.isFinite(paidAmt / premiumAmt))
-        ? Math.min(12, Math.max(1, Math.round(paidAmt / premiumAmt)))
+        ? Math.min(12, Math.max(0, Math.floor(paidAmt / premiumAmt)))
         : 1;
       let currentPolicySnap: typeof policy = policy;
       let paymentPeriod: { periodFrom: string; periodTo: string } = { periodFrom: today, periodTo: today };
@@ -805,7 +808,11 @@ export async function applyPaymentToPolicy(
       receipt = rec;
 
       await txDb.update(paymentIntents).set({ status: "paid" }).where(eq(paymentIntents.id, intent.id));
-      await applyPolicyStatusForClearedPayment(txDb, intent.policyId, policy, today, "", recordedByForLedger ?? undefined);
+      // Only reinstate/activate if the payment actually covered a full cycle above — otherwise
+      // status would flip to "active" while currentCycleEnd stays stale/unset (monthCount === 0).
+      if (monthCount > 0) {
+        await applyPolicyStatusForClearedPayment(txDb, intent.policyId, policy, today, "", recordedByForLedger ?? undefined);
+      }
 
       await insertOutboxMessageInTx(txDb, {
         organizationId: orgId,

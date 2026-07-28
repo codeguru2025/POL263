@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { eq, and, asc, desc, sql, count, sum, max, gte, lte, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
@@ -19,6 +20,7 @@ import {
   orgMemberSequences, orgPolicySequences,
   paymentTransactions, receipts, reversalEntries, cashups,
   paymentIntents, paymentEvents, paymentReceipts, paymentLinks, paymentLinkTokens,
+  quotes, quoteTokens,
   claims, claimDocuments, claimStatusHistory,
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
   partnerParlours, parlourPersonnel,
@@ -37,7 +39,7 @@ import {
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
   bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
-  quotationGuarantors, quotationCollateral, receiptAdverts, reminders, agentContentPosts,
+  quotationGuarantors, quotationCollateral, receiptAdverts, reminders, agentContentPosts, agentCardEvents,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
   userNotifications, userDeviceTokens,
@@ -145,6 +147,8 @@ import {
   type DirectoryContact, type InsertDirectoryContact,
   type ReceiptAdvert, type InsertReceiptAdvert,
   type AgentContentPost, type InsertAgentContentPost,
+  type AgentCardEvent, type InsertAgentCardEvent,
+  type Quote, type InsertQuote,
   memberCardSettings,
   type MemberCardSettings, type InsertMemberCardSettings,
   countryFlagSettings,
@@ -345,9 +349,9 @@ export interface IStorage {
   addUserRole(userId: string, roleId: string, orgId: string, branchId?: string): Promise<void>;
   removeUserRole(userId: string, roleId: string): Promise<void>;
   clearUserRoles(userId: string, organizationId?: string): Promise<void>;
-  getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]>;
-  setUserPermissionOverride(userId: string, permissionName: string, isGranted: boolean): Promise<void>;
-  removeUserPermissionOverride(userId: string, permissionName: string): Promise<void>;
+  getUserPermissionOverrides(userId: string, orgId: string | null): Promise<{ permissionName: string; isGranted: boolean }[]>;
+  setUserPermissionOverride(userId: string, permissionName: string, isGranted: boolean, orgId: string | null): Promise<void>;
+  removeUserPermissionOverride(userId: string, permissionName: string, orgId: string | null): Promise<void>;
   getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]>;
   getAuditLogs(organizationId: string, limit?: number, offset?: number, filters?: { search?: string; action?: string; from?: string; to?: string }): Promise<{ rows: AuditLog[]; total: number }>;
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
@@ -483,6 +487,13 @@ export interface IStorage {
   getPaymentLinkByToken(token: string, orgId: string): Promise<PaymentLink | undefined>;
   getPaymentLinksByPolicy(policyId: string, orgId: string): Promise<PaymentLink[]>;
   updatePaymentLink(id: string, data: Partial<InsertPaymentLink>, orgId: string): Promise<PaymentLink | undefined>;
+  /** Creates the tenant-DB quotes row (with a pre-generated id) AND the central token->org
+   *  routing pointer, so the shareable /quote/:id page can resolve it with no session. */
+  createQuote(data: Omit<InsertQuote, "id" | "expiresAt"> & { expiresAt?: Date }): Promise<Quote>;
+  /** Central-DB lookup only — resolves which org a /quote/:id belongs to, before any tenant DB can be reached. */
+  resolveOrgIdForQuoteToken(id: string): Promise<string | undefined>;
+  getQuote(id: string, orgId: string): Promise<Quote | undefined>;
+  getQuoteByLeadId(leadId: string, orgId: string): Promise<Quote | undefined>;
   createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent>;
   getPaymentEventsByIntentId(paymentIntentId: string, orgId: string): Promise<PaymentEvent[]>;
   createPaymentReceipt(receipt: InsertPaymentReceipt): Promise<PaymentReceipt>;
@@ -727,6 +738,9 @@ export interface IStorage {
   createAgentContentPost(data: InsertAgentContentPost): Promise<AgentContentPost>;
   updateAgentContentPost(id: string, data: Partial<InsertAgentContentPost>, orgId: string): Promise<AgentContentPost | undefined>;
   deleteAgentContentPost(id: string, orgId: string): Promise<void>;
+  createAgentCardEvent(data: InsertAgentCardEvent): Promise<AgentCardEvent>;
+  getAgentCardEventStats(agentId: string, orgId: string): Promise<{ pageViews: number; quoteRequests: number }>;
+  getAgentCardEvents(agentId: string, orgId: string, limit?: number): Promise<AgentCardEvent[]>;
   /** Returns the org's member-card template settings, or the built-in defaults if the org
    *  hasn't configured one yet (Member Card Admin hasn't been saved before). */
   getMemberCardSettings(orgId: string): Promise<MemberCardSettings>;
@@ -1100,25 +1114,37 @@ export class DatabaseStorage implements IStorage {
     }
     await db.delete(userRoles).where(eq(userRoles.userId, userId));
   }
-  async getUserPermissionOverrides(userId: string): Promise<{ permissionName: string; isGranted: boolean }[]> {
+  async getUserPermissionOverrides(userId: string, orgId: string | null): Promise<{ permissionName: string; isGranted: boolean }[]> {
     const rows = await db.select({ permissionName: permissions.name, isGranted: userPermissionOverrides.isGranted })
       .from(userPermissionOverrides)
       .innerJoin(permissions, eq(userPermissionOverrides.permissionId, permissions.id))
-      .where(eq(userPermissionOverrides.userId, userId));
+      .where(and(
+        eq(userPermissionOverrides.userId, userId),
+        orgId ? eq(userPermissionOverrides.organizationId, orgId) : isNull(userPermissionOverrides.organizationId),
+      ));
     return rows;
   }
-  async setUserPermissionOverride(userId: string, permissionName: string, isGranted: boolean): Promise<void> {
+  async setUserPermissionOverride(userId: string, permissionName: string, isGranted: boolean, orgId: string | null): Promise<void> {
     const [perm] = await db.select({ id: permissions.id }).from(permissions).where(eq(permissions.name, permissionName)).limit(1);
     if (!perm) throw new Error(`Unknown permission: ${permissionName}`);
-    // No unique constraint on (userId, permissionId) — delete any existing override for this
-    // permission first so re-toggling doesn't accumulate duplicate rows.
-    await db.delete(userPermissionOverrides).where(and(eq(userPermissionOverrides.userId, userId), eq(userPermissionOverrides.permissionId, perm.id)));
-    await db.insert(userPermissionOverrides).values({ userId, permissionId: perm.id, isGranted });
+    // No unique constraint on (userId, permissionId, organizationId) — delete any existing
+    // override for this permission *at this org* first so re-toggling doesn't accumulate
+    // duplicate rows, and so it can't be confused with the same user's override at another org.
+    await db.delete(userPermissionOverrides).where(and(
+      eq(userPermissionOverrides.userId, userId),
+      eq(userPermissionOverrides.permissionId, perm.id),
+      orgId ? eq(userPermissionOverrides.organizationId, orgId) : isNull(userPermissionOverrides.organizationId),
+    ));
+    await db.insert(userPermissionOverrides).values({ userId, permissionId: perm.id, isGranted, organizationId: orgId });
   }
-  async removeUserPermissionOverride(userId: string, permissionName: string): Promise<void> {
+  async removeUserPermissionOverride(userId: string, permissionName: string, orgId: string | null): Promise<void> {
     const [perm] = await db.select({ id: permissions.id }).from(permissions).where(eq(permissions.name, permissionName)).limit(1);
     if (!perm) return;
-    await db.delete(userPermissionOverrides).where(and(eq(userPermissionOverrides.userId, userId), eq(userPermissionOverrides.permissionId, perm.id)));
+    await db.delete(userPermissionOverrides).where(and(
+      eq(userPermissionOverrides.userId, userId),
+      eq(userPermissionOverrides.permissionId, perm.id),
+      orgId ? eq(userPermissionOverrides.organizationId, orgId) : isNull(userPermissionOverrides.organizationId),
+    ));
   }
   async getUserEffectivePermissions(userId: string, orgId?: string | null): Promise<string[]> {
     const lookupDb = orgId ? await getDbForOrg(orgId) : db;
@@ -1161,7 +1187,7 @@ export class DatabaseStorage implements IStorage {
       for (const row of permRows) permSet.add(row.name);
     }
 
-    const overrides = await this.getUserPermissionOverrides(userId);
+    const overrides = await this.getUserPermissionOverrides(userId, effectiveOrgId ?? null);
     for (const o of overrides) {
       if (o.isGranted) permSet.add(o.permissionName);
       else permSet.delete(o.permissionName);
@@ -3283,6 +3309,31 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(paymentLinks).set(data).where(and(eq(paymentLinks.id, id), eq(paymentLinks.organizationId, orgId))).returning();
     return updated;
+  }
+  async createQuote(data: Omit<InsertQuote, "id" | "expiresAt"> & { expiresAt?: Date }): Promise<Quote> {
+    const id = crypto.randomUUID();
+    const tdb = await getDbForOrg(data.organizationId);
+    const expiresAt = data.expiresAt ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+    const [created] = await tdb.insert(quotes).values({ ...data, id, expiresAt }).returning();
+    // Central routing pointer so the public /quote/:id page (no session) can resolve an org
+    // before it can reach that org's own tenant DB — see the quoteTokens schema comment.
+    await db.insert(quoteTokens).values({ token: id, organizationId: data.organizationId });
+    return created;
+  }
+  async resolveOrgIdForQuoteToken(id: string): Promise<string | undefined> {
+    const [row] = await db.select().from(quoteTokens).where(eq(quoteTokens.token, id));
+    return row?.organizationId;
+  }
+  async getQuote(id: string, orgId: string): Promise<Quote | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(quotes).where(and(eq(quotes.id, id), eq(quotes.organizationId, orgId)));
+    return row;
+  }
+  async getQuoteByLeadId(leadId: string, orgId: string): Promise<Quote | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(quotes).where(and(eq(quotes.leadId, leadId), eq(quotes.organizationId, orgId)))
+      .orderBy(desc(quotes.createdAt)).limit(1);
+    return row;
   }
   async createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent> {
     // Always route to the same DB as the intent — use event.organizationId directly to avoid
@@ -6546,6 +6597,30 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(agentContentPosts).where(and(eq(agentContentPosts.id, id), eq(agentContentPosts.organizationId, orgId)));
   }
+  async createAgentCardEvent(data: InsertAgentCardEvent): Promise<AgentCardEvent> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(agentCardEvents).values(data).returning();
+    return row;
+  }
+  async getAgentCardEventStats(agentId: string, orgId: string): Promise<{ pageViews: number; quoteRequests: number }> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select({ eventType: agentCardEvents.eventType, n: count() })
+      .from(agentCardEvents)
+      .where(and(eq(agentCardEvents.agentId, agentId), eq(agentCardEvents.organizationId, orgId)))
+      .groupBy(agentCardEvents.eventType);
+    const stats = { pageViews: 0, quoteRequests: 0 };
+    for (const r of rows) {
+      if (r.eventType === "page_view") stats.pageViews = Number(r.n);
+      else if (r.eventType === "quote_request") stats.quoteRequests = Number(r.n);
+    }
+    return stats;
+  }
+  async getAgentCardEvents(agentId: string, orgId: string, limit = 50): Promise<AgentCardEvent[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(agentCardEvents)
+      .where(and(eq(agentCardEvents.agentId, agentId), eq(agentCardEvents.organizationId, orgId)))
+      .orderBy(desc(agentCardEvents.createdAt)).limit(limit);
+  }
 
   // ─── Member Card Admin ────────────────────────────────────
   async getMemberCardSettings(orgId: string): Promise<MemberCardSettings> {
@@ -7282,8 +7357,11 @@ export class DatabaseStorage implements IStorage {
         // covering several premiums replays into several advanced cycles, same as it would live.
         const premiumAmt = currentSnap.premiumAmount ? parseFloat(String(currentSnap.premiumAmount)) : 0;
         const paidAmt = parseFloat(String(paymentFields.amount));
+        // Math.max(0, ...): a payment under one premium must NOT advance the cycle — it gets
+        // banked below as credit instead. Flooring (not rounding) so an overpayment just under
+        // 2x a premium doesn't grant a free extra cycle either. Mirrors payment-service.ts.
         const monthCount = (premiumAmt > 0 && Number.isFinite(paidAmt / premiumAmt))
-          ? Math.min(12, Math.max(1, Math.round(paidAmt / premiumAmt)))
+          ? Math.min(12, Math.max(0, Math.floor(paidAmt / premiumAmt)))
           : 1;
 
         let periodFrom = paymentDate;
@@ -7335,9 +7413,17 @@ export class DatabaseStorage implements IStorage {
           metadataJson: { transactionId: txnRow.id },
         }).returning();
 
-        await applyPolicyStatusForClearedPayment(tx, policyId, currentSnap, paymentDate, " (legacy import)", undefined);
-        const [refreshedAfterStatus] = await tx.select().from(policies).where(eq(policies.id, policyId));
-        if (refreshedAfterStatus) currentSnap = refreshedAfterStatus;
+        // Only reinstate/activate if this row actually covered a full cycle above — otherwise
+        // status would flip to "active" while currentCycleEnd stays stale/unset (monthCount === 0).
+        if (monthCount > 0) {
+          // Tagged with this batch's id (not just a generic "(legacy import)" marker) so
+          // rollbackPaymentReplay can delete exactly this batch's status-history rows — a
+          // policy re-imported across two separate batches must not have batch A's audit
+          // trail wiped when only batch B is rolled back.
+          await applyPolicyStatusForClearedPayment(tx, policyId, currentSnap, paymentDate, ` (legacy import ${batchId})`, undefined);
+          const [refreshedAfterStatus] = await tx.select().from(policies).where(eq(policies.id, policyId));
+          if (refreshedAfterStatus) currentSnap = refreshedAfterStatus;
+        }
 
         await tx.insert(importRecords).values({
           batchId, organizationId: orgId, entityType: "payment",
@@ -7402,11 +7488,12 @@ export class DatabaseStorage implements IStorage {
       // row inserted during commit's replay loop gets the SAME createdAt, so a wall-clock window
       // captured in JS can't distinguish "created by this batch" from "created a moment earlier
       // in the same transaction." Match on the reason suffix applyPolicyStatusForClearedPayment
-      // was called with instead (" (legacy import)", passed only from replay, never by a live
-      // payment) — precise regardless of transaction timing.
+      // was called with instead — tagged with THIS batch's id specifically (not a generic
+      // "(legacy import)" marker), so rolling back one batch can't delete another, earlier
+      // batch's status-history rows for the same policy.
       await tx.delete(policyStatusHistory).where(and(
         eq(policyStatusHistory.policyId, policyId),
-        ilike(policyStatusHistory.reason, "%(legacy import)%"),
+        ilike(policyStatusHistory.reason, `%(legacy import ${batch.id})%`),
       ));
       await tx.update(policyCreditBalances).set({ balance: snap.creditBefore ?? "0", updatedAt: new Date() })
         .where(and(eq(policyCreditBalances.organizationId, orgId), eq(policyCreditBalances.policyId, policyId)));

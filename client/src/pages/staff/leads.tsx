@@ -11,10 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { PageHeader, PageShell } from "@/components/ds";
-import { Plus, Loader2, FileText, Phone, Mail, User, Calendar, Tag, MessageSquare, X, FileDown, MoreVertical } from "lucide-react";
+import { Plus, Loader2, FileText, Phone, Mail, User, Calendar, Tag, MessageSquare, X, FileDown, MoreVertical, Link2, Check, ArrowRight, Receipt } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useLocation, useSearch } from "wouter";
 import { cn } from "@/lib/utils";
+import { resolveDobForQuote } from "@/lib/estimated-dob";
 
 /**
  * 6-stage pipeline. Each display column maps to one or more legacy DB stage values.
@@ -103,6 +104,37 @@ export default function StaffLeads() {
   const [dragLeadId, setDragLeadId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<StageKey | null>(null);
 
+  // ── Quote a lead (standalone — no client record required) ──────────────
+  const [showQuoteForm, setShowQuoteForm] = useState(false);
+  const [quoteDob, setQuoteDob] = useState("");
+  const [quoteDeps, setQuoteDeps] = useState<{ firstName: string; lastName: string; dateOfBirth: string; estimatedAge: string }[]>([]);
+  const [quoting, setQuoting] = useState(false);
+  const [quoteApiError, setQuoteApiError] = useState<string | null>(null);
+  const [freshQuote, setFreshQuote] = useState<{ recommended: any; alternatives: any[]; quoteId: string | null } | null>(null);
+  const [quoteLinkCopied, setQuoteLinkCopied] = useState(false);
+
+  const { data: existingQuote, isLoading: existingQuoteLoading } = useQuery<any>({
+    queryKey: ["/api/leads", viewingLead?.id, "quote"],
+    queryFn: async () => {
+      try {
+        return await (await apiRequest("GET", `/api/leads/${viewingLead.id}/quote`)).json();
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!viewingLead,
+  });
+  const activeQuote = freshQuote || (existingQuote ? {
+    recommended: existingQuote.recommendedProductVersionId ? {
+      productName: existingQuote.recommendedProductName,
+      premium: existingQuote.recommendedPremium,
+      currency: existingQuote.currency,
+      paymentSchedule: existingQuote.paymentSchedule,
+    } : null,
+    alternatives: existingQuote.alternativesJson || [],
+    quoteId: existingQuote.id,
+  } : null);
+
   useEffect(() => {
     if (new URLSearchParams(createSearch).get("create") === "1") setShowCreate(true);
   }, [createSearch]);
@@ -162,6 +194,40 @@ export default function StaffLeads() {
     setViewingLead(lead);
     setEditNotes(lead.notes || "");
     setEditProduct(lead.productInterest || "");
+    setShowQuoteForm(false);
+    setQuoteDob("");
+    setQuoteDeps([]);
+    setQuoteApiError(null);
+    setFreshQuote(null);
+  };
+
+  const addQuoteDep = () => setQuoteDeps((d) => [...d, { firstName: "", lastName: "", dateOfBirth: "", estimatedAge: "" }]);
+  const removeQuoteDep = (i: number) => setQuoteDeps((d) => d.filter((_, idx) => idx !== i));
+  const updateQuoteDep = (i: number, field: "firstName" | "lastName" | "dateOfBirth" | "estimatedAge", value: string) =>
+    setQuoteDeps((d) => d.map((dep, idx) => (idx === i ? { ...dep, [field]: value } : dep)));
+
+  const getLeadQuote = async () => {
+    if (!viewingLead || !quoteDob) return;
+    setQuoting(true);
+    setQuoteApiError(null);
+    try {
+      const policyholderName = [viewingLead.firstName, viewingLead.lastName].filter(Boolean).join(" ");
+      const res = await apiRequest("POST", "/api/quote", {
+        leadId: viewingLead.id,
+        policyholderName,
+        policyholderDateOfBirth: quoteDob,
+        dependents: quoteDeps.map((d) => ({ firstName: d.firstName, lastName: d.lastName, dateOfBirth: resolveDobForQuote(d.dateOfBirth, d.estimatedAge) || "" })),
+        dependentDateOfBirths: quoteDeps.map((d) => resolveDobForQuote(d.dateOfBirth, d.estimatedAge)).filter((x): x is string => !!x),
+      });
+      const data = await res.json();
+      setFreshQuote(data);
+      setShowQuoteForm(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+    } catch (err: any) {
+      setQuoteApiError(err.message || "Couldn't get a quote right now — please try again.");
+    } finally {
+      setQuoting(false);
+    }
   };
 
   const saveDetail = () => {
@@ -259,6 +325,7 @@ export default function StaffLeads() {
                       <SelectContent>
                         <SelectItem value="walk_in">Walk-in</SelectItem>
                         <SelectItem value="agent_link">Agent Referral</SelectItem>
+                        <SelectItem value="vcard_quote">Agent vCard Quote</SelectItem>
                         <SelectItem value="campaign">Campaign</SelectItem>
                         <SelectItem value="website">Website</SelectItem>
                       </SelectContent>
@@ -454,6 +521,87 @@ export default function StaffLeads() {
                     {PIPELINE_STAGES.find((s) => s.key === effectiveStage(viewingLead))?.label}
                   </Badge>
                   {viewingLead.clientId && <Badge className="bg-primary/10 text-primary">Client linked</Badge>}
+                </div>
+
+                {/* Quote — no client record required, uses the same recommendation engine as the
+                    staff wizard and public vCard (server/quote-engine.ts). */}
+                <div className="rounded-lg border p-3 space-y-3 bg-muted/20">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium flex items-center gap-1.5"><Receipt className="h-3.5 w-3.5" /> Quote</p>
+                    {!activeQuote && !showQuoteForm && (
+                      <Button type="button" size="sm" variant="outline" onClick={() => setShowQuoteForm(true)} disabled={existingQuoteLoading}>
+                        {existingQuoteLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Get a quote"}
+                      </Button>
+                    )}
+                  </div>
+
+                  {showQuoteForm && !activeQuote && (
+                    <div className="space-y-2">
+                      <div>
+                        <Label className="text-xs">Date of birth</Label>
+                        <Input type="date" value={quoteDob} onChange={(e) => setQuoteDob(e.target.value)} data-testid="input-lead-quote-dob" />
+                      </div>
+                      {quoteDeps.map((dep, i) => (
+                        <div key={i} className="rounded-md border p-2 space-y-1.5 relative bg-background">
+                          <Button type="button" variant="ghost" size="icon" className="h-5 w-5 absolute top-1.5 right-1.5" onClick={() => removeQuoteDep(i)}>
+                            <X className="h-3 w-3" />
+                          </Button>
+                          <div className="grid grid-cols-2 gap-1.5 pr-6">
+                            <Input className="h-8 text-xs" placeholder="First name" value={dep.firstName} onChange={(e) => updateQuoteDep(i, "firstName", e.target.value)} />
+                            <Input className="h-8 text-xs" placeholder="Last name" value={dep.lastName} onChange={(e) => updateQuoteDep(i, "lastName", e.target.value)} />
+                          </div>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <Input className="h-8 text-xs" type="date" value={dep.dateOfBirth} onChange={(e) => updateQuoteDep(i, "dateOfBirth", e.target.value)} />
+                            {!dep.dateOfBirth && (
+                              <Input className="h-8 text-xs" type="number" min="0" max="120" placeholder="Est. age if DOB unknown" value={dep.estimatedAge} onChange={(e) => updateQuoteDep(i, "estimatedAge", e.target.value)} />
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={addQuoteDep}>
+                        <Plus className="h-3 w-3" /> Add a dependant
+                      </Button>
+                      <Button type="button" size="sm" className="w-full" disabled={!quoteDob || quoting} onClick={getLeadQuote} data-testid="button-get-lead-quote">
+                        {quoting && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                        Get Quote
+                      </Button>
+                      {quoteApiError && <p className="text-xs text-destructive">{quoteApiError}</p>}
+                    </div>
+                  )}
+
+                  {activeQuote?.recommended && (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Badge>Recommended</Badge>
+                        <p className="text-sm font-medium">{activeQuote.recommended.productName}</p>
+                      </div>
+                      <p className="text-lg font-bold tabular-nums">
+                        {activeQuote.recommended.currency} {parseFloat(activeQuote.recommended.premium).toFixed(2)}
+                        <span className="text-xs font-normal text-muted-foreground"> / {activeQuote.recommended.paymentSchedule}</span>
+                      </p>
+                      <div className="flex gap-2">
+                        {activeQuote.quoteId && (
+                          <Button
+                            type="button" size="sm" variant="outline" className="gap-1.5"
+                            onClick={() => {
+                              navigator.clipboard.writeText(`${window.location.origin}/quote/${activeQuote.quoteId}`);
+                              setQuoteLinkCopied(true);
+                              setTimeout(() => setQuoteLinkCopied(false), 2000);
+                            }}
+                          >
+                            {quoteLinkCopied ? <Check className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
+                            {quoteLinkCopied ? "Copied" : "Copy link"}
+                          </Button>
+                        )}
+                        <Button
+                          type="button" size="sm" variant="default" className="gap-1.5"
+                          onClick={() => { setViewingLead(null); setLocation(`/staff/policies?create=1&leadId=${viewingLead.id}`); }}
+                        >
+                          Convert to policy <ArrowRight className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Move to stage */}
