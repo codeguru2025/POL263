@@ -6146,7 +6146,7 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(paymentAutomationSettings).values({
       organizationId: orgId,
       isEnabled: data.isEnabled ?? false,
-      daysAfterLastPayment: data.daysAfterLastPayment ?? 30,
+      daysAfterLastPayment: data.daysAfterLastPayment ?? 0,
       repeatEveryDays: data.repeatEveryDays ?? 30,
       sendPushNotifications: data.sendPushNotifications ?? true,
       autoRunPayments: data.autoRunPayments ?? true,

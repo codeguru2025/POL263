@@ -67,6 +67,17 @@ function SettingsCard() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const runSweepNowMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/platform/billing/sweep", {})).json(),
+    onSuccess: (data: any) => {
+      toast({
+        title: "Billing sweep complete",
+        description: `${data.invoicesGenerated} invoice(s) generated, ${data.pastDueTransitions} moved past-due, ${data.autoSuspensions} auto-suspended${data.errors?.length ? `, ${data.errors.length} error(s)` : ""}`,
+      });
+    },
+    onError: (e: any) => toast({ title: "Run failed", description: e.message, variant: "destructive" }),
+  });
+
   if (isLoading) {
     return <CardSection title="Global settings" icon={SettingsIcon}><div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div></CardSection>;
   }
@@ -103,19 +114,28 @@ function SettingsCard() {
           </div>
           <Switch checked={moduleEnforcementEnabled} onCheckedChange={(v) => setModuleEnforcementEnabled(v === true)} />
         </div>
-        <Button
-          onClick={() => saveMutation.mutate({
-            trialDays: parseInt(trialDays, 10) || 0,
-            graceDays: parseInt(graceDays, 10) || 0,
-            reminderLeadDays: parseInt(reminderLeadDays, 10) || 0,
-            moduleEnforcementEnabled,
-            platformFeeRatePercent,
-          })}
-          disabled={saveMutation.isPending}
-        >
-          {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-          Save settings
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => saveMutation.mutate({
+              trialDays: parseInt(trialDays, 10) || 0,
+              graceDays: parseInt(graceDays, 10) || 0,
+              reminderLeadDays: parseInt(reminderLeadDays, 10) || 0,
+              moduleEnforcementEnabled,
+              platformFeeRatePercent,
+            })}
+            disabled={saveMutation.isPending}
+          >
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Save settings
+          </Button>
+          <Button variant="outline" onClick={() => runSweepNowMutation.mutate()} disabled={runSweepNowMutation.isPending}>
+            {runSweepNowMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Run billing sweep now
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The billing sweep already runs automatically once a day (06:00 UTC) — generates invoice reminders, moves overdue subscriptions to past-due, and auto-suspends past their grace period. Use this to run it on demand.
+        </p>
       </div>
     </CardSection>
   );

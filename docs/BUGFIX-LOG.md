@@ -10,6 +10,101 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-28 — Payment automation due-date trigger + notification digest scheduling: three bugs from self-review
+
+Found during a requested "check for edge cases and bugs" pass immediately after building the
+due-date-based payment automation trigger and the client-notification-sweep scheduler (both
+same-day work, see the two entries below). None had shipped to a real automated run yet.
+
+1. **`PUT /api/payment-automation-settings` couldn't actually save the new "0 = charge on due
+   date" value.** `server/routes.ts`'s save handler had `Math.max(1, Number(body.daysAfterLastPayment
+   || 30))` — the `|| 30` silently replaces a genuine `0` with `30` (0 is falsy), and
+   `Math.max(1, ...)` then made a `0` floor structurally impossible even without that. So a staff
+   member setting the new "0 = on the due date" option in the UI I'd just built would have it
+   silently rewritten to 30 on save — a value with the *old* meaning (30 days past due, not past
+   last payment), i.e. the opposite of the feature's whole point. **Fix:** `Math.max(0,
+   Number(body.daysAfterLastPayment ?? 0))`, plus the matching `GET` fallback default
+   (30→0) for consistency. Root cause pattern: I'd fixed the client-side default and the
+   automation-logic read site for the 0-is-falsy trap, but not the save route — a reminder that
+   every read site of a "0 is now meaningful" field needs auditing, not just the ones touched
+   first.
+2. **Notification digest had no per-day dedup — the new scheduler made a latent risk real.**
+   `server/client-notification-sweep.ts`'s birthday/anniversary/premium-due/pre-lapse logic is
+   date-based (matches "today"), not state-based like the policy lapse sweep (which naturally
+   stops matching a policy once it's moved to grace/lapsed). Before this session the only way to
+   trigger it was a manual admin click, so accidental double-sends were rare. Once I added (a) an
+   automatic 05:00 UTC daily run and (b) a prominent "Run notification digest now" button right
+   next to it, the realistic case of "staff clicks the button after the scheduled run already
+   fired that day" would have double-sent every matching birthday/anniversary/premium-due/pre-lapse
+   email — and `notification_logs` doesn't even store an event type, so there was no cheap way to
+   detect this after the fact from existing data. **Fix:** added an in-memory
+   `Map<orgId, harareDateString>` guard (`lastRunHarareDateByOrg`) — same per-process convention
+   as `paymentAutomationTickRunning`/`parkedVehicleTickRunning` in `server/routes.ts` — checked
+   before, and only set after, a successful per-org run; a second call same calendar day is a
+   no-op that reports `orgsAlreadyRanToday` instead of resending. Resets on restart/deploy
+   (acceptable gap — infrequent, and this covers the actual common case).
+3. **Same file: raw `new Date()` for "today" instead of Harare-local date, violating the
+   pattern `server/date-utils.ts` explicitly warns about.** Pre-existing in the original inline
+   route handler this was extracted from, not introduced this session, but surfaced during the
+   same review. A plain server-UTC "today" mis-attributes anything in the ~2h window just after
+   midnight Harare time (still "yesterday" in UTC) to the wrong calendar day — harmless for the
+   scheduled 05:00 UTC (07:00 CAT) run, but wrong for a manual click landing in that window.
+   **Fix:** switched to `todayInHarare()` plus string-based month/day and whole-day-difference
+   helpers (`isSameMonthDay`, `daysBetween`), matching the exact convention already used in
+   `policy-lapse-sweep.ts` and `policy-status-on-payment.ts`.
+
+**Verified:** `npm run check` clean, `npm run test` 298/298 passing after each fix.
+
+**Lesson for next time:** when a field's "empty/zero" value changes from meaningless to
+meaningful (here: `daysAfterLastPayment: 0` going from "unset, treat as 30" to "a deliberate,
+common setting"), grep every read site for `|| ` fallbacks and every write site for `Math.max(1,
+...)`-style floors before considering the change done — the bug is never in the one place you
+were already looking at. And: turning a manual-only endpoint into a scheduled one changes its
+risk profile even if its own logic didn't change — re-audit idempotency at that moment, don't
+assume "it was safe as a manual button" still holds once it also fires unattended and gets an
+easy-to-reach "run it again" button next to it.
+
+---
+
+## 2026-07-28 — Birthday/anniversary/pre-lapse email digest was never actually scheduled
+
+**Symptom:** none reported yet — found while auditing every code path that sends email in
+production (user asked for a full inventory), not from a user complaint.
+
+**Root cause:** `POST /api/admin/run-notifications` (`server/routes.ts`) computed and sent the
+daily digest of birthday, policy-anniversary, premium-due (3-days-out), pre-lapse-warning, and
+today's-lapse client emails — but nothing in `server/index.ts` ever called it automatically.
+The two sibling sweeps that *do* the equivalent work for policy status
+(`server/policy-lapse-sweep.ts`) and tenant billing (`server/tenant-billing-sweep.ts`) both have
+a `setTimeout`-based daily scheduler started at boot; this one only had the manual admin route
+and was never wired to a scheduler when it was built. So every tenant relying on birthday touches
+or pre-lapse nudges got zero of them, silently, with no error anywhere — the code worked
+perfectly whenever a human happened to call it.
+
+**Fix:** extracted the handler's inline logic into `server/client-notification-sweep.ts`
+following the exact same shape as `policy-lapse-sweep.ts` (advisory-lock-guarded
+`runClientNotificationSweep(trigger, orgId?)`, `start/stopClientNotificationSweepScheduler()`),
+wired the scheduler into `server/index.ts` at boot/shutdown (daily 05:00 UTC, staggered between
+policy lapse's 04:00 and tenant billing's 06:00), and pointed the existing route at it. Also
+added the missing "Run now" UI buttons for this and the policy-lapse sweep to
+`/staff/notifications`, and one for the tenant billing sweep to `/staff/platform/billing` — none
+of the three manual-trigger routes had a frontend button before this.
+
+**Verified:** `npm run check` clean, `npm run test` 298/298 passing. Scheduler correctness
+(actually firing at 05:00 UTC in production) not independently verified beyond code review —
+worth checking server logs for "Client notification sweep starting" after the next UTC 05:00.
+
+**Lesson for next time:** when a new sweep/digest endpoint is built with only a manual
+admin-triggered route and no scheduler, it will silently never run in production — nobody
+gets an error, the feature just does nothing. If you build a `run-X-now` admin endpoint whose
+job description implies "should happen daily," check `server/index.ts` for a matching
+`start...Scheduler()` call before considering it done. This is also a good general signal to
+watch for during any "list every place X happens" audit — cross-check every "manual trigger"
+endpoint against whether it also has an automatic counterpart, the same way `email_inbound`'s
+feature-flag-vs-actual-provisioning gap surfaced in the entry below.
+
+---
+
 ## 2026-07-28 — Self-review of the per-tenant email domains + inbound receiving feature
 
 Found by a dedicated bug/edge-case review pass right after building

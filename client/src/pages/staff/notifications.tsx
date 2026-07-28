@@ -73,7 +73,7 @@ export default function StaffNotifications() {
   const [bcBody, setBcBody] = useState("");
   const [autoSettings, setAutoSettings] = useState<PaymentAutomationSettings>({
     isEnabled: false,
-    daysAfterLastPayment: 30,
+    daysAfterLastPayment: 0,
     repeatEveryDays: 30,
     sendPushNotifications: true,
     autoRunPayments: true,
@@ -93,7 +93,7 @@ export default function StaffNotifications() {
     if (!paymentAutomationSettings) return;
     setAutoSettings({
       isEnabled: !!paymentAutomationSettings.isEnabled,
-      daysAfterLastPayment: Number(paymentAutomationSettings.daysAfterLastPayment || 30),
+      daysAfterLastPayment: Number(paymentAutomationSettings.daysAfterLastPayment ?? 0),
       repeatEveryDays: Number(paymentAutomationSettings.repeatEveryDays || 30),
       sendPushNotifications: paymentAutomationSettings.sendPushNotifications !== false,
       autoRunPayments: paymentAutomationSettings.autoRunPayments !== false,
@@ -181,6 +181,41 @@ export default function StaffNotifications() {
       toast({
         title: "Automation run complete",
         description: `Scanned ${data.scanned}, reminded ${data.reminded}, mobile payment prompts started ${data.attempted}, skipped ${data.skipped ?? 0}`,
+      });
+    },
+    onError: (err: any) => toast({ title: "Run failed", description: err.message, variant: "destructive" }),
+  });
+
+  const runLapseSweepNowMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/run-policy-lapse-sweep", {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: "Policy lapse sweep complete",
+        description: `${data.movedToGrace} moved to grace, ${data.movedToLapsed} moved to lapsed${data.errors?.length ? `, ${data.errors.length} error(s)` : ""}`,
+      });
+    },
+    onError: (err: any) => toast({ title: "Run failed", description: err.message, variant: "destructive" }),
+  });
+
+  const runNotificationDigestNowMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/run-notifications", {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      if (data.orgsAlreadyRanToday) {
+        toast({
+          title: "Already sent today",
+          description: "Today's digest already went out (scheduled run or an earlier click) — skipped to avoid double-sending the same birthday/anniversary/premium-due emails. It'll run again tomorrow, or automatically at 05:00 UTC.",
+        });
+        return;
+      }
+      toast({
+        title: "Notification digest complete",
+        description: `${data.birthdayCount} birthday, ${data.anniversaryCount} anniversary, ${data.premiumDueCount} premium-due, ${data.preLapseCount} pre-lapse, ${data.lapseCount} lapsed${data.errors?.length ? `, ${data.errors.length} error(s)` : ""}`,
       });
     },
     onError: (err: any) => toast({ title: "Run failed", description: err.message, variant: "destructive" }),
@@ -335,7 +370,7 @@ export default function StaffNotifications() {
 
         <CardSection
           title="Payment Automation Triggers"
-          description="After the thresholds below, clients get reminders and (if enabled) a mobile wallet payment prompt is sent to their saved number so they can approve with their PIN on the phone. Card is not used for automation."
+          description="Triggers off each policy's actual due date (its own billing-cycle date — weekly, monthly, or yearly, whatever that client's policy runs on), not a generic days-since-last-payment guess. After the thresholds below, clients get reminders and (if enabled) a mobile wallet payment prompt is sent to their saved number so they can approve with their PIN on the phone. Card is not used for automation."
           icon={Bell}
         >
           <div className="space-y-4">
@@ -345,13 +380,14 @@ export default function StaffNotifications() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="start-after-days-since-last-payment">Start after days since last payment</Label>
+                <Label htmlFor="start-after-days-since-last-payment">Start after days past due date</Label>
                 <Input id="start-after-days-since-last-payment"
                   type="number"
-                  min={1}
+                  min={0}
                   value={String(autoSettings.daysAfterLastPayment)}
-                  onChange={(e) => setAutoSettings((s) => ({ ...s, daysAfterLastPayment: Math.max(1, Number(e.target.value || 1)) }))}
+                  onChange={(e) => setAutoSettings((s) => ({ ...s, daysAfterLastPayment: Math.max(0, Number(e.target.value || 0)) }))}
                 />
+                <p className="text-xs text-muted-foreground mt-1">0 = charge exactly on the due date.</p>
               </div>
               <div>
                 <Label htmlFor="repeat-every-days">Repeat every (days)</Label>
@@ -383,6 +419,24 @@ export default function StaffNotifications() {
               </Button>
             </div>
           </div>
+        </CardSection>
+
+        <CardSection
+          title="Other Scheduled Digests"
+          description="Both of these already run automatically once a day (policy lapse sweep at 04:00 UTC, notification digest at 05:00 UTC). Use these to run them on demand — e.g. after changing a template, or to check today's results without waiting."
+          icon={Bell}
+        >
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => runLapseSweepNowMutation.mutate()} disabled={runLapseSweepNowMutation.isPending}>
+              {runLapseSweepNowMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Run policy lapse sweep now
+            </Button>
+            <Button variant="outline" onClick={() => runNotificationDigestNowMutation.mutate()} disabled={runNotificationDigestNowMutation.isPending}>
+              {runNotificationDigestNowMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Run notification digest now
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Policy lapse sweep sends grace-period-started and policy-lapsed emails for overdue policies — safe to run repeatedly, it only acts on policies that are still overdue. Notification digest sends birthday, policy anniversary, premium-due (3 days out), and pre-lapse warning emails for today, and only ever sends once per day even if you click it after the scheduled run already fired.
+          </p>
         </CardSection>
 
         <CardSection title="Automation Activity" description="Recent automation runs: mobile payment prompts, skips, and reminder dispatches." icon={Bell}>

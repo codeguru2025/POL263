@@ -112,6 +112,7 @@ export default function StaffLeads() {
   const [quoteApiError, setQuoteApiError] = useState<string | null>(null);
   const [freshQuote, setFreshQuote] = useState<{ recommended: any; alternatives: any[]; quoteId: string | null } | null>(null);
   const [quoteLinkCopied, setQuoteLinkCopied] = useState(false);
+  const [emailQuoteAddress, setEmailQuoteAddress] = useState("");
 
   const { data: existingQuote, isLoading: existingQuoteLoading } = useQuery<any>({
     queryKey: ["/api/leads", viewingLead?.id, "quote"],
@@ -176,6 +177,13 @@ export default function StaffLeads() {
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const emailQuoteMutation = useMutation({
+    mutationFn: async ({ quoteId, email }: { quoteId: string; email: string }) =>
+      (await apiRequest("POST", `/api/quotes/${quoteId}/email`, { email })).json(),
+    onSuccess: (data: any) => toast({ title: "Quote emailed", description: data.message }),
+    onError: (err: any) => toast({ title: "Couldn't send quote email", description: err.message, variant: "destructive" }),
+  });
+
   const handleCreate = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -199,6 +207,7 @@ export default function StaffLeads() {
     setQuoteDeps([]);
     setQuoteApiError(null);
     setFreshQuote(null);
+    setEmailQuoteAddress(lead.email || "");
   };
 
   const addQuoteDep = () => setQuoteDeps((d) => [...d, { firstName: "", lastName: "", dateOfBirth: "", estimatedAge: "" }]);
@@ -600,6 +609,24 @@ export default function StaffLeads() {
                           Convert to policy <ArrowRight className="h-3.5 w-3.5" />
                         </Button>
                       </div>
+                      {activeQuote.quoteId && (
+                        <div className="flex gap-1.5 items-center pt-1">
+                          <Input
+                            type="email" placeholder="client@email.com" className="h-8 text-xs"
+                            value={emailQuoteAddress} onChange={(e) => setEmailQuoteAddress(e.target.value)}
+                            data-testid="input-email-quote-address"
+                          />
+                          <Button
+                            type="button" size="sm" variant="outline" className="gap-1.5 shrink-0"
+                            disabled={!emailQuoteAddress.trim() || emailQuoteMutation.isPending}
+                            onClick={() => emailQuoteMutation.mutate({ quoteId: activeQuote.quoteId, email: emailQuoteAddress.trim() })}
+                            data-testid="button-email-quote"
+                          >
+                            {emailQuoteMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                            Email quote
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -360,6 +360,11 @@ if (enableCsrf) {
       // ever moves a policy this direction on its own.
       import("./policy-lapse-sweep").then(({ startPolicyLapseSweepScheduler }) => startPolicyLapseSweepScheduler()).catch(() => {});
 
+      // Start the daily client notification digest (birthdays, policy anniversaries,
+      // premium-due/pre-lapse warnings) — previously only reachable via a manual admin
+      // endpoint that nothing ever called automatically.
+      import("./client-notification-sweep").then(({ startClientNotificationSweepScheduler }) => startClientNotificationSweepScheduler()).catch(() => {});
+
       // Ensure all orgs have every role defined in ROLE_PERMISSION_MAP (e.g. newly added roles like "driver")
       import("./seed").then(async ({ seedPermissions, seedOrgRoles }) => {
         const { storage } = await import("./storage");
@@ -393,6 +398,7 @@ if (enableCsrf) {
     import("./backup-sync").then(({ stopBackupScheduler }) => stopBackupScheduler()).catch(() => {});
     import("./tenant-billing-sweep").then(({ stopTenantBillingSweepScheduler }) => stopTenantBillingSweepScheduler()).catch(() => {});
     import("./policy-lapse-sweep").then(({ stopPolicyLapseSweepScheduler }) => stopPolicyLapseSweepScheduler()).catch(() => {});
+    import("./client-notification-sweep").then(({ stopClientNotificationSweepScheduler }) => stopClientNotificationSweepScheduler()).catch(() => {});
     await drainActiveJobs(30_000);
     structuredLog("info", "Graceful shutdown complete");
     process.exit(0);

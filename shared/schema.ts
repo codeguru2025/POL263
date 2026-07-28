@@ -552,8 +552,12 @@ export const paymentAutomationSettings = pgTable(
       .notNull()
       .references(() => organizations.id),
     isEnabled: boolean("is_enabled").default(false).notNull(),
-    /** Start automation after this many days since last cleared payment. */
-    daysAfterLastPayment: integer("days_after_last_payment").default(30).notNull(),
+    /** Start automation after this many days past the policy's actual due date (its own
+     *  billing-cycle date — currentCycleEnd + 1 — not a generic days-since-last-payment guess).
+     *  0 = trigger exactly on the due date. Column name kept for migration simplicity; the
+     *  reference point moved from "last cleared payment" to "due date" — see server/routes.ts's
+     *  runPaymentAutomationForOrg(). */
+    daysAfterLastPayment: integer("days_after_last_payment").default(0).notNull(),
     /** Repeat notification/collection attempts every N days while unpaid. */
     repeatEveryDays: integer("repeat_every_days").default(30).notNull(),
     sendPushNotifications: boolean("send_push_notifications").default(true).notNull(),

@@ -42,7 +42,7 @@ import { registerBillingPublicRoutes } from "./billing-public-routes";
 import { registerTenantSignupPublicRoutes } from "./tenant-signup-public-routes";
 import { registerInboundEmailPublicRoutes } from "./inbound-email-public-routes";
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
-import { requireModule } from "./module-gate";
+import { requireModule, hasModule } from "./module-gate";
 import { sendEmail } from "./email-service";
 import { tenantSubscriptions, billingPlans, tenantInvoices } from "@shared/control-plane-schema";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
@@ -342,16 +342,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const settings = await storage.getPaymentAutomationSettings(orgId);
     if (!settings?.isEnabled) return { scanned: 0, reminded: 0, attempted: 0, skipped: 0 };
 
-    // Fix 3: Bulk-load last cleared payment date per policy once (still a single GROUP BY query).
-    const tdbForAuto = await getDbForOrg(orgId);
-    const lastPmtRows = await tdbForAuto
-      .select({ policyId: paymentTransactions.policyId, lastCleared: max(paymentTransactions.receivedAt) })
-      .from(paymentTransactions)
-      .where(and(eq(paymentTransactions.organizationId, orgId), sql`${paymentTransactions.status} = 'cleared'`))
-      .groupBy(paymentTransactions.policyId);
-    const lastClearedMap = new Map<string, Date>();
-    for (const r of lastPmtRows) {
-      if (r.policyId && r.lastCleared) lastClearedMap.set(r.policyId, new Date(r.lastCleared));
+    // Auto-charging is the "Mobile Payments" module's actual capability (initiating a real
+    // Paynow wallet debit unattended) — reminders/push notifications below aren't gated by it,
+    // only this. Checked once per org, not per policy: hasModule() hits the control-plane DB
+    // (cached, but no reason to pay even the cache-hit cost thousands of times per sweep).
+    const autoChargeAllowed = !!settings.autoRunPayments && (await hasModule(orgId, "mobile_payments"));
+    if (settings.autoRunPayments && !autoChargeAllowed) {
+      structuredLog("info", "Payment automation: auto-charge skipped org-wide — mobile_payments module not enabled", { orgId });
     }
 
     const now = new Date();
@@ -374,12 +371,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     for (const policy of policies) {
       if (!policy.clientId) continue;
-      const lastClearedAt = lastClearedMap.get(policy.id) ?? null;
-      const baseline = lastClearedAt || new Date(policy.inceptionDate || policy.effectiveDate || policy.createdAt);
-      if (Number.isNaN(baseline.getTime())) continue;
 
-      const daysSinceLastPayment = Math.floor((now.getTime() - baseline.getTime()) / msPerDay);
-      if (daysSinceLastPayment < Number(settings.daysAfterLastPayment || 30)) continue;
+      // Trigger on the policy's actual due date — the client's real billing-cycle date — not a
+      // relative "days since last payment" offset. The old offset ignored payment schedule
+      // entirely (a flat 30 days is right for monthly but wildly wrong for weekly/yearly
+      // policies); the due date already accounts for schedule via advancePolicyCycle().
+      // Due date = the day after the last covered day of the current cycle (currentCycleEnd + 1,
+      // same convention as policy-status-on-payment.ts and policy-lapse-sweep.ts). A policy
+      // that's never been paid has no cycle yet, so fall back to its inception/effective date.
+      let dueDate: Date;
+      if (policy.currentCycleEnd) {
+        const [y, m, d] = String(policy.currentCycleEnd).split("-").map(Number);
+        dueDate = new Date(Date.UTC(y, m - 1, d + 1));
+      } else {
+        dueDate = new Date(policy.inceptionDate || policy.effectiveDate || policy.createdAt);
+      }
+      if (Number.isNaN(dueDate.getTime())) continue;
+
+      // settings.daysAfterLastPayment is reused here as "grace days after the due date" (0 =
+      // charge exactly on the due date) — same stored setting, now measured against the due
+      // date instead of the last-payment date.
+      const daysPastDue = Math.floor((now.getTime() - dueDate.getTime()) / msPerDay);
+      if (daysPastDue < Number(settings.daysAfterLastPayment ?? 0)) continue;
 
       const lastTouchAt = policy.lastAutoReminderAt || policy.lastAutoPaymentAttemptAt;
       if (lastTouchAt) {
@@ -389,7 +402,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const ctx = await buildPolicyContext(policy, orgId);
 
-      if (settings.autoRunPayments) {
+      if (autoChargeAllowed) {
         const method = await storage.getDefaultClientPaymentMethod(policy.clientId, orgId);
         if (!method) {
           skipped++;
@@ -7713,7 +7726,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const settings = await storage.getPaymentAutomationSettings(user.organizationId);
     return res.json(settings ?? {
       isEnabled: false,
-      daysAfterLastPayment: 30,
+      daysAfterLastPayment: 0,
       repeatEveryDays: 30,
       sendPushNotifications: true,
       autoRunPayments: true,
@@ -7725,7 +7738,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const body = req.body || {};
     const updated = await storage.upsertPaymentAutomationSettings(user.organizationId, {
       isEnabled: body.isEnabled === true,
-      daysAfterLastPayment: Math.max(1, Number(body.daysAfterLastPayment || 30)),
+      // 0 is a valid, meaningful value here ("charge exactly on the due date") — must use ??
+      // not ||, and the floor is 0 not 1, or the UI's "0 = on the due date" option could never
+      // actually be saved.
+      daysAfterLastPayment: Math.max(0, Number(body.daysAfterLastPayment ?? 0)),
       repeatEveryDays: Math.max(1, Number(body.repeatEveryDays || 30)),
       sendPushNotifications: body.sendPushNotifications !== false,
       autoRunPayments: body.autoRunPayments !== false,
@@ -12882,91 +12898,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/admin/run-notifications", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
-    const orgId = user.organizationId;
-    const today = new Date();
-    const { dispatchNotification, buildPolicyContext } = require("./notifications");
-    const org = await storage.getOrganization(orgId);
-
-    let birthdayCount = 0;
-    let preLapseCount = 0;
-    let lapseCount = 0;
-    let anniversaryCount = 0;
-    let premiumDueCount = 0;
-
-    const allClients = await storage.getClientsByOrg(orgId, 100000, 0);
-    for (const c of allClients) {
-      if (c.dateOfBirth) {
-        const dob = new Date(c.dateOfBirth);
-        if (dob.getMonth() === today.getMonth() && dob.getDate() === today.getDate()) {
-          const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-          await dispatchNotification(orgId, "birthday", c.id, {
-            clientName: `${c.firstName} ${c.lastName}`,
-            firstName: c.firstName,
-            lastName: c.lastName,
-            birthdayName: `${c.firstName} ${c.lastName}`,
-            birthdayDate: `${monthNames[dob.getMonth()]} ${dob.getDate()}`,
-            orgName: org?.name,
-          });
-          birthdayCount++;
-        }
-      }
-    }
-
-    const allPolicies = await storage.getPoliciesByOrg(orgId, 100000, 0);
-    for (const p of allPolicies) {
-      if (!p.clientId) continue;
-      const ctx = await buildPolicyContext(p, orgId);
-
-      if (p.inceptionDate) {
-        const inception = new Date(p.inceptionDate);
-        if (inception.getMonth() === today.getMonth() && inception.getDate() === today.getDate() && inception.getFullYear() < today.getFullYear()) {
-          const years = today.getFullYear() - inception.getFullYear();
-          await dispatchNotification(orgId, "anniversary", p.clientId, { ...ctx, anniversaryYears: String(years) });
-          anniversaryCount++;
-        }
-      }
-
-      if (p.status === "active" && p.currentCycleEnd) {
-        const cycleEnd = new Date(p.currentCycleEnd);
-        const daysToEnd = Math.ceil((cycleEnd.getTime() - today.getTime()) / 86400000);
-        if (daysToEnd === 3) {
-          await dispatchNotification(orgId, "premium_due", p.clientId, ctx);
-          premiumDueCount++;
-        }
-      }
-
-      if ((p.status === "active" || p.status === "grace") && p.graceEndDate) {
-        const graceEnd = new Date(p.graceEndDate);
-        const daysToGrace = Math.ceil((graceEnd.getTime() - today.getTime()) / 86400000);
-        if (daysToGrace === 7 || daysToGrace === 3 || daysToGrace === 1) {
-          await dispatchNotification(orgId, "pre_lapse_warning", p.clientId, ctx);
-          preLapseCount++;
-        } else if (daysToGrace <= 0 && p.status === "grace") {
-          await dispatchNotification(orgId, "policy_lapsed", p.clientId, ctx);
-          lapseCount++;
-        }
-      }
-
-      const members = await storage.getPolicyMembers(p.id, orgId);
-      for (const m of members as any[]) {
-        if (!m.dependentId) continue;
-        const dep = await storage.getDependent(m.dependentId, orgId);
-        if (!dep?.dateOfBirth) continue;
-        const dob = new Date(dep.dateOfBirth);
-        if (dob.getMonth() === today.getMonth() && dob.getDate() === today.getDate()) {
-          const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-          await dispatchNotification(orgId, "birthday", p.clientId, {
-            ...ctx,
-            birthdayName: `${dep.firstName} ${dep.lastName}`,
-            birthdayDate: `${monthNames[dob.getMonth()]} ${dob.getDate()}`,
-            memberName: `${dep.firstName} ${dep.lastName}`,
-          });
-          birthdayCount++;
-        }
-      }
-    }
-
-    return res.json({ birthdayCount, preLapseCount, lapseCount, anniversaryCount, premiumDueCount });
+    const { runClientNotificationSweep } = await import("./client-notification-sweep");
+    const result = await runClientNotificationSweep("manual", user.organizationId);
+    await auditLog(req, "RUN_CLIENT_NOTIFICATION_SWEEP", "ClientNotification", undefined, null, result);
+    return res.json(result);
   });
 
   app.post("/api/admin/sync-permissions", requireAuth, requireTenantScope, requirePermission("manage:permissions"), async (req, res) => {
