@@ -55,10 +55,24 @@ function ageFromDob(dob: string | null | undefined): number | null {
 }
 
 export async function streamPolicyDocumentToResponse(policyId: string, orgId: string, res: Response, options?: { attachment?: boolean; lang?: string }): Promise<void> {
+  await _renderPolicyDocumentPdf(policyId, orgId, options, res);
+}
+
+/** Buffer-returning variant of streamPolicyDocumentToResponse, for email attachments (no HTTP response). */
+export async function buildPolicyDocumentPdfBuffer(policyId: string, orgId: string, options?: { lang?: string }): Promise<{ buffer: Buffer; filename: string } | null> {
+  return _renderPolicyDocumentPdf(policyId, orgId, options, null);
+}
+
+async function _renderPolicyDocumentPdf(
+  policyId: string,
+  orgId: string,
+  options: { attachment?: boolean; lang?: string } | undefined,
+  res: Response | null,
+): Promise<{ buffer: Buffer; filename: string } | null> {
   const policy = await storage.getPolicy(policyId, orgId);
   if (!policy || policy.organizationId !== orgId) {
-    res.status(404).json({ message: "Policy not found" });
-    return;
+    if (res) res.status(404).json({ message: "Policy not found" });
+    return null;
   }
   const org = await storage.getOrganization(policy.organizationId);
   const client = await storage.getClient(policy.clientId, policy.organizationId);
@@ -118,10 +132,16 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     enrichedMembers.push({ name, relationship, nationalId, dateOfBirth, age, gender, captureDate, inceptionDate: inceptionDate || "", coverDate, waitingDays: waitingPeriodDays, claimable, claimableReason });
   }
   const doc = new PDFDocument({ size: "A4", margin: 50 });
-  res.setHeader("Content-Type", "application/pdf");
-  const attachment = options?.attachment === true;
-  res.setHeader("Content-Disposition", attachment ? `attachment; filename="Policy-${policy.policyNumber}.pdf"` : `inline; filename="Policy-${policy.policyNumber}.pdf"`);
-  doc.pipe(res);
+  const filename = `Policy-${policy.policyNumber}.pdf`;
+  const chunks: Buffer[] = [];
+  if (res) {
+    res.setHeader("Content-Type", "application/pdf");
+    const attachment = options?.attachment === true;
+    res.setHeader("Content-Disposition", attachment ? `attachment; filename="${filename}"` : `inline; filename="${filename}"`);
+    doc.pipe(res);
+  } else {
+    doc.on("data", (c: Buffer) => chunks.push(c));
+  }
   const docBlack = "#000000";
   const logoBuffer = await resolveImageForPdf(org?.logoUrl);
   const signatureBuffer = await resolveImageForPdf(org?.signatureUrl);
@@ -405,6 +425,11 @@ export async function streamPolicyDocumentToResponse(policyId: string, orgId: st
     );
 
   doc.end();
+  if (res) return null;
+  return new Promise((resolve) => {
+    doc.on("end", () => resolve({ buffer: Buffer.concat(chunks), filename }));
+    doc.on("error", () => resolve(null));
+  });
 }
 
 export { SUPPORTED_LANGUAGES };

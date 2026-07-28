@@ -77,6 +77,34 @@ export const tenantDomains = pgTable(
   ]
 );
 
+/**
+ * Per-tenant email domain state (Resend). One row per tenant that has opted into the
+ * "email_inbound" module — subdomain, the Resend domain resource id, and verification/
+ * receiving status. No secrets here (the Resend API key is a single global env var, not
+ * per-tenant) — this is routing/status data only, same spirit as tenantDomains above.
+ */
+export const tenantEmailDomains = pgTable(
+  "tenant_email_domains",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    /** e.g. "falakhe.pol263.com" */
+    subdomain: text("subdomain").notNull(),
+    resendDomainId: text("resend_domain_id").notNull(),
+    fromAddress: text("from_address"),
+    sendingVerified: boolean("sending_verified").default(false).notNull(),
+    receivingEnabled: boolean("receiving_enabled").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("tenant_email_domains_tenant_idx").on(t.tenantId),
+    uniqueIndex("tenant_email_domains_subdomain_idx").on(t.subdomain),
+  ]
+);
+
 // ─── DATABASE ROUTING ─────────────────────────────────────────────────────────
 
 /**
@@ -438,6 +466,7 @@ export const backupSyncRuns = pgTable("backup_sync_runs", {
 export type Tenant = typeof tenants.$inferSelect;
 export type TenantDatabase = typeof tenantDatabases.$inferSelect;
 export type TenantIntegration = typeof tenantIntegrations.$inferSelect;
+export type TenantEmailDomain = typeof tenantEmailDomains.$inferSelect;
 export type TenantBranding = typeof tenantBranding.$inferSelect;
 export type BackupSyncRun = typeof backupSyncRuns.$inferSelect;
 export type BillingPlan = typeof billingPlans.$inferSelect;

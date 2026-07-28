@@ -60,7 +60,7 @@ export default function StaffSettings() {
   const [, setLocation] = useLocation();
   const canManageSettings = permissions.includes("manage:settings");
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const validTabs = ["terms", "rbac", "adverts", "account", "countryFlag", "agentContent"];
+  const validTabs = ["terms", "rbac", "adverts", "account", "countryFlag", "agentContent", "inbox"];
   const defaultTab = tabParam && validTabs.includes(tabParam) ? tabParam : "account";
   const [activeTab, setActiveTab] = useState(defaultTab);
 
@@ -394,6 +394,7 @@ export default function StaffSettings() {
             {!isControlPlaneMode && canManageSettings && <TabsTrigger value="countryFlag">Country Flag</TabsTrigger>}
             {!isControlPlaneMode && canManageSettings && <TabsTrigger value="agentContent">Agent Content</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="rbac">RBAC</TabsTrigger>}
+            {!isControlPlaneMode && <TabsTrigger value="inbox">Inbox</TabsTrigger>}
           </TabsList>
 
           {/* Receipt Adverts */}
@@ -993,9 +994,105 @@ export default function StaffSettings() {
                 )}
             </CardSection>
           </TabsContent>
+
+          <TabsContent value="inbox" className="mt-6">
+            <InboxTab />
+          </TabsContent>
         </Tabs>
       </PageShell>
     </StaffLayout>
+  );
+}
+
+function InboxTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState<string>("unread");
+
+  const { data: emails, isLoading, isError, error } = useQuery<any[]>({
+    queryKey: ["/api/inbound-emails", statusFilter],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/inbound-emails?status=${statusFilter}`);
+      return res.json();
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      await apiRequest("PATCH", `/api/inbound-emails/${id}`, { status });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/inbound-emails"] }),
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const notEnabled = isError && String((error as any)?.message || "").includes("isn't included in your current plan");
+
+  return (
+    <CardSection
+      title="Inbound Email"
+      description="Mail received at your organisation's inbound address, for manual staff triage. Nothing here is auto-converted into a claim or feedback ticket."
+      icon={Globe}
+    >
+      <div className="p-6 space-y-4">
+        {notEnabled ? (
+          <EmptyState
+            title="Inbound email isn't enabled for your organisation"
+            description="Ask your platform contact to enable the Email Inbound module for your account."
+          />
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              {["unread", "reviewed", "archived"].map((s) => (
+                <Button key={s} size="sm" variant={statusFilter === s ? "default" : "outline"} onClick={() => setStatusFilter(s)}>
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </Button>
+              ))}
+            </div>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              </div>
+            ) : !emails || emails.length === 0 ? (
+              <EmptyState title="Nothing here" description={`No ${statusFilter} messages.`} />
+            ) : (
+              <div className="border border-border/70 rounded-md overflow-hidden overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>From</TableHead>
+                      <TableHead>Subject</TableHead>
+                      <TableHead>Received</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {emails.map((e: any) => (
+                      <TableRow key={e.id}>
+                        <TableCell className="text-sm">{e.fromAddress}</TableCell>
+                        <TableCell className="text-sm">{e.subject || "(no subject)"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{new Date(e.receivedAt).toLocaleString()}</TableCell>
+                        <TableCell className="text-right space-x-2">
+                          {statusFilter !== "reviewed" && (
+                            <Button size="sm" variant="outline" onClick={() => updateMutation.mutate({ id: e.id, status: "reviewed" })}>
+                              Mark reviewed
+                            </Button>
+                          )}
+                          {statusFilter !== "archived" && (
+                            <Button size="sm" variant="ghost" onClick={() => updateMutation.mutate({ id: e.id, status: "archived" })}>
+                              Archive
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </CardSection>
   );
 }
 

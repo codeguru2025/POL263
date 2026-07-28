@@ -10,6 +10,154 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-28 — Self-review of the per-tenant email domains + inbound receiving feature
+
+Found by a dedicated bug/edge-case review pass right after building
+(`server/email-domain-provisioning.ts`, `server/inbound-email-public-routes.ts`, the new
+`POST /api/quotes/:id/email`, and the `email_notifications` module gate on client-auth's
+password-reset email) — before any of it had shipped to a real user, so no user-facing
+symptom for any of these.
+
+1. **Quote-email endpoint had an ownership-check gap.** `POST /api/quotes/:id/email`
+   (`server/routes.ts`) only checked lead ownership when `quote.leadId` was set *and* the
+   lead still loaded — a lead-less quote, or one whose lead was later deleted, skipped the
+   check entirely, letting an agent-scoped user email any other agent's quote by guessing its
+   id. **Fix:** check `quote.agentId` directly (the actual ownership field) instead of
+   deriving ownership through the lead.
+2. **`hasModule()` isn't defensively wrapped** (unlike the rest of `module-gate.ts`, which
+   fails open on every DB error) — a transient control-plane DB hiccup while checking it would
+   throw uncaught. In `client-auth.ts`'s password-reset handler, that call sat *after* the
+   password had already been successfully changed, so the failure mode was a client seeing
+   "Internal server error" for a reset that had actually succeeded. **Fix:** moved the
+   module-check + notification email into its own fire-and-forget async block with its own
+   catch, so nothing after the real state change (the password update) can affect the
+   response.
+3. **Inbound webhook's `extractSubdomain` assumed a bare email address.** Real `to` headers
+   can be RFC 5322 `"Display Name <addr@domain>"` — unhandled, this would have mis-parsed the
+   subdomain and dropped/misrouted the email. **Fix:** strip `<...>` bracket formatting first.
+4. **Turning `email_inbound` back off didn't actually stop new inbound mail from being
+   stored.** The webhook receiver only checked `tenantEmailDomains.receivingEnabled` (DNS-level
+   state) — Resend has no API to un-set receiving once granted, so that flag can't reflect a
+   platform owner disabling the module later. **Fix:** webhook now also checks
+   `hasModule(tenantId, "email_inbound")` before storing, so the tenantFeatureFlags toggle is
+   the actual authority even though DNS-level receiving can't be instantly revoked.
+5. **`createInboundEmail`'s return type lied about `onConflictDoNothing` semantics.** On a
+   duplicate webhook delivery (Resend retry), `.returning()` yields an empty array —
+   `InboundEmail` (non-optional) was the declared return type, `undefined` the actual
+   possible runtime value. **Fix:** typed as `InboundEmail | undefined`.
+6. **`PATCH /api/inbound-emails/:id` with an empty body** would call `.set()` with every
+   field `undefined` — either a no-op update or malformed SQL depending on Drizzle's handling
+   of an all-undefined set object, never exercised because nothing enforced at least one field
+   being present. **Fix:** 400 if neither `status` nor `linkedNote` is provided.
+7. **DNS record creation would drop an MX record with `priority: 0`** —
+   `if (rec.type === "MX" && rec.priority)` treats `0` as falsy. Unlikely in practice (Resend's
+   priorities are non-zero in what's been observed) but wrong regardless. **Fix:** check
+   `rec.priority !== undefined`.
+
+- **Verified:** `npm run check` clean, `npm run test` 298/298 passing after all seven fixes.
+- **Files:** `server/routes.ts`, `server/client-auth.ts`, `server/inbound-email-public-routes.ts`,
+  `server/storage.ts`, `server/email-domain-provisioning.ts`.
+- **Lesson for next time:** when adding a `hasModule()`/`requireModule()` check to an existing
+  handler, check what happens *after* the state-changing work if the module check itself
+  throws — `hasModule` isn't wrapped defensively, so bolting it onto the tail of an
+  already-successful operation (rather than the top, before anything happens) can turn a
+  success into a false failure. And for any per-tenant resource resolved by parsing an
+  attacker-controlled string (a subdomain out of an email address, here), check ownership on
+  the resource's own foreign key, not through a second hop (lead → quote) that can be null or
+  deleted.
+
+---
+
+## 2026-07-28 — Notification "Email" and "Push" channels were silently no-ops
+
+- **Symptom:** none reported — found by code review while wiring up SMTP (Resend) for the
+  first time and asking "which parts of the app send email." The staff notification-template
+  UI (`client/src/pages/staff/notifications.tsx:277`) has always offered "Email" as a channel
+  option alongside "In-App," "SMS," and "WhatsApp" for any of the 18 client-lifecycle events
+  (policy created/activated, payment received/receipted, premium due, grace/lapse/cancel/
+  reinstate, member added/removed, birthday, anniversary, broadcasts, etc.).
+- **Root cause:** `dispatchNotification` (`server/notifications.ts`) looped over admin-
+  configured templates and, for every one, only ever wrote a `notification_logs` row with
+  `channel: tmpl.channel` — it never branched on the channel to actually deliver anything.
+  So configuring an "Email" (or "Push") template appeared to save successfully and looked
+  identical to "In-App" in the admin UI, but nothing was ever sent beyond the log entry. This
+  had been true since the notification-template feature was built; it only became visible
+  once real SMTP was available to test against.
+- **Fix:** `dispatchNotification`'s template loop now branches on `tmpl.channel`: `"email"`
+  resolves the client's email (`storage.getClient`) and sends via the new
+  `server/email-service.ts` (`sendEmail`); `"push"` calls the existing `pushToClient`. Two
+  new event types (`claim_status_change`, `activation`) were also added and wired in
+  (`server/routes.ts` claims-transition handler and both public self-registration paths) —
+  since these are brand-new events with no pre-existing per-org template to opt into, their
+  no-template fallback path also emails by default when the client has an address, unlike the
+  16 older event types where the existing "in-app only until an admin configures a channel"
+  behavior was left untouched to avoid an unannounced burst of new email traffic to every
+  existing tenant's client base. `payment_receipt` and `policy_activated`/`policy_capture`
+  emails now attach the relevant PDF (receipt/policy certificate) via new buffer-returning
+  variants of the existing streaming PDF builders (`server/receipt-pdf.ts`,
+  `server/policy-document.ts`), reusing the exact same PDFKit drawing code rather than
+  duplicating it. Also added: a direct (non-template) security-notice email on client
+  password reset (`server/client-auth.ts`), since that flow previously gave the account owner
+  no signal at all if someone else reset their password via the security-question flow.
+- **Verified:** `npm run check` clean, `npm run test` 298/298 passing. Manual: sent a live
+  test email through the Resend SMTP relay (see the sibling entry above) confirming the
+  underlying transport works end-to-end.
+- **Files:** `server/email-service.ts` (new — extracted shared `getTransporter`/`sendEmail`
+  out of `payslip-email.ts` and `tenant-billing-email.ts`, which were duplicating it),
+  `server/notifications.ts`, `server/routes.ts`, `server/client-auth.ts`,
+  `server/outbox-handlers.ts`, `server/receipt-pdf.ts`, `server/policy-document.ts`.
+  Follow-up in the same session: `runPaynowApplyFollowup` (`server/outbox-handlers.ts`) had
+  its own separate, hardcoded in-app-only `createNotificationLog` call for payment
+  confirmation instead of going through `dispatchNotification` like the cash-payment path did
+  — so PayNow-paid clients got no email receipt even after the fix above, while cash-paid
+  clients did. Replaced with the same `buildPolicyContext` + `dispatchNotification(...,
+  "payment_receipt", ...)` call (passing `receiptId` for the PDF attachment), matching the
+  cash path exactly.
+- **Lesson for next time:** an admin-facing config option (a dropdown, a toggle) that writes
+  to storage successfully is not proof it does anything — check whether the value is ever
+  *read* by a real dispatch path, not just persisted. This class of bug (config accepted,
+  never consumed) won't show up in tests unless a test asserts on the actual side effect
+  (email sent, push delivered), not just on the log row existing.
+
+---
+
+## 2026-07-28 — Full-access Resend API key pasted directly into chat
+
+Not a code bug — an operational credential-handling incident, logged because it set a
+convention (scoped keys only, `.env.example` comment now warns future sessions).
+
+- **Symptom:** none — caught by asking "what are the risks of this API" before using the key
+  for anything beyond DNS/domain lookups.
+- **Root cause:** user pasted a Resend API key directly into the chat to let Claude configure
+  SMTP for payslip/billing email (`server/payslip-email.ts`, `server/tenant-billing-email.ts`).
+  The key turned out to be **full account access**, not scoped to sending — confirmed by it
+  successfully calling account-wide endpoints (`GET /domains`, `POST /domains/:id/verify`).
+  The Resend account is shared across multiple unrelated projects (other API keys present:
+  dakamela, Peicosy, salesguru intergrations, Onboarding), so a leaked full-access key's blast
+  radius extended well beyond POL263 — it could send-as any verified domain on the account,
+  create/delete domains, and create/delete/revoke other projects' keys.
+- **Fix:** created a new key scoped to `sending_access` restricted to the `pol263.com`
+  `domain_id` via `POST /api-keys`, wrote it directly to `.env` (`SMTP_PASS`) without ever
+  printing the token value to the transcript, and deleted the scratchpad file holding the raw
+  creation response. The original full-access key is being rotated/deleted by the user
+  directly in the Resend dashboard — not deleted by Claude, since revoking is easy but a
+  wrong deletion (e.g. of another project's key) is not something to risk doing programmatically
+  without the user's own hands on it.
+- **Verified:** confirmed via `GET /api-keys` that the pasted key had touched account-wide
+  endpoints (proof of full-access scope); scoped key created and present in `.env`
+  (value not echoed).
+- **Files:** `.env` (local, gitignored), `.env.example` (SMTP section now documents the
+  scoped-key requirement).
+- **Lesson for next time:** when a user pastes a third-party API key inline, don't assume it's
+  scoped to the minimum needed for the task — check by testing it against an endpoint outside
+  that scope (e.g. an account-management endpoint a sending-only key should 403 on) before
+  treating it as safe to use or store. If the provider account is shared with unrelated
+  projects (visible via a "list all keys/resources" call), treat any destructive cleanup
+  request ("delete every other key") as needing explicit per-item confirmation, not a blanket
+  yes — the user may not be tracking what else lives in that account.
+
+---
+
 ## 2026-07-28 — Public registration silently dropped every dependent; agent lead-access scoping gap
 
 Found while reviewing the same-session vCard/quote-engine build for bugs before continuing.

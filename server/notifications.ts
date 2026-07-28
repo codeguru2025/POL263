@@ -1,6 +1,30 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { pushToClient } from "./push";
+import { sendEmail } from "./email-service";
+import { hasModule } from "./module-gate";
+
+/** Best-effort PDF attachment for the events that have a document worth attaching. Never throws. */
+async function resolveEmailAttachment(
+  orgId: string,
+  eventType: string,
+  ctx: NotificationContext,
+): Promise<{ filename: string; content: Buffer; contentType: string }[] | undefined> {
+  try {
+    if (eventType === "payment_receipt" && ctx.receiptId) {
+      const { buildReceiptPdfBuffer } = await import("./receipt-pdf");
+      const result = await buildReceiptPdfBuffer(ctx.receiptId);
+      if (result) return [{ filename: result.filename, content: result.buffer, contentType: "application/pdf" }];
+    } else if ((eventType === "policy_activated" || eventType === "policy_capture") && ctx.policyId) {
+      const { buildPolicyDocumentPdfBuffer } = await import("./policy-document");
+      const result = await buildPolicyDocumentPdfBuffer(ctx.policyId, orgId);
+      if (result) return [{ filename: result.filename, content: result.buffer, contentType: "application/pdf" }];
+    }
+  } catch (err) {
+    structuredLog("error", "Failed to build notification email attachment", { error: (err as Error).message, eventType });
+  }
+  return undefined;
+}
 
 /** All supported merge tags with descriptions for the admin UI */
 export const MERGE_TAGS: { tag: string; description: string; example: string }[] = [
@@ -28,6 +52,9 @@ export const MERGE_TAGS: { tag: string; description: string; example: string }[]
   { tag: "{balance}", description: "Policy account balance", example: "USD 50.00" },
   { tag: "{outstanding}", description: "Outstanding premium amount", example: "USD 25.00" },
   { tag: "{cycle_end}", description: "Current billing cycle end date", example: "2025-03-31" },
+  { tag: "{claim_number}", description: "Claim reference number", example: "CLM-000123" },
+  { tag: "{activation_code}", description: "Client portal activation code", example: "ACT-4F8B2C1A" },
+  { tag: "{document_label}", description: "Uploaded document name/type", example: "National ID" },
 ];
 
 export const EVENT_TYPES = [
@@ -49,6 +76,8 @@ export const EVENT_TYPES = [
   { value: "policy_update", label: "Policy Updated" },
   { value: "general_notice", label: "General Notice (Broadcast)" },
   { value: "activation", label: "Client Activation" },
+  { value: "claim_status_change", label: "Claim Status Changed" },
+  { value: "kyc_status_change", label: "KYC Document Reviewed" },
 ];
 
 const DEFAULT_MESSAGES: Record<string, { subject: string; body: string }> = {
@@ -122,7 +151,15 @@ const DEFAULT_MESSAGES: Record<string, { subject: string; body: string }> = {
   },
   activation: {
     subject: "Welcome to {org_name}!",
-    body: "Dear {client_name}, your client portal account is now active. You can view your policies, make payments, and more.",
+    body: "Dear {client_name}, welcome to {org_name}. Your client portal activation code is {activation_code}. Use it to claim your account and view your policies, make payments, and more.",
+  },
+  claim_status_change: {
+    subject: "Claim {claim_number} — Status Update",
+    body: "Dear {client_name}, your claim {claim_number} status has been changed to {status}.",
+  },
+  kyc_status_change: {
+    subject: "Document Review Update",
+    body: "Dear {client_name}, your submitted {document_label} has been {status}. Please contact us if you have any questions.",
   },
 };
 
@@ -153,6 +190,10 @@ export interface NotificationContext {
   balance?: string;
   outstanding?: string;
   cycleEnd?: string;
+  claimNumber?: string;
+  activationCode?: string;
+  receiptId?: string;
+  documentLabel?: string;
 }
 
 function renderTemplate(template: string, ctx: NotificationContext): string {
@@ -182,6 +223,9 @@ function renderTemplate(template: string, ctx: NotificationContext): string {
     "{balance}": ctx.balance,
     "{outstanding}": ctx.outstanding,
     "{cycle_end}": ctx.cycleEnd,
+    "{claim_number}": ctx.claimNumber,
+    "{activation_code}": ctx.activationCode,
+    "{document_label}": ctx.documentLabel,
     // Legacy compat
     "{name}": ctx.clientName,
   };
@@ -241,10 +285,12 @@ export async function dispatchNotification(
   try {
     const org = await storage.getOrganization(orgId);
     ctx.orgName = ctx.orgName || org?.name || "POL263";
+    const emailAllowed = await hasModule(orgId, "email_notifications");
 
     const templates = await storage.getActiveTemplatesByEvent(orgId, eventType);
 
     if (templates.length > 0) {
+      let clientEmail: string | null | undefined;
       for (const tmpl of templates) {
         const renderedSubject = renderTemplate(tmpl.subject || "", ctx);
         const renderedBody = renderTemplate(tmpl.bodyTemplate, ctx);
@@ -258,6 +304,36 @@ export async function dispatchNotification(
           policyId: ctx.policyId ?? null,
           status: "sent",
         });
+
+        try {
+          if (tmpl.channel === "email" && !emailAllowed) {
+            structuredLog("info", "Notification email skipped — email_notifications module not enabled for this tenant", { orgId, clientId, eventType });
+          } else if (tmpl.channel === "email") {
+            if (clientEmail === undefined) {
+              const client = await storage.getClient(clientId, orgId);
+              clientEmail = client?.email ?? null;
+            }
+            if (clientEmail) {
+              const attachments = await resolveEmailAttachment(orgId, eventType, ctx);
+              await sendEmail({
+                to: clientEmail,
+                fromName: ctx.orgName,
+                subject: renderedSubject,
+                text: renderedBody,
+                html: `<p>${renderedBody.replace(/\n/g, "<br/>")}</p>`,
+                attachments,
+              });
+            } else {
+              structuredLog("warn", "Notification email skipped — client has no email on file", { orgId, clientId, eventType });
+            }
+          } else if (tmpl.channel === "push") {
+            await pushToClient(orgId, clientId, { title: renderedSubject, body: renderedBody, data: { policyId: ctx.policyId } });
+          }
+        } catch (err) {
+          structuredLog("error", "Failed to deliver notification via channel", {
+            error: (err as Error).message, orgId, clientId, eventType, channel: tmpl.channel,
+          });
+        }
       }
     } else {
       const defaults = DEFAULT_MESSAGES[eventType];
@@ -265,6 +341,29 @@ export async function dispatchNotification(
         const renderedSubject = renderTemplate(defaults.subject, ctx);
         const renderedBody = renderTemplate(defaults.body, ctx);
         await notifyClient(orgId, clientId, renderedSubject, renderedBody, "in_app", ctx.policyId);
+
+        // "activation" and "claim_status_change" are new event types with no pre-existing
+        // per-org template to opt into yet, so also email by default where we have an
+        // address — unlike the older event types, there's no established "in-app only
+        // until an admin configures a channel" behavior here to preserve.
+        if (emailAllowed && (eventType === "activation" || eventType === "claim_status_change" || eventType === "kyc_status_change")) {
+          try {
+            const client = await storage.getClient(clientId, orgId);
+            if (client?.email) {
+              await sendEmail({
+                to: client.email,
+                fromName: ctx.orgName,
+                subject: renderedSubject,
+                text: renderedBody,
+                html: `<p>${renderedBody.replace(/\n/g, "<br/>")}</p>`,
+              });
+            }
+          } catch (err) {
+            structuredLog("error", "Failed to send default-channel notification email", {
+              error: (err as Error).message, orgId, clientId, eventType,
+            });
+          }
+        }
       }
     }
   } catch (err) {

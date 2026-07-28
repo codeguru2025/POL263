@@ -194,6 +194,17 @@ function drawAdvertAndQr(
 }
 
 export async function generateReceiptPdf(receiptId: string): Promise<string | null> {
+  const result = await _buildOrUploadReceiptPdf(receiptId, true);
+  return typeof result === "string" ? result : null;
+}
+
+/** Buffer-returning variant of generateReceiptPdf, for email attachments (no object-storage upload). */
+export async function buildReceiptPdfBuffer(receiptId: string): Promise<{ buffer: Buffer; filename: string } | null> {
+  const result = await _buildOrUploadReceiptPdf(receiptId, false);
+  return result && typeof result !== "string" ? result : null;
+}
+
+async function _buildOrUploadReceiptPdf(receiptId: string, upload: boolean): Promise<string | { buffer: Buffer; filename: string } | null> {
   const receipt = await findPaymentReceiptById(receiptId);
   if (!receipt) return null;
   const orgId = receipt.organizationId;
@@ -312,6 +323,10 @@ export async function generateReceiptPdf(receiptId: string): Promise<string | nu
     doc.on("end", async () => {
       try {
         const pdfBuffer = Buffer.concat(chunks);
+        if (!upload) {
+          resolve({ buffer: pdfBuffer, filename });
+          return;
+        }
         const { key } = await objectStorage.uploadFile(pdfBuffer, filename, "application/pdf", "receipts");
         resolve(key);
       } catch {

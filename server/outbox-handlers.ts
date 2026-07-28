@@ -150,6 +150,7 @@ async function runCashReceiptFollowup(orgId: string, payload: CashPayload): Prom
         paymentAmount: `${txRow.currency} ${parseFloat(String(txRow.amount)).toFixed(2)}`,
         paymentDate: new Date().toLocaleDateString("en-GB"),
         paymentMethod: "Cash",
+        receiptId: receipt.id,
       });
       await dispatchNotification(orgId, "payment_receipt", policy.clientId, ctx);
     }
@@ -210,14 +211,13 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
   const receiptForNotify = (await storage.getPaymentReceiptById(payload.receiptId, orgId)) ?? receiptFresh ?? receipt;
   const policy = transaction.policyId ? await storage.getPolicy(transaction.policyId, orgId) : undefined;
   if (policy && intent.clientId) {
-    await storage.createNotificationLog(orgId, {
-      recipientType: "client",
-      recipientId: intent.clientId,
-      channel: "in_app",
-      subject: "Payment received",
-      body: `Payment of ${intent.currency} ${intent.amount} received for policy ${policy.policyNumber}. Receipt #${receiptForNotify.receiptNumber}.`,
-      status: "sent",
+    const ctx = await buildPolicyContext(policy, orgId, {
+      paymentAmount: `${intent.currency} ${parseFloat(String(intent.amount)).toFixed(2)}`,
+      paymentDate: new Date().toLocaleDateString("en-GB"),
+      paymentMethod: "PayNow",
+      receiptId: receiptForNotify.id,
     });
+    await dispatchNotification(orgId, "payment_receipt", intent.clientId, ctx);
   }
 
   if (policy?.agentId) {

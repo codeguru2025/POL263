@@ -2615,6 +2615,39 @@ export const notificationLogs = pgTable(
   ]
 );
 
+/**
+ * Inbound email inbox — mail received at a tenant's provisioned address
+ * (e.g. claims@{slug}.pol263.com, gated behind the "email_inbound" module). Staff-triage
+ * only: no automatic conversion into claims/feedback, so nothing here starts an SLA clock
+ * on unreviewed, possibly spoofed/misrouted mail.
+ */
+export const inboundEmails = pgTable(
+  "inbound_emails",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    fromAddress: text("from_address").notNull(),
+    toAddress: text("to_address").notNull(),
+    subject: text("subject"),
+    bodyText: text("body_text"),
+    bodyHtml: text("body_html"),
+    resendEmailId: text("resend_email_id").notNull(),
+    receivedAt: timestamp("received_at").notNull(),
+    status: text("status").default("unread").notNull(), // unread | reviewed | archived
+    linkedNote: text("linked_note"),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("inbound_emails_org_idx").on(t.organizationId),
+    index("inbound_emails_status_idx").on(t.organizationId, t.status),
+    uniqueIndex("inbound_emails_resend_id_idx").on(t.resendEmailId),
+  ]
+);
+
 // ─── LEAD PIPELINE (CRM-LITE) ──────────────────────────────
 
 export const leads = pgTable(
@@ -3567,6 +3600,7 @@ export type InsertCommissionLedgerEntry = z.infer<typeof insertCommissionLedgerE
 export type NotificationTemplate = typeof notificationTemplates.$inferSelect;
 export type InsertNotificationTemplate = z.infer<typeof insertNotificationTemplateSchema>;
 export type NotificationLog = typeof notificationLogs.$inferSelect;
+export type InboundEmail = typeof inboundEmails.$inferSelect;
 export type Lead = typeof leads.$inferSelect;
 export type InsertLead = z.infer<typeof insertLeadSchema>;
 export type ClientFeedback = typeof clientFeedback.$inferSelect;

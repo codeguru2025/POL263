@@ -28,6 +28,8 @@ import { getOrgPaynowConfig, upsertOrgPaynowConfig } from "./paynow-config";
 import { encryptSecret } from "./tenant-config-crypto";
 import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
+import { invalidateTenantModuleCache } from "./module-gate";
+import { provisionTenantEmailDomain } from "./email-domain-provisioning";
 import { auditLog } from "./route-helpers";
 import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
 import { upsertTenantDatabaseRouting } from "./tenant-data-migration";
@@ -38,7 +40,7 @@ import {
   cacheParsedUpload, getCachedUpload, AUDIT_ENTITY_TYPE_LABEL,
 } from "./legacy-import";
 
-const KNOWN_FEATURE_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications"];
+const KNOWN_FEATURE_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications", "email_notifications", "email_inbound"];
 
 const brandingUpload = multer({
   storage: multer.memoryStorage(),
@@ -368,6 +370,12 @@ export function registerPlatformRoutes(app: Express): void {
       await cpDb.insert(tenantFeatureFlags).values({ tenantId: id, flag, enabled: req.body.enabled });
     }
     await auditLog(req, "SET_TENANT_FEATURE_FLAG", "TenantFeatureFlag", id, null, { flag, enabled: req.body.enabled }, id);
+    invalidateTenantModuleCache(id);
+
+    if (flag === "email_inbound" && req.body.enabled === true) {
+      const provisioning = await provisionTenantEmailDomain(id);
+      return res.json({ flag, enabled: req.body.enabled, provisioning });
+    }
     return res.json({ flag, enabled: req.body.enabled });
   });
 

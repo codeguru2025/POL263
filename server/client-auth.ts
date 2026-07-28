@@ -10,6 +10,8 @@ import { streamPolicyDocumentToResponse } from "./policy-document";
 import { insertClaimSchema, insertClientFeedbackSchema, claims, claimStatusHistory } from "@shared/schema";
 import { withOrgTransaction } from "./tenant-db";
 import { sql } from "drizzle-orm";
+import { sendEmail } from "./email-service";
+import { hasModule } from "./module-gate";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -611,6 +613,24 @@ export function setupClientAuth(app: Express) {
         failedLoginAttempts: 0,
         lockedUntil: null,
       }, client.organizationId);
+
+      // Security notice, not an admin-editable template — sent directly so an org admin
+      // can't disable or reword the one signal a client gets if someone else reset their
+      // password via the security-question flow. Best-effort: the password change above has
+      // already succeeded, so a failure here (including hasModule() itself throwing on a
+      // transient control-plane DB hiccup — it isn't defensively wrapped internally) must
+      // never turn a successful reset into a 500 for the caller.
+      (async () => {
+        if (!client.email || !(await hasModule(client.organizationId, "email_notifications"))) return;
+        const org = await storage.getOrganization(client.organizationId);
+        await sendEmail({
+          to: client.email,
+          fromName: org?.name || "POL263",
+          subject: "Your password was changed",
+          text: `Dear ${client.firstName},\n\nYour account password was just reset. If this wasn't you, please contact us immediately.`,
+          html: `<p>Dear ${client.firstName},</p><p>Your account password was just reset. If this wasn't you, please contact us immediately.</p>`,
+        });
+      })().catch((err) => structuredLog("error", "Password-change notice email failed", { error: (err as Error).message, clientId: client.id }));
 
       return constantTimeResponse(res, 200, { message: "Password reset successful" });
     } catch (err) {

@@ -35,7 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ImportWizard } from "@/components/legacy-import/ImportWizard";
 
 const SWATCHES = ["#0d9488","#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"];
-const KNOWN_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications"];
+const KNOWN_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications", "email_notifications", "email_inbound"];
 
 interface TenantConfig {
   id: string;
@@ -604,9 +604,19 @@ function FeatureFlagsTab({ tenantId, flags, onSaved }: { tenantId: string; flags
 
   const setMutation = useMutation({
     mutationFn: async ({ flag, enabled }: { flag: string; enabled: boolean }) => {
-      await apiRequest("PUT", `/api/platform/tenants/${tenantId}/feature-flags/${flag}`, { enabled });
+      const res = await apiRequest("PUT", `/api/platform/tenants/${tenantId}/feature-flags/${flag}`, { enabled });
+      return res.json() as Promise<{ flag: string; enabled: boolean; provisioning?: { ok: boolean; message: string } }>;
     },
-    onSuccess: () => onSaved(),
+    onSuccess: (data) => {
+      onSaved();
+      if (data.provisioning) {
+        toast({
+          title: data.provisioning.ok ? "Email domain provisioning" : "Provisioning failed",
+          description: data.provisioning.message,
+          variant: data.provisioning.ok ? "default" : "destructive",
+        });
+      }
+    },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 

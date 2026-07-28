@@ -40,8 +40,10 @@ import { registerPlatformRoutes } from "./platform-routes";
 import { registerPlatformBillingRoutes } from "./platform-billing-routes";
 import { registerBillingPublicRoutes } from "./billing-public-routes";
 import { registerTenantSignupPublicRoutes } from "./tenant-signup-public-routes";
+import { registerInboundEmailPublicRoutes } from "./inbound-email-public-routes";
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
 import { requireModule } from "./module-gate";
+import { sendEmail } from "./email-service";
 import { tenantSubscriptions, billingPlans, tenantInvoices } from "@shared/control-plane-schema";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
 import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
@@ -92,7 +94,7 @@ import {
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
 import { pool, db } from "./db";
-import { notifyClient, notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
+import { notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
@@ -2342,8 +2344,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       structuredLog("error", "Client creation failed (rolled back)", { error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
-    const org = await storage.getOrganization(user.organizationId);
-    await notifyClient(user.organizationId, client.id, "Welcome!", `Welcome to ${org?.name || "our platform"}. Your account has been created.`);
+    await dispatchNotification(user.organizationId, "activation", client.id, {
+      clientName: `${client.firstName} ${client.lastName}`,
+      firstName: client.firstName,
+      lastName: client.lastName,
+      activationCode: client.activationCode || undefined,
+    }).catch(() => {});
     const { passwordHash: _ncph, securityAnswerHash: _ncsah, activationCode: _ncac, ...safeNewClient } = client as any;
     return res.status(201).json(safeNewClient);
   });
@@ -2550,6 +2556,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       rejectionReason: typeof req.body.rejectionReason === "string" ? req.body.rejectionReason.trim() || undefined : undefined,
     });
     await auditLog(req, "VERIFY_CLIENT_DOCUMENT", "ClientDocument", req.params.docId as string, before, updated);
+    dispatchNotification(user.organizationId, "kyc_status_change", client.id, {
+      clientName: `${client.firstName} ${client.lastName}`,
+      firstName: client.firstName,
+      lastName: client.lastName,
+      documentLabel: before.label || before.documentType,
+      status: status === "verified" ? "Verified" : "Rejected",
+    }).catch(() => {});
+    return res.json(updated);
+  });
+
+  // ─── Inbound Email Inbox ─────────────────────────────────────────────────
+  app.get("/api/inbound-emails", requireAuth, requireTenantScope, requireModule("email_inbound"), async (req, res) => {
+    const user = req.user as any;
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    return res.json(await storage.getInboundEmails(user.organizationId, status));
+  });
+
+  app.patch("/api/inbound-emails/:id", requireAuth, requireTenantScope, requireModule("email_inbound"), async (req, res) => {
+    const user = req.user as any;
+    const { status, linkedNote } = req.body;
+    if (status !== undefined && !["unread", "reviewed", "archived"].includes(status)) {
+      return res.status(400).json({ message: "status must be 'unread', 'reviewed', or 'archived'" });
+    }
+    if (status === undefined && typeof linkedNote !== "string") {
+      return res.status(400).json({ message: "Provide status and/or linkedNote to update." });
+    }
+    const updated = await storage.updateInboundEmail(req.params.id as string, user.organizationId, {
+      status,
+      linkedNote: typeof linkedNote === "string" ? linkedNote.trim() || null : undefined,
+      reviewedBy: status ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined,
+      reviewedAt: status ? new Date() : undefined,
+    });
+    if (!updated) return res.status(404).json({ message: "Not found" });
     return res.json(updated);
   });
 
@@ -6083,6 +6122,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (claim.clientId) {
       const statusLabel = toStatus.charAt(0).toUpperCase() + toStatus.slice(1);
       notifyClientPush(claim.organizationId, claim.clientId, `Claim ${statusLabel}`, `Your claim ${claim.claimNumber} has been ${toStatus}.`, claim.policyId ?? undefined).catch(() => {});
+      storage.getClient(claim.clientId, claim.organizationId).then((claimClient) =>
+        dispatchNotification(claim.organizationId, "claim_status_change", claim.clientId!, {
+          clientName: claimClient ? `${claimClient.firstName} ${claimClient.lastName}` : undefined,
+          firstName: claimClient?.firstName,
+          lastName: claimClient?.lastName,
+          claimNumber: claim.claimNumber,
+          status: statusLabel,
+          policyId: claim.policyId ?? undefined,
+        })
+      ).catch(() => {});
     }
     return res.json(updated);
   });
@@ -7527,6 +7576,57 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const quote = await storage.getQuoteByLeadId(lead.id, user.organizationId);
     if (!quote) return res.status(404).json({ message: "No quote found for this lead" });
     return res.json(quote);
+  });
+
+  // Staff/agent-triggered send — mirrors the existing "text/WhatsApp it to the client" framing
+  // in POST /api/quote (line ~1179): explicit action, not an automatic send on every quote.
+  app.post("/api/quotes/:id/email", requireAuth, requireTenantScope, requirePermission("read:lead"), requireModule("email_notifications"), async (req, res) => {
+    const user = req.user as any;
+    const quote = await storage.getQuote(req.params.id as string, user.organizationId);
+    if (!quote || quote.organizationId !== user.organizationId) return res.status(404).json({ message: "Quote not found" });
+
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    if (isAgentScoped(userRoles) && quote.agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+      // Ownership lives on the quote itself (quote.agentId) — checked directly rather than
+      // via quote.leadId's lead, since a lead-less quote or one whose lead was later deleted
+      // would otherwise skip the check entirely.
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const lead = quote.leadId ? await storage.getLead(quote.leadId, user.organizationId) : undefined;
+    const recipientEmail = typeof req.body.email === "string" && req.body.email.trim() ? req.body.email.trim() : lead?.email;
+    if (!recipientEmail) return res.status(400).json({ message: "No email address on file for this lead — provide one in the request body." });
+
+    const org = await storage.getOrganization(user.organizationId);
+    const orgName = org?.name || "POL263";
+    const recommended = quote.recommendedProductName
+      ? `${quote.recommendedProductName} — ${quote.currency} ${quote.recommendedPremium} (${quote.paymentSchedule})`
+      : null;
+    const alternatives = (quote.alternativesJson || []).map((a) => `${a.productName} — ${a.currency} ${a.premium} (${a.paymentSchedule})`);
+    const expiry = new Date(quote.expiresAt).toLocaleDateString();
+
+    const result = await sendEmail({
+      to: recipientEmail,
+      fromName: orgName,
+      subject: `Your Insurance Quote from ${orgName}`,
+      text: [
+        `Dear ${quote.policyholderName},`,
+        "",
+        "Here is your personalised quote:",
+        recommended || "No recommendation available.",
+        alternatives.length ? `\nAlternatives:\n${alternatives.join("\n")}` : "",
+        `\nThis quote is valid until ${expiry}.`,
+      ].filter(Boolean).join("\n"),
+      html: `
+        <p>Dear ${quote.policyholderName},</p>
+        <p>Here is your personalised quote:</p>
+        <p><strong>${recommended || "No recommendation available."}</strong></p>
+        ${alternatives.length ? `<p>Alternatives:</p><ul>${alternatives.map((l) => `<li>${l}</li>`).join("")}</ul>` : ""}
+        <p style="color:#888;font-size:12px;">This quote is valid until ${expiry}.</p>
+      `,
+    });
+    if (!result.ok) return res.status(502).json({ message: result.message });
+    await auditLog(req, "EMAIL_QUOTE", "Quote", quote.id, null, { to: recipientEmail });
+    return res.json({ message: `Quote emailed to ${recipientEmail}` });
   });
 
   app.post("/api/leads", requireAuth, requireTenantScope, requirePermission("write:lead"), async (req, res) => {
@@ -10265,6 +10365,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         phone: client.phone || undefined, email: client.email || undefined,
         source: agentId ? "agent_link" : "walk_in", stage: "lead",
       });
+      dispatchNotification(orgId, "activation", client.id, {
+        clientName: `${client.firstName} ${client.lastName}`,
+        firstName: client.firstName,
+        lastName: client.lastName,
+        activationCode: client.activationCode || undefined,
+        policyId: policy.id,
+      }).catch(() => {});
       res.status(201).json({
         policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,
         message: agentId
@@ -11408,6 +11515,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerPlatformBillingRoutes(app);
   registerBillingPublicRoutes(app);
   registerTenantSignupPublicRoutes(app);
+  registerInboundEmailPublicRoutes(app);
   registerHrFleetFormRoutes(app);
 
   // ─── Tenant-facing billing (logged-in Pay Now flow) ────────────────

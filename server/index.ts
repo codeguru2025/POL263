@@ -86,6 +86,7 @@ if (enableCsrf) {
 
   const CSRF_EXEMPT_PATHS = [
     "/api/payments/paynow/result",
+    "/api/public/inbound-email/webhook",
     "/api/agent-auth/login",
     "/api/agent-auth/logout",
     // Mobile deep-link exchange and client auth flows are called without a browser session

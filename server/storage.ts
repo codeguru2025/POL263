@@ -32,7 +32,7 @@ import {
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements, platformFeeCredits,
   payrollEmployees, payrollRuns, payslips, attendanceLogs, attendanceQrCodes, attendanceScans,
   vehicleLocationPings, vehicleAlerts,
-  notificationTemplates, notificationLogs, leads, expenditures,
+  notificationTemplates, notificationLogs, inboundEmails, leads, expenditures,
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, groupMembers, groupContributions, groupPoolPayouts, settlementAllocations, termsAndConditions,
   accumulationAccounts, accumulationContributions, accumulationWithdrawals,
@@ -116,6 +116,7 @@ import {
   type CommissionLedgerEntry, type InsertCommissionLedgerEntry,
   type NotificationTemplate, type InsertNotificationTemplate,
   type NotificationLog,
+  type InboundEmail,
   type Lead, type InsertLead,
   type Expenditure, type InsertExpenditure,
   type PriceBookItem, type InsertPriceBookItem,
@@ -4076,6 +4077,39 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     return tdb.select().from(notificationTemplates)
       .where(and(eq(notificationTemplates.organizationId, orgId), eq(notificationTemplates.eventType, eventType), eq(notificationTemplates.isActive, true)));
+  }
+
+  // ─── Inbound Email Inbox ───────────────────────────────────
+  async createInboundEmail(data: {
+    organizationId: string; fromAddress: string; toAddress: string; subject?: string | null;
+    bodyText?: string | null; bodyHtml?: string | null; resendEmailId: string; receivedAt: Date;
+  }): Promise<InboundEmail | undefined> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [created] = await tdb.insert(inboundEmails).values({
+      organizationId: data.organizationId,
+      fromAddress: data.fromAddress,
+      toAddress: data.toAddress,
+      subject: data.subject ?? null,
+      bodyText: data.bodyText ?? null,
+      bodyHtml: data.bodyHtml ?? null,
+      resendEmailId: data.resendEmailId,
+      receivedAt: data.receivedAt,
+    }).onConflictDoNothing({ target: inboundEmails.resendEmailId }).returning();
+    return created;
+  }
+  async getInboundEmails(orgId: string, status?: string): Promise<InboundEmail[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(inboundEmails)
+      .where(status ? and(eq(inboundEmails.organizationId, orgId), eq(inboundEmails.status, status)) : eq(inboundEmails.organizationId, orgId))
+      .orderBy(desc(inboundEmails.receivedAt));
+  }
+  async updateInboundEmail(id: string, orgId: string, data: {
+    status?: string; linkedNote?: string | null; reviewedBy?: string | null; reviewedAt?: Date | null;
+  }): Promise<InboundEmail | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(inboundEmails).set(data)
+      .where(and(eq(inboundEmails.id, id), eq(inboundEmails.organizationId, orgId))).returning();
+    return updated;
   }
   async getClientNotifications(clientId: string, orgId: string, limit = 50): Promise<NotificationLog[]> {
     const tdb = await getDbForOrg(orgId);
