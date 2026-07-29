@@ -944,6 +944,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
     const org = await storage.getOrganization(agent.organizationId);
     const posts = await storage.getAgentContentPosts(agent.organizationId, true);
+    // Real, non-fabricated trust signals only — no invented ratings/regulatory claims. footerText
+    // is the same field already used for compliance/legal boilerplate on documents & receipts, so
+    // reusing it here never introduces a claim an admin didn't already choose to put in writing.
+    const stats = await storage.countCoveredLives(agent.organizationId).catch(() => null);
     return res.json({
       displayName: agent.displayName || agent.email,
       avatarUrl: agent.avatarUrl,
@@ -953,7 +957,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       facebookUrl: agent.facebookUrl,
       instagramUrl: agent.instagramUrl,
       websiteUrl: agent.websiteUrl,
-      org: org ? { name: org.name, logoUrl: org.logoUrl, primaryColor: org.primaryColor } : null,
+      org: org ? {
+        name: org.name,
+        logoUrl: org.logoUrl,
+        primaryColor: org.primaryColor,
+        footerText: org.footerText,
+        sinceYear: org.createdAt ? new Date(org.createdAt).getFullYear() : null,
+      } : null,
+      stats: stats ? { coveredLives: stats.coveredLives, activePolicyCount: stats.activePolicyCount } : null,
       posts,
     });
   });

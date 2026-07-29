@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Loader2, Phone, MessageCircle, Facebook, Instagram, Globe, ArrowRight, Play, Plus, X, Contact, Link2, Check } from "lucide-react";
-import { getApiBase } from "@/lib/queryClient";
+import { Loader2, Phone, MessageCircle, Facebook, Instagram, Globe, ArrowRight, Play, Plus, X, Contact, Link2, Check, ShieldCheck, Users, CalendarClock, Share2, Sparkles } from "lucide-react";
+import { getApiBase, apiFetch } from "@/lib/queryClient";
 import { getDefaultLogoUrl } from "@/lib/assetUrl";
 import { AppChrome, APP_SHELL_MAX } from "@/components/layout/app-chrome";
 import { cn } from "@/lib/utils";
@@ -21,8 +21,24 @@ interface VCard {
   facebookUrl: string | null;
   instagramUrl: string | null;
   websiteUrl: string | null;
-  org: { name: string; logoUrl: string | null; primaryColor: string | null } | null;
+  org: { name: string; logoUrl: string | null; primaryColor: string | null; footerText: string | null; sinceYear: number | null } | null;
+  /** Real aggregate counts only (server/storage.ts countCoveredLives) — never invented ratings or
+   *  regulatory claims. Absent (not zero) hides the tile entirely rather than showing a hollow "0". */
+  stats: { coveredLives: number; activePolicyCount: number } | null;
   posts: { id: string; type: "video" | "post"; title: string; body: string | null; videoUrl: string | null; thumbnailUrl: string | null }[];
+}
+
+/** Darkens a #rrggbb hex color by `amount` (0-1) for hero-gradient backgrounds. Falls back to a
+ *  neutral slate if org.primaryColor is missing/malformed — every tenant has a primaryColor
+ *  default in the schema, but this guards public-facing rendering against a null anyway. */
+function darkenHex(hex: string | null | undefined, amount: number): string {
+  const fallback = "#1f2937";
+  if (!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)) return fallback;
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.round(((n >> 16) & 0xff) * (1 - amount));
+  const g = Math.round(((n >> 8) & 0xff) * (1 - amount));
+  const b = Math.round((n & 0xff) * (1 - amount));
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 interface RankedCandidate {
@@ -87,6 +103,28 @@ export default function AgentVCardPage() {
   const [card, setCard] = useState<VCard | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const quoteFormRef = useRef<HTMLDivElement>(null);
+  const scrollToQuoteForm = () => quoteFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const [cardLinkCopied, setCardLinkCopied] = useState(false);
+  const shareCard = async (displayName: string) => {
+    const url = window.location.href;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: `${displayName}'s vCard`, url });
+        return;
+      } catch {
+        // User cancelled the native share sheet, or the browser doesn't actually support it despite
+        // exposing navigator.share — fall through to the clipboard copy either way.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setCardLinkCopied(true);
+      setTimeout(() => setCardLinkCopied(false), 2000);
+    } catch {
+      // Clipboard access denied — nothing more we can do for this best-effort action.
+    }
+  };
 
   useEffect(() => {
     if (!refCode) return;
@@ -95,7 +133,7 @@ export default function AgentVCardPage() {
       .then((data) => setCard(data))
       .catch(() => setNotFound(true))
       .finally(() => setLoading(false));
-    fetch(getApiBase() + `/api/public/agent-vcard/${refCode}/track`, {
+    apiFetch(`/api/public/agent-vcard/${refCode}/track`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ eventType: "page_view" }),
@@ -133,7 +171,7 @@ export default function AgentVCardPage() {
     setResult(null);
     try {
       const [firstName, ...rest] = policyholderName.trim().split(/\s+/);
-      const res = await fetch(getApiBase() + "/api/public/quote", {
+      const res = await apiFetch("/api/public/quote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -147,7 +185,7 @@ export default function AgentVCardPage() {
       setResult(data);
       // Capture the lead now that we have phone/name — quote-request analytics, lead creation,
       // and the shareable quote snapshot all happen together server-side (POST /quote-lead).
-      const leadRes = await fetch(getApiBase() + `/api/public/agent-vcard/${refCode}/quote-lead`, {
+      const leadRes = await apiFetch(`/api/public/agent-vcard/${refCode}/quote-lead`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -207,64 +245,116 @@ export default function AgentVCardPage() {
   }
 
   const waLink = card.whatsapp ? `https://wa.me/${card.whatsapp.replace(/[^\d]/g, "")}` : null;
+  const trustTiles = [
+    card.org?.sinceYear ? { icon: CalendarClock, label: `Since ${card.org.sinceYear}` } : null,
+    card.stats && card.stats.coveredLives > 0 ? { icon: Users, label: `${card.stats.coveredLives.toLocaleString()}+ Lives Covered` } : null,
+    card.org?.footerText ? { icon: ShieldCheck, label: "Licensed Provider" } : null,
+  ].filter((t): t is { icon: typeof CalendarClock; label: string } => t !== null);
+  const heroGradient = `linear-gradient(135deg, ${card.org?.primaryColor || "#0d9488"}, ${darkenHex(card.org?.primaryColor, 0.65)})`;
 
   return (
     <AppChrome center={false} mainClassName="flex flex-col flex-1">
       <div className={cn(APP_SHELL_MAX, "flex-1 flex flex-col items-center px-4 py-10 gap-6")}>
-        <Card className="w-full max-w-lg shadow-lg overflow-hidden">
-          <CardHeader className="text-center space-y-3 pb-4">
-            <div className="mx-auto h-20 w-20 rounded-full overflow-hidden border-2 bg-muted flex items-center justify-center">
+        {card.org?.name && (
+          <div className="flex items-center gap-2">
+            <img src={card.org.logoUrl || getDefaultLogoUrl()} alt="" className="h-6 w-6 object-contain" />
+            <span className="text-sm font-medium text-muted-foreground">{card.org.name}</span>
+          </div>
+        )}
+
+        {/* Hero */}
+        <Card className="w-full max-w-lg shadow-lg overflow-hidden border-0">
+          <div style={{ background: heroGradient }} className="text-center px-6 pt-8 pb-6 space-y-3">
+            <div className="mx-auto h-24 w-24 rounded-full overflow-hidden border-4 border-white/20 bg-white/10 flex items-center justify-center backdrop-blur-sm">
               {card.avatarUrl ? (
                 <img src={card.avatarUrl} alt={card.displayName} className="h-full w-full object-cover" />
               ) : (
-                <img src={card.org?.logoUrl || getDefaultLogoUrl()} alt="" className="h-10 w-10 object-contain" />
+                <img src={card.org?.logoUrl || getDefaultLogoUrl()} alt="" className="h-12 w-12 object-contain" />
               )}
             </div>
             <div>
-              <h1 className="text-xl font-display font-bold">{card.displayName}</h1>
-              <p className="text-sm text-muted-foreground">{card.org?.name}</p>
+              <h1 className="text-2xl font-display font-bold text-white">{card.displayName}</h1>
+              <p className="text-sm text-white/80">{card.org?.name}</p>
             </div>
-            {card.bio && <p className="text-sm text-muted-foreground max-w-sm mx-auto">{card.bio}</p>}
-            <div className="flex items-center justify-center gap-4 flex-wrap pt-1">
-              {card.phone && (
-                <a href={`tel:${card.phone}`} className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline" data-testid="link-agent-phone">
-                  <Phone className="h-3.5 w-3.5" /> Call
-                </a>
-              )}
-              {waLink && (
-                <a href={waLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline" data-testid="link-agent-whatsapp">
-                  <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
-                </a>
-              )}
-              {card.facebookUrl && (
-                <a href={card.facebookUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
-                  <Facebook className="h-3.5 w-3.5" /> Facebook
-                </a>
-              )}
-              {card.instagramUrl && (
-                <a href={card.instagramUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
-                  <Instagram className="h-3.5 w-3.5" /> Instagram
-                </a>
-              )}
-              {card.websiteUrl && (
-                <a href={card.websiteUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
-                  <Globe className="h-3.5 w-3.5" /> Website
-                </a>
-              )}
-            </div>
-            <Button variant="outline" size="sm" className="gap-2 mx-auto" onClick={() => downloadVCard(card)} data-testid="button-save-contact">
-              <Contact className="h-3.5 w-3.5" /> Save to Contacts
+            {card.bio && <p className="text-sm text-white/90 max-w-sm mx-auto">{card.bio}</p>}
+          </div>
+          <CardContent className="p-5 space-y-3">
+            <Button className="w-full gap-2" size="lg" onClick={scrollToQuoteForm} data-testid="button-hero-get-quote">
+              <Sparkles className="h-4 w-4" /> Get My Free Quote
             </Button>
-          </CardHeader>
+            <div className="grid grid-cols-2 gap-3">
+              {waLink && (
+                <a href={waLink} target="_blank" rel="noreferrer" data-testid="link-agent-whatsapp">
+                  <Button variant="outline" className="w-full gap-2 border-green-600/30 text-green-700 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-950">
+                    <MessageCircle className="h-4 w-4" /> WhatsApp
+                  </Button>
+                </a>
+              )}
+              {card.phone && (
+                <a href={`tel:${card.phone}`} data-testid="link-agent-phone" className={cn(!waLink && "col-span-2")}>
+                  <Button variant="outline" className="w-full gap-2">
+                    <Phone className="h-4 w-4" /> Call Now
+                  </Button>
+                </a>
+              )}
+            </div>
+            {(card.facebookUrl || card.instagramUrl || card.websiteUrl) && (
+              <div className="flex items-center justify-center gap-4 flex-wrap pt-1">
+                {card.facebookUrl && (
+                  <a href={card.facebookUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary hover:underline">
+                    <Facebook className="h-3.5 w-3.5" /> Facebook
+                  </a>
+                )}
+                {card.instagramUrl && (
+                  <a href={card.instagramUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary hover:underline">
+                    <Instagram className="h-3.5 w-3.5" /> Instagram
+                  </a>
+                )}
+                {card.websiteUrl && (
+                  <a href={card.websiteUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary hover:underline">
+                    <Globe className="h-3.5 w-3.5" /> Website
+                  </a>
+                )}
+              </div>
+            )}
+          </CardContent>
         </Card>
 
+        {/* Trust signals — real aggregate data only, see VCard.stats doc comment */}
+        {trustTiles.length > 0 && (
+          <div className={cn("w-full max-w-lg grid gap-3", trustTiles.length === 1 ? "grid-cols-1" : trustTiles.length === 2 ? "grid-cols-2" : "grid-cols-3")}>
+            {trustTiles.map((tile, i) => (
+              <div key={i} className="rounded-lg border bg-card p-3 text-center space-y-1.5">
+                <tile.icon className="h-5 w-5 mx-auto text-primary" />
+                <p className="text-xs font-medium leading-tight">{tile.label}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Save / Share */}
+        <div className="w-full max-w-lg grid grid-cols-2 gap-3">
+          <Button variant="outline" className="gap-2" onClick={() => downloadVCard(card)} data-testid="button-save-contact">
+            <Contact className="h-4 w-4" /> Save Contact
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => shareCard(card.displayName)} data-testid="button-share-card">
+            {cardLinkCopied ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+            {cardLinkCopied ? "Link copied" : "Share Card"}
+          </Button>
+        </div>
+
         {/* Quote & Recommend */}
-        <Card className="w-full max-w-lg shadow-lg">
+        <Card ref={quoteFormRef} className="w-full max-w-lg shadow-lg scroll-mt-6">
           <CardContent className="p-5 space-y-4">
-            <h2 className="font-semibold">Get a Quote</h2>
-            <p className="text-xs text-muted-foreground">
-              Tell us who needs cover — we'll suggest the most appropriate plan and price it for you.
-            </p>
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                <ShieldCheck className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <h2 className="font-semibold leading-tight">Request Your Quote</h2>
+                <p className="text-xs text-muted-foreground">Get a personalised recommendation in minutes</p>
+              </div>
+            </div>
             <div className="space-y-1.5">
               <Label>Your full name</Label>
               <Input value={policyholderName} onChange={(e) => setPolicyholderName(e.target.value)} data-testid="input-policyholder-name" />
@@ -365,6 +455,20 @@ export default function AgentVCardPage() {
           </CardContent>
         </Card>
 
+        {/* Repeats the primary CTA further down the page for anyone who scrolled past the form
+            without filling it in — mirrors the quote form's own eligibility, not a duplicate ask. */}
+        {!result?.recommended && (
+          <Card className="w-full max-w-lg shadow-lg overflow-hidden border-0">
+            <div style={{ background: heroGradient }} className="text-center px-6 py-6 space-y-3">
+              <h2 className="text-lg font-display font-bold text-white">Ready to protect your family?</h2>
+              <p className="text-sm text-white/80">Get a personalised recommendation — no obligation.</p>
+              <Button variant="secondary" className="gap-2" onClick={scrollToQuoteForm} data-testid="button-midpage-get-quote">
+                <Sparkles className="h-4 w-4" /> Get My Free Quote
+              </Button>
+            </div>
+          </Card>
+        )}
+
         {/* Marketing materials (org-wide, centrally controlled) */}
         {card.posts.length > 0 && (
           <div className="w-full max-w-lg space-y-3">
@@ -399,6 +503,11 @@ export default function AgentVCardPage() {
             ))}
           </div>
         )}
+
+        <div className="w-full max-w-lg text-center space-y-1 pt-4 pb-2">
+          <p className="text-xs text-muted-foreground">Powered by POL263</p>
+          {card.org?.footerText && <p className="text-[11px] text-muted-foreground/80">{card.org.footerText}</p>}
+        </div>
       </div>
     </AppChrome>
   );

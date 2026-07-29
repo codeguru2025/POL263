@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Loader2, Phone, ArrowRight, Play, Plus, X } from "lucide-react";
-import { getApiBase } from "@/lib/queryClient";
+import { getApiBase, apiFetch } from "@/lib/queryClient";
 import { getDefaultLogoUrl } from "@/lib/assetUrl";
 import { AppChrome, APP_SHELL_MAX } from "@/components/layout/app-chrome";
 import { cn } from "@/lib/utils";
@@ -87,7 +87,7 @@ export default function AgentCardPage() {
     setQuoting(true);
     setQuote(null);
     try {
-      const res = await fetch(getApiBase() + "/api/public/quote", {
+      const res = await apiFetch("/api/public/quote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refCode, productVersionId, memberCount }),
