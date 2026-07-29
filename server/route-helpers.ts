@@ -110,6 +110,66 @@ function hasAgeBandRates(pv: any): boolean {
   ].some((v) => v != null);
 }
 
+export interface ChargeableMember {
+  age: number | null;
+  isChild: boolean;
+  /** Enrollment order — policyholder is always 0, dependents follow the order they were added. */
+  index: number;
+}
+
+/**
+ * Determines which household members fall outside a product's included allowance and must be
+ * surcharged — shared by computePolicyPremium (actual billing) and quote-engine.ts's
+ * surchargedMemberCount (recommendation ranking) so "fit" and "price" never disagree.
+ *
+ * Per Augustus 2026-07-29 (FLK00526 investigation): a product only gets a separate, non-sharing
+ * adult/child split when it explicitly configures a children allowance (maxChildren > 0) — that's
+ * the "no borrowing between pools" behavior that stops extra adults silently riding free on unused
+ * child slots (see docs/BUGFIX-LOG.md). When a product doesn't define a distinct children tier
+ * (maxChildren === 0, e.g. an "Any N Members" plan with no age distinction), splitting into a
+ * 0-capacity child pool made every child chargeable from the very first one regardless of the
+ * household's total size — not what "any N members" means. In that case this falls back to a
+ * single combined pool sized to includedAdults, first-enrolled-first-included, ignoring age for
+ * the inclusion decision (the per-member surcharge amount downstream can still vary by age band —
+ * only which members count as "extra" stops splitting by type).
+ */
+export function resolveChargeableMembers(
+  includedAdults: number,
+  includedChildren: number,
+  includedExtended: number,
+  childThresholdAge: number,
+  dependentDateOfBirths: (string | null | undefined)[],
+): ChargeableMember[] {
+  const members: ChargeableMember[] = [
+    { age: null, isChild: false, index: 0 }, // policyholder — always adult, always first enrolled
+    ...dependentDateOfBirths.map((dob, i) => {
+      const age = ageAt(dob ?? null);
+      return { age, isChild: age !== null && age < childThresholdAge, index: i + 1 };
+    }),
+  ];
+
+  let chargeable: ChargeableMember[];
+  if (includedChildren > 0) {
+    const adultMembers = members.filter((m) => !m.isChild);
+    const childMembers = members.filter((m) => m.isChild);
+    const extraAdultCount = Math.max(0, adultMembers.length - includedAdults);
+    const extraChildCount = Math.max(0, childMembers.length - includedChildren);
+    chargeable = [
+      ...adultMembers.slice(adultMembers.length - extraAdultCount),
+      ...childMembers.slice(childMembers.length - extraChildCount),
+    ];
+  } else {
+    // No distinct children tier — single pool, first `includedAdults` enrolled (by index) are
+    // free regardless of age, the rest are chargeable.
+    chargeable = members.slice(includedAdults);
+  }
+  if (includedExtended > 0 && chargeable.length > 0) {
+    // Bonus slots free up whichever otherwise-chargeable member joined earliest.
+    chargeable = chargeable.sort((a, b) => a.index - b.index).slice(includedExtended);
+  }
+  return chargeable;
+}
+
 export async function computePolicyPremium(
   orgId: string,
   productVersionId: string,
@@ -182,13 +242,7 @@ export async function computePolicyPremium(
     const includedExtended = Number(product.maxExtendedMembers ?? 0);
     const childThresholdAge = Number(pv.dependentMaxAge ?? 20);
 
-    let adults = 1; // Policy holder.
-    let children = 0;
-    for (const dob of dependentDateOfBirths || []) {
-      const age = ageAt(dob ?? null);
-      if (age === null || age >= childThresholdAge) adults += 1;
-      else children += 1;
-    }
+    const chargeable = resolveChargeableMembers(includedAdults, includedChildren, includedExtended, childThresholdAge, dependentDateOfBirths || []);
 
     // Dedicated client-facing additional-member rate (set by admin on product version)
     const additionalRate = currencyField(pv, currency, "additionalMemberPremiumMonthly");
@@ -196,56 +250,18 @@ export async function computePolicyPremium(
     if (hasAgeBandRates(pv)) {
       // Age-band behaviour: each member beyond the product's included count is priced
       // individually by their own age band, instead of one flat additional-member rate.
-      // Members are covered for free in the order they were added (policy holder first);
-      // whichever were added last are the ones counted as "additional" once the included
-      // count is exceeded.
-      //
-      // Adults and children are capped against their OWN limits separately — same reason the
-      // flat-rate branch two lines below does this: pooling everyone into one totalIncluded
-      // count let extra adults "borrow" unused child slots (e.g. maxAdults=2/maxChildren=4 with
-      // 6 adults and 0 children pooled to 6-6=0 chargeable, silently undercharging 4 adults'
-      // worth). maxExtendedMembers is the one genuinely shared bonus pool — it isn't tied to
-      // either cap, so it's applied afterward to whichever otherwise-chargeable member joined
-      // earliest, not pooled into the per-type caps themselves.
-      const members: { age: number | null; isChild: boolean; index: number }[] = [
-        { age: null, isChild: false, index: 0 },
-        ...((dependentDateOfBirths || []).map((dob, i) => {
-          const age = ageAt(dob ?? null);
-          return { age, isChild: age !== null && age < childThresholdAge, index: i + 1 };
-        })),
-      ];
-      const adultMembers = members.filter((m) => !m.isChild);
-      const childMembers = members.filter((m) => m.isChild);
-      const extraAdultCount = Math.max(0, adultMembers.length - includedAdults);
-      const extraChildCount = Math.max(0, childMembers.length - includedChildren);
-      let chargeable = [
-        ...adultMembers.slice(adultMembers.length - extraAdultCount),
-        ...childMembers.slice(childMembers.length - extraChildCount),
-      ];
-      if (includedExtended > 0 && chargeable.length > 0) {
-        // Bonus slots free up whichever otherwise-chargeable member joined earliest.
-        chargeable = chargeable.sort((a, b) => a.index - b.index).slice(includedExtended);
-      }
       if (chargeable.length > 0) {
         const perMemberTotal = chargeable.reduce((sum: number, m) => sum + ageBandRate(pv, currency, m.age, childThresholdAge), 0);
         dependantSurcharge = perMemberTotal * monthlyToScheduleFactor(paymentSchedule);
       }
     } else if (additionalRate > 0) {
-      // Flat behaviour: single per-additional-member rate. Adults and children are checked
-      // against their own caps separately (not pooled into one combined total) — otherwise
-      // a product with e.g. maxAdults=2/maxChildren=4 would let a 3rd adult ride free by
-      // "borrowing" an unused child slot, silently undercharging the adult cap.
-      const extraAdults = Math.max(0, adults - includedAdults);
-      const extraChildren = Math.max(0, children - includedChildren);
-      const extraTotal = extraAdults + extraChildren;
-      dependantSurcharge = extraTotal * additionalRate * monthlyToScheduleFactor(paymentSchedule);
+      // Flat behaviour: single per-additional-member rate, same regardless of member type.
+      dependantSurcharge = chargeable.length * additionalRate * monthlyToScheduleFactor(paymentSchedule);
     } else {
       // Legacy behaviour: use underwriter rates per member type (backwards compatible).
       const adultRateMonthly = parseFloat(String(pv.underwriterAmountAdult ?? 0));
       const childRateMonthly = parseFloat(String(pv.underwriterAmountChild ?? pv.underwriterAmountAdult ?? 0));
-      const extraAdults = Math.max(0, adults - includedAdults);
-      const extraChildren = Math.max(0, children - includedChildren);
-      const monthlySurcharge = (extraAdults * adultRateMonthly) + (extraChildren * childRateMonthly);
+      const monthlySurcharge = chargeable.reduce((sum, m) => sum + (m.isChild ? childRateMonthly : adultRateMonthly), 0);
       dependantSurcharge = monthlySurcharge * monthlyToScheduleFactor(paymentSchedule);
     }
   }

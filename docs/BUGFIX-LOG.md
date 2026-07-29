@@ -10,6 +10,66 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-07-29 — Premium miscalculation on "Any N Members" products (maxChildren=0): children always charged from the first one
+
+Augustus reported policy FLK00526 (UMTHUNZI, "Any 8 Members" plan, Falakhe tenant) wasn't
+computing premiums correctly. Verified by running the real `computePolicyPremium` against the
+policy's actual stored household (10 members: 8 adults, 2 children) — it returned exactly $18.00,
+matching what was stored. Not a crash or a stale-value bug; the formula was doing precisely what
+it was coded to do — the formula itself was wrong for this class of product.
+
+**Root cause:** `computePolicyPremium` (and `quote-engine.ts`'s `surchargedMemberCount`) tracked
+adults and children in **completely separate pools that never share capacity** — a deliberate fix
+from an earlier audit (see the "no borrowing between pools" comments this replaced) to stop extra
+adults silently riding free on unused child slots. That fix assumed every product meaningfully
+configures both `maxAdults` and `maxChildren`. Products like UMTHUNZI don't — "Any 8 Members" is
+modeled as `maxAdults: 8, maxChildren: 0` (no distinct children tier), which under the separate-
+pool logic means **zero children are ever included free, from the very first one**, regardless of
+how much of the 8-person allowance is unused. FLK00526's 8 adults exactly filled the 8-adult pool
+(free) while both children were charged from a 0-capacity child pool ($3 each) — a household of 10
+paying only $6/month more than a single adult, and for the wrong reason (bucket exhaustion, not
+actual overflow).
+
+**Fix:** `server/route-helpers.ts` — new `resolveChargeableMembers()` (exported, shared with
+`quote-engine.ts`) branches on whether the product actually defines a children allowance:
+- `maxChildren > 0` (product explicitly states adult/child counts): unchanged — separate pools, no
+  borrowing between them, exactly as before.
+- `maxChildren === 0` (no distinct children tier defined): single combined pool sized to
+  `maxAdults`, members included free in enrollment order (policyholder first, dependents in the
+  order added) regardless of age — only members enrolled beyond that combined count are
+  chargeable. Their surcharge amount still varies by age band where the product defines one (a
+  chargeable child still costs the child rate, not the adult rate) — only the *inclusion* decision
+  stopped splitting by type.
+
+All three pricing branches (age-band, flat per-additional-member, legacy underwriter rate) and
+`quote-engine.ts`'s ranking-fit counter now call the same shared function, so recommendation
+ranking and actual billing can't drift apart.
+
+**Verified:** ran the real function against FLK00526's exact stored data before and after (was
+$18.00, now $25.00 — 8 free slots go to the first 8 enrolled by order, the 2 members who enrolled
+9th/10th are chargeable at their own age band: one 66-84 senior at $9 + one 21-65 adult at $4).
+Added 2 regression tests in `tests/unit/premium-calculation.test.ts` covering both the
+within-allowance case (a child enrolled inside the free count isn't charged) and the FLK00526
+reproduction (children enrolled last, after the pool is full, are charged) plus a control case
+(an adult enrolled last is charged too — confirms this isn't "children only" logic). 301/301 tests
+passing, `npm run check` clean.
+
+**Not yet done — needs Augustus's decision:** 66 active Falakhe policies sit on `maxChildren: 0`
+products (UMTHUNZI, YEDWANA); their `policies.premium_amount` was computed and stored under the
+old (buggy) formula and won't auto-correct — this fix only changes premiums computed *going
+forward* (new policies, and any future recompute triggered by a membership edit). Whether to
+retroactively recompute and adjust already-active policies' stored premiums (and notify affected
+clients of a rate change) is a business decision, not something to do silently.
+
+**Lesson for next time:** a "no borrowing between pools" fix that's correct for products which
+define *both* categories can be silently wrong for products that only define one — check whether
+the other side of a two-sided cap is genuinely configured (`> 0`) before assuming a `0` means
+"deliberately excluded" rather than "not a category this product uses." Same shape of bug as
+underrepresented product configurations elsewhere in this codebase (nullable/additive fields need
+every read site to handle "not configured" distinctly from "configured to exclude").
+
+---
+
 ## 2026-07-28 — Payment automation due-date trigger + notification digest scheduling: three bugs from self-review
 
 Found during a requested "check for edge cases and bugs" pass immediately after building the

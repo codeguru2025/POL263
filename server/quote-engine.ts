@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { storage } from "./storage";
-import { computePolicyPremium } from "./route-helpers";
+import { computePolicyPremium, resolveChargeableMembers } from "./route-helpers";
 import type { Product, ProductVersion } from "@shared/schema";
 
 const QUOTE_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours — long enough to cover a wizard session
@@ -86,22 +86,13 @@ function latestActiveVersionPerProduct(versions: ProductVersion[]): Map<string, 
 }
 
 /** Members priced beyond a product's included adult/child caps — mirrors computePolicyPremium's
- *  own adult/child split (route-helpers.ts) so "fit" and "price" never disagree with each other. */
+ *  own resolveChargeableMembers (route-helpers.ts) so "fit" and "price" never disagree with each other. */
 function surchargedMemberCount(product: Product, pv: ProductVersion, dependentDobs: (string | null | undefined)[]): number {
   const includedAdults = Number(product.maxAdults ?? 2);
   const includedChildren = Number(product.maxChildren ?? 4);
   const includedExtended = Number(product.maxExtendedMembers ?? 0);
   const childThresholdAge = Number(pv.dependentMaxAge ?? 20);
-  let adults = 1;
-  let children = 0;
-  for (const dob of dependentDobs) {
-    const age = ageAt(dob ?? null);
-    if (age === null || age >= childThresholdAge) adults += 1;
-    else children += 1;
-  }
-  const extraAdults = Math.max(0, adults - includedAdults);
-  const extraChildren = Math.max(0, children - includedChildren);
-  return Math.max(0, extraAdults + extraChildren - includedExtended);
+  return resolveChargeableMembers(includedAdults, includedChildren, includedExtended, childThresholdAge, dependentDobs).length;
 }
 
 /**

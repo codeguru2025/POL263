@@ -241,6 +241,56 @@ describe("computePolicyPremium — age-band pricing", () => {
   });
 });
 
+describe("computePolicyPremium — maxChildren=0 uses a combined pool, not a 0-capacity child pool (FLK00526)", () => {
+  const AGE_BAND_VERSION: any = {
+    ...BASE_VERSION,
+    additionalMemberRateChildUsd: "3.00",
+    additionalMemberRate21To65Usd: "4.00",
+    additionalMemberRate66To84Usd: "9.00",
+    additionalMemberRate85PlusUsd: "19.00",
+  };
+  // "Any 8 Members" style product: no distinct children allowance configured.
+  const ANY_N_PRODUCT: any = { id: "prod1", maxAdults: "8", maxChildren: "0", maxExtendedMembers: "0" };
+
+  beforeEach(() => {
+    vi.mocked(storage.getProductVersion).mockResolvedValue(AGE_BAND_VERSION);
+    vi.mocked(storage.getProduct).mockResolvedValue(ANY_N_PRODUCT);
+    vi.mocked(storage.getAddOns).mockResolvedValue([]);
+  });
+
+  it("does not charge a child from the first one when the household is within the total included count", async () => {
+    // Holder (adult) + 6 adult dependents + 1 child = 8 total, within maxAdults=8. A 0-capacity
+    // child pool would charge the child anyway (0 included); the fix pools everyone into the 8
+    // free slots regardless of age since maxChildren is 0 (no distinct children tier defined).
+    const currentYear = new Date().getFullYear();
+    const childDob = `${currentYear - 10}-01-01`;
+    const dobs = ["1980-01-01", "1981-01-01", "1982-01-01", "1983-01-01", "1984-01-01", "1985-01-01", childDob];
+    const result = await computePolicyPremium("org1", "pv1", "USD", "monthly", [], undefined, undefined, dobs);
+    expect(parseFloat(result)).toBeCloseTo(50.0, 2); // base only, all 8 members fit for free
+  });
+
+  it("charges only the members beyond the total included count, by their own age band — FLK00526 reproduction", async () => {
+    // 8 adults (policyholder + 7 adult deps, exactly filling maxAdults=8) enrolled first, then 2
+    // children enrolled last. The combined pool has no room left by the time the children join,
+    // so they're chargeable — not because they're children, but because they enrolled 9th/10th.
+    const currentYear = new Date().getFullYear();
+    const adultDobs = Array.from({ length: 7 }, (_, i) => `${1970 + i}-01-01`);
+    const childDobs = [`${currentYear - 10}-01-01`, `${currentYear - 12}-01-01`];
+    const result = await computePolicyPremium("org1", "pv1", "USD", "monthly", [], undefined, undefined, [...adultDobs, ...childDobs]);
+    // base 50 + 2 chargeable children * $3 (child band) = 56
+    expect(parseFloat(result)).toBeCloseTo(56.0, 2);
+  });
+
+  it("charges an adult enrolled beyond the total included count too, not just children", async () => {
+    // 9 adults total (policyholder + 8 adult deps), no children at all — the 9th adult enrolled
+    // is the one chargeable, confirming the combined-pool fix didn't turn into "children only".
+    const adultDobs = Array.from({ length: 8 }, (_, i) => `${1970 + i}-01-01`);
+    const result = await computePolicyPremium("org1", "pv1", "USD", "monthly", [], undefined, undefined, adultDobs);
+    // base 50 + 1 chargeable adult * $4 (21-65 band) = 54
+    expect(parseFloat(result)).toBeCloseTo(54.0, 2);
+  });
+});
+
 describe("computePolicyPremium — negative add-on pricing is clamped, not premium-zeroing", () => {
   beforeEach(() => {
     vi.mocked(storage.getProductVersion).mockResolvedValue(BASE_VERSION);
