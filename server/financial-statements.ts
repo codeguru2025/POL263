@@ -272,6 +272,106 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   };
 }
 
+export interface IncomeTimeSeriesPoint {
+  periodStart: string; // YYYY-MM-DD, bucket start
+  periodLabel: string; // human label for chart axis
+  income: AmountMap;
+  expenses: AmountMap;
+  net: AmountMap;
+}
+
+/**
+ * Same income/expense definitions as buildIncomeStatement (issued premium + service receipts
+ * minus paid disbursements + paid commissions), bucketed over time for trend charts — the
+ * executive report needs a series, not just one period total. One grouped SQL query per source
+ * table (date_trunc bucket), not N calls to buildIncomeStatement per bucket, to keep this cheap
+ * over long ranges.
+ */
+export async function buildIncomeTimeSeries(
+  orgId: string,
+  params: StatementParams & { bucket?: "day" | "week" | "month" },
+): Promise<IncomeTimeSeriesPoint[]> {
+  const { from, to, branchId } = params;
+  const bucket = params.bucket ?? (daysBetweenInclusive(from, to) > 45 ? "week" : "day");
+  const tdb = await getDbForOrg(orgId);
+
+  const branchClausePr = branchId ? sql`AND branch_id = ${branchId}` : sql``;
+
+  const premiumRows = await tdb.execute(sql`
+    SELECT date_trunc(${bucket}, issued_at)::date AS bucket, currency,
+           COALESCE(SUM(amount::numeric), 0) AS total
+    FROM payment_receipts
+    WHERE organization_id = ${orgId} AND status = 'issued'
+      AND issued_at >= ${fromTs(from)} AND issued_at <= ${toTs(to)}
+      ${branchClausePr}
+    GROUP BY 1, 2
+  `);
+  const serviceRows = await tdb.execute(sql`
+    SELECT date_trunc(${bucket}, issued_at)::date AS bucket, currency,
+           COALESCE(SUM(amount::numeric), 0) AS total
+    FROM service_receipts
+    WHERE organization_id = ${orgId} AND status = 'issued'
+      AND issued_at >= ${fromTs(from)} AND issued_at <= ${toTs(to)}
+      ${branchClausePr}
+    GROUP BY 1, 2
+  `);
+  const disbRows = await tdb.execute(sql`
+    SELECT date_trunc(${bucket}, paid_date::timestamp)::date AS bucket, currency,
+           COALESCE(SUM(amount::numeric), 0) AS total
+    FROM payment_disbursements
+    WHERE organization_id = ${orgId}
+      AND paid_date >= ${from} AND paid_date <= ${to}
+      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+    GROUP BY 1, 2
+  `);
+  const commRows = await tdb.execute(sql`
+    SELECT date_trunc(${bucket}, created_at)::date AS bucket, currency,
+           COALESCE(SUM(amount::numeric), 0) AS total
+    FROM commission_ledger_entries
+    WHERE organization_id = ${orgId} AND status = 'paid'
+      AND created_at >= ${fromTs(from)} AND created_at <= ${toTs(to)}
+    GROUP BY 1, 2
+  `);
+
+  const rowsOf = (r: any): { bucket: string; currency: string; total: string }[] => r.rows ?? r;
+  const byBucket = new Map<string, { income: AmountMap; expenses: AmountMap }>();
+  const ensure = (b: string) => {
+    if (!byBucket.has(b)) byBucket.set(b, { income: {}, expenses: {} });
+    return byBucket.get(b)!;
+  };
+  for (const r of rowsOf(premiumRows)) add(ensure(r.bucket).income, r.currency, parseFloat(r.total));
+  for (const r of rowsOf(serviceRows)) add(ensure(r.bucket).income, r.currency, parseFloat(r.total));
+  for (const r of rowsOf(disbRows)) add(ensure(r.bucket).expenses, r.currency, parseFloat(r.total));
+  for (const r of rowsOf(commRows)) add(ensure(r.bucket).expenses, r.currency, parseFloat(r.total));
+
+  const points: IncomeTimeSeriesPoint[] = Array.from(byBucket.entries())
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([periodStart, v]) => {
+      const net: AmountMap = {};
+      for (const [c, val] of Object.entries(v.income)) add(net, c, val);
+      for (const [c, val] of Object.entries(v.expenses)) add(net, c, -val);
+      return {
+        periodStart,
+        periodLabel: bucketLabel(periodStart, bucket),
+        income: round2(v.income),
+        expenses: round2(v.expenses),
+        net: round2(net),
+      };
+    });
+  return points;
+}
+
+function daysBetweenInclusive(from: string, to: string): number {
+  return Math.round((toTs(to).getTime() - fromTs(from).getTime()) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+function bucketLabel(periodStart: string, bucket: "day" | "week" | "month"): string {
+  const d = new Date(periodStart + "T00:00:00.000Z");
+  if (bucket === "month") return d.toLocaleDateString("en-ZA", { month: "short", year: "numeric" });
+  if (bucket === "week") return `Wk of ${d.toLocaleDateString("en-ZA", { day: "2-digit", month: "short" })}`;
+  return d.toLocaleDateString("en-ZA", { day: "2-digit", month: "short" });
+}
+
 // ─── Cash Flow Statement ───────────────────────────────────────────────────
 
 export async function buildCashFlowStatement(orgId: string, params: StatementParams) {

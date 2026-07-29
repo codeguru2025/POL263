@@ -20,8 +20,9 @@ import { withClaimAging } from "./claims-sla";
 import { withComplaintAging } from "./complaints-sla";
 import { withAdvisoryLock } from "./advisory-lock";
 import { todayInHarare, harareLocalToUtcDate } from "./date-utils";
-import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, fxMapFor } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor } from "./financial-statements";
 import { buildDailyReport } from "./daily-report";
+import { buildExecutiveReport } from "./executive-report";
 import { enhanceNote, generateInsights } from "./ai-service";
 import { buildAiInsightContext, buildNoteEnhanceContext, AI_SURFACE_PERMISSION, type AiSurface } from "./ai-context";
 import { generateRequisitionPdf } from "./requisition-pdf";
@@ -11809,6 +11810,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await streamDailyReportPdf(user.organizationId, date, res, { attachment: req.query.download === "1" });
   });
 
+  // Executive Report — cross-module (financials, policies, funeral services, quotes/conversion,
+  // mortuary, fleet, claims) business-intelligence report for a date range. See
+  // server/executive-report.ts.
+  app.get("/api/reports/executive", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultExecutiveSummaryRange();
+    const from = typeof req.query.from === "string" && req.query.from ? req.query.from : def.from;
+    const to = typeof req.query.to === "string" && req.query.to ? req.query.to : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    return res.json(await buildExecutiveReport(user.organizationId, { from, to, branchId }));
+  });
+
+  app.get("/api/reports/executive/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultExecutiveSummaryRange();
+    const from = typeof req.query.from === "string" && req.query.from ? req.query.from : def.from;
+    const to = typeof req.query.to === "string" && req.query.to ? req.query.to : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const { streamExecutiveReportPdf } = await import("./executive-report-pdf");
+    await streamExecutiveReportPdf(user.organizationId, { from, to, branchId }, res, { attachment: req.query.download === "1" });
+  });
+
   app.post("/api/reports/daily/notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const date = typeof req.body.date === "string" && req.body.date ? req.body.date : todayInHarare();
@@ -11851,8 +11874,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const date = typeof req.body.date === "string" && req.body.date ? req.body.date : undefined;
     const question = typeof req.body.question === "string" ? req.body.question : undefined;
+    const from = typeof req.body.from === "string" && req.body.from ? req.body.from : undefined;
+    const to = typeof req.body.to === "string" && req.body.to ? req.body.to : undefined;
+    const branchId = typeof req.body.branchId === "string" && req.body.branchId ? req.body.branchId : undefined;
+    const range = from && to ? { from, to, branchId } : undefined;
     try {
-      const { datasetLabel, dataJson } = await buildAiInsightContext(surface, user.organizationId, date);
+      const { datasetLabel, dataJson } = await buildAiInsightContext(surface, user.organizationId, date, range);
       const result = await generateInsights({ datasetLabel, dataJson, question });
       if (!result.ok) return res.status(422).json({ message: result.error });
       return res.json({ text: result.text });

@@ -10,32 +10,32 @@ import { resolveImage } from "./object-storage";
 import { buildIncomeStatement, buildCashFlowStatement } from "./financial-statements";
 import { buildDailyReport } from "./daily-report";
 
-const A4_W = 595.28;
-const A4_H = 841.89;
-const M = 44;
-const COL = A4_W - M * 2;
+export const A4_W = 595.28;
+export const A4_H = 841.89;
+export const M = 44;
+export const COL = A4_W - M * 2;
 
-const C_PRIMARY = "#0f766e";
-const C_ACCENT = "#134e4a";
-const C_TEXT = "#111827";
-const C_MUTED = "#6b7280";
-const C_LIGHT = "#f0fdf4";
-const C_ROW_ALT = "#f9fafb";
-const C_INCOME = "#15803d";
-const C_EXPENSE = "#b91c1c";
+export const C_PRIMARY = "#0f766e";
+export const C_ACCENT = "#134e4a";
+export const C_TEXT = "#111827";
+export const C_MUTED = "#6b7280";
+export const C_LIGHT = "#f0fdf4";
+export const C_ROW_ALT = "#f9fafb";
+export const C_INCOME = "#15803d";
+export const C_EXPENSE = "#b91c1c";
 
-function fmtDate(v: string | Date | null | undefined): string {
+export function fmtDate(v: string | Date | null | undefined): string {
   if (!v) return "—";
   try { return new Date(v).toLocaleDateString("en-ZA", { day: "2-digit", month: "long", year: "numeric" }); } catch { return String(v); }
 }
-function money(n: any): string {
+export function money(n: any): string {
   return Number(n || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 /**
  * Measures the string against the CURRENT font/size on `doc` and truncates with an ellipsis
  * if it's wider than `maxWidth` — a table cell must never wrap or overflow into its neighbour.
  */
-function fitText(doc: InstanceType<typeof PDFDocument>, text: string, maxWidth: number): string {
+export function fitText(doc: InstanceType<typeof PDFDocument>, text: string, maxWidth: number): string {
   if (doc.widthOfString(text) <= maxWidth) return text;
   let lo = 0, hi = text.length;
   while (lo < hi) {
@@ -44,13 +44,13 @@ function fitText(doc: InstanceType<typeof PDFDocument>, text: string, maxWidth: 
   }
   return text.slice(0, lo) + "…";
 }
-function currencyLines(m: Record<string, number> | undefined): string {
+export function currencyLines(m: Record<string, number> | undefined): string {
   if (!m || Object.keys(m).length === 0) return "—";
   const parts = Object.entries(m).filter(([, v]) => Math.abs(v) > 0.004).map(([c, v]) => `${c} ${money(v)}`);
   return parts.length ? parts.join("  ·  ") : "—";
 }
 
-interface DocContext {
+export interface DocContext {
   doc: InstanceType<typeof PDFDocument>;
   org: { name: string | null; phone: string | null; email: string | null; address: string | null; footerText?: string | null };
   logoData: Buffer | null;
@@ -60,12 +60,12 @@ interface DocContext {
   pageNum: number;
 }
 
-function makeDoc(org: any, logoData: Buffer | null, title: string, subtitle: string): DocContext {
+export function makeDoc(org: any, logoData: Buffer | null, title: string, subtitle: string): DocContext {
   const doc = new PDFDocument({ size: "A4", margin: M, bufferPages: true, info: { Title: title, Author: org.name || "POL263" } });
   return { doc, org, logoData, title, subtitle, y: M, pageNum: 0 };
 }
 
-function drawLetterhead(ctx: DocContext) {
+export function drawLetterhead(ctx: DocContext) {
   const { doc, org, logoData } = ctx;
   let y = M;
   if (logoData) {
@@ -87,17 +87,17 @@ function drawLetterhead(ctx: DocContext) {
   ctx.y = y;
 }
 
-function newPage(ctx: DocContext) {
+export function newPage(ctx: DocContext) {
   if (ctx.pageNum > 0) ctx.doc.addPage();
   ctx.pageNum++;
   drawLetterhead(ctx);
 }
 
-function ensureSpace(ctx: DocContext, h: number) {
+export function ensureSpace(ctx: DocContext, h: number) {
   if (ctx.y + h > A4_H - M - 24) newPage(ctx);
 }
 
-function sectionBand(ctx: DocContext, title: string) {
+export function sectionBand(ctx: DocContext, title: string) {
   ensureSpace(ctx, 22);
   const { doc } = ctx;
   doc.rect(M, ctx.y, COL, 16).fill(C_PRIMARY);
@@ -106,7 +106,7 @@ function sectionBand(ctx: DocContext, title: string) {
   doc.fillColor(C_TEXT);
 }
 
-function kv(ctx: DocContext, label: string, value: string, color = C_TEXT, lw = 220) {
+export function kv(ctx: DocContext, label: string, value: string, color = C_TEXT, lw = 220) {
   ensureSpace(ctx, 14);
   const { doc } = ctx;
   doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(label, M, ctx.y, { width: lw });
@@ -114,7 +114,7 @@ function kv(ctx: DocContext, label: string, value: string, color = C_TEXT, lw = 
   ctx.y += 14;
 }
 
-function statRow(ctx: DocContext, stats: { label: string; value: string; color?: string }[]) {
+export function statRow(ctx: DocContext, stats: { label: string; value: string; color?: string }[]) {
   ensureSpace(ctx, 36);
   const { doc } = ctx;
   const w = Math.floor(COL / stats.length);
@@ -128,8 +128,8 @@ function statRow(ctx: DocContext, stats: { label: string; value: string; color?:
   ctx.y += 36;
 }
 
-type ColDef = { header: string; width: number; align?: "left" | "right" | "center"; getter: (row: any) => string; color?: (row: any) => string };
-function drawTable(ctx: DocContext, cols: ColDef[], rows: any[], emptyMsg = "No records.") {
+export type ColDef = { header: string; width: number; align?: "left" | "right" | "center"; getter: (row: any) => string; color?: (row: any) => string };
+export function drawTable(ctx: DocContext, cols: ColDef[], rows: any[], emptyMsg = "No records.") {
   const { doc } = ctx;
   if (rows.length === 0) {
     ensureSpace(ctx, 20);
@@ -163,7 +163,7 @@ function drawTable(ctx: DocContext, cols: ColDef[], rows: any[], emptyMsg = "No 
   ctx.y += 6;
 }
 
-function finish(ctx: DocContext, res: Response, filename: string, download: boolean) {
+export function finish(ctx: DocContext, res: Response, filename: string, download: boolean) {
   const { doc } = ctx;
   res.setHeader("Content-Disposition", `${download ? "attachment" : "inline"}; filename="${filename}"`);
   res.setHeader("Content-Type", "application/pdf");
@@ -189,7 +189,7 @@ function finish(ctx: DocContext, res: Response, filename: string, download: bool
   doc.end();
 }
 
-function renderIncomeStatementBody(ctx: DocContext, is: any) {
+export function renderIncomeStatementBody(ctx: DocContext, is: any) {
   sectionBand(ctx, "Income");
   kv(ctx, "Individual premiums", currencyLines(is.income.premiumIndividual));
   kv(ctx, "Group premiums", currencyLines(is.income.premiumGroup));

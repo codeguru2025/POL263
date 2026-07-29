@@ -362,6 +362,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     ? []
     : filterNav([
         { href: "/staff/daily-report", label: "Daily Report", icon: FileText, permission: "read:finance" },
+        { href: "/staff/executive-report", label: "Executive Report", icon: LineChart, permission: "read:finance" },
         { href: "/staff/schedule-reports", label: "Schedule & Department Reports", icon: CalendarDays, permission: "read:report" },
         { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
         { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2, agentHidden: true },
@@ -513,6 +514,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           title: "Reports",
           items: filterNav([
             { href: "/staff/daily-report", label: "Daily Report", icon: FileText, permission: "read:finance" },
+            { href: "/staff/executive-report", label: "Executive Report", icon: LineChart, permission: "read:finance" },
             { href: "/staff/schedule-reports", label: "Schedule & Dept Reports", icon: CalendarDays, permission: "read:report" },
             { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
             { href: "/staff/reports?section=finance", label: "Financial Reports", icon: Receipt, permission: "read:report" },

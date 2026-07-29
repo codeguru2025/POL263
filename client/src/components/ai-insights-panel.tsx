@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2, Sparkles } from "lucide-react";
 
-export type AiSurface = "daily_report" | "dashboard" | "finance" | "policies" | "claims";
+export type AiSurface = "daily_report" | "dashboard" | "finance" | "policies" | "claims" | "executive_report";
 
 /**
  * On-demand AI insights for a page's data. Never auto-runs on mount — every Opus
@@ -19,12 +19,19 @@ export function AiInsightsPanel({
   title = "AI Insights",
   description = "Ask AI to summarize this data and flag anything worth attention.",
   date,
+  from,
+  to,
+  branchId,
 }: {
   surface: AiSurface;
   title?: string;
   description?: string;
   /** YYYY-MM-DD — only meaningful for the daily_report surface. */
   date?: string;
+  /** YYYY-MM-DD range — only meaningful for the executive_report surface. */
+  from?: string;
+  to?: string;
+  branchId?: string;
 }) {
   const { permissions } = useAuth();
   const [question, setQuestion] = useState("");
@@ -32,7 +39,7 @@ export function AiInsightsPanel({
 
   const mutation = useMutation({
     mutationFn: async (q?: string) => {
-      const res = await apiRequest("POST", "/api/ai/insights", { surface, date, question: q || undefined });
+      const res = await apiRequest("POST", "/api/ai/insights", { surface, date, from, to, branchId, question: q || undefined });
       const data = await res.json();
       return data.text as string;
     },

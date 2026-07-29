@@ -15,8 +15,9 @@ import { storage } from "./storage";
 import { buildDailyReport } from "./daily-report";
 import { todayInHarare } from "./date-utils";
 import { buildExecutiveSummary, defaultExecutiveSummaryRange } from "./financial-statements";
+import { buildExecutiveReport } from "./executive-report";
 
-export type AiSurface = "daily_report" | "dashboard" | "finance" | "policies" | "claims";
+export type AiSurface = "daily_report" | "dashboard" | "finance" | "policies" | "claims" | "executive_report";
 
 /** Extra permission (beyond use:ai) required to request insights for a surface. */
 export const AI_SURFACE_PERMISSION: Record<AiSurface, string> = {
@@ -25,6 +26,7 @@ export const AI_SURFACE_PERMISSION: Record<AiSurface, string> = {
   finance: "read:finance",
   policies: "read:policy",
   claims: "read:claim",
+  executive_report: "read:finance",
 };
 
 const AI_CONTEXT_MAX_ROWS = 2000;
@@ -135,10 +137,37 @@ export async function buildClaimsContext(orgId: string) {
   };
 }
 
+export async function buildExecutiveReportContext(orgId: string, from: string, to: string, branchId?: string) {
+  const report = await buildExecutiveReport(orgId, { from, to, branchId });
+  // Trimmed to counts/totals, not raw itemized rows — same discipline as every other context
+  // builder here (see file docstring).
+  return {
+    datasetLabel: `Executive report (${from} to ${to})`,
+    dataJson: {
+      period: report.period,
+      income: report.financial.incomeStatement.income,
+      expenses: report.financial.incomeStatement.expenses.total,
+      net: report.financial.incomeStatement.net,
+      consolidatedUsd: report.financial.incomeStatement.consolidatedUsd,
+      branchBreakdown: report.financial.branchBreakdown,
+      newPoliciesCount: report.policies.newPoliciesCount,
+      revenueByProduct: report.policies.revenueByProduct,
+      countryFlag: report.policies.countryFlag,
+      funeralServices: report.funeralServices,
+      quotes: report.quotes,
+      leadFunnel: report.leadFunnel,
+      mortuary: report.mortuary,
+      fleet: report.fleet,
+      claims: report.claims,
+    },
+  };
+}
+
 export async function buildAiInsightContext(
   surface: AiSurface,
   orgId: string,
   date: string | undefined,
+  range?: { from: string; to: string; branchId?: string },
 ): Promise<{ datasetLabel: string; dataJson: unknown }> {
   switch (surface) {
     case "daily_report":
@@ -151,5 +180,9 @@ export async function buildAiInsightContext(
       return buildPoliciesContext(orgId);
     case "claims":
       return buildClaimsContext(orgId);
+    case "executive_report": {
+      const r = range ?? defaultExecutiveSummaryRange();
+      return buildExecutiveReportContext(orgId, r.from, r.to, range?.branchId);
+    }
   }
 }

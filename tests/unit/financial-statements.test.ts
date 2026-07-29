@@ -4,7 +4,8 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../../server/tenant-db", () => ({ getDbForOrg: vi.fn() }));
 vi.mock("../../server/storage", () => ({ storage: {} }));
 
-import { consolidateToUsd } from "../../server/financial-statements";
+import { consolidateToUsd, buildIncomeTimeSeries } from "../../server/financial-statements";
+import { getDbForOrg } from "../../server/tenant-db";
 
 describe("consolidateToUsd", () => {
   const fx = { USD: 1, ZAR: 0.055, ZIG: 0.037 };
@@ -37,5 +38,57 @@ describe("consolidateToUsd", () => {
     const r = consolidateToUsd({ USD: -40, ZAR: 200 }, fx);
     // -40 + 200*0.055 = -40 + 11 = -29
     expect(r.usd).toBeCloseTo(-29, 2);
+  });
+});
+
+describe("buildIncomeTimeSeries", () => {
+  // Postgres does the actual date_trunc bucketing; these tests mock the four grouped queries
+  // (premium receipts, service receipts, disbursements, commissions) as if already bucketed, and
+  // verify the JS-side merge: income/expenses summed per bucket+currency, net computed, sorted,
+  // and currencies never blended together.
+  function mockRows(premium: any[], service: any[], disb: any[], comm: any[]) {
+    const execute = vi.fn()
+      .mockResolvedValueOnce({ rows: premium })
+      .mockResolvedValueOnce({ rows: service })
+      .mockResolvedValueOnce({ rows: disb })
+      .mockResolvedValueOnce({ rows: comm });
+    vi.mocked(getDbForOrg).mockResolvedValue({ execute } as any);
+  }
+
+  it("sums income and expenses per bucket, computing net", async () => {
+    mockRows(
+      [{ bucket: "2026-07-01", currency: "USD", total: "100.00" }],
+      [{ bucket: "2026-07-01", currency: "USD", total: "20.00" }],
+      [{ bucket: "2026-07-01", currency: "USD", total: "30.00" }],
+      [],
+    );
+    const points = await buildIncomeTimeSeries("org1", { from: "2026-07-01", to: "2026-07-01" });
+    expect(points).toHaveLength(1);
+    expect(points[0].income).toEqual({ USD: 120 });
+    expect(points[0].expenses).toEqual({ USD: 30 });
+    expect(points[0].net).toEqual({ USD: 90 });
+  });
+
+  it("never blends currencies — each stays its own key", async () => {
+    mockRows(
+      [{ bucket: "2026-07-01", currency: "USD", total: "100.00" }, { bucket: "2026-07-01", currency: "ZAR", total: "500.00" }],
+      [],
+      [],
+      [],
+    );
+    const points = await buildIncomeTimeSeries("org1", { from: "2026-07-01", to: "2026-07-01" });
+    expect(points[0].income).toEqual({ USD: 100, ZAR: 500 });
+  });
+
+  it("sorts multiple buckets chronologically", async () => {
+    mockRows(
+      [
+        { bucket: "2026-07-03", currency: "USD", total: "10.00" },
+        { bucket: "2026-07-01", currency: "USD", total: "20.00" },
+      ],
+      [], [], [],
+    );
+    const points = await buildIncomeTimeSeries("org1", { from: "2026-07-01", to: "2026-07-03" });
+    expect(points.map((p) => p.periodStart)).toEqual(["2026-07-01", "2026-07-03"]);
   });
 });

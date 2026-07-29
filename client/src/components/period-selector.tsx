@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { format, subDays, startOfWeek, startOfMonth, startOfYear } from "date-fns";
+import { format, subDays, startOfWeek, startOfMonth, endOfMonth, subMonths, startOfQuarter, startOfYear } from "date-fns";
 import { Calendar as CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -7,7 +7,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { DateRange } from "react-day-picker";
 
-export type PeriodPreset = "today" | "yesterday" | "week" | "mtd" | "ytd" | "custom";
+export type PeriodPreset = "today" | "yesterday" | "week" | "mtd" | "lastMonth" | "quarter" | "ytd" | "custom";
 
 export interface Period {
   preset: PeriodPreset;
@@ -30,6 +30,12 @@ export function periodForPreset(preset: PeriodPreset, custom?: { from: string; t
       return { preset, from: fmt(startOfWeek(today, { weekStartsOn: 1 })), to: todayStr };
     case "mtd":
       return { preset, from: fmt(startOfMonth(today)), to: todayStr };
+    case "lastMonth": {
+      const lastMonthDate = subMonths(today, 1);
+      return { preset, from: fmt(startOfMonth(lastMonthDate)), to: fmt(endOfMonth(lastMonthDate)) };
+    }
+    case "quarter":
+      return { preset, from: fmt(startOfQuarter(today)), to: todayStr };
     case "ytd":
       return { preset, from: fmt(startOfYear(today)), to: todayStr };
     case "custom":
@@ -45,6 +51,8 @@ const PRESET_LABELS: Record<PeriodPreset, string> = {
   yesterday: "Yesterday",
   week: "This week",
   mtd: "Month to date",
+  lastMonth: "Last month",
+  quarter: "This quarter",
   ytd: "Year to date",
   custom: "Custom range",
 };
