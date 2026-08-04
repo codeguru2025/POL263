@@ -897,6 +897,13 @@ export async function applyGroupPaymentToPolicies(
 
       const amount = String(alloc.amount);
       const currency = alloc.currency || groupIntent.currency || "USD";
+      // computePlatformFee reads the control-plane DB (a separate database from txDb below, for
+      // isolated tenants), so it can't run inside the org-data transaction — but the amount/
+      // currency it needs are already known, so compute it first and write the receivable row
+      // inside the same transaction as the payment (see createPlatformReceivableInTx) instead of
+      // in a detached, unawaited .then() after commit — closing the crash window where a fee
+      // could be durably lost with no record it was ever owed.
+      const feeAmount = await computePlatformFee(orgId, amount);
 
       // Wrap each allocation in its own transaction for atomicity
       const { newTx, receiptNumber } = await withOrgTransaction(orgId, async (txDb) => {
@@ -949,21 +956,20 @@ export async function applyGroupPaymentToPolicies(
         });
 
         await applyPolicyStatusForClearedPayment(txDb, alloc.policyId, policy, today, " (group PayNow)", recordedByForLedger ?? undefined);
-        return { newTx, receiptNumber };
-      });
-
-      successCount++;
-
-      // Platform fee on cleared group PayNow receipt
-      computePlatformFee(orgId, amount).then((feeAmount) =>
-        storage.createPlatformReceivable({
+        // Platform fee on cleared group PayNow receipt — written in the same transaction as
+        // the payment (see comment above where feeAmount is computed).
+        await storage.createPlatformReceivableInTx(txDb, {
           organizationId: orgId,
+          sourceTransactionId: newTx.id,
           amount: feeAmount,
           currency,
           description: `Platform fee on group PayNow receipt ${receiptNumber} (policy ${policy.policyNumber})`,
           isSettled: false,
-        })
-      ).catch((err: Error) => structuredLog("error", "Platform fee failed (group PayNow)", { policyId: policy.id, error: err.message }));
+        });
+        return { newTx, receiptNumber };
+      });
+
+      successCount++;
 
       // Post-transaction best-effort side effects
       if (policy.status === "lapsed") {

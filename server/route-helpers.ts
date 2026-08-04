@@ -308,8 +308,14 @@ export async function resolvePolicyWaitingPeriodEndDate(policy: any, orgId: stri
 
 // ─── Billing / arrears helpers ──────────────────────────────────────────────
 
+// "yearly" is the value actually used for policies.paymentSchedule everywhere else (see
+// monthlyToScheduleFactor above) — this map used "annually" instead, so periodDaysForSchedule
+// never matched a yearly policy's real schedule value and silently fell through to the 30.44-day
+// monthly default via the `??` below, inflating a yearly policy's computed arrears by ~12x
+// (computePolicyOutstanding and periodsBetween both depend on this). Keeping "annually" too in
+// case anything else ever passes it.
 const PERIOD_DAYS: Record<string, number> = {
-  weekly: 7, biweekly: 14, quarterly: 91.31, annually: 365.25, monthly: 30.44,
+  weekly: 7, biweekly: 14, quarterly: 91.31, yearly: 365.25, annually: 365.25, monthly: 30.44,
 };
 export function periodDaysForSchedule(schedule: string | null | undefined): number {
   return PERIOD_DAYS[String(schedule || "monthly")] ?? 30.44;

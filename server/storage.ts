@@ -495,6 +495,7 @@ export interface IStorage {
   resolveOrgIdForQuoteToken(id: string): Promise<string | undefined>;
   getQuote(id: string, orgId: string): Promise<Quote | undefined>;
   getQuoteByLeadId(leadId: string, orgId: string): Promise<Quote | undefined>;
+  getQuotesByLeadIds(leadIds: string[], orgId: string): Promise<Record<string, Quote>>;
   createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent>;
   getPaymentEventsByIntentId(paymentIntentId: string, orgId: string): Promise<PaymentEvent[]>;
   createPaymentReceipt(receipt: InsertPaymentReceipt): Promise<PaymentReceipt>;
@@ -765,6 +766,7 @@ export interface IStorage {
   getNextMonthEndRunNumber(orgId: string): Promise<string>;
   getPlatformReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PlatformReceivable[]>;
   createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
+  createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
   getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }>;
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
@@ -3335,6 +3337,20 @@ export class DatabaseStorage implements IStorage {
     const [row] = await tdb.select().from(quotes).where(and(eq(quotes.leadId, leadId), eq(quotes.organizationId, orgId)))
       .orderBy(desc(quotes.createdAt)).limit(1);
     return row;
+  }
+  async getQuotesByLeadIds(leadIds: string[], orgId: string): Promise<Record<string, Quote>> {
+    if (leadIds.length === 0) return {};
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(quotes)
+      .where(and(inArray(quotes.leadId, leadIds), eq(quotes.organizationId, orgId)))
+      .orderBy(desc(quotes.createdAt));
+    const result: Record<string, Quote> = {};
+    // Ordered newest-first, so the first row seen per leadId is the most recent — matches
+    // getQuoteByLeadId's per-lead `orderBy(desc(createdAt)).limit(1)` semantics.
+    for (const r of rows) {
+      if (r.leadId && !result[r.leadId]) result[r.leadId] = r;
+    }
+    return result;
   }
   async createPaymentEvent(event: InsertPaymentEvent): Promise<PaymentEvent> {
     // Always route to the same DB as the intent — use event.organizationId directly to avoid
@@ -6228,32 +6244,39 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(platformReceivables.createdAt)).limit(limit).offset(offset);
   }
   async createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
-    return withOrgTransaction(entry.organizationId, async (tx) => {
-      const [created] = await tx.insert(platformReceivables).values(entry).returning();
+    return withOrgTransaction(entry.organizationId, (tx) => this.createPlatformReceivableInTx(tx, entry));
+  }
+  // Split out so callers that already have an open transaction for the payment this fee is on
+  // (same org data DB — platform_receivables lives there, not on the control-plane DB) can write
+  // the receivable as part of that same commit instead of a separate one afterward. Closes the
+  // crash window a detached, unawaited `computePlatformFee(...).then(() => createPlatformReceivable(...))`
+  // has: if the process dies between the payment transaction committing and that promise
+  // resolving, the fee is durably lost with no record it was ever owed — see docs/BUGFIX-LOG.md.
+  async createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
+    const [created] = await tx.insert(platformReceivables).values(entry).returning();
 
-      // Immediately draw down any same-currency fee credit this org built up from a past
-      // settlement overpayment (see approveSettlementWithAllocation) rather than leaving this
-      // fee sitting unsettled while a credit for it is available. Conditional UPDATE avoids a
-      // race against a concurrent draw-down of the same balance.
-      const amount = parseFloat(String(created.amount));
-      if (amount > 0.005) {
-        const deduct = await tx.execute(sql`
-          UPDATE platform_fee_credits
-          SET balance = balance - ${amount.toFixed(2)}::numeric, updated_at = now()
-          WHERE organization_id = ${entry.organizationId}
-            AND currency = ${created.currency}
-            AND balance >= ${amount.toFixed(2)}::numeric
-          RETURNING id
-        `);
-        const deductedRows = (deduct as unknown as { rows?: { id: string }[] }).rows;
-        if (deductedRows && deductedRows.length > 0) {
-          const [settled] = await tx.update(platformReceivables).set({ isSettled: true })
-            .where(eq(platformReceivables.id, created.id)).returning();
-          return settled;
-        }
+    // Immediately draw down any same-currency fee credit this org built up from a past
+    // settlement overpayment (see approveSettlementWithAllocation) rather than leaving this
+    // fee sitting unsettled while a credit for it is available. Conditional UPDATE avoids a
+    // race against a concurrent draw-down of the same balance.
+    const amount = parseFloat(String(created.amount));
+    if (amount > 0.005) {
+      const deduct = await tx.execute(sql`
+        UPDATE platform_fee_credits
+        SET balance = balance - ${amount.toFixed(2)}::numeric, updated_at = now()
+        WHERE organization_id = ${entry.organizationId}
+          AND currency = ${created.currency}
+          AND balance >= ${amount.toFixed(2)}::numeric
+        RETURNING id
+      `);
+      const deductedRows = (deduct as unknown as { rows?: { id: string }[] }).rows;
+      if (deductedRows && deductedRows.length > 0) {
+        const [settled] = await tx.update(platformReceivables).set({ isSettled: true })
+          .where(eq(platformReceivables.id, created.id)).returning();
+        return settled;
       }
-      return created;
-    });
+    }
+    return created;
   }
   async getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }> {
     // Grouped by currency — platform_receivables holds USD, ZAR, and ZIG amounts,

@@ -67,15 +67,29 @@ function youtubeEmbedUrl(url: string): string | null {
   return m ? `https://www.youtube.com/embed/${m[1]}` : null;
 }
 
+// Per RFC 6350 §3.3: backslash, comma, and semicolon are value-separator characters and must be
+// backslash-escaped; a literal newline within a value must become the two-character escape "\n",
+// not a real CR/LF — an unescaped CR/LF in a field (displayName/org name/phone/url all come from
+// agent-editable profile data, see PATCH /api/auth/me) would inject an extra raw line into the
+// .vcf file, letting an agent smuggle arbitrary additional vCard properties (e.g. a fake EMAIL/
+// NOTE line) into every visitor's downloaded contact file.
+function escapeVCardValue(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\r\n|\r|\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
 function buildVCardFile(card: VCard): string {
   const phone = card.whatsapp || card.phone || "";
   const lines = [
     "BEGIN:VCARD",
     "VERSION:3.0",
-    `FN:${card.displayName}`,
-    card.org?.name ? `ORG:${card.org.name}` : "",
-    phone ? `TEL;TYPE=CELL:${phone}` : "",
-    card.websiteUrl ? `URL:${card.websiteUrl}` : "",
+    `FN:${escapeVCardValue(card.displayName)}`,
+    card.org?.name ? `ORG:${escapeVCardValue(card.org.name)}` : "",
+    phone ? `TEL;TYPE=CELL:${escapeVCardValue(phone)}` : "",
+    card.websiteUrl ? `URL:${escapeVCardValue(card.websiteUrl)}` : "",
     "END:VCARD",
   ].filter(Boolean);
   // RFC 6350 requires CRLF line endings — most phone contact-import parsers tolerate bare \n,

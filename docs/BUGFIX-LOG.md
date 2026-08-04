@@ -10,6 +10,208 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-04 — Thorough system audit: 5 parallel domain audits, 11 fixes (1 critical PII leak, 1 critical ~12x billing error, 1 high-severity payment race, 6 revenue-durability gaps, 2 injection bugs)
+
+Augustus asked for a thorough audit + edge-case sweep + optimization pass across the whole
+system. Followed the established pattern from the 2026-07-28/2026-07-20 audits: parallel
+read-only fork agents, each scoped to a non-overlapping domain (security/RBAC/tenant isolation,
+financial/ACID integrity, core domain edge cases, newest unaudited features, performance/
+scalability), each required to cite file:line and say "not found" rather than guess. Fixed
+everything bounded/mechanical same session; flagged the rest.
+
+1. **CRITICAL — `GET /api/clients` leaked every client's password hash, security-answer hash,
+   and plaintext portal activation code** to any staff/agent holding basic `read:client`
+   permission. `storage.getClientsByOrg`/`getClientsByAgent` do an unrestricted `SELECT *`; the
+   sibling `GET /api/clients/:id` route already stripped these fields before responding, the list
+   route never did. Fixed by scrubbing the same fields from the list response
+   (`server/routes.ts`). Verified the frontend's client list view never reads those fields from
+   the list response (they come from separate `:id`/create-response queries that were already
+   safe) — no UI regression.
+2. **CRITICAL — yearly-billed policies' outstanding/arrears overstated by ~12x.**
+   `periodDaysForSchedule()` (`server/route-helpers.ts`) keyed its lookup map on `"annually"`,
+   but `"yearly"` is the value actually used everywhere else for `policies.paymentSchedule` —
+   every yearly policy silently fell through to the 30.44-day monthly default, inflating
+   `computePolicyOutstanding`'s period count (and therefore total arrears) by roughly 12x on the
+   policy detail page and the premium-change reconciliation. Added `yearly` to the map (kept
+   `annually` too).
+3. **HIGH — legacy `PATCH /api/requisitions/:id?action=pay` could double-record a payout.** Read
+   `amountPaid` with no row lock before writing a disbursement + status update off that stale
+   read; its replacement, `POST /api/requisitions/:id/payments`, already locks the row and
+   re-validates under lock. No frontend/app caller used `action: "pay"` (grepped clean) — removed
+   the branch (410 response) rather than duplicate the locked logic in two places.
+4. **MEDIUM-HIGH — platform-fee crediting wasn't durable outside the direct-PayNow path.** Six
+   call sites (`applyGroupPaymentToPolicies` in `server/payment-service.ts`,
+   `server/credit-apply.ts`, and four sites in `server/routes.ts` — month-end billing, group
+   receipts, approved backdated/premium-override receipts, legacy group receipts) computed the
+   platform's fee and wrote `platform_receivables` via a detached, unawaited
+   `computePlatformFee(...).then(() => createPlatformReceivable(...))` with only `.catch()`
+   logging — a process crash/restart in that window durably loses the fee with no record it was
+   ever owed. Split `storage.createPlatformReceivable` into a thin wrapper plus
+   `createPlatformReceivableInTx(tx, entry)`; for the 3 sites where the fee amount is known
+   before the payment's own transaction opens, moved the receivable write inside that same
+   transaction (fully closes the gap — same atomic commit as the payment). For the other 3 (fee
+   computed only after their transaction already committed — a loop over multiple already-posted
+   receipts, or a raw-SQL insert with no transaction wrapper), properly `await`ed instead of
+   detaching, so a failure is at least synchronous and logged before the response returns rather
+   than an unwatched dangling promise.
+5. **MEDIUM — HTML injection in outbound emails.** `server/notifications.ts` built HTML email
+   bodies via `` `<p>${renderedBody...}</p>` ``, where `renderedBody` is plain string
+   substitution of client-entered data (name, etc.) with no escaping — a client whose stored
+   field contains markup gets it rendered verbatim in every automated email about them. Same bug
+   independently in `server/payslip-email.ts`. Added `escapeHtml()` to `server/email-service.ts`
+   (shared by both) and applied it at both notification call sites and the payslip email.
+6. **MEDIUM — vCard CRLF/field injection.** `buildVCardFile` in
+   `client/src/pages/public/agent-vcard.tsx` interpolated agent-editable profile fields
+   (`displayName`, phone, website, org name — all settable via `PATCH /api/auth/me`) into `.vcf`
+   lines with no escaping; an unescaped CR/LF lets an agent inject extra raw vCard properties into
+   every visitor's downloaded contact file. Added RFC 6350 value escaping (backslash/comma/
+   semicolon/newline).
+7. **MEDIUM — N+1 query in `GET /api/my-vcard/leads`.** Fetched one quote per lead via
+   `Promise.all` over `getQuoteByLeadId` (up to 500 leads). Added
+   `storage.getQuotesByLeadIds()` (single batched query) and switched the route to it.
+8. **MEDIUM — unbounded concurrent fan-out + redundant DB call in payroll "send all payslips."**
+   `POST /api/payroll/runs/:id/send-all` fired one `Promise.all` entry per employee, each doing a
+   CPU-bound PDF build + outbound SMTP send + a repeated `storage.getOrganization` lookup of the
+   same row every time. Chunked to 4 concurrent sends and hoisted the org lookup out to once per
+   run (`server/routes.ts`, `server/payslip-email.ts`).
+9. **MEDIUM — Executive Report did 14+ sequential DB round-trips per load.** `server/
+   executive-report.ts` awaited financials/funerals/quotes/mortuary/fleet/claims queries one at a
+   time. Batched into one `Promise.all` (safe here — all reads, no lock contention like the
+   write-fan-out bug below).
+10. **MEDIUM — cross-instance module-flag cache staleness.** `server/module-gate.ts`'s cache has
+    no invalidation broadcast across the app's 2 running instances — a write clears the cache only
+    on whichever instance handled it, so the sibling can serve a stale flag for up to the TTL.
+    Matters because `mobile_payments` gates real PayNow auto-charging. A full fix needs new
+    infrastructure (pub/sub or a shared cache) — out of scope for a bounded fix. Shrunk the TTL
+    from 5 minutes to 30 seconds as a stopgap, not a full close.
+11. **LOW — no positive-amount validation on settlement creation.** A zero/negative settlement
+    passed validation, got approved, and silently no-op'd in the allocation loop (`remaining <= 0`
+    short-circuits both branches) with no error anywhere. Added an explicit check in
+    `POST /api/settlements`.
+
+**Also found — from the same `batchRecalculatePolicyPremiums` write-fan-out fix earlier today
+(see the entry directly below this one): confirmed it was the actual cause of both production
+500s pulled from DigitalOcean's runtime logs (`GET /api/policies`, `GET /api/requisitions`,
+2026-08-02/03) — cross-referenced here since this audit's financial-integrity fork independently
+flagged the same fan-out pattern as a systemic risk, not a one-off.**
+
+**Deliberately NOT fixed — reported only, needs Augustus's input or too large to blind-fix:**
+1. **FLK00526 (Falakhe) still has a live `premium_override` of $21.00** — confirmed via a direct
+   production query. This is the exact item flagged as "still open" in the 2026-08-01 correction
+   pass (25 policies were fixed; this one was excluded/missed). Needs a decision on whether the
+   override was ever a deliberate grandfathered rate vs. a leftover bug artifact, and what refund/
+   credit reconciliation was already planned — not something to blind-fix.
+2. **`schedulePolicyPremiumBackfill` (`server/routes.ts`) may now be partially redundant** with
+   today's batched list-view premium recalc, and adds sustained sequential load against a tenant
+   pool already shown to be under pressure. Serves a different purpose though (eventual full-table
+   consistency vs. per-page consistency-on-read) — removing or changing it is a product/
+   architecture call, not a bug fix.
+3. **`server/backup-sync.ts` does `SELECT * FROM "table"` with no LIMIT**, once per table. Fine at
+   current row counts (the file's own comment says so) but no ceiling exists as tables like
+   `audit_logs`/`payment_transactions` grow over years on a 1GB instance. Not urgent.
+4. Security/RBAC fork found no other new issues (core middleware, storage-layer tenant isolation,
+   client-portal IDOR surface, SQL injection surface, secret exposure all checked clean) beyond
+   item 1. Core-domain fork found sweep locking, claim waiting-period boundaries, vehicle-checkout
+   races, and mortuary dispatch upserts all clean beyond item 2 above.
+
+**Verified:** `npm run check` clean; `npm run test` full suite (309/309) passed after every fix.
+
+**Lesson for next time:** when a fix threads a value (fee amount, computed rate, etc.) that
+depends on a *different* database than the one already open in a transaction (control-plane DB
+vs. org data DB here), don't assume "compute after commit" is the only option — check whether the
+value can be computed *before* the transaction opens instead, so the actual write still lands
+inside the same atomic commit. Only fall back to "await it properly afterward" when the
+dependency genuinely can't be resolved until after commit (e.g. a loop over rows that were
+already written in a prior transaction).
+
+---
+
+## 2026-08-04 — Production 500 investigation: tenant DB pool exhaustion, dead backup connection, silent approval failure, CSRF misclassified as 500
+
+Augustus asked for an investigation into everything throwing an internal server error. Pulled the
+last 5 days of runtime logs directly from the DigitalOcean App Platform API (no doctl needed —
+`GET /v2/apps/{id}/deployments/{id}/logs?type=RUN` returns a signed URL to the raw log dump) and
+traced every `level:"error"` entry and every `statusCode >= 500` access-log line back to its
+source. Four distinct issues found; all four fixed.
+
+**1. `GET /api/policies` and `GET /api/requisitions` returned real 500s** (one each, on
+2026-08-02 and 2026-08-03) — both `"timeout exceeded when trying to connect"` against the
+Falakhe tenant's isolated Postgres pool, capped at 10 connections
+(`TENANT_DB_POOL_MAX`/`tenantMax` in `server/tenant-db.ts`). **Root cause:**
+`batchRecalculatePolicyPremiums` (`server/routes.ts`, called from `GET /api/policies` on every
+load) fired one `UPDATE` per drifted policy inside an **unbounded** `Promise.all` — a page with
+dozens of policies drifting at once (e.g. right after a product price change, or last week's mass
+premium correction) could spike concurrent connection demand well past the 10-connection cap,
+starving every other request against that tenant, including unrelated ones like
+`GET /api/requisitions` that happened to need a connection at the same moment. A third request
+(`GET /api/clients`, 2026-08-02 11:10:48) hit the same contention as `Connection terminated due to
+connection timeout`, and its error handler then crashed with `ERR_HTTP_HEADERS_SENT` trying to
+write a response that had already been sent — a race that only manifests under this same
+contention. **Fix:** split `batchRecalculatePolicyPremiums` into an unbounded in-memory compute
+phase (cheap — `computePolicyPremium` makes no DB calls when given preloaded product/version/add-on
+data) and a separate write phase that persists drifted premiums in chunks of 5 concurrent
+`UPDATE`s instead of all-at-once. **Files:** `server/routes.ts`.
+
+**2. Off-site backup sync has been 100% broken, every table, every night, since 2026-07-29** —
+3,540+ `"Backup schema reconciliation failed for table"` errors, all `connect EHOSTUNREACH
+2a05:d014:...`. **Root cause:** `getSupabaseUrl()` (`server/backup-sync.ts`) preferred
+`SUPABASE_BACKUP_DIRECT_URL` (`db.<ref>.supabase.co:5432`) since the 2026-07-25 fix below. Confirmed
+via direct DNS lookup that this host has **only an IPv6 (AAAA) record — no IPv4 (A) record at
+all** — a fixed property of the hostname, not an environment quirk. DigitalOcean App Platform has
+no IPv6 egress, so every connection attempt to it is permanently, unconditionally unreachable; the
+2026-07-25 fix (preferring direct to route around a pooler TLS issue) traded one 100%-failure mode
+for a different, permanent 100%-failure mode. **Fix:** reversed the preference back to
+`SUPABASE_BACKUP_URL` (the Supavisor pooler, port 6543, IPv4-reachable). This is a step back toward
+the 2026-07-14/2026-07-25 pooler TLS issue (`self-signed certificate in certificate chain`,
+reproducible only from DO's network) if it's still present — **not verified against DO's network
+from this session** (same limitation the 2026-07-25 entry had); needs confirmation via "Run Backup
+Now" or the next scheduled run. If the TLS error reappears, the per-table error handling in
+`reconcileSchemaForSource`/`upsertRows` already tolerates and logs individual failures rather than
+crashing the whole run, and `script/test-backup-conn.ts` (already in the repo) should be run
+directly on the production instance to compare both URLs side by side. **Files:**
+`server/backup-sync.ts`.
+
+**3. Approving a `delete_receipt` request could silently fail while reporting success** — hit
+once, 2026-08-02, deleting a receipt whose linked `payment_transaction` still had a
+`platform_receivables` row pointing at it via `platform_receivables_source_transaction_id_payment_transactions`
+(FK, no cascade). The delete's own transaction correctly rolled back, but
+`POST /api/approvals/:id/resolve` (`server/routes.ts`) committed the approval's `status: "approved"`
+**before** running the side-effect, then swallowed the side-effect error into a log line only —
+so the approver got a 200 telling them the receipt was deleted when it silently still existed, with
+no way to know it needed retrying. Same swallow-and-report-success pattern applied to every
+`approval` request type (`delete_policy`, `delete_quote`, `correct_paid_date`,
+`correct_paid_currency`), not just `delete_receipt`. **Fix:** on side-effect failure, revert the
+approval back to `status: "pending"` (clearing `approvedBy`/`rejectionReason`) so it isn't lost,
+audit-log the reversion as `APPROVAL_SIDE_EFFECT_FAILED`, and return a 500 with a message telling
+the caller it did not go through — instead of falling through to the success response. **Files:**
+`server/routes.ts`.
+
+**4. CSRF token rejections were misreported as 500 Internal Server Error instead of 403** — 167
+occurrences, all vulnerability-scanner bot traffic hitting non-API WordPress paths
+(`/xmlrpc.php`, `/wp-json/batch/v1`, `/wp/`) with no session, so not user-impacting, but a real
+bug: `csurf` already classifies this as a 403 (`err.status`/`err.code === "EBADCSRFTOKEN"`), but
+the global Express error handler mapped every non-`ZodError` to a generic 500, discarding that
+classification. Also logged at `"error"` level, adding noise to exactly the log stream this
+investigation had to search through. **Fix:** the global error handler now checks for
+`err.code === "EBADCSRFTOKEN"` and returns 403, logged at `"warn"`. **Files:** `server/routes.ts`.
+
+**Verified:** `npm run check` clean; `npm run test` full suite passed. Items 1, 3, 4 are pure logic
+changes verifiable by type-check/tests; item 2 (backup connectivity) cannot be verified from this
+session since the failure and any fix for it only reproduce from DigitalOcean's actual network —
+needs a manual "Run Backup Now" check post-deploy.
+
+**Lesson for next time:** DigitalOcean App Platform has no IPv6 egress — never prefer a direct
+(non-pooler) Supabase connection string without first checking it actually resolves an A record;
+`nslookup`/`dns.resolve4` a candidate host before trusting it as "the fix" for a connectivity
+issue, the same way this entry's predecessor (2026-07-25) trusted a local repro that didn't
+account for DO's network. Also: production runtime logs are pullable straight from the DO API
+with the existing `DIGITALOCEAN_API_TOKEN` in `.env` (`GET /v2/apps` → find app id → `GET
+.../deployments` → find the `ACTIVE` one → `GET .../logs?type=RUN` → fetch the returned URL) —
+no `doctl` install needed, and this is the fastest way to find out what's *actually* erroring in
+prod rather than guessing from a code audit alone.
+
+---
+
 ## 2026-07-29 — Premium miscalculation on "Any N Members" products (maxChildren=0): children always charged from the first one
 
 Augustus reported policy FLK00526 (UMTHUNZI, "Any 8 Members" plan, Falakhe tenant) wasn't

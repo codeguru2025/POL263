@@ -60,6 +60,12 @@ export async function applyCreditBalanceToPolicy(
 
   let receiptNumberForNotify: string | undefined;
 
+  // computePlatformFee reads the control-plane DB, a separate database from txDb below, so it
+  // can't run inside the org-data transaction — but premium is already known, so compute it
+  // first and write the receivable inside the same transaction as the payment instead of in a
+  // detached, unawaited .then() after commit (see createPlatformReceivableInTx).
+  const feeAmount = await computePlatformFee(orgId, premium);
+
   try {
     receiptNumberForNotify = await withOrgTransaction(orgId, async (txDb) => {
       // Resolve the acting user's tenant-DB id the same way every other receipt-creating
@@ -123,6 +129,14 @@ export async function applyCreditBalanceToPolicy(
 
       // Update policy status within the same transaction
       await applyPolicyStatusForClearedPayment(txDb, policyId, policy, today, " (credit balance)", recordedByForLedger);
+      await storage.createPlatformReceivableInTx(txDb, {
+        organizationId: orgId,
+        sourceTransactionId: tx.id,
+        amount: feeAmount,
+        currency,
+        description: `Platform fee on credit-balance receipt ${receiptNumber} (policy ${policy.policyNumber})`,
+        isSettled: false,
+      });
       return receiptNumber;
     });
   } catch (err: any) {
@@ -132,17 +146,6 @@ export async function applyCreditBalanceToPolicy(
     structuredLog("error", "applyCreditBalanceToPolicy failed", { policyId, error: err?.message });
     return { ok: false, error: err?.message || "Failed to apply credit balance" };
   }
-
-  // Platform fee on cleared credit-balance premium
-  computePlatformFee(orgId, premium).then((feeAmount) =>
-    storage.createPlatformReceivable({
-      organizationId: orgId,
-      amount: feeAmount,
-      currency,
-      description: `Platform fee on credit-balance receipt ${receiptNumberForNotify ?? "—"} (policy ${policy.policyNumber})`,
-      isSettled: false,
-    })
-  ).catch((err: Error) => structuredLog("error", "Platform fee failed (credit-balance)", { policyId, error: err.message }));
 
   // Post-transaction best-effort side effects
   if (policy.status === "lapsed" && policy.agentId) {

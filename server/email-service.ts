@@ -8,6 +8,22 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import { structuredLog } from "./logger";
 
+/**
+ * Escapes a value for safe interpolation into an HTML email body. Every caller building an
+ * `html` string by interpolating user/client-entered data (names, addresses, free-text notes)
+ * needs this — plain string substitution with no escaping lets a client whose stored name/field
+ * contains markup have it render verbatim (including injected links/scripts, depending on the
+ * mail client) in every automated email about them.
+ */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export interface SendEmailOptions {
   to: string;
   subject: string;

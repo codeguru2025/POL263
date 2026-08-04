@@ -28,7 +28,17 @@ interface CachedModules {
 }
 
 const moduleCache = new Map<string, CachedModules>();
-const MODULE_CACHE_TTL_MS = 5 * 60 * 1000;
+// invalidateTenantModuleCache() only clears this Map on whichever of the app's instances
+// (instance_count: 2) handled the write — there's no cross-instance broadcast, so the sibling
+// instance can keep serving a stale flag for up to this TTL. That matters here specifically
+// because mobile_payments gates real auto-charge behavior (see runPaymentAutomationForOrg) —
+// disabling it for a tenant might not actually stop auto-charges routed to the other instance
+// right away. A real fix needs a cross-instance invalidation broadcast (Postgres LISTEN/NOTIFY
+// or a shared cache) — out of scope for a bounded fix; shrinking the window from 5 minutes to 30
+// seconds is a stopgap, not a full close, while keeping the caching that avoids hitting the
+// control-plane DB on every policy in a sweep (see the mobile_payments check in
+// runPaymentAutomationForOrg for why that cost matters).
+const MODULE_CACHE_TTL_MS = 30 * 1000;
 
 export function invalidateTenantModuleCache(orgId: string) {
   moduleCache.delete(orgId);

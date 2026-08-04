@@ -42,20 +42,22 @@
  * backup's structure up to match before every sync rather than assuming it
  * already does.
  *
- * ENV: SUPABASE_BACKUP_DIRECT_URL — direct Supabase connection (port 5432), preferred.
- *      SUPABASE_BACKUP_URL — Supabase pooler (Supavisor/pgbouncer, port 6543), used only
- *      if the direct URL isn't set. If neither is set, the backup is silently skipped.
+ * ENV: SUPABASE_BACKUP_URL — Supabase pooler (Supavisor/pgbouncer, port 6543), preferred.
+ *      SUPABASE_BACKUP_DIRECT_URL — direct Supabase connection (port 5432), used only if
+ *      the pooler URL isn't set. If neither is set, the backup is silently skipped.
  *
- * Prefer the direct URL: production runs of this job have failed on 100% of tables, every
- * night, with "self-signed certificate in certificate chain" on every upsert against the
- * pooler — reproducible only from DigitalOcean's network, not locally, so it's a TLS chain
- * quirk specific to the pooler endpoint (Supavisor terminates TLS differently from a direct
- * `postgres` connection) rather than a code defect; see docs/BUGFIX-LOG.md, 2026-07-14 and
- * 2026-07-25. `script/full-sync-to-supabase.ts`'s manual equivalent already prefers the direct
- * URL for this same reason — this brings the scheduled job in line with it. A batch job like
- * this (a handful of long-lived connections, one run/day, DDL via reconcileSchemaForSource)
- * also has none of the high-connection-churn characteristics pgbouncer's transaction pooler
- * exists for, so direct is the better fit independent of the TLS issue.
+ * Prefer the pooler URL: the direct host (`db.<ref>.supabase.co:5432`) resolves to an
+ * IPv6-only AAAA record with no A record at all — confirmed via direct DNS lookup, not
+ * environment-specific — and DigitalOcean App Platform has no IPv6 egress. Every connection
+ * attempt against it fails with `EHOSTUNREACH`, 100% of runs, every night since this job
+ * started preferring it on 2026-07-25 (see docs/BUGFIX-LOG.md, 2026-07-25 and 2026-08-04).
+ * This reverses that 2026-07-25 fix, which itself was working around a *different* failure
+ * on the pooler (`self-signed certificate in certificate chain`, reproducible only from DO's
+ * network) — that issue was never confirmed fixed, only routed around by switching to an
+ * endpoint that turned out to be permanently unreachable from here. The pooler is the only
+ * candidate that can work at all from DO's IPv4-only egress, so it's preferred regardless of
+ * whether that TLS quirk still applies; if it does, this job's per-table error handling
+ * already tolerates and logs individual failures rather than crashing the run.
  */
 import pg from "pg";
 import { structuredLog } from "./logger";
@@ -70,7 +72,7 @@ const SYNC_EXCLUDE_TABLES = new Set(["schema_migrations"]);
 let backupTimer: ReturnType<typeof setTimeout> | null = null;
 
 function getSupabaseUrl(): string | null {
-  return process.env.SUPABASE_BACKUP_DIRECT_URL || process.env.SUPABASE_BACKUP_URL || null;
+  return process.env.SUPABASE_BACKUP_URL || process.env.SUPABASE_BACKUP_DIRECT_URL || null;
 }
 
 async function getBackupPool(): Promise<pg.Pool | null> {

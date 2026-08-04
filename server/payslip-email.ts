@@ -7,12 +7,16 @@
 import { buildPayslipPdf } from "./payslip-pdf";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
-import { sendEmail, isEmailConfigured } from "./email-service";
+import { sendEmail, isEmailConfigured, escapeHtml } from "./email-service";
+import type { Organization } from "@shared/schema";
 
 export async function sendPayslipEmail(
   runId: string,
   employeeId: string,
-  orgId: string
+  orgId: string,
+  // Callers sending to a whole run's worth of employees (POST .../send-all) already have this —
+  // passing it in avoids re-fetching the same org row once per employee.
+  preloadedOrg?: Organization,
 ): Promise<{ ok: boolean; message: string; sentTo?: string }> {
   if (!isEmailConfigured()) {
     return { ok: false, message: "SMTP is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT and EMAIL_FROM in your environment variables." };
@@ -24,7 +28,7 @@ export async function sendPayslipEmail(
   }
 
   const { buffer, filename, employee, run } = result;
-  const org = await storage.getOrganization(orgId);
+  const org = preloadedOrg ?? await storage.getOrganization(orgId);
 
   // Resolve recipient email — from linked user account, or stored directly
   let recipientEmail: string | null = null;
@@ -45,12 +49,12 @@ export async function sendPayslipEmail(
     subject: `Your Payslip for ${periodLabel}`,
     text: `Dear ${employee.firstName},\n\nPlease find attached your payslip for the period ${periodLabel}.\n\nIf you have any queries, please contact the HR department.\n\nThis is a confidential document.\n\n${org?.name || ""}`,
     html: `
-      <p>Dear <strong>${employee.firstName}</strong>,</p>
-      <p>Please find attached your payslip for the period <strong>${periodLabel}</strong>.</p>
-      <p>Employee Number: <strong>${employee.employeeNumber}</strong></p>
+      <p>Dear <strong>${escapeHtml(employee.firstName)}</strong>,</p>
+      <p>Please find attached your payslip for the period <strong>${escapeHtml(periodLabel)}</strong>.</p>
+      <p>Employee Number: <strong>${escapeHtml(employee.employeeNumber)}</strong></p>
       <p>If you have any queries, please contact the HR department.</p>
       <hr/>
-      <p style="color:#888;font-size:12px;">This is a confidential document. ${org?.name || ""}</p>
+      <p style="color:#888;font-size:12px;">This is a confidential document. ${escapeHtml(org?.name || "")}</p>
     `,
     attachments: [{ filename, content: buffer, contentType: "application/pdf" }],
   });

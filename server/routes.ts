@@ -239,7 +239,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const productById = new Map(allProducts.map((p: any) => [p.id, p]));
     const productVersionById = new Map(allProductVersions.map((pv: any) => [pv.id, pv]));
 
-    const updated = new Map<string, any>();
+    // Compute every candidate's recomputed premium in-memory first — computePolicyPremium makes
+    // no DB calls here since product/productVersion/orgAddOns are all preloaded above, so this
+    // Promise.all is cheap and safe to run unbounded. Only policies that actually drifted are
+    // collected for the write phase below.
+    const drifted: { policy: any; recomputedPremium: string }[] = [];
     await Promise.all(candidates.map(async (policy) => {
       const pv = productVersionById.get(policy.productVersionId);
       if (!pv) return; // matches computePolicyPremium's own "no such version -> 0" guard being moot here — leave untouched rather than zero a real policy out from bad data
@@ -268,10 +272,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const current = parseFloat(String(policy.premiumAmount ?? "0"));
       const next = parseFloat(String(recomputedPremium ?? "0"));
       if (Number.isFinite(current) && Number.isFinite(next) && Math.abs(current - next) >= 0.01) {
-        const row = await storage.updatePolicy(policy.id, { premiumAmount: recomputedPremium }, orgId);
-        updated.set(policy.id, row || { ...policy, premiumAmount: recomputedPremium });
+        drifted.push({ policy, recomputedPremium });
       }
     }));
+
+    // Persist drifted premiums with bounded concurrency. A single page can have dozens of
+    // policies drift at once (e.g. right after a product price change or a mass premium
+    // correction), and firing one UPDATE per policy unbounded can exceed the tenant DB pool's
+    // connection cap (10 — see TENANT_DB_POOL_MAX in server/tenant-db.ts), starving every other
+    // request against that tenant. This is what caused production 500s on GET /api/policies and
+    // GET /api/requisitions ("timeout exceeded when trying to connect") — see docs/BUGFIX-LOG.md.
+    const UPDATE_CONCURRENCY = 5;
+    const updated = new Map<string, any>();
+    for (let i = 0; i < drifted.length; i += UPDATE_CONCURRENCY) {
+      const chunk = drifted.slice(i, i + UPDATE_CONCURRENCY);
+      await Promise.all(chunk.map(async ({ policy, recomputedPremium }) => {
+        const row = await storage.updatePolicy(policy.id, { premiumAmount: recomputedPremium }, orgId);
+        updated.set(policy.id, row || { ...policy, premiumAmount: recomputedPremium });
+      }));
+    }
 
     return list.map((p) => updated.get(p.id) ?? p);
   }
@@ -1091,10 +1110,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const leads = (await storage.getLeadsByAgent(agentId, user.organizationId)).filter((l) => l.source === "vcard_quote");
-    const withQuotes = await Promise.all(leads.map(async (l) => {
-      const quote = await storage.getQuoteByLeadId(l.id, user.organizationId);
-      return { ...l, quoteId: quote?.id ?? null };
-    }));
+    const quotesByLeadId = await storage.getQuotesByLeadIds(leads.map((l) => l.id), user.organizationId);
+    const withQuotes = leads.map((l) => ({ ...l, quoteId: quotesByLeadId[l.id]?.id ?? null }));
     return res.json(withQuotes);
   });
 
@@ -2223,7 +2240,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const list = isAgent
       ? await storage.getClientsByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId, limit, offset, search)
       : await storage.getClientsByOrg(user.organizationId, limit, offset, search);
-    return res.json(list);
+    // Unlike GET /api/clients/:id below, this list path was returning raw rows straight from
+    // storage — including passwordHash, securityAnswerHash, and the plaintext portal
+    // activationCode for every client in the org — to anyone holding read:client (a common,
+    // non-admin permission). Strip the same fields here that the singular route already strips.
+    const safeList = (list as any[]).map(({ passwordHash: _cph, securityAnswerHash: _csah, activationCode: _cac, ...safeClient }) => safeClient);
+    return res.json(safeList);
   });
 
   app.get("/api/clients/:id", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
@@ -5208,6 +5230,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           receipted++;
           continue;
         }
+        // computePlatformFee reads the control-plane DB, a separate database from txDb below,
+        // so it can't run inside the org-data transaction — but premium is already known, so
+        // compute it first and write the receivable inside the same transaction as the payment
+        // instead of in a detached, unawaited .then() after commit (see createPlatformReceivableInTx).
+        const feeAmount = await computePlatformFee(user.organizationId, premium);
         await withOrgTransaction(user.organizationId, async (txDb) => {
           // Lock the policy row to prevent concurrent status changes
           await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
@@ -5244,18 +5271,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (policy.status === "lapsed") {
             await rollbackClawbacksInTx(txDb, user.organizationId, policy);
           }
-        });
-        receipted++;
-        // Platform fee on month-end cleared receipt
-        computePlatformFee(user.organizationId, premium).then((feeAmount) =>
-          storage.createPlatformReceivable({
+          await storage.createPlatformReceivableInTx(txDb, {
             organizationId: user.organizationId,
+            sourceTransactionId: tx.id,
             amount: feeAmount,
             currency: policy.currency || "USD",
             description: `Platform fee on month-end receipt (policy ${policyNumber})`,
             isSettled: false,
-          })
-        ).catch((err: Error) => structuredLog("error", "Platform fee failed (month-end)", { policyId: policy.id, error: err.message }));
+          });
+        });
+        receipted++;
         // Post-transaction best-effort side effects
         if (policy.status === "lapsed") {
           if (policy.clientId) {
@@ -5426,17 +5451,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     });
     if (!isBackdated) {
-      // Platform fee on each cleared group receipt (not on pending approvals)
+      // Platform fee on each cleared group receipt (not on pending approvals). Awaited (not a
+      // detached, unawaited .then()) so a crash here is at worst a synchronous failure logged
+      // before the response returns, not a lost promise nobody was ever watching — see
+      // docs/BUGFIX-LOG.md for the durability gap this closes.
       for (const r of results) {
-        computePlatformFee(user.organizationId, r.amount).then((feeAmount) =>
-          storage.createPlatformReceivable({
+        try {
+          const feeAmount = await computePlatformFee(user.organizationId, r.amount);
+          await storage.createPlatformReceivable({
             organizationId: user.organizationId,
             amount: feeAmount,
             currency: r.currency,
             description: `Platform fee on group receipt ${r.receiptNumber} (policy ${r.policyNumber})`,
             isSettled: false,
-          })
-        ).catch((err: Error) => structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err.message }));
+          });
+        } catch (err: any) {
+          structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err?.message });
+        }
       }
     }
     return res.status(201).json({ receipted: results.length, results, pendingApproval: isBackdated, groupRef });
@@ -5509,6 +5540,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const approvedNoteText = isPremiumOverride
         ? `Premium override approved — receipted ${receipt.amount} vs system premium ${(receipt.metadataJson as any)?.systemPremium ?? "?"}`
         : `Backdated group receipt approved — original date: ${effectiveDate}`;
+      // computePlatformFee reads the control-plane DB, a separate database from txDb below, so
+      // it can't run inside the org-data transaction — but receipt.amount is already known, so
+      // compute it first and write the receivable inside the same transaction as the payment
+      // instead of in a detached, unawaited .then() after commit.
+      const feeAmount = await computePlatformFee(user.organizationId, receipt.amount);
       await withOrgTransaction(user.organizationId, async (txDb) => {
         await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
         const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
@@ -5576,18 +5612,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (policy.status === "lapsed") {
           await rollbackClawbacksInTx(txDb, user.organizationId, policy);
         }
-      });
-      computePlatformFee(user.organizationId, receipt.amount).then((feeAmount) =>
-        storage.createPlatformReceivable({
+        await storage.createPlatformReceivableInTx(txDb, {
           organizationId: user.organizationId,
+          sourceTransactionId: tx.id,
           amount: feeAmount,
           currency: receipt.currency,
           description: isPremiumOverride
             ? `Platform fee on approved premium-override receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`
             : `Platform fee on approved backdated receipt ${receipt.receiptNumber} (policy ${policy.policyNumber})`,
           isSettled: false,
-        })
-      ).catch((err: Error) => structuredLog("error", "Platform fee failed (approved receipt)", { receiptId, error: err.message }));
+        });
+      });
       await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
       return res.json({ message: "Receipt approved and applied." });
     } catch (err: any) {
@@ -8020,47 +8055,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         patch.approverNotes = req.body.approverNotes.trim();
       }
     } else if (action === "pay") {
-      // Legacy single-shot pay — redirects to disbursement endpoint. Keep for backward compat but discourage.
-      if (!["approved", "partial"].includes(existing.status)) return res.status(400).json({ message: "Only approved or partially-paid requisitions can record a payment" });
-      const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : today;
-      const payAmount = req.body.amount ? Number(req.body.amount) : (Number(existing.amount) - Number(existing.amountPaid ?? 0));
-      const newAmountPaid = Math.min(Number(existing.amount), Number(existing.amountPaid ?? 0) + payAmount);
-      const fullyPaid = newAmountPaid >= Number(existing.amount);
-      patch.status = fullyPaid ? "paid" : "partial";
-      patch.amountPaid = String(newAmountPaid.toFixed(2));
-      patch.paidBy = effectiveUserId;
-      patch.paidAt = new Date();
-      patch.paidDate = paidDate;
-      if (typeof req.body.paymentMethod === "string") patch.paymentMethod = req.body.paymentMethod;
-      if (typeof req.body.reference === "string") patch.reference = req.body.reference;
-      if (typeof req.body.receivedBy === "string") patch.receivedBy = req.body.receivedBy;
-      if (typeof req.body.receivedByUserId === "string") patch.receivedByUserId = req.body.receivedByUserId;
-      // Disbursement + requisition update happen in one transaction — see the dedicated
-      // POST /api/requisitions/:id/payments endpoint for why (same atomicity concern: a crash
-      // between the two calls would otherwise leave an orphaned disbursement or a "paid"
-      // requisition with no disbursement backing it).
-      updated = await withOrgTransaction(user.organizationId, async (txDb) => {
-        await txDb.insert(paymentDisbursements).values({
-          organizationId: user.organizationId,
-          branchId: existing.branchId ?? undefined,
-          entityType: "requisition",
-          entityId: existing.id,
-          amount: String(payAmount.toFixed(2)),
-          currency: existing.currency,
-          paidByUserId: effectiveUserId,
-          receivedBy: typeof req.body.receivedBy === "string" ? req.body.receivedBy : undefined,
-          receivedByUserId: typeof req.body.receivedByUserId === "string" ? req.body.receivedByUserId : undefined,
-          paidDate,
-          paymentMethod: typeof req.body.paymentMethod === "string" ? req.body.paymentMethod : "cash",
-          reference: typeof req.body.reference === "string" ? req.body.reference : undefined,
-          notes: typeof req.body.notes === "string" ? req.body.notes : undefined,
-          createdByUserId: effectiveUserId,
-        });
-        const [row] = await txDb.update(requisitions).set(patch)
-          .where(and(eq(requisitions.id, existing.id), eq(requisitions.organizationId, user.organizationId)))
-          .returning();
-        return row;
-      });
+      // Removed 2026-08-04: this legacy single-shot pay path read `existing.amountPaid` with no
+      // row lock before writing a disbursement + status update off that stale read — two
+      // concurrent calls (double-click, or two staff paying the same requisition) could each
+      // insert a separate disbursement and both mark it "paid", double-recording the payout. Its
+      // replacement, POST /api/requisitions/:id/payments, locks the row (`FOR UPDATE`) and
+      // re-validates the outstanding balance under that lock before writing. No frontend or app
+      // caller used `action: "pay"` (grepped clean), so this returns an error instead of silently
+      // doing nothing, rather than duplicating the locked logic here.
+      return res.status(410).json({ message: "This action is no longer supported. Use POST /api/requisitions/:id/payments instead." });
     } else if (action === "correct-paid-date" || action === "correct-paid-currency") {
       // Corrects the value date or currency used for cash-basis financial statements on an
       // already-paid requisition — e.g. cash actually left on an earlier day than the system
@@ -9621,6 +9624,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       } catch (sideEffectErr: any) {
         structuredLog("error", "Approval side-effect failed", { approvalId: approval.id, requestType: approval.requestType, error: sideEffectErr?.message });
+        // The side-effect (e.g. the actual delete/correction) failed and its own transaction
+        // rolled back, but `updated` above already committed status: "approved" — leaving the
+        // approval record claiming success while the thing it approved never happened. Revert
+        // it to "pending" so it isn't silently lost (the approver saw a 200 and would have no
+        // reason to retry) and tell the caller it didn't actually go through, instead of
+        // returning `updated` below as if it had.
+        const reverted = await storage.updateApprovalRequest(approval.id, {
+          status: "pending",
+          approvedBy: null,
+          rejectionReason: null,
+        }, user.organizationId);
+        await auditLog(req, "APPROVAL_SIDE_EFFECT_FAILED", "ApprovalRequest", approval.id, updated, reverted);
+        return res.status(500).json({
+          message: `Approval could not be completed: ${sideEffectErr?.message || "the underlying change failed"}. The request has been reset to pending.`,
+        });
       }
     }
 
@@ -10120,13 +10138,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const runId = req.params.id as string;
     const { sendPayslipEmail } = await import("./payslip-email");
     const slips = await storage.getPayslipsForRun(runId, user.organizationId);
-    const results = await Promise.all(
-      slips.map(async (s: any) => {
-        const empId: string = s.employeeId ?? s.employee?.id;
-        const r = await sendPayslipEmail(runId, empId, user.organizationId);
-        return { employeeId: empId, ...r };
-      })
-    );
+    const org = await storage.getOrganization(user.organizationId);
+    // Each send does a CPU-bound PDF build plus an outbound SMTP call — firing all of them at
+    // once for a large run risks mail-provider rate-limiting/connection exhaustion and serializes
+    // CPU work across concurrent requests on this app's single-vCPU instance. Chunked instead of
+    // unbounded, same pattern as today's batchRecalculatePolicyPremiums fix.
+    const SEND_CONCURRENCY = 4;
+    const results: { employeeId: string; ok: boolean; message: string; sentTo?: string }[] = [];
+    for (let i = 0; i < slips.length; i += SEND_CONCURRENCY) {
+      const chunk = slips.slice(i, i + SEND_CONCURRENCY);
+      const chunkResults = await Promise.all(
+        chunk.map(async (s: any) => {
+          const empId: string = s.employeeId ?? s.employee?.id;
+          const r = await sendPayslipEmail(runId, empId, user.organizationId, org);
+          return { employeeId: empId, ...r };
+        })
+      );
+      results.push(...chunkResults);
+    }
     await auditLog(req, "SEND_ALL_PAYSLIPS", "PayrollRun", runId, null, { results });
     const sent = results.filter(r => r.ok).length;
     const failed = results.filter(r => !r.ok).length;
@@ -10916,17 +10945,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // Platform fee on each legacy group receipt, same as regular group receipts.
       // Stamped with the receipt's own payment date (not "now") so backdated legacy
-      // entries land in the correct month on date-filtered platform-fee reports.
-      computePlatformFee(user.organizationId, String(amount)).then((feeAmount) =>
-        storage.createPlatformReceivable({
+      // entries land in the correct month on date-filtered platform-fee reports. Awaited (not a
+      // detached, unawaited .then()) so a crash here is at worst a synchronous failure logged
+      // before the response returns, not a lost promise nobody was ever watching.
+      try {
+        const feeAmount = await computePlatformFee(user.organizationId, String(amount));
+        await storage.createPlatformReceivable({
           organizationId: user.organizationId,
           amount: feeAmount,
           currency: String(currency).toUpperCase(),
           description: `Platform fee on legacy group receipt ${receiptNumber} (group ${group.name})`,
           isSettled: false,
           createdAt: new Date(`${paymentDate}T12:00:00.000Z`),
-        })
-      ).catch((err: Error) => structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err.message }));
+        });
+      } catch (err: any) {
+        structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err?.message });
+      }
 
       return res.status(201).json(created);
     } catch (err: any) {
@@ -11182,6 +11216,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/settlements", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
+    // insertSettlementSchema has no positive-amount check (settlements.amount is a plain
+    // `numeric`, not zod-refined) — a zero/negative amount would pass validation, get approved,
+    // and silently no-op in approveSettlementWithAllocation's allocation loop (remaining <= 0
+    // short-circuits both the allocate and the overpayment-credit branch), leaving a settlement
+    // marked "approved" with nothing actually allocated and no error anywhere.
+    if (!(Number(req.body.amount) > 0)) {
+      return res.status(400).json({ message: "Settlement amount must be a positive number" });
+    }
     const parsed = insertSettlementSchema.parse({
       ...req.body,
       organizationId: user.organizationId,
@@ -13017,6 +13059,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: err.errors[0]?.message || "Validation failed", errors: err.errors });
+    }
+    // csurf already classifies this as a 403 (err.status/err.code === "EBADCSRFTOKEN") — falling
+    // through to the generic 500 below misreported every CSRF rejection (mostly vulnerability
+    // scanners probing WordPress paths like /xmlrpc.php with no session at all) as a server
+    // error. Logged at "warn", not "error": these are routine unauthenticated bot noise, not
+    // something that needs the same attention as an actual unhandled exception.
+    if (err.code === "EBADCSRFTOKEN") {
+      structuredLog("warn", "CSRF token rejected", { path: req.path, method: req.method });
+      return res.status(403).json({ message: "Invalid or missing CSRF token" });
     }
     structuredLog("error", "Unhandled route error", { error: err.message, stack: err.stack, path: req.path, method: req.method });
     return res.status(500).json({ message: "Internal server error" });

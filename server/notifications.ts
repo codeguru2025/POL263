@@ -1,7 +1,7 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { pushToClient } from "./push";
-import { sendEmail } from "./email-service";
+import { sendEmail, escapeHtml } from "./email-service";
 import { hasModule } from "./module-gate";
 
 /** Best-effort PDF attachment for the events that have a document worth attaching. Never throws. */
@@ -320,7 +320,11 @@ export async function dispatchNotification(
                 fromName: ctx.orgName,
                 subject: renderedSubject,
                 text: renderedBody,
-                html: `<p>${renderedBody.replace(/\n/g, "<br/>")}</p>`,
+                // renderTemplate does plain string substitution of client-entered data
+                // ({client_name}, etc.) into the template with no escaping — escape the fully
+                // rendered text before wrapping in HTML (after escaping, not before, so the
+                // \n -> <br/> tag we insert here isn't itself escaped).
+                html: `<p>${escapeHtml(renderedBody).replace(/\n/g, "<br/>")}</p>`,
                 attachments,
               });
             } else {
@@ -355,7 +359,11 @@ export async function dispatchNotification(
                 fromName: ctx.orgName,
                 subject: renderedSubject,
                 text: renderedBody,
-                html: `<p>${renderedBody.replace(/\n/g, "<br/>")}</p>`,
+                // renderTemplate does plain string substitution of client-entered data
+                // ({client_name}, etc.) into the template with no escaping — escape the fully
+                // rendered text before wrapping in HTML (after escaping, not before, so the
+                // \n -> <br/> tag we insert here isn't itself escaped).
+                html: `<p>${escapeHtml(renderedBody).replace(/\n/g, "<br/>")}</p>`,
               });
             }
           } catch (err) {
