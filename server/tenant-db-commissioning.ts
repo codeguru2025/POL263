@@ -21,10 +21,17 @@ import { sendInfrastructureReadyEmail } from "./tenant-billing-email";
 import { structuredLog } from "./logger";
 import pg from "pg";
 
-// Next in the sequence after PAYMENT_AUTO_LOCK_KEY (9_002_630_001), PARKED_VEHICLE_LOCK_KEY
-// (9_002_630_002), TENANT_BILLING_SWEEP_LOCK_KEY (9_002_630_003), POLICY_LAPSE_SWEEP_LOCK_KEY
-// (9_002_630_004) — see server/routes.ts / server/tenant-billing-sweep.ts / server/policy-lapse-sweep.ts.
-const TENANT_DB_PROVISIONING_LOCK_CLASS = 9_002_630_005;
+// NOT part of the PAYMENT_AUTO_LOCK_KEY (9_002_630_001) / PARKED_VEHICLE_LOCK_KEY (9_002_630_002)
+// / TENANT_BILLING_SWEEP_LOCK_KEY (9_002_630_003) / POLICY_LAPSE_SWEEP_LOCK_KEY (9_002_630_004)
+// sequence despite the similar name — those are all called via withAdvisoryLock's single-argument
+// form (routes to pg_try_advisory_lock(bigint), which tolerates a ~9 billion value fine). This
+// one is called via the two-argument class+key form below, which routes to
+// pg_try_advisory_lock(int, int) — both arguments must fit in a 32-bit int4 (max ~2.147 billion).
+// A 9-billion "next in the sequence" value here throws "value out of range for type integer" on
+// every call — never caught before this because no tenant had gone through real dedicated-database
+// provisioning (auto or manual) until 2026-08-04. Sized instead to match BACKFILL_LOCK_CLASS
+// (900263002 in server/routes.ts), the only other 2-arg advisory lock class in this codebase.
+const TENANT_DB_PROVISIONING_LOCK_CLASS = 900263005;
 
 /** Deterministic string→int32 hash for the per-tenant advisory-lock key. Collisions only cause
  *  harmless retried lock contention — correctness comes from the databaseUrl check below,

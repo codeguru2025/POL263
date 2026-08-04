@@ -51,7 +51,16 @@ async function doApiRequest(path: string, init?: RequestInit): Promise<any> {
 
 function isDuplicateDbNameError(err: any): boolean {
   const text = `${err?.body || ""} ${err?.message || ""}`.toLowerCase();
-  return err?.status === 409 || (err?.status === 400 && text.includes("already exists"));
+  // The DO Managed Databases API's actual observed shape for "this name is taken" is
+  // 422 unprocessable_entity / "database name is not available" — not the 409 or 400-plus-
+  // "already exists" this originally guessed at. Confirmed against a real retry (2026-08-04):
+  // a partially-completed provisioning attempt (logical DB created, then a later step failed)
+  // hard-failed on retry instead of treating the already-created DB as idempotent success,
+  // because neither of the guessed shapes matched. Keeping the 409/400 checks too in case DO's
+  // API is inconsistent across error paths — never observed either of those directly.
+  return err?.status === 409
+    || (err?.status === 400 && text.includes("already exists"))
+    || (err?.status === 422 && text.includes("not available"));
 }
 
 /** Swaps the trailing database-name path segment of a Postgres connection URI. */
@@ -59,6 +68,20 @@ function withDatabaseName(uri: string, dbName: string): string {
   const url = new URL(uri);
   url.pathname = `/${dbName}`;
   return url.toString();
+}
+
+/** Strips a `sslmode=` query param from a connection string. DO's cluster connection URI
+ *  includes `?sslmode=require`, which fights with an explicit `ssl: { rejectUnauthorized: false }`
+ *  pool option passed alongside it — pg ends up still attempting full certificate-chain
+ *  verification and failing with "self-signed certificate in certificate chain" against DO's
+ *  managed-Postgres certs, even though the pool option says not to. Same fix already applied to
+ *  every other pool built against a DO/self-signed-tolerant host — see buildPoolConfig in
+ *  server/tenant-db.ts, which this provisioning flow's own connections had been missing. */
+function stripSslMode(connectionString: string): string {
+  return connectionString
+    .replace(/\?sslmode=[^&]*&?/gi, "?")
+    .replace(/&sslmode=[^&]*/gi, "")
+    .replace(/\?$/, "");
 }
 
 /**
@@ -93,7 +116,7 @@ export async function provisionLogicalTenantDatabase(tenantId: string): Promise<
     const { database } = await doApiRequest(`/databases/${clusterId}`);
     const adminUri: string | undefined = database?.connection?.uri;
     if (!adminUri) throw new Error("DO cluster response missing connection.uri");
-    const logicalDbAdminUri = withDatabaseName(adminUri, logicalDbName);
+    const logicalDbAdminUri = stripSslMode(withDatabaseName(adminUri, logicalDbName));
 
     const roleName = `pol263_tenant_${tenantId.replace(/-/g, "").slice(0, 12)}`;
     const rolePassword = crypto.randomBytes(24).toString("base64url");
@@ -111,6 +134,17 @@ export async function provisionLogicalTenantDatabase(tenantId: string): Promise<
       }
       await adminPool.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO ${roleName}`);
       await adminPool.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT,INSERT,UPDATE,DELETE ON TABLES TO ${roleName}`);
+      // Without this, the app's own lazy safety-net auto-migration (applyPendingMigrations,
+      // triggered on first pool creation for this org — see server/tenant-db.ts, meant to bring
+      // a DB restored from a stale backup back up to date automatically) fails with "permission
+      // denied for schema public" the moment it needs to CREATE TABLE anything, even a table
+      // that already exists (Postgres still checks CREATE privilege before evaluating
+      // IF NOT EXISTS). Postgres 15+ revokes CREATE on the public schema from the PUBLIC
+      // pseudo-role by default, so a least-privilege role like this one doesn't get it for free
+      // the way it would have on older Postgres. The failure is already caught and logged
+      // ("pool still usable") rather than fatal, but degrades the safety net to a no-op for this
+      // tenant. Discovered 2026-08-04 provisioning IFALAKHE FUNERAL SERVICES.
+      await adminPool.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${roleName}`);
     } finally {
       await adminPool.end().catch(() => {});
     }

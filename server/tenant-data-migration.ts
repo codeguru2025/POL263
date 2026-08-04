@@ -44,12 +44,19 @@ export async function copyTenantTable(
   }
 
   const colRes = await src.query(
-    `SELECT column_name FROM information_schema.columns
+    `SELECT column_name, data_type FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = $1
      ORDER BY ordinal_position`,
     [table],
   );
   const cols = colRes.rows.map((r: any) => r.column_name);
+  // node-postgres auto-parses json/jsonb columns into JS objects/arrays on SELECT, but does NOT
+  // auto-serialize them back on the way out as bind parameters for the INSERT below — a plain
+  // object gets coerced to its string representation ("[object Object]"), which Postgres then
+  // rejects with "invalid input syntax for type json". Only a real risk for tables that actually
+  // have non-null json/jsonb data (most newly-provisioned tenants have none yet, which is exactly
+  // why this was never hit before 2026-08-04's first real dedicated-database commissioning).
+  const jsonColumns = new Set(colRes.rows.filter((r: any) => r.data_type === "json" || r.data_type === "jsonb").map((r: any) => r.column_name));
   const colList = cols.map((c: string) => `"${c}"`).join(", ");
   const placeholders = (start: number, len: number) => cols.map((_, i) => `$${start + i}`).join(", ");
 
@@ -62,7 +69,10 @@ export async function copyTenantTable(
     const values: any[] = [];
     const rowPlaceholders: string[] = [];
     rows.rows.forEach((row: any, i: number) => {
-      cols.forEach((col: string) => values.push(row[col]));
+      cols.forEach((col: string) => {
+        const v = row[col];
+        values.push(jsonColumns.has(col) && v !== null && typeof v === "object" ? JSON.stringify(v) : v);
+      });
       rowPlaceholders.push(`(${placeholders(i * cols.length + 1, cols.length)})`);
     });
 

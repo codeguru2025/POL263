@@ -10,6 +10,117 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-04 — Per-tenant dedicated-database provisioning had never actually worked: 8 latent bugs found by finally exercising it end-to-end
+
+Augustus asked which database IFALAKHE FUNERAL SERVICES (a same-day self-signup tenant) was
+using, then asked to commission it a dedicated database on the shared cluster — the intended
+default architecture (`server/do-database-provisioning.ts`'s own header comment already
+documented this: one logical database per tenant inside one shared DO cluster, not a cluster
+per tenant, since DO caps accounts at 10 clusters). This was the first time this whole feature
+was ever exercised against a real signup rather than the manual admin script it was extracted
+from — every one of the 8 bugs below was latent, not new; nothing about IFALAKHE was special.
+
+**1. Advisory lock class exceeded `int4` range.** `TENANT_DB_PROVISIONING_LOCK_CLASS =
+9_002_630_005` (`server/tenant-db-commissioning.ts`) followed the naming convention of four
+other lock constants (`PAYMENT_AUTO_LOCK_KEY` etc.) that are all called via `withAdvisoryLock`'s
+single-argument form (routes to `pg_try_advisory_lock(bigint)`, tolerates ~9 billion fine) — but
+this one is called via the two-argument class+key form (`pg_try_advisory_lock(int, int)`), where
+*both* arguments must fit a 32-bit `int4` (~2.147 billion max). Every call threw immediately.
+Resized to `900263005`, matching `BACKFILL_LOCK_CLASS` (900263002 in `server/routes.ts`), the
+only other 2-arg advisory lock class in the codebase.
+
+**2. SSL `sslmode` conflict on the provisioning admin connection.** DO's cluster connection URI
+embeds `?sslmode=require`, which fights with an explicit `ssl: { rejectUnauthorized: false }`
+pool option passed alongside it — Postgres still attempted full certificate-chain verification
+and failed with `self-signed certificate in certificate chain`. Same class of issue already
+worked around for every other DO/self-signed-tolerant pool (`buildPoolConfig` in
+`server/tenant-db.ts`) — this provisioning flow's own connections had just been missed. Added
+`stripSslMode()` in `server/do-database-provisioning.ts`, same fix.
+
+**3. "Database name already exists" detection didn't match DO's actual error shape.**
+`isDuplicateDbNameError` checked for `409` or `400`+`"already exists"` — DO's Managed Databases
+API actually returns `422 unprocessable_entity` / `"database name is not available"`. A retry
+after any partial failure (exactly the scenario a real retry hits) hard-failed instead of
+treating the already-created logical database as idempotent success. Added the real observed
+shape to the check.
+
+**4. 6 tables missing from `migrations/` entirely.** `parlour_personnel`, `payment_disbursements`,
+`bank_accounts`, `bank_deposits`, `bank_statement_balances`, `balance_sheet_entries` exist in
+every real database (main, Falakhe) but were created via `npm run db:push` directly at some
+point in the past and never captured as a tracked migration file — exactly the historical drift
+this repo's "never use `db:push`" rule (see [[feedback_no_drizzle_push]]) already exists to
+prevent going forward, just never backfilled from before that rule existed. Never noticed
+because `npm run db:migrate` only ever runs against already-existing databases that already have
+these tables — this only matters when building a database from `migrations/` alone from empty,
+which per-tenant commissioning is the only code path that ever does. Added
+`migrations/0004_baseline_missing_tables.sql`, generated from a direct introspection of the live
+database's `information_schema`/`pg_catalog` (columns, FKs, indexes, constraints) — not
+transcribed from `shared/schema.ts`, to avoid the exact kind of drift that caused this gap in the
+first place. One FK (`bank_deposits.safe_id → safes`) had to be split into a separate migration
+(`0065_zz_bank_deposits_safe_fk.sql`) positioned after `0065_safes.sql`, since `payment_disbursements`
+(also in the baseline file) needs to exist before `0064_disbursement_cross_currency.sql` — no
+single insertion point satisfies both orderings.
+
+**5. `payment_receipts.approval_status` — the same class of gap, one column this time.** Also
+`db:push`-only, never in a tracked migration; `0080_performance_indexes.sql`'s partial index on
+it failed on a schema-only build. Added `migrations/0079_zz_payment_receipts_approval_status.sql`.
+(A full static sweep for *every* other possibly-missing column was attempted and abandoned — two
+regex-based attempts both produced unreliable results, one wildly over-counting via a shell-
+escaping bug, one under/over-counting via cross-statement regex spanning. Real Postgres replay
+against an actual empty database, fixing each error as it surfaces, proved far more reliable
+than static analysis here and is what actually found every issue in this entry.)
+
+**6. A tenant-specific data `INSERT` was bundled into the general migration stream.**
+`0074_country_flag_settings.sql` hardcoded `INSERT INTO country_flag_settings VALUES
+('4eadab0e-...' [Falakhe's org id], ...)` — correct for the shared registry DB and Falakhe's own
+database (both contain that row), but every *other* tenant's fresh database doesn't have and
+will never have Falakhe's organization row, so the FK constraint failed immediately.
+`ON CONFLICT DO NOTHING` didn't help — that only suppresses a conflict on the insert target, not
+an FK violation on a referenced row that doesn't exist. Rewrote as `INSERT ... SELECT ... WHERE
+EXISTS (SELECT 1 FROM organizations WHERE id = ...)`, safe against any database regardless of
+whether that specific org exists in it.
+
+**7. json/jsonb round-trip bug in the tenant data-copy step.** `copyTenantTable`
+(`server/tenant-data-migration.ts`) selects rows from the source database — node-postgres
+auto-parses `json`/`jsonb` columns into JS objects — then re-inserts those same values as bind
+parameters into the destination without re-serializing them. A plain object as a bind parameter
+coerces to its string form (`"[object Object]"`), which Postgres rejects with `invalid input
+syntax for type json`. Only triggers for tables with actual non-null json/jsonb data, which is
+exactly why a freshly-signed-up tenant with minimal data (only `audit_logs`, in this case) was
+the first thing to ever hit it. Now checks each column's `data_type` from `information_schema`
+and `JSON.stringify()`s object/array values for `json`/`jsonb` columns before binding.
+
+**8. The provisioned app role couldn't self-heal via the pool's own auto-migration safety net.**
+`getDbForOrg` (`server/tenant-db.ts`) runs `applyPendingMigrations` automatically on first pool
+creation for an org, specifically so a database restored from a stale backup catches back up
+without manual intervention. That failed with `permission denied for schema public` for the
+newly-provisioned role — Postgres 15+ revokes `CREATE` on the `public` schema from the `PUBLIC`
+pseudo-role by default, so a least-privilege role doesn't get it for free the way it would have
+on older Postgres, and `CREATE TABLE IF NOT EXISTS` still requires the `CREATE` privilege check
+even when the table already exists. Already gracefully caught and logged ("pool still usable"),
+so not fatal — real app usage (SELECT/INSERT/UPDATE/DELETE) worked throughout — but silently
+degraded the safety net to a no-op for every dedicated-database tenant. Added
+`GRANT USAGE, CREATE ON SCHEMA public TO ${roleName}` to provisioning.
+
+**Verified:** ran the complete, real `commissionDedicatedTenantDatabase` flow against IFALAKHE
+FUNERAL SERVICES's real tenant id end-to-end (not a dry run) after each fix, iterating on the
+actual error Postgres returned each time rather than guessing ahead — confirmed final state:
+`tenant_databases.migrationState = "current"`, `getDbForOrg` routes to the new isolated database,
+querying `organizations` through it returns exactly IFALAKHE's own row (no cross-tenant leak),
+and the auto-migration safety net now runs cleanly with no permission warning. `npm run check`
+and `npm run test` (316/316) both clean.
+
+**Lesson for next time:** a "provision X automatically" code path that has an existing manual
+fallback UI (here: the platform dashboard's "Pending domain/database commissioning" queue) can
+silently never have been exercised for real, even in a mature codebase — the fallback path
+absorbs every failure so smoothly that nobody notices the automation itself is broken. When
+asked to "just turn this feature on" for a real case, budget for the possibility that it's never
+actually run before, and prefer iterating against the real target system's real errors over
+predicting them — every bug in this entry was found by literally running the thing and reading
+what Postgres/DigitalOcean actually said, not by reading the code and guessing.
+
+---
+
 ## 2026-08-04 — New tenant's subdomain never went live: automated commissioning only told DO App Platform about the domain, never created its DNS record
 
 A new self-signup tenant, IFALAKHE FUNERAL SERVICES, provisioned at 14:12:01 UTC; its subdomain
