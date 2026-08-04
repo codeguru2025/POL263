@@ -95,24 +95,30 @@ everything bounded/mechanical same session; flagged the rest.
 2026-08-02/03) — cross-referenced here since this audit's financial-integrity fork independently
 flagged the same fan-out pattern as a systemic risk, not a one-off.**
 
-**Deliberately NOT fixed — reported only, needs Augustus's input or too large to blind-fix:**
-1. **FLK00526 (Falakhe) still has a live `premium_override` of $21.00** — confirmed via a direct
-   production query. This is the exact item flagged as "still open" in the 2026-08-01 correction
-   pass (25 policies were fixed; this one was excluded/missed). Needs a decision on whether the
-   override was ever a deliberate grandfathered rate vs. a leftover bug artifact, and what refund/
-   credit reconciliation was already planned — not something to blind-fix.
-2. **`schedulePolicyPremiumBackfill` (`server/routes.ts`) may now be partially redundant** with
+**Update, same day, after Augustus's decision:** FLK00526's `premium_override` was in fact
+deliberately set (see the 2026-07-29 entry below — the client's real agreed price was $21/mo vs.
+the formula's $25), so this wasn't a leftover bug artifact. Asked Augustus explicitly rather than
+guess; he chose to clear the override and move the client onto the standard formula price anyway.
+Recomputed via the real production `computePolicyPremium` (same methodology as the 2026-08-01
+correction of the other 25 policies — a one-off script using the actual `storage`/route-helpers
+modules, not a reimplementation) and wrote `premiumAmount: 25.00`, clearing `premiumOverride`/
+`premiumOverrideNote`, audit-logged. No retroactive wallet reconciliation for the period this
+policy was billed at $21 — same "going-forward only" scope as the other 25, not revisited here.
+
+**Deliberately NOT fixed — reported only, too large to blind-fix:**
+1. **`schedulePolicyPremiumBackfill` (`server/routes.ts`) may now be partially redundant** with
    today's batched list-view premium recalc, and adds sustained sequential load against a tenant
    pool already shown to be under pressure. Serves a different purpose though (eventual full-table
    consistency vs. per-page consistency-on-read) — removing or changing it is a product/
    architecture call, not a bug fix.
-3. **`server/backup-sync.ts` does `SELECT * FROM "table"` with no LIMIT**, once per table. Fine at
+2. **`server/backup-sync.ts` does `SELECT * FROM "table"` with no LIMIT**, once per table. Fine at
    current row counts (the file's own comment says so) but no ceiling exists as tables like
    `audit_logs`/`payment_transactions` grow over years on a 1GB instance. Not urgent.
-4. Security/RBAC fork found no other new issues (core middleware, storage-layer tenant isolation,
+3. Security/RBAC fork found no other new issues (core middleware, storage-layer tenant isolation,
    client-portal IDOR surface, SQL injection surface, secret exposure all checked clean) beyond
-   item 1. Core-domain fork found sweep locking, claim waiting-period boundaries, vehicle-checkout
-   races, and mortuary dispatch upserts all clean beyond item 2 above.
+   the client-list PII leak fixed above. Core-domain fork found sweep locking, claim waiting-period
+   boundaries, vehicle-checkout races, and mortuary dispatch upserts all clean beyond the
+   `periodDaysForSchedule` fix above and item 1 here.
 
 **Verified:** `npm run check` clean; `npm run test` full suite (309/309) passed after every fix.
 
