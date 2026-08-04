@@ -10,6 +10,93 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-04 — New tenant's subdomain never went live: automated commissioning only told DO App Platform about the domain, never created its DNS record
+
+A new self-signup tenant, IFALAKHE FUNERAL SERVICES, provisioned at 14:12:01 UTC; its subdomain
+(`ifalakhe-funeral-services.pol263.com`) never became reachable. Augustus asked why the app
+didn't create the DNS record automatically — he'd had to add it by hand.
+
+**Root cause:** `server/tenant-provisioning.ts` fires `commissionTenantDomainOnDO()`
+(`server/do-app-domains.ts`) on every new signup, and it worked exactly as designed — confirmed
+by `domainCommissioned` flipping `true` 9 seconds after signup and a new deployment landing at
+the same timestamp (that's what a successful `PUT /v2/apps/{id}` with the domain added to
+`spec.domains` triggers). The bug is in the design itself: that function only ever added the
+subdomain to the DigitalOcean App Platform *domain list* — it never called DO's separate DNS
+*Records* API. It relied entirely on DO App Platform to auto-create the matching DNS record
+once the domain was registered on the app (this normally works when the zone is on DO's own
+nameservers, which `pol263.com`'s is), and never verified that this actually happened.
+`domainCommissioned = true` therefore only ever meant "we told DO App Platform," not "the
+subdomain resolves" — a distinction the code's own comments acknowledged but didn't act on. When
+DO's auto-DNS step silently didn't produce a working record here, there was no error, no retry,
+and no visibility anywhere — a human had to notice the site wasn't live and intervene manually,
+which is exactly where a *second*, independent bug got introduced: the DNS record was created
+by hand with the full FQDN as its "name" field instead of the zone-relative label, producing a
+nonsense record for `ifalakhe-funeral-services.pol263.com.pol263.com` that never matched real
+traffic — DNS for the real hostname fell through to the zone's catch-all wildcard
+(`* → pol263.com`) instead, which is why DO's own domain verification stayed stuck on
+`DomainCNAMEMismatch`. Diagnosed by cross-referencing the DO Apps API (domain phase +
+per-step progress/error reasons), direct DNS/NS lookups, the DO Domain Records API (found the
+literal malformed record), and the control-plane `tenants` table (`domain_commissioned_at`
+timestamp pinpointing exactly which deployment corresponds to the automated attempt).
+
+**Immediate fix (same day, before this entry):** deleted the malformed DNS record and recreated
+it correctly (name `ifalakhe-funeral-services`, not the full FQDN) directly via the DO API. Site
+confirmed live (`HTTP 200`, valid certificate) once DO's own domain verification re-ran.
+
+**Root-cause fix (this entry):** `server/do-app-domains.ts` now creates/verifies the DNS CNAME
+record itself, directly via DO's Domain Records API, instead of trusting DO App Platform to do
+it silently:
+- New `relativeRecordName(subdomain, zone)` computes the correct zone-relative label — the one
+  place this computation happens in code now, instead of a human re-deriving it by hand in DO's
+  dashboard (exactly what went wrong here). Throws rather than silently producing a wrong record
+  if the subdomain isn't actually under the zone. Covered by `tests/unit/do-app-domains.test.ts`,
+  including the exact real-world hyphenated-subdomain case.
+- `ensureDnsRecord()` is idempotent and self-healing: no-ops if a correct record already exists,
+  *corrects* it in place if one exists pointing at the wrong target (instead of requiring a human
+  to notice and fix it by hand again), and creates it if missing.
+- The target hostname (`default_ingress`) is read live from the DO Apps API rather than
+  hardcoded, so it self-corrects if the app is ever recreated — same reasoning already used for
+  `getDoAppId()`'s domain-match caching.
+- **Transactional, per-subdomain semantics** (per Augustus's explicit ask): `commissionTenantDomainOnDO`
+  now resolves per-subdomain with `{ ok: boolean; error?: string }`, not a batch-wide boolean. A
+  subdomain is only ever reported successful once *both* the DNS record and the DO App Platform
+  domain-list entry are confirmed; any failure in either step fails that subdomain completely and
+  returns a specific, human-readable reason — never a silent partial state like the one that
+  caused this incident.
+- That failure reason is now persisted (`tenants.domain_commission_error`, new column —
+  `migrations/control-plane/0002_domain_commission_error.sql`) and surfaced on the platform
+  dashboard's "Pending domain commissioning" section and the tenant console, instead of a stuck
+  tenant sitting with no visible explanation.
+- The manual "commission domain" fallback (`POST /api/platform/tenants/:id/commission-domain`)
+  used to just flip the `domainCommissioned` flag unconditionally, trusting whoever clicked it had
+  already fixed things by hand outside the app — it now actually retries the same DNS-record +
+  domain-list logic synchronously and reports the real result, turning it from a "trust me"
+  checkbox into a real retry-with-verification action.
+
+**Files:** `server/do-app-domains.ts`, `server/tenant-provisioning.ts`, `server/platform-routes.ts`,
+`server/routes.ts`, `shared/control-plane-schema.ts`,
+`migrations/control-plane/0002_domain_commission_error.sql`,
+`client/src/pages/staff/dashboard.tsx`, `client/src/pages/staff/platform-tenant-console.tsx`,
+`tests/unit/do-app-domains.test.ts`.
+
+**Verified:** `npm run check` clean; `npm run test` (316/316, 7 new) passed. The live incident
+itself: `ifalakhe-funeral-services.pol263.com` confirmed `HTTP 200` with a valid certificate
+after DO's domain verification re-ran post-fix. The rewritten automation itself has **not** been
+exercised against a real new signup yet (no tenant has signed up since this deployed) — next
+real signup is the first live test of the new path; the manual "retry" button in the platform
+console can also be used to test it against any currently-pending tenant.
+
+**Lesson for next time:** "the code successfully told an external platform to do X" is not the
+same claim as "X actually happened," especially when X is a second system's own automation you
+don't control (here, DO App Platform's auto-DNS for a domain added to an app spec). Don't let a
+boolean success flag collapse those two distinct claims into one — if there's a way to verify the
+actual outcome directly (here, DO's separate DNS Records API), do that instead of trusting a
+downstream system's undocumented internal behavior, and if a failure is possible, persist *why*,
+not just *that*, so a stuck resource is diagnosable without re-deriving the whole investigation
+from scratch.
+
+---
+
 ## 2026-08-04 — Thorough system audit: 5 parallel domain audits, 11 fixes (1 critical PII leak, 1 critical ~12x billing error, 1 high-severity payment race, 6 revenue-durability gaps, 2 injection bugs)
 
 Augustus asked for a thorough audit + edge-case sweep + optimization pass across the whole

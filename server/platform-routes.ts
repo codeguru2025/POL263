@@ -30,6 +30,7 @@ import * as objectStorage from "./object-storage";
 import { structuredLog } from "./logger";
 import { invalidateTenantModuleCache } from "./module-gate";
 import { provisionTenantEmailDomain } from "./email-domain-provisioning";
+import { commissionTenantDomainOnDO } from "./do-app-domains";
 import { auditLog } from "./route-helpers";
 import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
 import { upsertTenantDatabaseRouting } from "./tenant-data-migration";
@@ -129,10 +130,11 @@ export function registerPlatformRoutes(app: Express): void {
             licenseStatus: tenant.licenseStatus,
             provisioningState: tenant.provisioningState,
             domainCommissioned: tenant.domainCommissioned,
+            domainCommissionError: tenant.domainCommissionError,
             suspendedAt: tenant.suspendedAt,
             suspendReason: tenant.suspendReason,
           }
-        : { slug: null, isActive: true, licenseStatus: "active", provisioningState: "ready", domainCommissioned: true, suspendedAt: null, suspendReason: null },
+        : { slug: null, isActive: true, licenseStatus: "active", provisioningState: "ready", domainCommissioned: true, domainCommissionError: null, suspendedAt: null, suspendReason: null },
       branding: {
         logoUrl: org.logoUrl,
         signatureUrl: org.signatureUrl,
@@ -447,19 +449,35 @@ export function registerPlatformRoutes(app: Express): void {
   });
 
   // ── Domain commissioning ─────────────────────────────────────────
-  // Marks the tenant's default subdomain as manually added to DigitalOcean App Platform's
-  // Domains list — see docs on tenants.domainCommissioned in shared/control-plane-schema.ts.
+  // Retries automated commissioning (DNS record + DO App Platform domain-list entry — see
+  // server/do-app-domains.ts) for a tenant whose subdomain isn't working yet, e.g. because the
+  // automatic attempt at signup time failed (DIGITALOCEAN_API_TOKEN was briefly unavailable, DO
+  // API error, etc. — see tenants.domainCommissionError). This used to just mark the flag true
+  // unconditionally, trusting that whoever clicked the button had already fixed it by hand
+  // outside the app — which is exactly how a wrong DNS record went unnoticed on 2026-08-04 (see
+  // docs/BUGFIX-LOG.md). Runs synchronously (a few seconds) since this is an explicit,
+  // human-triggered action, unlike the fire-and-forget call at signup time.
   app.post("/api/platform/tenants/:id/commission-domain", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
     if (!(await requireTenant(id, res))) return;
     const [before] = await cpDb.select().from(cpTenants).where(eq(cpTenants.id, id)).limit(1);
     if (before?.domainCommissioned) {
-      return res.json({ slug: before.slug, domainCommissioned: true, domainCommissionedAt: before.domainCommissionedAt });
+      return res.json({ slug: before.slug, domainCommissioned: true, domainCommissionedAt: before.domainCommissionedAt, domainCommissionError: null });
     }
-    await cpDb.update(cpTenants).set({ domainCommissioned: true, domainCommissionedAt: new Date() }).where(eq(cpTenants.id, id));
+    const baseDomain = process.env.APP_BASE_DOMAIN || "localhost";
+    if (!before?.slug || baseDomain === "localhost") {
+      return res.status(400).json({ message: "No slug or APP_BASE_DOMAIN configured for this tenant" });
+    }
+    const result = await commissionTenantDomainOnDO(`${before.slug}.${baseDomain}`);
+    if (!result.ok) {
+      await cpDb.update(cpTenants).set({ domainCommissionError: result.error ?? "Unknown error" }).where(eq(cpTenants.id, id));
+      await auditLog(req, "COMMISSION_TENANT_DOMAIN_FAILED", "Tenant", id, before, { error: result.error }, id);
+      return res.status(502).json({ message: result.error ?? "Domain commissioning failed", domainCommissioned: false });
+    }
+    await cpDb.update(cpTenants).set({ domainCommissioned: true, domainCommissionedAt: new Date(), domainCommissionError: null }).where(eq(cpTenants.id, id));
     const [after] = await cpDb.select().from(cpTenants).where(eq(cpTenants.id, id)).limit(1);
     await auditLog(req, "COMMISSION_TENANT_DOMAIN", "Tenant", id, before, after, id);
-    return res.json({ slug: after?.slug, domainCommissioned: after?.domainCommissioned, domainCommissionedAt: after?.domainCommissionedAt });
+    return res.json({ slug: after?.slug, domainCommissioned: after?.domainCommissioned, domainCommissionedAt: after?.domainCommissionedAt, domainCommissionError: null });
   });
 
   // ── Database routing ────────────────────────────────────────────

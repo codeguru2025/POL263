@@ -45,6 +45,12 @@ export const tenants = pgTable(
      */
     domainCommissioned: boolean("domain_commissioned").default(true).notNull(),
     domainCommissionedAt: timestamp("domain_commissioned_at"),
+    /** Set when automated commissioning (server/do-app-domains.ts) fails — either the DNS
+     *  record couldn't be created/verified, or the DigitalOcean App Platform domain-list update
+     *  failed. Cleared on the next successful attempt. Surfaced on the platform dashboard's
+     *  "Pending domain commissioning" list instead of leaving a stuck tenant with no visible
+     *  reason (see docs/BUGFIX-LOG.md, 2026-08-04 domain automation entry). */
+    domainCommissionError: text("domain_commission_error"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     suspendedAt: timestamp("suspended_at"),
     suspendReason: text("suspend_reason"),

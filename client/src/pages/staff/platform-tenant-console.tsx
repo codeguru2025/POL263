@@ -43,6 +43,7 @@ interface TenantConfig {
   lifecycle: {
     slug: string | null; isActive: boolean; licenseStatus: string; provisioningState: string;
     domainCommissioned: boolean;
+    domainCommissionError: string | null;
     suspendedAt: string | null; suspendReason: string | null;
   };
   branding: {
@@ -881,6 +882,9 @@ function LifecycleTab({ tenantId, lifecycle, onSaved }: { tenantId: string; life
               ? <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Commissioned</Badge>
               : <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30">Pending DO setup</Badge>}
           </p>
+          {lifecycle.domainCommissionError && (
+            <p className="text-destructive"><span className="text-muted-foreground">Last commissioning error:</span> {lifecycle.domainCommissionError}</p>
+          )}
           {lifecycle.suspendedAt && (
             <p><span className="text-muted-foreground">Suspended at:</span> {new Date(lifecycle.suspendedAt).toLocaleString()}</p>
           )}

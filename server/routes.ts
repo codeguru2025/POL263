@@ -1510,6 +1510,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         logoUrl: cpTenantBranding.logoUrl,
         domainCommissioned: cpTenants.domainCommissioned,
         domainCommissionedAt: cpTenants.domainCommissionedAt,
+        domainCommissionError: cpTenants.domainCommissionError,
         dbMigrationState: cpTenantDatabases.migrationState,
         hasDedicatedDb: sql<boolean>`${cpTenantDatabases.databaseUrl} IS NOT NULL`,
       })

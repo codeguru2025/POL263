@@ -114,6 +114,7 @@ interface ControlPlaneTenantMetrics {
   logoUrl?: string | null;
   domainCommissioned: boolean;
   domainCommissionedAt: string | null;
+  domainCommissionError: string | null;
   dbMigrationState: string | null;
   hasDedicatedDb: boolean;
   usersCount: number;
@@ -439,15 +440,20 @@ function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneT
     mutationFn: async (tenantId: string) => {
       const res = await apiRequest("POST", `/api/platform/tenants/${tenantId}/commission-domain`, {});
       const j = await res.json();
-      if (!res.ok) throw new Error(j.message || "Failed to mark as commissioned");
+      if (!res.ok) throw new Error(j.message || "Domain commissioning failed");
       return j;
     },
     onSuccess: () => {
-      toast({ title: "Domain commissioned", description: "This tenant's subdomain is marked as live." });
+      toast({ title: "Domain commissioned", description: "DNS record created/verified and added to DigitalOcean's Domains list." });
       setConfirmTarget(null);
       queryClient.invalidateQueries({ queryKey: ["/api/platform/dashboard"] });
     },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => {
+      toast({ title: "Commissioning failed", description: err.message, variant: "destructive" });
+      // The failure reason is persisted server-side (tenants.domainCommissionError) even on
+      // failure — refresh so it shows under the tenant instead of only flashing in the toast.
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/dashboard"] });
+    },
   });
 
   if (tenants.length === 0) return null;
@@ -487,6 +493,11 @@ function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneT
                     {copiedId === t.id ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
+                {t.domainCommissionError ? (
+                  <p className="text-xs text-destructive mt-1.5" data-testid={`text-commission-error-${t.id}`}>
+                    Last attempt failed: {t.domainCommissionError}
+                  </p>
+                ) : null}
               </div>
               <Button
                 size="sm"
@@ -495,7 +506,7 @@ function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneT
                 onClick={() => setConfirmTarget(t)}
                 data-testid={`button-commission-domain-${t.id}`}
               >
-                Mark as commissioned
+                {t.domainCommissionError ? "Retry commissioning" : "Commission domain"}
               </Button>
             </div>
           ))}
@@ -505,11 +516,12 @@ function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneT
       <AlertDialog open={!!confirmTarget} onOpenChange={(open) => { if (!open) setConfirmTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm domain commissioned</AlertDialogTitle>
+            <AlertDialogTitle>Commission this tenant's domain?</AlertDialogTitle>
             <AlertDialogDescription>
-              Confirm you've added <span className="font-mono">{confirmTarget ? subdomainFor(confirmTarget) : ""}</span> to
-              the DigitalOcean App Platform Domains list for this app. This can't be auto-verified — only confirm once
-              DO shows the domain as Active.
+              This will create/verify the DNS record for <span className="font-mono">{confirmTarget ? subdomainFor(confirmTarget) : ""}</span> and
+              add it to DigitalOcean App Platform's Domains list. DigitalOcean still needs a few minutes afterward to
+              issue a certificate and route traffic — this confirms the setup step succeeded, not that the site is
+              live yet.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -519,7 +531,7 @@ function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneT
               disabled={commissionMutation.isPending}
             >
               {commissionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Confirm
+              Commission
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

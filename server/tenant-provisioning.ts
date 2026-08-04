@@ -82,11 +82,12 @@ export async function provisionTenantCore(org: Organization, opts: ProvisionTena
     licenseStatus: "trial",
     provisioningState: "ready",
     // Starts false unconditionally — see the fire-and-forget commissioning call below, which
-    // flips it once (if) DO confirms the subdomain was added. Never set synchronously here:
-    // commissionTenantDomainOnDO batches signups into one deploy every few seconds (see
-    // server/do-app-domains.ts), and even a successful DO API call only *queues* a redeploy —
-    // it doesn't mean the subdomain is actually reachable yet. Claiming otherwise at insert
-    // time would be premature; the manual "Pending domain commissioning" dashboard queue
+    // flips it only once BOTH the DNS record and the DO App Platform domain-list update are
+    // confirmed (see server/do-app-domains.ts — commissionTenantDomainOnDO is per-subdomain
+    // transactional: it never reports success unless the subdomain is actually going to work).
+    // Never set synchronously here: even a fully successful commission only *queues* a redeploy —
+    // it doesn't mean the subdomain is actually reachable yet. Claiming otherwise at insert time
+    // would be premature; the manual "Pending domain commissioning" dashboard queue
     // (POST /api/platform/tenants/:id/commission-domain) remains the honest fallback either way.
     domainCommissioned: false,
     domainCommissionedAt: null,
@@ -96,13 +97,18 @@ export async function provisionTenantCore(org: Organization, opts: ProvisionTena
   const baseDomain = process.env.APP_BASE_DOMAIN || "localhost";
   if (baseDomain !== "localhost") {
     commissionTenantDomainOnDO(`${slug}.${baseDomain}`)
-      .then((ok) => {
-        if (!ok) return;
+      .then((result) => {
+        if (result.ok) {
+          return cpDb.update(cpTenants)
+            .set({ domainCommissioned: true, domainCommissionedAt: new Date(), domainCommissionError: null })
+            .where(eq(cpTenants.id, org.id));
+        }
+        structuredLog("error", "Automated domain commissioning failed — falling back to manual queue", { tenantId: org.id, error: result.error });
         return cpDb.update(cpTenants)
-          .set({ domainCommissioned: true, domainCommissionedAt: new Date() })
+          .set({ domainCommissionError: result.error ?? "Unknown error" })
           .where(eq(cpTenants.id, org.id));
       })
-      .catch((err) => structuredLog("error", "commissionTenantDomainOnDO failed", { tenantId: org.id, error: (err as Error).message }));
+      .catch((err) => structuredLog("error", "commissionTenantDomainOnDO threw unexpectedly", { tenantId: org.id, error: (err as Error).message }));
   }
   await seedTenantBranding(org.id, {
     logoUrl: org.logoUrl,
