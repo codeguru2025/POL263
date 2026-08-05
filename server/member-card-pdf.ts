@@ -126,37 +126,34 @@ function drawGlobe(doc: InstanceType<typeof PDFDocument>, cx: number, cy: number
   doc.moveTo(cx - r, cy).lineTo(cx + r, cy).stroke();
 }
 
-export async function streamMemberCardToResponse(
-  policyId: string,
-  orgId: string,
-  res: import("express").Response,
-  opts?: { attachment?: boolean }
-): Promise<void> {
-  const [policy, settings] = await Promise.all([
-    storage.getPolicy(policyId, orgId),
-    storage.getMemberCardSettings(orgId),
-  ]);
-  if (!policy || policy.organizationId !== orgId) {
-    res.status(404).json({ message: "Policy not found" });
-    return;
-  }
+interface MemberCardPageData {
+  policy: Awaited<ReturnType<typeof storage.getPolicy>> & {};
+  client: Awaited<ReturnType<typeof storage.getClient>> & {};
+  org: Awaited<ReturnType<typeof storage.getOrganization>> & {};
+  product: Awaited<ReturnType<typeof storage.getProduct>>;
+  settings: Awaited<ReturnType<typeof storage.getMemberCardSettings>>;
+  orgId: string;
+}
+
+/** Fetches everything needed to render one card. Returns null if the policy/client/org data
+ *  is incomplete (caller decides whether to skip or 404). */
+async function loadMemberCardPageData(policyId: string, orgId: string, settings: Awaited<ReturnType<typeof storage.getMemberCardSettings>>): Promise<MemberCardPageData | null> {
+  const policy = await storage.getPolicy(policyId, orgId);
+  if (!policy || policy.organizationId !== orgId) return null;
   const [client, org, productVersion] = await Promise.all([
     storage.getClient(policy.clientId, orgId),
     storage.getOrganization(orgId),
     storage.getProductVersion(policy.productVersionId, orgId),
   ]);
-  if (!client || !org) {
-    res.status(404).json({ message: "Card data incomplete" });
-    return;
-  }
+  if (!client || !org) return null;
   const product = productVersion ? await storage.getProduct(productVersion.productId, orgId) : undefined;
+  return { policy, client, org, product, settings, orgId } as MemberCardPageData;
+}
 
-  const filename = `Member-Card-${policy.policyNumber}.pdf`;
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", opts?.attachment
-    ? `attachment; filename="${filename}"`
-    : `inline; filename="${filename}"`);
-
+/** Draws one card onto whatever page of `doc` is currently active. Caller is responsible for
+ *  creating the PDFDocument and calling doc.addPage() between cards for a multi-card batch. */
+async function drawMemberCardPage(doc: InstanceType<typeof PDFDocument>, data: MemberCardPageData): Promise<void> {
+  const { policy, client, org, product, settings, orgId } = data;
   const navy = org.primaryColor || "#0f2a4d";
   const navyDark = darken(navy, 0.18);
   const logoData = settings.showLogo ? await resolveImage(org.logoUrl) : null;
@@ -166,10 +163,7 @@ export async function streamMemberCardToResponse(
     if (verifyUrl) qrBuffer = await buildVerifyQrBuffer(verifyUrl, 200);
   }
 
-  const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
-  doc.pipe(res);
-
-  try {
+  {
     const cardX = MARGIN + (COL - CARD_W) / 2;
     const cardY = MARGIN + 20;
     const contentH = CARD_H - FOOTER_H;
@@ -309,10 +303,67 @@ export async function streamMemberCardToResponse(
 
     doc.restore();
     doc.roundedRect(cardX, cardY, CARD_W, CARD_H, 14).lineWidth(1.5).strokeColor(C_BORDER).stroke();
+  }
+}
 
+export async function streamMemberCardToResponse(
+  policyId: string,
+  orgId: string,
+  res: import("express").Response,
+  opts?: { attachment?: boolean }
+): Promise<void> {
+  const settings = await storage.getMemberCardSettings(orgId);
+  const data = await loadMemberCardPageData(policyId, orgId, settings);
+  if (!data) {
+    res.status(404).json({ message: "Policy not found or card data incomplete" });
+    return;
+  }
+
+  const filename = `Member-Card-${data.policy.policyNumber}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", opts?.attachment
+    ? `attachment; filename="${filename}"`
+    : `inline; filename="${filename}"`);
+
+  const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
+  doc.pipe(res);
+  try {
+    await drawMemberCardPage(doc, data);
     doc.end();
   } catch (err: any) {
     try { doc.end(); } catch { /* already ended */ }
     res.destroy();
   }
+}
+
+/** Batch-prints member cards for multiple policies into a single multi-page PDF (one card per
+ *  page) — Print Policy Cards. Policies with incomplete card data (missing client/org) are
+ *  silently skipped rather than failing the whole batch. */
+export async function streamMemberCardsBatchToResponse(
+  policyIds: string[],
+  orgId: string,
+  res: import("express").Response
+): Promise<{ printed: number; skipped: number }> {
+  const settings = await storage.getMemberCardSettings(orgId);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="Member-Cards-Batch.pdf"`);
+
+  const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
+  doc.pipe(res);
+  let printed = 0;
+  let skipped = 0;
+  try {
+    for (const policyId of policyIds) {
+      const data = await loadMemberCardPageData(policyId, orgId, settings);
+      if (!data) { skipped++; continue; }
+      if (printed > 0) doc.addPage();
+      await drawMemberCardPage(doc, data);
+      printed++;
+    }
+    doc.end();
+  } catch (err: any) {
+    try { doc.end(); } catch { /* already ended */ }
+    res.destroy();
+  }
+  return { printed, skipped };
 }

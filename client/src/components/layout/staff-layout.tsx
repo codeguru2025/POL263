@@ -44,15 +44,12 @@ import {
   CreditCard,
   Printer,
   LineChart,
-  Zap,
   ClipboardList,
   UserCheck,
   Briefcase,
   MapPin,
-  GitBranch,
   Shield,
   HeartHandshake,
-  Monitor,
   Smartphone,
   Download,
   TrendingUp,
@@ -323,12 +320,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
         { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
         { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet", agentHidden: true },
-        { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
         { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
         { href: "/staff/leads", label: "Quotations", icon: Target, permission: "read:lead" },
-        { href: "/staff/transactions/invoices", label: "Invoices", icon: FileText, agentHidden: true },
-        { href: "/staff/transactions/credit-notes", label: "Credit Notes", icon: FileMinus, agentHidden: true },
-        { href: "/staff/transactions/fax", label: "Fax", icon: Printer, agentHidden: true },
       ]);
 
   // ── Finance: everything money — in, out, people, periodic close ──
@@ -365,7 +358,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/executive-report", label: "Executive Report", icon: LineChart, permission: "read:finance" },
         { href: "/staff/schedule-reports", label: "Schedule & Department Reports", icon: CalendarDays, permission: "read:report" },
         { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
-        { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2, agentHidden: true },
         { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
         { href: "/staff/reports?section=finance", label: "Financial Reports", icon: Receipt, permission: "read:report" },
         { href: "/staff/reports?section=agents", label: "Agent Reports", icon: UserCircle, permission: "read:report" },
@@ -385,14 +377,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone, agentHidden: true },
         { href: "/staff/products", label: "Product Admin", icon: Box, permission: "write:product" },
         { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
-        { href: "/staff/admin/invoice-items", label: "Invoice Items Admin", icon: ClipboardList, agentHidden: true },
         // Clients & groups
         { href: "/staff/clients", label: isAgent ? "My Clients" : "Clients", icon: Users, permission: "read:client" },
         { href: "/staff/feedback", label: "Client Feedback", icon: MessageSquare, permission: "read:client", agentHidden: true },
         { href: "/staff/groups", label: "Employer Admin", icon: Layers, permissions: ["write:policy"], agentHidden: true },
-        { href: "/staff/admin/sub-groups", label: "Sub Group Admin", icon: GitBranch, agentHidden: true },
         { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard, permission: "manage:settings", agentHidden: true },
-        { href: "/staff/admin/terminals", label: "Terminals + Cards Admin", icon: Monitor, agentHidden: true },
         // Partners & distribution
         { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck, agentHidden: true },
         { href: "/staff/admin/brokers", label: "Broker Admin", icon: Briefcase, agentHidden: true },
@@ -416,8 +405,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
         { href: "/staff/tools/statistical-graphs", label: "Statistical Graphs", icon: LineChart, agentHidden: true },
         { href: "/staff/notifications", label: "SMS Tools", icon: Bell, permission: "read:notification" },
         { href: "/staff/tools/print-policy-cards", label: "Print Policy Cards", icon: Printer },
-        { href: "/staff/tools/claims-form", label: "Manage Online Claims Form", icon: ClipboardList, agentHidden: true },
-        { href: "/staff/tools/easypay", label: "Manage EasyPay", icon: Zap, agentHidden: true },
         { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck, agentHidden: true },
         { href: "/staff/tools/contacts", label: "Contacts Manager", icon: BookOpen },
         { href: "/staff/reminders", label: "Reminders", icon: Clock },
@@ -444,8 +431,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/feedback", label: "Client Feedback", icon: MessageSquare, permission: "read:client", agentHidden: true },
             { href: "/staff/groups", label: "Schemes (Employer / Society)", icon: Layers, permissions: ["write:policy"], agentHidden: true },
             { href: "/staff/admin/society", label: "Society Admin", icon: Building2, agentHidden: true },
-            { href: "/staff/transactions/society", label: "Society Transactions", icon: Building2, agentHidden: true },
-            { href: "/staff/admin/sub-groups", label: "Sub Groups", icon: GitBranch, agentHidden: true },
             { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone, agentHidden: true },
             { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
           ]),
@@ -478,7 +463,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           title: "Claims",
           items: filterNav([
             { href: "/staff/claims", label: "Claims", icon: FileText, permission: "read:claim", capabilityModule: "claims" },
-            { href: "/staff/tools/claims-form", label: "Online Claims Form", icon: ClipboardList, agentHidden: true },
           ]),
         },
         {
@@ -505,9 +489,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=approvals", label: "Receipt Approvals", icon: ShieldCheck, permission: "approve:finance", agentHidden: true },
             { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permissions: ["approve:requests", "approve:waivers", "approve:settlements", "approve:finance"], badge: approvalsPendingCount },
-            { href: "/staff/transactions/credit-notes", label: "Credit Notes", icon: FileMinus, agentHidden: true },
-            { href: "/staff/transactions/invoices", label: "Invoices", icon: FileText, agentHidden: true },
-            { href: "/staff/transactions/fax", label: "Fax", icon: Printer, agentHidden: true },
           ]),
         },
         {
@@ -521,7 +502,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/reports?section=agents", label: "Agent Reports", icon: UserCircle, permission: "read:report" },
             { href: "/staff/reports?section=claims", label: "Claims Reports", icon: Shield, permission: "read:report" },
             { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
-            { href: "/staff/reports/dynamic-generic", label: "Dynamic Reports (Generic)", icon: BarChart2, agentHidden: true },
             { href: "/staff/employee-reports", label: "Employee Reports", icon: Users, permission: "read:report", agentHidden: true },
             { href: "/staff/tools/statistics", label: "Statistics", icon: BarChart2, agentHidden: true },
             { href: "/staff/tools/statistical-graphs", label: "Statistical Graphs", icon: LineChart, agentHidden: true },
@@ -533,7 +513,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           items: filterNav([
             { href: "/staff/products", label: "Products", icon: Box, permission: "write:product" },
             { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
-            { href: "/staff/admin/invoice-items", label: "Invoice Items", icon: ClipboardList, permission: "write:product", agentHidden: true },
             // Was "Organization & Branding" — branding/payments/tenant management moved to the
             // platform-owner console; this page now only holds Account, Terms, RBAC, and Receipt
             // Adverts, so the label needs to stop promising branding that isn't here anymore.
@@ -541,8 +520,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             { href: "/staff/billing", label: "Billing", icon: CreditCard, permission: "manage:settings", agentHidden: true },
             { href: "/staff/notifications", label: "Notifications / SMS", icon: Bell, permission: "read:notification" },
             { href: "/staff/order-services", label: "Order Services", icon: DollarSign, permission: "manage:settings", agentHidden: true },
-            { href: "/staff/admin/terminals", label: "Terminals + Cards", icon: Monitor, permission: "manage:settings", agentHidden: true },
-            { href: "/staff/tools/easypay", label: "Manage EasyPay", icon: Zap, permission: "manage:settings", agentHidden: true },
             { href: "/staff/reminders", label: "Reminders", icon: Clock },
             { href: "/staff/help", label: "Help Centre", icon: HelpCircle },
           ]),

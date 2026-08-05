@@ -86,6 +86,7 @@ import {
   insertRequisitionSchema, insertRequisitionItemSchema, REQUISITION_STATUSES,
   insertPaymentDisbursementSchema,
   insertDebitOrderSchema, DEBIT_ORDER_STATUSES,
+  TOMBSTONE_ORDER_STATUSES,
   VALID_POLICY_TRANSITIONS, VALID_CLAIM_TRANSITIONS,
   policies, paymentTransactions, paymentReceipts, users, clients, claims, claimStatusHistory, policyStatusHistory, leads, branches, appReleases, waitingPeriodWaivers,
   groupPaymentIntents, groupPaymentAllocations,
@@ -1320,6 +1321,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const { streamMemberCardToResponse } = await import("./member-card-pdf");
     return streamMemberCardToResponse(id, user.organizationId, res, { attachment: true });
+  });
+
+  // Print Policy Cards — batch-prints member cards for policies matching the same filters as
+  // the Policies list (branch/product/status/search), one card per page in a single PDF.
+  const MEMBER_CARD_BATCH_LIMIT = 150;
+  app.get("/api/policies/member-cards/batch-download", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const status = typeof req.query.status === "string" && req.query.status ? req.query.status : undefined;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const productId = typeof req.query.productId === "string" && req.query.productId ? req.query.productId : undefined;
+    const qRaw = typeof req.query.q === "string" ? req.query.q : "";
+    const search = qRaw.trim() || undefined;
+    const filters: ReportFilters & { search?: string } = {};
+    if (status) filters.status = status;
+    if (branchId) filters.branchId = branchId;
+    if (productId) filters.productId = productId;
+    if (search) filters.search = search;
+    const hasFilter = Object.keys(filters).length > 0;
+    const list = await storage.getPoliciesByOrg(user.organizationId, MEMBER_CARD_BATCH_LIMIT, 0, hasFilter ? filters : undefined);
+    if (list.length === 0) return res.status(404).json({ message: "No policies matched the selected filters" });
+    const { streamMemberCardsBatchToResponse } = await import("./member-card-pdf");
+    const { printed, skipped } = await streamMemberCardsBatchToResponse(list.map((p) => p.id), user.organizationId, res);
+    structuredLog("info", "Batch member-card print", { organizationId: user.organizationId, printed, skipped, matched: list.length });
   });
 
   // Avatar upload — any authenticated staff user can upload their own avatar.
@@ -8745,6 +8769,272 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       await auditLog(req, "CREATE_BANK_STATEMENT_BALANCE", "BankStatementBalance", bal.id, null, bal);
       return res.status(201).json(bal);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  // ─── Petty Cash (float register: opening float, replenishments, disbursements) ───
+  app.get("/api/petty-cash/floats", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const floats = await storage.getPettyCashFloats(user.organizationId);
+    const custodianIds = floats.map(f => f.custodianUserId).filter(Boolean) as string[];
+    const custodians = custodianIds.length > 0 ? await storage.getUsersByIds(custodianIds, user.organizationId) : [];
+    const findU = (id: string | null | undefined) => custodians.find((u: any) => u.id === id);
+    return res.json(floats.map(f => ({
+      ...f,
+      custodianName: findU(f.custodianUserId)?.displayName || findU(f.custodianUserId)?.email || null,
+    })));
+  });
+
+  app.post("/api/petty-cash/floats", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { name, branchId, currency, custodianUserId, openingBalance } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: "name is required" });
+    try {
+      const custodianId = custodianUserId ? await resolveOrSyncTenantUserId(user.organizationId, custodianUserId) : undefined;
+      const opening = openingBalance !== undefined && openingBalance !== null && openingBalance !== "" ? parsePositiveAmount(openingBalance) : undefined;
+      const performedByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const float = await storage.createPettyCashFloat({
+        organizationId: user.organizationId,
+        branchId: branchId || undefined,
+        name: String(name).trim(),
+        currency: normalizeCurrency(currency) || "USD",
+        custodianUserId: custodianId,
+      }, opening ? opening.toFixed(2) : undefined, performedByUserId);
+      await auditLog(req, "CREATE_PETTY_CASH_FLOAT", "PettyCashFloat", float.id, null, float);
+      return res.status(201).json(float);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/petty-cash/floats/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = await storage.getPettyCashFloat(id, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Petty cash float not found" });
+    const patch: Record<string, any> = {};
+    for (const k of ["name", "custodianUserId", "isActive"]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k];
+    }
+    if (patch.custodianUserId) patch.custodianUserId = await resolveOrSyncTenantUserId(user.organizationId, patch.custodianUserId);
+    const updated = await storage.updatePettyCashFloat(id, user.organizationId, patch);
+    await auditLog(req, "UPDATE_PETTY_CASH_FLOAT", "PettyCashFloat", id, existing, updated);
+    return res.json(updated);
+  });
+
+  app.get("/api/petty-cash/transactions", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = {
+      floatId: typeof req.query.floatId === "string" ? req.query.floatId : undefined,
+      fromDate: typeof req.query.fromDate === "string" ? req.query.fromDate : undefined,
+      toDate: typeof req.query.toDate === "string" ? req.query.toDate : undefined,
+    };
+    const txns = await storage.getPettyCashTransactions(user.organizationId, filters);
+    const userIds = txns.map(t => t.performedByUserId).filter(Boolean) as string[];
+    const txnUsers = userIds.length > 0 ? await storage.getUsersByIds(userIds, user.organizationId) : [];
+    const findU = (id: string | null | undefined) => txnUsers.find((u: any) => u.id === id);
+    return res.json(txns.map(t => ({
+      ...t,
+      performedByName: findU(t.performedByUserId)?.displayName || findU(t.performedByUserId)?.email || null,
+    })));
+  });
+
+  app.post("/api/petty-cash/transactions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { floatId, type, amount, category, description, receiptRef, transactionDate, countedAmount } = req.body;
+    const allowedTypes = ["replenishment", "disbursement", "adjustment_in", "adjustment_out", "reconciliation"];
+    if (!floatId || !allowedTypes.includes(type)) {
+      return res.status(400).json({ message: `type must be one of: ${allowedTypes.join(", ")}` });
+    }
+    if (!description?.trim()) return res.status(400).json({ message: "description is required" });
+    if (!transactionDate) return res.status(400).json({ message: "transactionDate is required" });
+    const float = await storage.getPettyCashFloat(String(floatId), user.organizationId);
+    if (!float) return res.status(404).json({ message: "Petty cash float not found" });
+    const isReconciliation = type === "reconciliation";
+    const amt = isReconciliation ? 0 : parsePositiveAmount(amount);
+    if (!isReconciliation && !amt) return res.status(400).json({ message: "A valid positive amount is required" });
+    if (isReconciliation && (countedAmount === undefined || countedAmount === null || countedAmount === "")) {
+      return res.status(400).json({ message: "countedAmount is required for a reconciliation entry" });
+    }
+    try {
+      const performedByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const { transaction, float: updatedFloat } = await storage.postPettyCashTransaction({
+        organizationId: user.organizationId,
+        floatId: String(floatId),
+        type,
+        amount: (isReconciliation ? 0 : amt!).toFixed(2),
+        category: category ? String(category).trim() : undefined,
+        description: String(description).trim(),
+        receiptRef: receiptRef ? String(receiptRef).trim() : undefined,
+        countedAmount: isReconciliation ? String(Number(countedAmount).toFixed(2)) : undefined,
+        performedByUserId,
+        transactionDate: String(transactionDate),
+      });
+      await auditLog(req, "POST_PETTY_CASH_TRANSACTION", "PettyCashTransaction", transaction.id, null, transaction);
+      return res.status(201).json({ transaction, float: updatedFloat });
+    } catch (err: any) {
+      return res.status(400).json({ message: safeError(err) });
+    }
+  });
+
+  // ─── Tombstones: catalogue (admin) ───────────────────────────
+  app.get("/api/tombstones/catalog", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const activeOnly = req.query.activeOnly === "true";
+    return res.json(await storage.getTombstoneCatalogItems(user.organizationId, activeOnly));
+  });
+
+  app.post("/api/tombstones/catalog", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const { name, material, size, color, description, price, currency, branchId, defaultSupplierName } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: "name is required" });
+    const amt = parsePositiveAmount(price);
+    if (!amt) return res.status(400).json({ message: "A valid positive price is required" });
+    try {
+      const item = await storage.createTombstoneCatalogItem({
+        organizationId: user.organizationId,
+        branchId: branchId || undefined,
+        name: String(name).trim(),
+        material: material ? String(material).trim() : undefined,
+        size: size ? String(size).trim() : undefined,
+        color: color ? String(color).trim() : undefined,
+        description: description ? String(description).trim() : undefined,
+        price: amt.toFixed(2),
+        currency: normalizeCurrency(currency) || "USD",
+        defaultSupplierName: defaultSupplierName ? String(defaultSupplierName).trim() : undefined,
+      });
+      await auditLog(req, "CREATE_TOMBSTONE_CATALOG_ITEM", "TombstoneCatalogItem", item.id, null, item);
+      return res.status(201).json(item);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/tombstones/catalog/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = await storage.getTombstoneCatalogItem(id, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Catalogue item not found" });
+    const patch: Record<string, any> = {};
+    for (const k of ["name", "material", "size", "color", "description", "currency", "defaultSupplierName", "isActive"]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k];
+    }
+    if (req.body.price !== undefined) {
+      const amt = parsePositiveAmount(req.body.price);
+      if (!amt) return res.status(400).json({ message: "A valid positive price is required" });
+      patch.price = amt.toFixed(2);
+    }
+    const updated = await storage.updateTombstoneCatalogItem(id, user.organizationId, patch);
+    await auditLog(req, "UPDATE_TOMBSTONE_CATALOG_ITEM", "TombstoneCatalogItem", id, existing, updated);
+    return res.json(updated);
+  });
+
+  // ─── Tombstones: orders (transactions) ───────────────────────
+  app.get("/api/tombstones/orders", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const filters = {
+      status: typeof req.query.status === "string" ? req.query.status : undefined,
+      clientId: typeof req.query.clientId === "string" ? req.query.clientId : undefined,
+      funeralCaseId: typeof req.query.funeralCaseId === "string" ? req.query.funeralCaseId : undefined,
+    };
+    return res.json(await storage.getTombstoneOrders(user.organizationId, filters));
+  });
+
+  app.post("/api/tombstones/orders", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const {
+      branchId, clientId, funeralCaseId, deceasedName, catalogItemId, itemDescription, material,
+      engravingText, cemeteryId, plotReference, supplierName, amount, currency, orderedDate,
+      expectedDeliveryDate, notes,
+    } = req.body;
+    if (!deceasedName?.trim()) return res.status(400).json({ message: "deceasedName is required" });
+    if (!itemDescription?.trim()) return res.status(400).json({ message: "itemDescription is required" });
+    if (!orderedDate) return res.status(400).json({ message: "orderedDate is required" });
+    const amt = parsePositiveAmount(amount);
+    if (!amt) return res.status(400).json({ message: "A valid positive amount is required" });
+    try {
+      const orderNumber = await storage.generateTombstoneOrderNumber(user.organizationId);
+      const createdByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const order = await storage.createTombstoneOrder({
+        organizationId: user.organizationId,
+        branchId: branchId || undefined,
+        orderNumber,
+        clientId: clientId || undefined,
+        funeralCaseId: funeralCaseId || undefined,
+        deceasedName: String(deceasedName).trim(),
+        catalogItemId: catalogItemId || undefined,
+        itemDescription: String(itemDescription).trim(),
+        material: material ? String(material).trim() : undefined,
+        engravingText: engravingText ? String(engravingText).trim() : undefined,
+        cemeteryId: cemeteryId || undefined,
+        plotReference: plotReference ? String(plotReference).trim() : undefined,
+        supplierName: supplierName ? String(supplierName).trim() : undefined,
+        amount: amt.toFixed(2),
+        currency: normalizeCurrency(currency) || "USD",
+        status: "ordered",
+        orderedDate: String(orderedDate),
+        expectedDeliveryDate: expectedDeliveryDate ? String(expectedDeliveryDate) : undefined,
+        notes: notes ? String(notes).trim() : undefined,
+        createdByUserId,
+      });
+      await auditLog(req, "CREATE_TOMBSTONE_ORDER", "TombstoneOrder", order.id, null, order);
+      return res.status(201).json(order);
+    } catch (err: any) {
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  app.patch("/api/tombstones/orders/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    const existing = await storage.getTombstoneOrder(id, user.organizationId);
+    if (!existing) return res.status(404).json({ message: "Tombstone order not found" });
+    const patch: Record<string, any> = {};
+    for (const k of [
+      "status", "material", "engravingText", "cemeteryId", "plotReference", "supplierName",
+      "expectedDeliveryDate", "deliveredDate", "installedDate", "notes",
+    ]) {
+      if (req.body[k] !== undefined) patch[k] = req.body[k];
+    }
+    if (patch.status && !TOMBSTONE_ORDER_STATUSES.includes(patch.status)) {
+      return res.status(400).json({ message: `status must be one of: ${TOMBSTONE_ORDER_STATUSES.join(", ")}` });
+    }
+    const updated = await storage.updateTombstoneOrder(id, user.organizationId, patch);
+    await auditLog(req, "UPDATE_TOMBSTONE_ORDER", "TombstoneOrder", id, existing, updated);
+    return res.json(updated);
+  });
+
+  app.get("/api/tombstones/orders/:id/payments", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const order = await storage.getTombstoneOrder(String(req.params.id), user.organizationId);
+    if (!order) return res.status(404).json({ message: "Tombstone order not found" });
+    return res.json(await storage.getTombstoneOrderPayments(user.organizationId, order.id));
+  });
+
+  app.post("/api/tombstones/orders/:id/payments", requireAuth, requireTenantScope, requireAnyPermission("receipt:cash", "write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const order = await storage.getTombstoneOrder(String(req.params.id), user.organizationId);
+    if (!order) return res.status(404).json({ message: "Tombstone order not found" });
+    const amt = parsePositiveAmount(req.body.amount);
+    if (!amt) return res.status(400).json({ message: "A valid positive amount is required" });
+    const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
+    try {
+      const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+      const receivedByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const { payment, order: updatedOrder } = await storage.recordTombstoneOrderPayment({
+        organizationId: user.organizationId,
+        orderId: order.id,
+        receiptNumber,
+        amount: amt.toFixed(2),
+        currency: order.currency,
+        paymentChannel: channel,
+        receivedByUserId,
+        notes: typeof req.body.notes === "string" ? req.body.notes.trim() : undefined,
+      });
+      await auditLog(req, "RECORD_TOMBSTONE_ORDER_PAYMENT", "TombstoneOrderPayment", payment.id, null, payment);
+      return res.status(201).json({ payment, order: updatedOrder });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
     }

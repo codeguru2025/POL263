@@ -92,10 +92,11 @@ const StaffHelpCenter = lazy(() => retryLazy(() => import("@/pages/staff/help-ce
 const StaffReminders = lazy(() => retryLazy(() => import("@/pages/staff/reminders")));
 const StaffOrderServices = lazy(() => retryLazy(() => import("@/pages/staff/order-services")));
 const StaffAssetsRegister = lazy(() => retryLazy(() => import("@/pages/staff/assets-register")));
-const StaffComingSoon = lazy(() => retryLazy(() => import("@/pages/staff/coming-soon")));
+const StaffPrintPolicyCards = lazy(() => retryLazy(() => import("@/pages/staff/tools/print-policy-cards")));
 const StaffMemberCardAdmin = lazy(() => retryLazy(() => import("@/pages/staff/member-card-admin")));
 const StaffBranchAdmin = lazy(() => retryLazy(() => import("@/pages/staff/admin/branches")));
 const StaffDebitOrders = lazy(() => retryLazy(() => import("@/pages/staff/transactions/debit-orders")));
+const StaffPettyCash = lazy(() => retryLazy(() => import("@/pages/staff/transactions/petty-cash")));
 const StaffEmployeeReports = lazy(() => retryLazy(() => import("@/pages/staff/employee-reports")));
 const StaffStatistics = lazy(() => retryLazy(() => import("@/pages/staff/statistics")));
 const StaffStatisticalGraphs = lazy(() => retryLazy(() => import("@/pages/staff/statistical-graphs")));
@@ -105,6 +106,8 @@ const StaffUndertakers = lazy(() => retryLazy(() => import("@/pages/staff/admin/
 const StaffUnderwriters = lazy(() => retryLazy(() => import("@/pages/staff/admin/underwriters")));
 const StaffContacts = lazy(() => retryLazy(() => import("@/pages/staff/tools/contacts")));
 const StaffTransportCompanies = lazy(() => retryLazy(() => import("@/pages/staff/tools/transport-companies")));
+const StaffTombstoneTransactions = lazy(() => retryLazy(() => import("@/pages/staff/transactions/tombstone")));
+const StaffTombstonesAdmin = lazy(() => retryLazy(() => import("@/pages/staff/admin/tombstones")));
 const StaffBrokers = lazy(() => retryLazy(() => import("@/pages/staff/admin/brokers")));
 
 const ClientLogin = lazy(() => retryLazy(() => import("@/pages/client/login")));
@@ -229,31 +232,20 @@ function Router() {
       <SafeRoute path="/staff/employee-reports" component={StaffEmployeeReports} />
 
       {/* Stub pages — under construction */}
-      <SafeRoute path="/staff/transactions/society" component={StaffComingSoon} />
-      <SafeRoute path="/staff/transactions/tombstone" component={StaffComingSoon} />
-      <SafeRoute path="/staff/transactions/credit-notes" component={StaffComingSoon} />
-      <SafeRoute path="/staff/transactions/invoices" component={StaffComingSoon} />
-      <SafeRoute path="/staff/transactions/petty-cash" component={StaffComingSoon} />
-      <SafeRoute path="/staff/transactions/bank-deposits" component={StaffComingSoon} />
+      <SafeRoute path="/staff/transactions/tombstone" component={StaffTombstoneTransactions} />
+      <SafeRoute path="/staff/transactions/petty-cash" component={StaffPettyCash} />
       <SafeRoute path="/staff/transactions/debit-orders" component={StaffDebitOrders} />
-      <SafeRoute path="/staff/transactions/fax" component={StaffComingSoon} />
-      <SafeRoute path="/staff/reports/dynamic-generic" component={StaffComingSoon} />
-      <SafeRoute path="/staff/tools/easypay" component={StaffComingSoon} />
-      <SafeRoute path="/staff/tools/print-policy-cards" component={StaffComingSoon} />
+      <SafeRoute path="/staff/tools/print-policy-cards" component={StaffPrintPolicyCards} />
       <SafeRoute path="/staff/tools/statistics" component={StaffStatistics} />
       <SafeRoute path="/staff/tools/statistical-graphs" component={StaffStatisticalGraphs} />
-      <SafeRoute path="/staff/tools/claims-form" component={StaffComingSoon} />
       <SafeRoute path="/staff/tools/transport-companies" component={StaffTransportCompanies} />
       <SafeRoute path="/staff/tools/contacts" component={StaffContacts} />
       <SafeRoute path="/staff/admin/society" component={StaffSocietyAdmin} />
-      <SafeRoute path="/staff/admin/tombstones" component={StaffComingSoon} />
-      <SafeRoute path="/staff/admin/invoice-items" component={StaffComingSoon} />
+      <SafeRoute path="/staff/admin/tombstones" component={StaffTombstonesAdmin} />
       <SafeRoute path="/staff/admin/agents" component={StaffAgentsAdmin} />
       <SafeRoute path="/staff/admin/brokers" component={StaffBrokers} />
       <SafeRoute path="/staff/admin/member-cards" component={StaffMemberCardAdmin} />
-      <SafeRoute path="/staff/admin/terminals" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/branches" component={StaffBranchAdmin} />
-      <SafeRoute path="/staff/admin/sub-groups" component={StaffComingSoon} />
       <SafeRoute path="/staff/admin/underwriters" component={StaffUnderwriters} />
       <SafeRoute path="/staff/admin/undertakers" component={StaffUndertakers} />
 

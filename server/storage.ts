@@ -39,6 +39,8 @@ import {
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
   bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  pettyCashFloats, pettyCashTransactions,
+  tombstoneCatalogItems, tombstoneOrders, tombstoneOrderPayments,
   quotationGuarantors, quotationCollateral, receiptAdverts, reminders, agentContentPosts, agentCardEvents,
   policyCreditBalances, policyPremiumChanges, creditNotes, monthEndRuns, groupPaymentIntents, groupPaymentAllocations,
   clientDeviceTokens, clientPaymentMethods, paymentAutomationSettings, paymentAutomationRuns,
@@ -57,6 +59,8 @@ import {
   type Safe, type InsertSafe,
   type BankDeposit, type InsertBankDeposit,
   type BankStatementBalance, type InsertBankStatementBalance,
+  type PettyCashFloat, type InsertPettyCashFloat, type PettyCashTransaction, type InsertPettyCashTransaction,
+  type TombstoneCatalogItem, type InsertTombstoneCatalogItem, type TombstoneOrder, type InsertTombstoneOrder, type TombstoneOrderPayment, type InsertTombstoneOrderPayment,
   type ParlourPersonnel, type InsertParlourPersonnel,
   type BalanceSheetEntry, type InsertBalanceSheetEntry,
   type DebitOrder, type InsertDebitOrder,
@@ -713,6 +717,23 @@ export interface IStorage {
   getBankStatementBalances(orgId: string, bankAccountId?: string): Promise<BankStatementBalance[]>;
   createBankStatementBalance(data: InsertBankStatementBalance): Promise<BankStatementBalance>;
   getAdminCashPosition(orgId: string, asOf?: string): Promise<Array<{ userId: string; totalCollected: number; totalDeposited: number; onHand: number; lastDepositDate: string | null; currency: string }>>;
+  getPettyCashFloats(orgId: string): Promise<PettyCashFloat[]>;
+  getPettyCashFloat(id: string, orgId: string): Promise<PettyCashFloat | undefined>;
+  createPettyCashFloat(data: InsertPettyCashFloat, openingBalance?: string, performedByUserId?: string): Promise<PettyCashFloat>;
+  updatePettyCashFloat(id: string, orgId: string, data: Partial<PettyCashFloat>): Promise<PettyCashFloat | undefined>;
+  getPettyCashTransactions(orgId: string, filters?: { floatId?: string; fromDate?: string; toDate?: string }): Promise<PettyCashTransaction[]>;
+  postPettyCashTransaction(data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }>;
+  getTombstoneCatalogItems(orgId: string, activeOnly?: boolean): Promise<TombstoneCatalogItem[]>;
+  getTombstoneCatalogItem(id: string, orgId: string): Promise<TombstoneCatalogItem | undefined>;
+  createTombstoneCatalogItem(data: InsertTombstoneCatalogItem): Promise<TombstoneCatalogItem>;
+  updateTombstoneCatalogItem(id: string, orgId: string, data: Partial<TombstoneCatalogItem>): Promise<TombstoneCatalogItem | undefined>;
+  generateTombstoneOrderNumber(orgId: string): Promise<string>;
+  getTombstoneOrders(orgId: string, filters?: { status?: string; clientId?: string; funeralCaseId?: string }): Promise<TombstoneOrder[]>;
+  getTombstoneOrder(id: string, orgId: string): Promise<TombstoneOrder | undefined>;
+  createTombstoneOrder(data: InsertTombstoneOrder): Promise<TombstoneOrder>;
+  updateTombstoneOrder(id: string, orgId: string, data: Partial<TombstoneOrder>): Promise<TombstoneOrder | undefined>;
+  getTombstoneOrderPayments(orgId: string, orderId: string): Promise<TombstoneOrderPayment[]>;
+  recordTombstoneOrderPayment(data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }>;
   getActuarialExposureSummary(orgId: string): Promise<{ productName: string; ageBand: string; memberCount: number }[]>;
   getBalanceSheetEntries(orgId: string, filters?: { section?: string; asOfDate?: string }): Promise<BalanceSheetEntry[]>;
   getBalanceSheetEntry(id: string, orgId: string): Promise<BalanceSheetEntry | undefined>;
@@ -5549,6 +5570,180 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(data.organizationId);
     const [row] = await tdb.insert(bankStatementBalances).values(data).returning();
     return row;
+  }
+
+  // ── Petty cash floats ────────────────────────────────────────
+  async getPettyCashFloats(orgId: string): Promise<PettyCashFloat[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(pettyCashFloats).where(eq(pettyCashFloats.organizationId, orgId)).orderBy(pettyCashFloats.name);
+  }
+  async getPettyCashFloat(id: string, orgId: string): Promise<PettyCashFloat | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(pettyCashFloats)
+      .where(and(eq(pettyCashFloats.id, id), eq(pettyCashFloats.organizationId, orgId)));
+    return row;
+  }
+  async createPettyCashFloat(data: InsertPettyCashFloat, openingBalance?: string, performedByUserId?: string): Promise<PettyCashFloat> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(pettyCashFloats).values(data).returning();
+    const opening = parseFloat(openingBalance || "0");
+    if (opening > 0 && performedByUserId) {
+      await this.postPettyCashTransaction({
+        organizationId: data.organizationId,
+        floatId: row.id,
+        type: "opening",
+        amount: opening.toFixed(2),
+        description: "Opening float",
+        performedByUserId,
+        transactionDate: todayInHarare(),
+      });
+      const opened = await this.getPettyCashFloat(row.id, data.organizationId);
+      return opened ?? row;
+    }
+    return row;
+  }
+  async updatePettyCashFloat(id: string, orgId: string, data: Partial<PettyCashFloat>): Promise<PettyCashFloat | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(pettyCashFloats).set({ ...data, updatedAt: new Date() })
+      .where(and(eq(pettyCashFloats.id, id), eq(pettyCashFloats.organizationId, orgId))).returning();
+    return row;
+  }
+  async getPettyCashTransactions(orgId: string, filters?: { floatId?: string; fromDate?: string; toDate?: string }): Promise<PettyCashTransaction[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(pettyCashTransactions.organizationId, orgId)];
+    if (filters?.floatId) conds.push(eq(pettyCashTransactions.floatId, filters.floatId));
+    if (filters?.fromDate) conds.push(sql`${pettyCashTransactions.transactionDate} >= ${filters.fromDate}`);
+    if (filters?.toDate) conds.push(sql`${pettyCashTransactions.transactionDate} <= ${filters.toDate}`);
+    return tdb.select().from(pettyCashTransactions).where(and(...conds)).orderBy(desc(pettyCashTransactions.transactionDate), desc(pettyCashTransactions.createdAt));
+  }
+  /** Posts a ledger entry and atomically adjusts the float balance. Disbursements/adjustment_out
+   *  can never push the balance negative — the guarded UPDATE below returns no row if the float
+   *  doesn't have enough, and we throw rather than post an orphaned ledger entry. */
+  async postPettyCashTransaction(data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const amount = parseFloat(String(data.amount));
+    const increases = ["opening", "replenishment", "adjustment_in"];
+    const decreases = ["disbursement", "adjustment_out"];
+    let float: PettyCashFloat;
+    let discrepancyAmount: string | undefined;
+    if (increases.includes(data.type)) {
+      const [row] = await tdb.update(pettyCashFloats)
+        .set({ balance: sql`${pettyCashFloats.balance} + ${amount}`, updatedAt: new Date() })
+        .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)))
+        .returning();
+      if (!row) throw new Error("Petty cash float not found");
+      float = row;
+    } else if (decreases.includes(data.type)) {
+      const [row] = await tdb.update(pettyCashFloats)
+        .set({ balance: sql`${pettyCashFloats.balance} - ${amount}`, updatedAt: new Date() })
+        .where(and(
+          eq(pettyCashFloats.id, data.floatId),
+          eq(pettyCashFloats.organizationId, data.organizationId),
+          gte(pettyCashFloats.balance, sql`${amount}::numeric`)
+        ))
+        .returning();
+      if (!row) {
+        const existing = await this.getPettyCashFloat(data.floatId, data.organizationId);
+        if (!existing) throw new Error("Petty cash float not found");
+        throw new Error(`Insufficient petty cash balance: float has ${existing.balance}, tried to disburse ${amount.toFixed(2)}`);
+      }
+      float = row;
+    } else {
+      // reconciliation: doesn't move the balance, just records a counted-vs-system snapshot
+      const existing = await this.getPettyCashFloat(data.floatId, data.organizationId);
+      if (!existing) throw new Error("Petty cash float not found");
+      float = existing;
+      const counted = parseFloat(String(data.countedAmount ?? "0"));
+      discrepancyAmount = (counted - parseFloat(String(existing.balance))).toFixed(2);
+    }
+    const [transaction] = await tdb.insert(pettyCashTransactions).values({
+      ...data,
+      amount: amount.toFixed(2),
+      balanceAfter: float.balance,
+      ...(discrepancyAmount !== undefined ? { discrepancyAmount } : {}),
+    }).returning();
+    return { transaction, float };
+  }
+
+  // ── Tombstones: catalogue ────────────────────────────────────
+  async getTombstoneCatalogItems(orgId: string, activeOnly?: boolean): Promise<TombstoneCatalogItem[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(tombstoneCatalogItems.organizationId, orgId)];
+    if (activeOnly) conds.push(eq(tombstoneCatalogItems.isActive, true));
+    return tdb.select().from(tombstoneCatalogItems).where(and(...conds)).orderBy(tombstoneCatalogItems.name);
+  }
+  async getTombstoneCatalogItem(id: string, orgId: string): Promise<TombstoneCatalogItem | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(tombstoneCatalogItems)
+      .where(and(eq(tombstoneCatalogItems.id, id), eq(tombstoneCatalogItems.organizationId, orgId)));
+    return row;
+  }
+  async createTombstoneCatalogItem(data: InsertTombstoneCatalogItem): Promise<TombstoneCatalogItem> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(tombstoneCatalogItems).values(data).returning();
+    return row;
+  }
+  async updateTombstoneCatalogItem(id: string, orgId: string, data: Partial<TombstoneCatalogItem>): Promise<TombstoneCatalogItem | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(tombstoneCatalogItems).set(data)
+      .where(and(eq(tombstoneCatalogItems.id, id), eq(tombstoneCatalogItems.organizationId, orgId))).returning();
+    return row;
+  }
+
+  // ── Tombstones: orders ───────────────────────────────────────
+  async generateTombstoneOrderNumber(orgId: string): Promise<string> {
+    const tdb = await getDbForOrg(orgId);
+    const result = await tdb.execute(sql`
+      INSERT INTO org_policy_sequences (organization_id, tombstone_order_next) VALUES (${orgId}, 1)
+      ON CONFLICT (organization_id) DO UPDATE SET tombstone_order_next = org_policy_sequences.tombstone_order_next + 1
+      RETURNING tombstone_order_next
+    `);
+    const nextVal = (result as unknown as { rows?: { tombstone_order_next: number }[] }).rows?.[0]?.tombstone_order_next ?? 1;
+    return `TOM-${String(nextVal).padStart(5, "0")}`;
+  }
+  async getTombstoneOrders(orgId: string, filters?: { status?: string; clientId?: string; funeralCaseId?: string }): Promise<TombstoneOrder[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(tombstoneOrders.organizationId, orgId)];
+    if (filters?.status) conds.push(eq(tombstoneOrders.status, filters.status));
+    if (filters?.clientId) conds.push(eq(tombstoneOrders.clientId, filters.clientId));
+    if (filters?.funeralCaseId) conds.push(eq(tombstoneOrders.funeralCaseId, filters.funeralCaseId));
+    return tdb.select().from(tombstoneOrders).where(and(...conds)).orderBy(desc(tombstoneOrders.orderedDate), desc(tombstoneOrders.createdAt));
+  }
+  async getTombstoneOrder(id: string, orgId: string): Promise<TombstoneOrder | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(tombstoneOrders)
+      .where(and(eq(tombstoneOrders.id, id), eq(tombstoneOrders.organizationId, orgId)));
+    return row;
+  }
+  async createTombstoneOrder(data: InsertTombstoneOrder): Promise<TombstoneOrder> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(tombstoneOrders).values(data).returning();
+    return row;
+  }
+  async updateTombstoneOrder(id: string, orgId: string, data: Partial<TombstoneOrder>): Promise<TombstoneOrder | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.update(tombstoneOrders).set(data)
+      .where(and(eq(tombstoneOrders.id, id), eq(tombstoneOrders.organizationId, orgId))).returning();
+    return row;
+  }
+  async getTombstoneOrderPayments(orgId: string, orderId: string): Promise<TombstoneOrderPayment[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(tombstoneOrderPayments)
+      .where(and(eq(tombstoneOrderPayments.organizationId, orgId), eq(tombstoneOrderPayments.orderId, orderId)))
+      .orderBy(desc(tombstoneOrderPayments.paidAt));
+  }
+  /** Atomically bumps tombstone_orders.amount_paid alongside inserting the payment row —
+   *  same conditional-update-then-insert shape as postPettyCashTransaction. */
+  async recordTombstoneOrderPayment(data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const amount = parseFloat(String(data.amount));
+    const [order] = await tdb.update(tombstoneOrders)
+      .set({ amountPaid: sql`${tombstoneOrders.amountPaid} + ${amount}` })
+      .where(and(eq(tombstoneOrders.id, data.orderId), eq(tombstoneOrders.organizationId, data.organizationId)))
+      .returning();
+    if (!order) throw new Error("Tombstone order not found");
+    const [payment] = await tdb.insert(tombstoneOrderPayments).values({ ...data, amount: amount.toFixed(2) }).returning();
+    return { payment, order };
   }
 
   // ── Per-admin cash position ────────────────────────────────

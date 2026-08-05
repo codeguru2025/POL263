@@ -174,6 +174,7 @@ export const orgPolicySequences = pgTable("org_policy_sequences", {
   requisitionNext: integer("requisition_next").default(0).notNull(),
   disbursementNext: integer("disbursement_next").default(0).notNull(),
   accumulationNext: integer("accumulation_next").default(0).notNull(),
+  tombstoneOrderNext: integer("tombstone_order_next").default(0).notNull(),
 });
 
 // ─── IDENTITY ───────────────────────────────────────────────
@@ -1925,6 +1926,99 @@ export const cemeteries = pgTable(
   (t) => [index("cem_org_idx").on(t.organizationId)]
 );
 
+// ─── TOMBSTONES (catalogue + orders, a physical-goods sale distinct from funeral policies) ──
+export const TOMBSTONE_ORDER_STATUSES = ["ordered", "in_production", "ready", "delivered", "installed", "cancelled"] as const;
+
+export const tombstoneCatalogItems = pgTable(
+  "tombstone_catalog_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    name: text("name").notNull(),
+    material: text("material"),
+    size: text("size"),
+    color: text("color"),
+    description: text("description"),
+    price: numeric("price", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    defaultSupplierName: text("default_supplier_name"),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("tci_org_idx").on(t.organizationId)]
+);
+
+// funeralCaseId/clientId are both optional — a tombstone can be ordered years after the funeral,
+// or as a standalone memorial purchase with no case in this system at all.
+export const tombstoneOrders = pgTable(
+  "tombstone_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    orderNumber: text("order_number").notNull(),
+    clientId: uuid("client_id").references(() => clients.id),
+    funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    deceasedName: text("deceased_name").notNull(),
+    catalogItemId: uuid("catalog_item_id").references(() => tombstoneCatalogItems.id),
+    itemDescription: text("item_description").notNull(), // snapshot at order time, independent of later catalogue edits
+    material: text("material"),
+    engravingText: text("engraving_text"),
+    cemeteryId: uuid("cemetery_id").references(() => cemeteries.id),
+    plotReference: text("plot_reference"),
+    supplierName: text("supplier_name"),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    amountPaid: numeric("amount_paid", { precision: 12, scale: 2 }).default("0").notNull(),
+    status: text("status").default("ordered").notNull(), // see TOMBSTONE_ORDER_STATUSES
+    orderedDate: date("ordered_date").notNull(),
+    expectedDeliveryDate: date("expected_delivery_date"),
+    deliveredDate: date("delivered_date"),
+    installedDate: date("installed_date"),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("tord_org_idx").on(t.organizationId),
+    index("tord_status_idx").on(t.organizationId, t.status),
+    uniqueIndex("tord_number_org_idx").on(t.organizationId, t.orderNumber),
+  ]
+);
+
+export const tombstoneOrderPayments = pgTable(
+  "tombstone_order_payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    orderId: uuid("order_id").notNull().references(() => tombstoneOrders.id),
+    receiptNumber: text("receipt_number").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    paymentChannel: text("payment_channel").default("cash").notNull(),
+    receivedByUserId: uuid("received_by_user_id").references(() => users.id),
+    notes: text("notes"),
+    paidAt: timestamp("paid_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("top_org_idx").on(t.organizationId),
+    index("top_order_idx").on(t.orderId),
+  ]
+);
+
+export const insertTombstoneCatalogItemSchema = createInsertSchema(tombstoneCatalogItems).omit({ id: true, createdAt: true });
+export type TombstoneCatalogItem = typeof tombstoneCatalogItems.$inferSelect;
+export type InsertTombstoneCatalogItem = z.infer<typeof insertTombstoneCatalogItemSchema>;
+
+export const insertTombstoneOrderSchema = createInsertSchema(tombstoneOrders).omit({ id: true, amountPaid: true, createdAt: true });
+export type TombstoneOrder = typeof tombstoneOrders.$inferSelect;
+export type InsertTombstoneOrder = z.infer<typeof insertTombstoneOrderSchema>;
+
+export const insertTombstoneOrderPaymentSchema = createInsertSchema(tombstoneOrderPayments).omit({ id: true, paidAt: true });
+export type TombstoneOrderPayment = typeof tombstoneOrderPayments.$inferSelect;
+export type InsertTombstoneOrderPayment = z.infer<typeof insertTombstoneOrderPaymentSchema>;
+
 // ─── Equipment Items (named, individually-tracked gravesite/event equipment) ──
 export const equipmentItems = pgTable(
   "equipment_items",
@@ -3297,6 +3391,63 @@ export type BankStatementBalance = typeof bankStatementBalances.$inferSelect;
 export type InsertBankStatementBalance = z.infer<typeof insertBankStatementBalanceSchema>;
 export type PaymentDisbursement = typeof paymentDisbursements.$inferSelect;
 export type InsertPaymentDisbursement = z.infer<typeof insertPaymentDisbursementSchema>;
+
+// ─── PETTY CASH FLOATS ─────────────────────────────────────
+// A cash float held by a custodian (branch or head office) for small operational spend.
+// `balance` is maintained atomically alongside petty_cash_transactions (the audit ledger) —
+// disbursements can never push it negative (enforced in storage.ts via a guarded UPDATE, the
+// same conditional-decrement pattern used for policy_credit_balances).
+export const PETTY_CASH_TXN_TYPES = ["opening", "replenishment", "disbursement", "adjustment_in", "adjustment_out", "reconciliation"] as const;
+
+export const pettyCashFloats = pgTable(
+  "petty_cash_floats",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    name: text("name").notNull(),
+    currency: text("currency").default("USD").notNull(),
+    balance: numeric("balance", { precision: 12, scale: 2 }).default("0").notNull(),
+    custodianUserId: uuid("custodian_user_id").references(() => users.id),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [index("pcf_org_idx").on(t.organizationId)]
+);
+
+export const pettyCashTransactions = pgTable(
+  "petty_cash_transactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    floatId: uuid("float_id").notNull().references(() => pettyCashFloats.id),
+    type: text("type").notNull(), // see PETTY_CASH_TXN_TYPES
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(), // always positive; direction implied by type
+    balanceAfter: numeric("balance_after", { precision: 12, scale: 2 }).notNull(),
+    category: text("category"),
+    description: text("description").notNull(),
+    receiptRef: text("receipt_ref"),
+    // Only set for type = 'reconciliation': the physically-counted amount vs balanceAfter at that point.
+    countedAmount: numeric("counted_amount", { precision: 12, scale: 2 }),
+    discrepancyAmount: numeric("discrepancy_amount", { precision: 12, scale: 2 }),
+    performedByUserId: uuid("performed_by_user_id").notNull().references(() => users.id),
+    transactionDate: date("transaction_date").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pct_org_idx").on(t.organizationId),
+    index("pct_float_idx").on(t.floatId),
+  ]
+);
+
+export const insertPettyCashFloatSchema = createInsertSchema(pettyCashFloats).omit({ id: true, balance: true, createdAt: true, updatedAt: true });
+export type PettyCashFloat = typeof pettyCashFloats.$inferSelect;
+export type InsertPettyCashFloat = z.infer<typeof insertPettyCashFloatSchema>;
+
+export const insertPettyCashTransactionSchema = createInsertSchema(pettyCashTransactions).omit({ id: true, balanceAfter: true, createdAt: true });
+export type PettyCashTransaction = typeof pettyCashTransactions.$inferSelect;
+export type InsertPettyCashTransaction = z.infer<typeof insertPettyCashTransactionSchema>;
 
 // ─── BALANCE SHEET MANUAL ENTRIES ─────────────────────────────────────────
 // Holds non-derived items: fixed assets, loans, capital contributions, etc.
