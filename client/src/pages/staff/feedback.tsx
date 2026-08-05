@@ -120,7 +120,6 @@ export default function StaffFeedback() {
   const escalateMutation = useMutation({
     mutationFn: async ({ id, escalatedToUserId }: { id: string; escalatedToUserId: string }) => {
       const res = await apiRequest("POST", `/api/feedback/${id}/escalate`, { escalatedToUserId });
-      if (!res.ok) throw new Error((await res.json()).message || "Failed to escalate");
       return res.json();
     },
     onSuccess: () => {

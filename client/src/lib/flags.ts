@@ -10,11 +10,10 @@ import { useSyncExternalStore } from "react";
  * - No server state, no schema change. Disabling a flag fully reverts to the
  *   prior behaviour (see docs/POL263-TRANSFORMATION-PLAN.md Part H/J).
  *
- * To revert the entire new experience from the browser console:
- *   localStorage.setItem('pol263.flags', JSON.stringify({ newNav:false, globalSearch:false, commandPalette:false, quickCreate:false, commandCenters:false }))
+ * To revert the remaining beta experience from the browser console:
+ *   localStorage.setItem('pol263.flags', JSON.stringify({ globalSearch:false, commandPalette:false, quickCreate:false, commandCenters:false }))
  */
 export type FlagName =
-  | "newNav"
   | "globalSearch"
   | "commandPalette"
   | "quickCreate"
@@ -23,7 +22,6 @@ export type FlagName =
   | "policyWizard";
 
 const DEFAULTS: Record<FlagName, boolean> = {
-  newNav: true,
   globalSearch: true,
   commandPalette: true,
   quickCreate: true,

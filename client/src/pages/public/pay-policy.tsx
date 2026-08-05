@@ -41,7 +41,6 @@ export default function PayPolicyLink() {
   const pn = usePaynowPolling({
     initiate: async () => {
       const res = await apiRequest("POST", `/api/pay/${token}/initiate`, {});
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Payment failed"); }
       return res.json();
     },
     poll: async () => {

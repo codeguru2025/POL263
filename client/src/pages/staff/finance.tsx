@@ -209,7 +209,6 @@ function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }) {
   const actionMutation = useMutation({
     mutationFn: async ({ id, type, note }: { id: string; type: "approve" | "reject"; note: string }) => {
       const res = await apiRequest("POST", `/api/payment-receipts/${id}/${type}`, { approvalNote: note });
-      if (!res.ok) { const j = await res.json(); throw new Error(j.message || res.statusText); }
       return res.json();
     },
     onSuccess: (_, vars) => {
@@ -1673,9 +1672,7 @@ export default function StaffFinance() {
         paidCurrency: payForm.paidInDifferentCurrency ? payForm.paidCurrency || undefined : undefined,
         fxRateApplied: payForm.paidInDifferentCurrency ? payForm.fxRateApplied || undefined : undefined,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Payment failed");
-      return data;
+      return res.json();
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/requisitions"] });

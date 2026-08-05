@@ -551,9 +551,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
   const legacyMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/clients", { firstName: legacyFirst.trim(), lastName: legacyLast.trim(), legacyGroupId: group.id });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed");
-      return data;
+      return res.json();
     },
     onSuccess: (data) => {
       setShowLegacyDialog(false);
@@ -931,7 +929,6 @@ function PoolSocietySection({ group }: { group: Group }) {
       const res = await apiRequest("POST", `/api/groups/${groupId}/members`, {
         fullName: newMemberName.trim(), memberNumber: newMemberNumber.trim() || undefined,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed"); }
       return res.json();
     },
     onSuccess: () => {
@@ -958,7 +955,6 @@ function PoolSocietySection({ group }: { group: Group }) {
             : [],
         }));
       const res = await apiRequest("POST", `/api/groups/${groupId}/members/bulk-import`, { members: membersPayload });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Import failed"); }
       return res.json() as Promise<{ membersCreated: number; contributionsCreated: number }>;
     },
     onSuccess: (data) => {
@@ -981,7 +977,6 @@ function PoolSocietySection({ group }: { group: Group }) {
       const res = await apiRequest("POST", `/api/groups/${groupId}/contributions`, {
         groupMemberId: contribMemberId, amount: contribAmount, currency: contribCurrency, contributionDate: contribDate,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed"); }
       return res.json();
     },
     onSuccess: () => {
@@ -1003,7 +998,6 @@ function PoolSocietySection({ group }: { group: Group }) {
         groupMemberId: payoutMemberId, eventType: payoutEventType,
         amount: payoutAmount || undefined, currency: payoutCurrency, force,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed"); }
       return res.json();
     },
     onSuccess: () => {
@@ -1377,9 +1371,7 @@ function LegacyPoliciesSection() {
         premiumOverrideNote: overrides[id]?.note?.trim() || null,
       }));
       const res = await apiRequest("POST", "/api/policies/legacy/bulk-override", updates);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed");
-      return data;
+      return res.json();
     },
     onSuccess: (data) => {
       setDirty(new Set());

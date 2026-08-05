@@ -706,8 +706,7 @@ export default function StaffPolicies() {
 
   const setMemberAddOnsMutation = useMutation({
     mutationFn: async ({ memberId, addOnIds }: { memberId: string; addOnIds: string[] }) => {
-      const res = await apiRequest("PUT", `/api/policies/${selectedPolicy!.id}/members/${memberId}/add-ons`, { addOnIds });
-      if (!res.ok) throw new Error("Failed to save add-ons");
+      await apiRequest("PUT", `/api/policies/${selectedPolicy!.id}/members/${memberId}/add-ons`, { addOnIds });
     },
     onSuccess: () => {
       refetchMemberAddOns();
@@ -836,14 +835,10 @@ export default function StaffPolicies() {
   async function submitWaiverRequest() {
     setWaiverSubmitting(true);
     try {
-      const res = await apiRequest("POST", `/api/policies/${selectedPolicy!.id}/waiver-request`, {
+      await apiRequest("POST", `/api/policies/${selectedPolicy!.id}/waiver-request`, {
         reason: waiverReason,
         supportingNotes: waiverNotes,
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to submit waiver request");
-      }
       refetchWaiver();
       setShowWaiverDialog(false);
       setWaiverReason("");
@@ -1223,9 +1218,7 @@ export default function StaffPolicies() {
   const updateClientDetailsMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("PATCH", `/api/clients/${policyHolderClient.id}`, editClientForm);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Could not update client details.");
-      return data;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients", displayPolicy?.clientId, "policy-detail-holder"] });

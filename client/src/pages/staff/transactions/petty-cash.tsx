@@ -76,7 +76,6 @@ export default function PettyCash() {
         custodianUserId: floatForm.custodianUserId || undefined,
         openingBalance: floatForm.openingBalance || undefined,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed to create float"); }
       return res.json();
     },
     onSuccess: () => {
@@ -107,7 +106,6 @@ export default function PettyCash() {
         receiptRef: txnForm.receiptRef.trim() || undefined,
         transactionDate: txnForm.transactionDate,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed to post transaction"); }
       return res.json();
     },
     onSuccess: () => {

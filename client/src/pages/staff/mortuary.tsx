@@ -208,9 +208,7 @@ export default function StaffMortuary() {
   const sendForPostMortemMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
       const res = await apiRequest("POST", `/api/mortuary-intakes/${selectedIntakeId}/post-mortem`, data);
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.message || "Failed");
-      return j;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/mortuary-intakes"] });
@@ -778,9 +776,7 @@ function PartnerParlourVehicleUsageSection({ vehicleOptions, vehicles, userOptio
   const logUsageMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
       const res = await apiRequest("POST", "/api/partner-parlour-vehicle-usage", data);
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.message || "Failed");
-      return j;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/partner-parlour-vehicle-usage"] });
@@ -805,9 +801,7 @@ function PartnerParlourVehicleUsageSection({ vehicleOptions, vehicles, userOptio
   const feePaymentMutation = useMutation({
     mutationFn: async ({ id, paidBy }: { id: string; paidBy: string }) => {
       const res = await apiRequest("POST", `/api/partner-parlour-vehicle-usage/${id}/fee-payment`, { paidBy });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.message || "Failed");
-      return j;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/partner-parlour-vehicle-usage"] });

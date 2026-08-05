@@ -58,22 +58,13 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { useState, useMemo } from "react";
-import {
-  AreaChart,
-  Area,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-  PieChart,
-  Pie,
-  Legend,
-} from "recharts";
+import { useState, useMemo, lazy, Suspense } from "react";
+
+// Split into their own lazy chunks so recharts (~400KB) doesn't block the initial render of
+// this page — it's the staff landing page, loaded on nearly every login.
+const RevenueAndPolicyCharts = lazy(() => import("./dashboard-revenue-chart"));
+const LeadFunnelChart = lazy(() => import("./dashboard-lead-funnel-chart"));
+const ChartSkeleton = () => <div className="h-[280px] animate-pulse rounded-lg bg-muted/50" />;
 import { isAgentScoped } from "@shared/roles";
 import { useFlag } from "@/lib/flags";
 import { useTenantCapabilities, hasCapabilityModule } from "@/hooks/use-tenant-capabilities";
@@ -350,9 +341,7 @@ function BackupHealthSection() {
   const triggerMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/platform/backup-sync", {});
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.message || "Failed to trigger backup");
-      return j;
+      return res.json();
     },
     onSuccess: () => {
       toast({ title: "Backup sync triggered", description: "Check back in a minute for the new run to appear." });
@@ -439,9 +428,7 @@ function PendingDomainCommissioningSection({ tenants }: { tenants: ControlPlaneT
   const commissionMutation = useMutation({
     mutationFn: async (tenantId: string) => {
       const res = await apiRequest("POST", `/api/platform/tenants/${tenantId}/commission-domain`, {});
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.message || "Domain commissioning failed");
-      return j;
+      return res.json();
     },
     onSuccess: () => {
       toast({ title: "Domain commissioned", description: "DNS record created/verified and added to DigitalOcean's Domains list." });
@@ -1228,88 +1215,25 @@ export default function StaffDashboard() {
         </div>
 
         {canReadFinance && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CardSection title="Revenue trend" icon={DollarSign} contentClassName="pt-2" headerRight={<PeriodSelector value={execPeriod} onChange={setExecPeriod} />}>
-              {filteredRevenueTrend.length > 0 ? (
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={filteredRevenueTrend}>
-                    <defs>
-                      <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d) => d.slice(5)} />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                    <Tooltip
-                      formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), "Revenue"]}
-                      labelFormatter={(label) => `Date: ${label}`}
-                    />
-                    <Area type="monotone" dataKey="total" stroke="#6366f1" fill="url(#colorRevenue)" strokeWidth={2} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-[280px] flex items-center justify-center text-sm text-muted-foreground" data-testid="text-no-revenue">
-                  No revenue data available
-                </div>
-              )}
-          </CardSection>
-
-          <CardSection title="Policy status breakdown" icon={FileStack} contentClassName="pt-2">
-              {policyStatusData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={280}>
-                  <PieChart>
-                    <Pie
-                      data={policyStatusData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={100}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      labelLine={false}
-                    >
-                      {policyStatusData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value: number) => [value, "Policies"]} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-[280px] flex items-center justify-center text-sm text-muted-foreground" data-testid="text-no-policies">
-                  No policy data available
-                </div>
-              )}
-          </CardSection>
-        </div>
+          <Suspense fallback={
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <ChartSkeleton /><ChartSkeleton />
+            </div>
+          }>
+            <RevenueAndPolicyCharts
+              revenueTrend={filteredRevenueTrend}
+              execPeriod={execPeriod}
+              onExecPeriodChange={setExecPeriod}
+              policyStatusData={policyStatusData}
+            />
+          </Suspense>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {!isAgent && canReadLead && (
-          <CardSection title="Lead conversion funnel" icon={BarChart3} contentClassName="pt-2">
-              {leadFunnelData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={leadFunnelData} layout="vertical" margin={{ left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis type="number" tick={{ fontSize: 11 }} />
-                    <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={120} />
-                    <Tooltip formatter={(value: number) => [value, "Leads"]} />
-                    <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                      {leadFunnelData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.fill} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-[280px] flex items-center justify-center text-sm text-muted-foreground" data-testid="text-no-leads">
-                  No lead data available
-                </div>
-              )}
-          </CardSection>
+          <Suspense fallback={<ChartSkeleton />}>
+            <LeadFunnelChart leadFunnelData={leadFunnelData} />
+          </Suspense>
           )}
 
           <CardSection title="Lapse & retention metrics" icon={AlertTriangle} contentClassName="pt-2">

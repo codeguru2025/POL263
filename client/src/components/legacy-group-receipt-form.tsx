@@ -31,9 +31,7 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess }: { groupId: string
       const res = await apiRequest("POST", "/api/groups/legacy-receipts", {
         groupId, amount: parseFloat(amount), currency, paymentDate, notes: notes.trim() || undefined,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Failed");
-      return data;
+      return res.json();
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/groups/legacy-receipts"] });

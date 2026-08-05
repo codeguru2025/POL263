@@ -5,7 +5,6 @@ import { Sparkles } from "lucide-react";
 import { useFlag, setFlag, type FlagName } from "@/lib/flags";
 
 const FLAG_META: { name: FlagName; label: string; description: string }[] = [
-  { name: "newNav", label: "New navigation", description: "Job-based menus (Sales, Clients, Policies, Collections, Claims, Finance, Reports, Setup)." },
   { name: "globalSearch", label: "Global search bar", description: "Header search across policies & clients (replaces the policy-only search)." },
   { name: "commandPalette", label: "Command palette (⌘K)", description: "Keyboard launcher for search and quick actions, available everywhere." },
   { name: "quickCreate", label: "Quick create button", description: 'The "+ New" button in the header for fast record creation.' },

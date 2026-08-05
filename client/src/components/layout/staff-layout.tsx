@@ -297,7 +297,6 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     },
   });
 
-  const newNav = useFlag("newNav");
   const globalSearch = useFlag("globalSearch");
   const quickCreate = useFlag("quickCreate");
 
@@ -310,110 +309,9 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       return hasAny(perms);
     });
 
-  // ── Transactions: day-to-day operational records (money-neutral) ──
-  const transactionsMenu: StaffNavItem[] = isControlPlaneMode
-    ? []
-    : filterNav([
-        { href: "/staff/policies", label: "Policy Transactions", icon: FileStack, permission: "read:policy", agentOnly: true },
-        { href: "/staff/funerals", label: "Funeral Files", icon: Truck, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
-        { href: "/staff/mortuary", label: "Mortuary Register", icon: Archive, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
-        { href: "/staff/pitching-schedule", label: "Pitching Schedule", icon: CalendarDays, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
-        { href: "/staff/quotations", label: "Cash Service Quotes", icon: Receipt, permission: "read:funeral_ops", capabilityModule: "funeral_ops" },
-        { href: "/staff/fleet-tracking", label: "Fleet Tracking", icon: Truck, permissions: ["use:fleet", "read:fleet"], capabilityModule: "fleet", agentHidden: true },
-        { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
-        { href: "/staff/leads", label: "Quotations", icon: Target, permission: "read:lead" },
-      ]);
-
-  // ── Finance: everything money — in, out, people, periodic close ──
-  const financeMenu: StaffNavItem[] = isControlPlaneMode
-    ? []
-    : filterNav([
-        // Money in
-        { href: "/staff/finance?tab=payments", label: "Receipts & Payments", icon: Receipt, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/finance?tab=receipting-by-staff", label: "Receipting by Staff", icon: Users, permission: "read:finance", agentHidden: true },
-        { href: "/staff/finance?tab=paynow", label: "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/finance?tab=group-receipt", label: "Group Receipt", icon: Layers, permission: "write:finance", agentHidden: true },
-        { href: "/staff/finance?tab=cashups", label: "Cash-up Reconciliation", icon: Wallet2, permissions: ["read:finance", "read:commission"] },
-        { href: "/staff/finance?tab=banking", label: "Banking & Cash", icon: Landmark, permission: "read:finance", agentHidden: true },
-        // Money out
-        { href: "/staff/finance?tab=requisitions", label: "Requisitions", icon: ClipboardList, permission: "read:finance", agentHidden: true },
-        { href: "/staff/finance?tab=expenditures", label: "Expenditures", icon: FileMinus, permission: "read:finance", agentHidden: true },
-        { href: "/staff/transactions/petty-cash", label: "Petty Cash", icon: Coins, agentHidden: true },
-        { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard, agentHidden: true },
-        // People & periodic
-        { href: "/staff/finance?tab=commissions", label: "Commissions", icon: TrendingUp, permission: "read:commission" },
-        { href: "/staff/payroll", label: "Payroll", icon: Wallet2, permission: "read:payroll", capabilityModule: "payroll" },
-        { href: "/staff/attendance", label: "Attendance", icon: ClipboardList, capabilityModule: "payroll" },
-        { href: "/staff/finance?tab=month-end", label: "Month-End Close", icon: CalendarDays, permission: "write:finance", agentHidden: true },
-        { href: "/staff/finance?tab=fx-rates", label: "FX Rates", icon: RefreshCw, permission: "manage:settings", agentHidden: true },
-        { href: "/staff/finance?tab=platform", label: "Platform Fees", icon: Building2, permission: "read:finance", agentHidden: true },
-        { href: "/staff/finance?tab=approvals", label: "Receipt Approvals", icon: ShieldCheck, permission: "approve:finance", agentHidden: true },
-      ]);
-
-  // ── Reports ──
-  const reportsMenu: StaffNavItem[] = isControlPlaneMode
-    ? []
-    : filterNav([
-        { href: "/staff/daily-report", label: "Daily Report", icon: FileText, permission: "read:finance" },
-        { href: "/staff/executive-report", label: "Executive Report", icon: LineChart, permission: "read:finance" },
-        { href: "/staff/schedule-reports", label: "Schedule & Department Reports", icon: CalendarDays, permission: "read:report" },
-        { href: "/staff/reports", label: "Dynamic Reports", icon: BarChart3, permission: "read:report" },
-        { href: "/staff/reports?section=policies", label: "Policy Reports", icon: FileStack, permission: "read:report" },
-        { href: "/staff/reports?section=finance", label: "Financial Reports", icon: Receipt, permission: "read:report" },
-        { href: "/staff/reports?section=agents", label: "Agent Reports", icon: UserCircle, permission: "read:report" },
-        { href: "/staff/reports?section=claims", label: "Claims Reports", icon: Shield, permission: "read:report" },
-        { href: "/staff/employee-reports", label: "Employee Reports", icon: Users, permission: "read:report", agentHidden: true },
-        { href: "/staff/diagnostics", label: "System Issue Reports", icon: Stethoscope, permission: "read:audit_log" },
-      ]);
-
-  // ── Administration: setup, reference data, access & org ──
-  const administrationMenu: StaffNavItem[] = isControlPlaneMode
-    ? []
-    : filterNav([
-        // Core records & products
-        { href: "/staff/policies", label: "Policy Admin", icon: FileStack, permission: "read:policy", agentHidden: true },
-        { href: "/staff/claims", label: "Claims Admin", icon: FileText, permission: "read:claim", capabilityModule: "claims" },
-        { href: "/staff/admin/society", label: "Society Admin", icon: Building2, agentHidden: true },
-        { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone, agentHidden: true },
-        { href: "/staff/products", label: "Product Admin", icon: Box, permission: "write:product" },
-        { href: "/staff/pricebook", label: "Price Book", icon: BookOpen, permission: "write:product" },
-        // Clients & groups
-        { href: "/staff/clients", label: isAgent ? "My Clients" : "Clients", icon: Users, permission: "read:client" },
-        { href: "/staff/feedback", label: "Client Feedback", icon: MessageSquare, permission: "read:client", agentHidden: true },
-        { href: "/staff/groups", label: "Employer Admin", icon: Layers, permissions: ["write:policy"], agentHidden: true },
-        { href: "/staff/admin/member-cards", label: "Member Card Admin", icon: CreditCard, permission: "manage:settings", agentHidden: true },
-        // Partners & distribution
-        { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck, agentHidden: true },
-        { href: "/staff/admin/brokers", label: "Broker Admin", icon: Briefcase, agentHidden: true },
-        { href: "/staff/admin/underwriters", label: "Underwriter Admin", icon: Shield, agentHidden: true },
-        { href: "/staff/admin/undertakers", label: "Undertaker Admin", icon: HeartHandshake, agentHidden: true },
-        // Org, access & system
-        { href: "/staff/admin/branches", label: "Branch Admin", icon: MapPin, agentHidden: true },
-        { href: "/staff/users", label: "User Admin", icon: UserCog, permission: "read:user" },
-        { href: "/staff/approvals", label: "Approvals", icon: ShieldCheck, permissions: ["approve:requests", "approve:waivers", "approve:settlements", "approve:finance"], badge: approvalsPendingCount },
-        { href: "/staff/settings", label: "System Setup", icon: Settings, agentHidden: true },
-        { href: "/staff/billing", label: "Billing", icon: CreditCard, permission: "manage:settings", agentHidden: true },
-      ]);
-
-  // ── Tools: utilities ──
-  const toolsMenu: StaffNavItem[] = isControlPlaneMode
-    ? []
-    : filterNav([
-        { href: "/staff/audit", label: "Audit Trail", icon: History, permission: "read:audit_log" },
-        { href: "/staff/tools/assets", label: "Asset Register", icon: Archive, permission: "read:audit_log" },
-        { href: "/staff/tools/statistics", label: "Statistics", icon: BarChart2, agentHidden: true },
-        { href: "/staff/tools/statistical-graphs", label: "Statistical Graphs", icon: LineChart, agentHidden: true },
-        { href: "/staff/notifications", label: "SMS Tools", icon: Bell, permission: "read:notification" },
-        { href: "/staff/tools/print-policy-cards", label: "Print Policy Cards", icon: Printer },
-        { href: "/staff/tools/transport-companies", label: "Transport Companies", icon: Truck, agentHidden: true },
-        { href: "/staff/tools/contacts", label: "Contacts Manager", icon: BookOpen },
-        { href: "/staff/reminders", label: "Reminders", icon: Clock },
-        { href: "/staff/order-services", label: "Order SMS & Prepaid", icon: DollarSign, agentHidden: true },
-        { href: "/staff/help", label: "Help Centre", icon: HelpCircle },
-      ]);
-
-  // ── New job-based IA (9 buckets) — behind the `newNav` flag. Preserves every
-  //    route/permission; reorganizes access paths only. See docs/POL263-TRANSFORMATION-PLAN.md.
+  // ── Job-based IA (9 buckets). Reorganized from the original flat Transactions/Finance/
+  //    Reports/Tools/Administration structure — see docs/POL263-TRANSFORMATION-PLAN.md. The old
+  //    structure was fully retired once this shipped as the default for every user.
   const newNavSections: { title: string; items: StaffNavItem[] }[] = isControlPlaneMode
     ? []
     : [
@@ -560,15 +458,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       ]
     : [
         { title: "Overview", items: [{ href: "/staff", label: "Home", icon: LayoutDashboard }] as StaffNavItem[] },
-        ...(newNav
-          ? newNavSections
-          : [
-              { title: "Transactions", items: transactionsMenu },
-              { title: "Finance", items: financeMenu },
-              { title: "Reports", items: reportsMenu },
-              { title: "Tools", items: toolsMenu },
-              { title: "Administration", items: administrationMenu },
-            ]),
+        ...newNavSections,
       ].filter((s) => s.items.length > 0);
 
   const prefetchForHref = (href: string) => {
@@ -842,20 +732,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                 Home
               </Button>
             </Link>
-            {!isControlPlaneMode && newNav && (
+            {!isControlPlaneMode && (
               <>
                 {newNavSections.map((section) => (
                   <StaffNavDropdown key={section.title} label={section.title} items={section.items} prefetchForHref={prefetchForHref} />
                 ))}
-              </>
-            )}
-            {!isControlPlaneMode && !newNav && (
-              <>
-                <StaffNavDropdown label="Transactions" items={transactionsMenu} prefetchForHref={prefetchForHref} />
-                <StaffNavDropdown label="Finance" items={financeMenu} prefetchForHref={prefetchForHref} />
-                <StaffNavDropdown label="Reports" items={reportsMenu} prefetchForHref={prefetchForHref} />
-                <StaffNavDropdown label="Tools" items={toolsMenu} prefetchForHref={prefetchForHref} />
-                <StaffNavDropdown label="Administration" items={administrationMenu} prefetchForHref={prefetchForHref} />
               </>
             )}
             {isControlPlaneMode && (

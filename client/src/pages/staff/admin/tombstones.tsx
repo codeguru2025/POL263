@@ -37,7 +37,6 @@ export default function TombstonesAdmin() {
         currency: form.currency,
         defaultSupplierName: form.defaultSupplierName.trim() || undefined,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed to create item"); }
       return res.json();
     },
     onSuccess: () => {
@@ -61,7 +60,6 @@ export default function TombstonesAdmin() {
         currency: form.currency,
         defaultSupplierName: form.defaultSupplierName.trim() || undefined,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed to update item"); }
       return res.json();
     },
     onSuccess: () => {

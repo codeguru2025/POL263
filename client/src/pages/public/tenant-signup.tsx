@@ -98,7 +98,6 @@ export default function TenantSignup() {
         payerPhone: mobileMethods.includes(method) ? payerPhone : undefined,
         payerEmail: method === "visa_mastercard" ? payerEmail : undefined,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Payment failed"); }
       return res.json() as Promise<{ redirectUrl?: string }>;
     },
     onSuccess: (data) => {

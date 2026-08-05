@@ -260,9 +260,7 @@ export default function StaffFunerals() {
   const addServiceChargeMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
       const res = await apiRequest("POST", `/api/funeral-cases/${selectedCaseId}/service-charges`, data);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message || "Failed to add service charge");
-      return json;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/funeral-cases/${selectedCaseId}/service-charges`] });
@@ -303,9 +301,7 @@ export default function StaffFunerals() {
       const res = editingRate
         ? await apiRequest("PATCH", `/api/mortuary-service-rates/${editingRate.id}`, data)
         : await apiRequest("POST", "/api/mortuary-service-rates", data);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message || "Failed to save rate");
-      return json;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/mortuary-service-rates"] });

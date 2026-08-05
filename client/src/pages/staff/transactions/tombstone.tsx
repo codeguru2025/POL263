@@ -72,7 +72,6 @@ export default function TombstoneTransactions() {
         expectedDeliveryDate: form.expectedDeliveryDate || undefined,
         notes: form.notes.trim() || undefined,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed to create order"); }
       return res.json();
     },
     onSuccess: () => {
@@ -101,7 +100,6 @@ export default function TombstoneTransactions() {
   const statusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
       const res = await apiRequest("PATCH", `/api/tombstones/orders/${id}`, { status });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed to update status"); }
       return res.json();
     },
     onSuccess: () => {
@@ -121,7 +119,6 @@ export default function TombstoneTransactions() {
         paymentChannel: paymentForm.paymentChannel,
         notes: paymentForm.notes.trim() || undefined,
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.message || "Failed to record payment"); }
       return res.json();
     },
     onSuccess: () => {

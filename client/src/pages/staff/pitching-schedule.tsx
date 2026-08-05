@@ -39,9 +39,7 @@ export default function StaffPitchingSchedule() {
   const createMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
       const res = await apiRequest("POST", "/api/pitching-assignments", data);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message || "Failed to create assignment");
-      return json;
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/pitching-assignments?date=${date}`] });

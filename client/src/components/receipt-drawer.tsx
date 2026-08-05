@@ -167,7 +167,6 @@ function PayStep({
           idempotencyKey,
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.message || "Payment failed");
         return { type: "immediate" as const, result: data };
       }
 
