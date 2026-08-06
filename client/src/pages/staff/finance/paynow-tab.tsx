@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CardSection, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +19,38 @@ interface PaynowTabProps {
   getClient: (clientId: string) => any;
   getPolicyNumber: (policyId: string) => string;
   isAgent: boolean;
+}
+
+function paymentIntentsColumns(opts: {
+  getPolicyNumber: (policyId: string) => string;
+  pollIntentMutation: { mutate: (id: string) => void; isPending: boolean };
+  pollingIntentId: string | null;
+}): EdtColumn<any>[] {
+  const { getPolicyNumber, pollIntentMutation, pollingIntentId } = opts;
+  return [
+    { id: "policy", header: "Policy", accessor: (pi) => pi.policyNumber || getPolicyNumber(pi.policyId), cell: (pi) => <span className="font-mono text-sm tabular-nums">{pi.policyNumber || getPolicyNumber(pi.policyId)}</span> },
+    { id: "amount", header: "Amount", align: "right", accessor: (pi) => parseFloat(pi.amount || "0"), cell: (pi) => <span className="tabular-nums font-medium">{pi.currency} {parseFloat(pi.amount || "0").toFixed(2)}</span> },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (pi) => pi.status,
+      cell: (pi) => <Badge variant={pi.status === "paid" ? "default" : pi.status === "failed" ? "destructive" : "secondary"}>{pi.status}</Badge>,
+    },
+    { id: "reference", header: "Reference", accessor: (pi) => pi.merchantReference || "", cell: (pi) => <span className="font-mono text-xs text-muted-foreground">{pi.merchantReference || "—"}</span> },
+    { id: "created", header: "Created", accessor: (pi) => new Date(pi.createdAt), cell: (pi) => <span className="text-sm text-muted-foreground tabular-nums">{new Date(pi.createdAt).toLocaleString()}</span> },
+    {
+      id: "actions",
+      header: "Actions",
+      sortable: false,
+      exportable: false,
+      cell: (pi) =>
+        pi.status === "pending_paynow" ? (
+          <Button variant="ghost" size="sm" disabled={pollIntentMutation.isPending && pollingIntentId === pi.id} onClick={() => pollIntentMutation.mutate(pi.id)}>
+            {pollingIntentId === pi.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          </Button>
+        ) : null,
+    },
+  ];
 }
 
 export function PaynowTab({ getPolicyNumber, isAgent }: PaynowTabProps) {
@@ -96,41 +127,15 @@ export function PaynowTab({ getPolicyNumber, isAgent }: PaynowTabProps) {
         >
             {loadingIntents ? (
               <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-            ) : paymentIntents.length === 0 ? (
-              <EmptyState title="No payment intents yet" className="border-0 rounded-none bg-transparent py-8" />
             ) : (
-              <DataTable>
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Policy</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Reference</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead className="w-[100px]">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paymentIntents.map((pi: any) => (
-                    <TableRow key={pi.id} className="hover:bg-muted/40">
-                      <TableCell className="font-mono text-sm tabular-nums">{pi.policyNumber || getPolicyNumber(pi.policyId)}</TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">{pi.currency} {parseFloat(pi.amount || "0").toFixed(2)}</TableCell>
-                      <TableCell>
-                        <Badge variant={pi.status === "paid" ? "default" : pi.status === "failed" ? "destructive" : "secondary"}>{pi.status}</Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{pi.merchantReference || "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground tabular-nums">{new Date(pi.createdAt).toLocaleString()}</TableCell>
-                      <TableCell>
-                        {pi.status === "pending_paynow" && (
-                          <Button variant="ghost" size="sm" disabled={pollIntentMutation.isPending && pollingIntentId === pi.id} onClick={() => pollIntentMutation.mutate(pi.id)}>
-                            {pollingIntentId === pi.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
+              <EnhancedDataTable
+                columns={paymentIntentsColumns({ getPolicyNumber, pollIntentMutation, pollingIntentId })}
+                rows={paymentIntents}
+                getRowKey={(pi: any) => pi.id}
+                exportFilename="payment-intents"
+                storageKey="finance-paynow-intents"
+                emptyMessage="No payment intents yet."
+              />
             )}
             <Separator />
             <div className="flex flex-wrap items-center gap-4">

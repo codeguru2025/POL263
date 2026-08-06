@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CardSection, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +18,76 @@ import { QK_CASHUPS } from "./query-keys";
 interface CashupsTabProps {
   authUser: any;
   canWriteFinance: boolean;
+}
+
+function cashupsColumns(opts: {
+  authUser: any;
+  canWriteFinance: boolean;
+  submitCashupMutation: { mutate: (id: string) => void; isPending: boolean };
+  onConfirm: (c: any) => void;
+}): EdtColumn<any>[] {
+  const { authUser, canWriteFinance, submitCashupMutation, onConfirm } = opts;
+  return [
+    { id: "date", header: "Date", accessor: (c) => c.cashupDate, cell: (c) => <span className="font-mono text-sm">{c.cashupDate}</span> },
+    { id: "currency", header: "Ccy", accessor: (c) => c.currency || "USD", cell: (c) => <Badge variant="outline" className="text-xs">{c.currency || "USD"}</Badge> },
+    { id: "total", header: "Total", accessor: (c) => parseFloat(c.totalAmount || "0"), cell: (c) => <span className="font-semibold">{formatAmount(c.totalAmount, c.currency || "USD")}</span> },
+    {
+      id: "byMethod",
+      header: "By method",
+      sortable: false,
+      accessor: (c) => {
+        const am = c.amountsByMethod || {};
+        return ["cash", "paynow_ecocash", "paynow_card", "other"]
+          .filter((k) => parseFloat(am[k] || "0") > 0)
+          .map((k) => `${k === "cash" ? "Cash" : k === "paynow_ecocash" ? "Mobile" : k === "paynow_card" ? "Card" : "Other"}: ${parseFloat(am[k] || "0").toFixed(2)}`)
+          .join("; ") || "—";
+      },
+      cell: (c) => {
+        const am = c.amountsByMethod || {};
+        const methodSummary = ["cash", "paynow_ecocash", "paynow_card", "other"]
+          .filter((k) => parseFloat(am[k] || "0") > 0)
+          .map((k) => `${k === "cash" ? "Cash" : k === "paynow_ecocash" ? "Mobile" : k === "paynow_card" ? "Card" : "Other"}: ${parseFloat(am[k] || "0").toFixed(2)}`)
+          .join("; ") || "—";
+        return <span className="text-xs text-muted-foreground max-w-[200px] truncate block" title={methodSummary}>{methodSummary}</span>;
+      },
+    },
+    { id: "txns", header: "Txns", accessor: (c) => c.transactionCount },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (c) => c.status,
+      cell: (c) => (
+        <Badge variant={c.status === "confirmed" ? "default" : c.status === "discrepancy" ? "secondary" : c.status === "submitted" ? "outline" : "secondary"}>
+          {c.status === "draft" ? "Draft" : c.status === "submitted" ? "Submitted" : c.status === "confirmed" ? "Confirmed" : c.status === "discrepancy" ? "Discrepancy" : c.status || "—"}
+        </Badge>
+      ),
+    },
+    {
+      id: "preparedBy",
+      header: "Prepared by",
+      accessor: (c) => (authUser?.id && c.preparedBy === authUser.id ? "You" : (c.preparedBy || "")),
+      cell: (c) => <span className="text-sm text-muted-foreground">{authUser?.id && c.preparedBy === authUser.id ? "You" : (c.preparedBy || "").slice(0, 8) + "…"}</span>,
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      sortable: false,
+      exportable: false,
+      cell: (c) => {
+        const isMine = authUser?.id && c.preparedBy === authUser.id;
+        return (
+          <>
+            {c.status === "draft" && isMine && (
+              <Button size="sm" variant="outline" onClick={() => submitCashupMutation.mutate(c.id)} disabled={submitCashupMutation.isPending} data-testid={`btn-submit-cashup-${c.id}`}>Submit</Button>
+            )}
+            {c.status === "submitted" && canWriteFinance && (
+              <Button size="sm" variant="outline" onClick={() => onConfirm(c)} data-testid={`btn-confirm-cashup-${c.id}`}>Confirm</Button>
+            )}
+          </>
+        );
+      },
+    },
+  ];
 }
 
 export function CashupsTab({ authUser, canWriteFinance }: CashupsTabProps) {
@@ -126,61 +195,21 @@ export function CashupsTab({ authUser, canWriteFinance }: CashupsTabProps) {
               </Button>
             </div>
         )}
-        flush
       >
-          {cashups.length === 0 ? (
-            <EmptyState title="No cashups yet" description="Create a draft, enter amounts by method (or load from your receipts), then submit to finance." className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-              <TableHeader className={dataTableStickyHeaderClass}>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Ccy</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>By method</TableHead>
-                  <TableHead>Txns</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Prepared by</TableHead>
-                  <TableHead className="w-[140px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {cashups.map((c: any) => {
-                  const am = c.amountsByMethod || {};
-                  const methodSummary = ["cash", "paynow_ecocash", "paynow_card", "other"]
-                    .filter((k) => parseFloat(am[k] || "0") > 0)
-                    .map((k) => `${k === "cash" ? "Cash" : k === "paynow_ecocash" ? "Mobile" : k === "paynow_card" ? "Card" : "Other"}: ${parseFloat(am[k] || "0").toFixed(2)}`)
-                    .join("; ") || "—";
-                  const isMine = authUser?.id && c.preparedBy === authUser.id;
-                  return (
-                    <TableRow key={c.id} data-testid={`row-cashup-${c.id}`}>
-                      <TableCell className="font-mono text-sm">{c.cashupDate}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-xs">{c.currency || "USD"}</Badge></TableCell>
-                      <TableCell className="font-semibold">{formatAmount(c.totalAmount, c.currency || "USD")}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={methodSummary}>{methodSummary}</TableCell>
-                      <TableCell>{c.transactionCount}</TableCell>
-                      <TableCell>
-                        <Badge variant={c.status === "confirmed" ? "default" : c.status === "discrepancy" ? "secondary" : c.status === "submitted" ? "outline" : "secondary"}>
-                          {c.status === "draft" ? "Draft" : c.status === "submitted" ? "Submitted" : c.status === "confirmed" ? "Confirmed" : c.status === "discrepancy" ? "Discrepancy" : c.status || "—"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{isMine ? "You" : (c.preparedBy || "").slice(0, 8) + "…"}</TableCell>
-                      <TableCell>
-                        {c.status === "draft" && isMine && (
-                          <div className="flex gap-1">
-                            <Button size="sm" variant="outline" onClick={() => submitCashupMutation.mutate(c.id)} disabled={submitCashupMutation.isPending} data-testid={`btn-submit-cashup-${c.id}`}>Submit</Button>
-                          </div>
-                        )}
-                        {c.status === "submitted" && canWriteFinance && (
-                          <Button size="sm" variant="outline" onClick={() => { setConfirmCashup(c); setConfirmCountedTotal(c.totalAmount || ""); setConfirmDiscrepancyNotes(""); setShowConfirmCashupDialog(true); }} data-testid={`btn-confirm-cashup-${c.id}`}>Confirm</Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </DataTable>
-          )}
+          <EnhancedDataTable
+            columns={cashupsColumns({
+              authUser,
+              canWriteFinance,
+              submitCashupMutation,
+              onConfirm: (c: any) => { setConfirmCashup(c); setConfirmCountedTotal(c.totalAmount || ""); setConfirmDiscrepancyNotes(""); setShowConfirmCashupDialog(true); },
+            })}
+            rows={cashups}
+            getRowKey={(c: any) => c.id}
+            rowTestId={(c: any) => `row-cashup-${c.id}`}
+            exportFilename="cashups"
+            storageKey="finance-cashups"
+            emptyMessage="No cashups yet. Create a draft, enter amounts by method (or load from your receipts), then submit to finance."
+          />
       </CardSection>
 
       <Dialog open={showCreateCashupDialog} onOpenChange={setShowCreateCashupDialog}>

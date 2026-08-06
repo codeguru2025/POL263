@@ -1,10 +1,21 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
-import { CardSection, EmptyState } from "@/components/ds";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CardSection, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { Loader2, Users } from "lucide-react";
 import { PeriodSelector, periodForPreset, type Period } from "@/components/period-selector";
+
+const byStaffColumns: EdtColumn<{ userId: string | null; displayName: string; currency: string; total: string; count: number }>[] = [
+  { id: "staff", header: "Staff", accessor: (u) => u.displayName, cell: (u) => <span className={!u.userId ? "text-muted-foreground italic" : ""}>{u.displayName}</span> },
+  { id: "amount", header: "Amount", align: "right", accessor: (u) => parseFloat(u.total), cell: (u) => <span className="tabular-nums">{u.currency} {parseFloat(u.total).toFixed(2)}</span> },
+  { id: "receipts", header: "Receipts", align: "right", accessor: (u) => u.count },
+];
+
+const byBranchColumns: EdtColumn<{ branchId: string | null; branchName: string; currency: string; total: string; count: number }>[] = [
+  { id: "branch", header: "Branch", accessor: (b) => b.branchName, cell: (b) => <span className={!b.branchId ? "text-muted-foreground italic" : ""}>{b.branchName}</span> },
+  { id: "amount", header: "Amount", align: "right", accessor: (b) => parseFloat(b.total), cell: (b) => <span className="tabular-nums">{b.currency} {parseFloat(b.total).toFixed(2)}</span> },
+  { id: "receipts", header: "Receipts", align: "right", accessor: (b) => b.count },
+];
 
 export function ReceiptingByStaffPanel() {
   const [period, setPeriod] = useState<Period>(() => periodForPreset("today"));
@@ -36,57 +47,25 @@ export function ReceiptingByStaffPanel() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div>
               <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">By staff member</h4>
-              {!data?.byUser.length ? (
-                <EmptyState title="No receipts in this period" className="border-0 rounded-none bg-transparent py-8" />
-              ) : (
-                <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Staff</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-right">Receipts</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.byUser.map((u, i) => (
-                      <TableRow key={`${u.userId}-${u.currency}-${i}`}>
-                        <TableCell className={!u.userId ? "text-muted-foreground italic" : ""}>{u.displayName}</TableCell>
-                        <TableCell className="text-right tabular-nums">{u.currency} {parseFloat(u.total).toFixed(2)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{u.count}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                </div>
-              )}
+              <EnhancedDataTable
+                columns={byStaffColumns}
+                rows={(data?.byUser ?? []).map((u, i) => ({ ...u, _rowKey: `${u.userId}-${u.currency}-${i}` }))}
+                getRowKey={(u: any) => u._rowKey}
+                exportFilename="receipting-by-staff"
+                storageKey="finance-receipting-by-staff"
+                emptyMessage="No receipts in this period."
+              />
             </div>
             <div>
               <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">By branch</h4>
-              {!data?.byBranch.length ? (
-                <EmptyState title="No receipts in this period" className="border-0 rounded-none bg-transparent py-8" />
-              ) : (
-                <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Branch</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-right">Receipts</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.byBranch.map((b, i) => (
-                      <TableRow key={`${b.branchId}-${b.currency}-${i}`}>
-                        <TableCell className={!b.branchId ? "text-muted-foreground italic" : ""}>{b.branchName}</TableCell>
-                        <TableCell className="text-right tabular-nums">{b.currency} {parseFloat(b.total).toFixed(2)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{b.count}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                </div>
-              )}
+              <EnhancedDataTable
+                columns={byBranchColumns}
+                rows={(data?.byBranch ?? []).map((b, i) => ({ ...b, _rowKey: `${b.branchId}-${b.currency}-${i}` }))}
+                getRowKey={(b: any) => b._rowKey}
+                exportFilename="receipting-by-branch"
+                storageKey="finance-receipting-by-branch"
+                emptyMessage="No receipts in this period."
+              />
             </div>
           </div>
         )}

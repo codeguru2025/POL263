@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, KpiStatCard } from "@/components/ds";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CardSection, EnhancedDataTable, type EdtColumn, KpiStatCard } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,6 +20,50 @@ function formatCurrencyMap(m: Record<string, string | number> | undefined): stri
   if (entries.length === 0) return "0.00";
   return entries.map(([c, v]) => `${c} ${Number(v).toFixed(2)}`).join("  ·  ");
 }
+
+const settlementsColumns = (approveSettlementMutation: { mutate: (id: string) => void; isPending: boolean }): EdtColumn<any>[] => [
+  { id: "date", header: "Date", accessor: (s) => new Date(s.createdAt), cell: (s) => <span className="text-sm">{new Date(s.createdAt).toLocaleDateString()}</span> },
+  { id: "amount", header: "Amount", align: "right", accessor: (s) => parseFloat(s.amount), cell: (s) => <span className="font-semibold tabular-nums">{s.currency} {parseFloat(s.amount).toFixed(2)}</span> },
+  { id: "method", header: "Method", accessor: (s) => s.method, cell: (s) => <Badge variant="outline">{s.method}</Badge> },
+  { id: "reference", header: "Reference", accessor: (s) => s.reference || "", cell: (s) => <span className="font-mono text-xs text-muted-foreground">{s.reference || "—"}</span> },
+  {
+    id: "status",
+    header: "Status",
+    accessor: (s) => s.status,
+    cell: (s) => <Badge variant={s.status === "approved" ? "default" : s.status === "rejected" ? "destructive" : "secondary"}>{s.status}</Badge>,
+  },
+  {
+    id: "action",
+    header: "Action",
+    sortable: false,
+    exportable: false,
+    cell: (s) =>
+      s.status === "pending" ? (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => approveSettlementMutation.mutate(s.id)}
+          disabled={approveSettlementMutation.isPending}
+          data-testid={`button-approve-settlement-${s.id}`}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
+        </Button>
+      ) : null,
+  },
+];
+
+const receivablesColumns: EdtColumn<any>[] = [
+  { id: "date", header: "Date", accessor: (r) => new Date(r.createdAt), cell: (r) => <span className="text-sm">{new Date(r.createdAt).toLocaleDateString()}</span> },
+  { id: "description", header: "Description", accessor: (r) => r.description || "", cell: (r) => <span className="text-sm">{r.description || "—"}</span> },
+  { id: "amount", header: "Amount", align: "right", accessor: (r) => parseFloat(r.amount), cell: (r) => <span className="font-semibold tabular-nums">{parseFloat(r.amount).toFixed(2)}</span> },
+  { id: "currency", header: "Currency", accessor: (r) => r.currency },
+  {
+    id: "status",
+    header: "Status",
+    accessor: (r) => (r.isSettled ? "Settled" : "Outstanding"),
+    cell: (r) => <Badge variant={r.isSettled ? "default" : "secondary"}>{r.isSettled ? "Settled" : "Outstanding"}</Badge>,
+  },
+];
 
 // MONEY-CRITICAL: this tab drives the platform revenue-share reconciliation.
 // See approveSettlementMutation below for the partial-allocation description calc —
@@ -179,88 +222,28 @@ export function PlatformTab() {
           </div>
         </CardSection>
 
-        <CardSection title="Settlements" description="Recorded settlements against platform revenue." icon={FileText} flush>
-          {settlements.length === 0 ? (
-            <EmptyState title="No settlements yet" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-              <TableHeader className={dataTableStickyHeaderClass}>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Method</TableHead>
-                  <TableHead>Reference</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {settlements.map((s: any) => (
-                  <TableRow key={s.id} className="hover:bg-muted/40" data-testid={`row-settlement-${s.id}`}>
-                    <TableCell className="text-sm">{new Date(s.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell className="font-semibold text-right tabular-nums">{s.currency} {parseFloat(s.amount).toFixed(2)}</TableCell>
-                    <TableCell><Badge variant="outline">{s.method}</Badge></TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{s.reference || "—"}</TableCell>
-                    <TableCell>
-                      <Badge variant={s.status === "approved" ? "default" : s.status === "rejected" ? "destructive" : "secondary"}>
-                        {s.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {s.status === "pending" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => approveSettlementMutation.mutate(s.id)}
-                          disabled={approveSettlementMutation.isPending}
-                          data-testid={`button-approve-settlement-${s.id}`}
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </DataTable>
-          )}
+        <CardSection title="Settlements" description="Recorded settlements against platform revenue." icon={FileText}>
+          <EnhancedDataTable
+            columns={settlementsColumns(approveSettlementMutation)}
+            rows={settlements}
+            getRowKey={(s: any) => s.id}
+            rowTestId={(s: any) => `row-settlement-${s.id}`}
+            exportFilename="platform-settlements"
+            storageKey="finance-platform-settlements"
+            emptyMessage="No settlements yet."
+          />
         </CardSection>
 
-        <CardSection title="Receivables" description="Auto-created when payments are cleared." icon={FileText} flush>
-          {platformReceivables.length === 0 ? (
-            <EmptyState
-              title="No receivables yet"
-              description="They are created automatically when payments are cleared."
-              className="border-0 rounded-none bg-transparent py-8"
-            />
-          ) : (
-            <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-              <TableHeader className={dataTableStickyHeaderClass}>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Currency</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {platformReceivables.map((r: any) => (
-                  <TableRow key={r.id} className="hover:bg-muted/40" data-testid={`row-receivable-${r.id}`}>
-                    <TableCell className="text-sm">{new Date(r.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell className="text-sm">{r.description || "—"}</TableCell>
-                    <TableCell className="font-semibold text-right tabular-nums">{parseFloat(r.amount).toFixed(2)}</TableCell>
-                    <TableCell>{r.currency}</TableCell>
-                    <TableCell>
-                      <Badge variant={r.isSettled ? "default" : "secondary"}>
-                        {r.isSettled ? "Settled" : "Outstanding"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </DataTable>
-          )}
+        <CardSection title="Receivables" description="Auto-created when payments are cleared." icon={FileText}>
+          <EnhancedDataTable
+            columns={receivablesColumns}
+            rows={platformReceivables}
+            getRowKey={(r: any) => r.id}
+            rowTestId={(r: any) => `row-receivable-${r.id}`}
+            exportFilename="platform-receivables"
+            storageKey="finance-platform-receivables"
+            emptyMessage="No receivables yet. They are created automatically when payments are cleared."
+          />
         </CardSection>
       </div>
     </TabsContent>

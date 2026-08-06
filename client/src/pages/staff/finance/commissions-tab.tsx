@@ -1,9 +1,81 @@
 import { useQuery } from "@tanstack/react-query";
-import { CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, KpiStatCard } from "@/components/ds";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CardSection, EnhancedDataTable, type EdtColumn, KpiStatCard } from "@/components/ds";
 import { Badge } from "@/components/ui/badge";
 import { TabsContent } from "@/components/ui/tabs";
 import { FileText, TrendingUp } from "lucide-react";
+
+const commissionRatesColumns: EdtColumn<any>[] = [
+  { id: "product", header: "Product", accessor: (v) => v.productName, cell: (v) => <span className="font-medium">{v.productName}</span> },
+  { id: "version", header: "Version", accessor: (v) => v.version, cell: (v) => <span>v{v.version}</span> },
+  { id: "newBusinessRate", header: "New Business Rate", accessor: (v) => v.commissionFirstMonthsRate, cell: (v) => <span>{v.commissionFirstMonthsRate}% for {v.commissionFirstMonthsCount ?? "—"} months</span> },
+  { id: "recurringRate", header: "Recurring Rate", accessor: (v) => v.commissionRecurringRate, cell: (v) => <span>{v.commissionRecurringRate}% from month {v.commissionRecurringStartMonth ?? "—"}</span> },
+  { id: "clawbackThreshold", header: "Clawback Threshold", accessor: (v) => v.commissionClawbackThreshold ?? "", cell: (v) => <span>{v.commissionClawbackThreshold ?? "—"} payments</span> },
+  { id: "status", header: "Status", accessor: (v) => (v.isActive ? "Active" : "Inactive"), cell: (v) => <Badge variant={v.isActive ? "default" : "secondary"}>{v.isActive ? "Active" : "Inactive"}</Badge> },
+];
+
+const commissionLedgerColumns: EdtColumn<any>[] = [
+  { id: "date", header: "Date", accessor: (entry) => new Date(entry.createdAt), cell: (entry) => <span className="text-sm text-muted-foreground whitespace-nowrap">{new Date(entry.createdAt).toLocaleDateString()}</span> },
+  {
+    id: "client",
+    header: "Client",
+    accessor: (entry) => entry.clientFirstName ? `${entry.clientFirstName} ${entry.clientLastName}` : "",
+    cell: (entry) =>
+      entry.clientFirstName ? (
+        <div>
+          <p className="text-sm font-medium">{entry.clientFirstName} {entry.clientLastName}</p>
+          {entry.clientPhone && <p className="text-[10px] text-muted-foreground">{entry.clientPhone}</p>}
+        </div>
+      ) : "—",
+  },
+  { id: "policy", header: "Policy", accessor: (entry) => entry.policyNumber || entry.policyId || "", cell: (entry) => <span className="font-mono text-sm">{entry.policyNumber || (entry.policyId ? entry.policyId.slice(0, 8) : "—")}</span> },
+  { id: "agent", header: "Agent", accessor: (entry) => entry.agentDisplayName || entry.agentEmail || "", cell: (entry) => <span className="text-sm">{entry.agentDisplayName || entry.agentEmail || "—"}</span> },
+  { id: "paymentDate", header: "Payment Date", accessor: (entry) => entry.paymentDate ? new Date(entry.paymentDate) : "", cell: (entry) => <span className="text-sm text-muted-foreground whitespace-nowrap">{entry.paymentDate ? new Date(entry.paymentDate).toLocaleDateString() : "—"}</span> },
+  {
+    id: "type",
+    header: "Type",
+    accessor: (entry) =>
+      entry.entryType === "first_months" ? "New Business" :
+      entry.entryType === "recurring" ? "Existing Business" :
+      entry.entryType === "clawback" ? "Clawback" :
+      entry.entryType === "rollback" ? "Rollback" :
+      entry.entryType,
+    cell: (entry) => {
+      const typeLabel =
+        entry.entryType === "first_months" ? "New Business" :
+        entry.entryType === "recurring" ? "Existing Business" :
+        entry.entryType === "clawback" ? "Clawback" :
+        entry.entryType === "rollback" ? "Rollback" :
+        entry.entryType;
+      const typeBadgeVariant =
+        entry.entryType === "clawback" ? "destructive" as const :
+        entry.entryType === "rollback" ? "secondary" as const :
+        "outline" as const;
+      return <Badge variant={typeBadgeVariant}>{typeLabel}</Badge>;
+    },
+  },
+  {
+    id: "amount",
+    header: "Amount",
+    align: "right",
+    accessor: (entry) => parseFloat(entry.amount || "0"),
+    cell: (entry) => {
+      const amountVal = parseFloat(entry.amount || "0");
+      const isNegative = amountVal < 0;
+      return (
+        <span className={`font-semibold tabular-nums ${isNegative ? "text-red-600" : ""}`}>
+          {isNegative ? "−" : ""}{entry.currency} {Math.abs(amountVal).toFixed(2)}
+        </span>
+      );
+    },
+  },
+  { id: "description", header: "Description", accessor: (entry) => entry.description || "", cell: (entry) => <span className="text-sm max-w-[200px] truncate block" title={entry.description}>{entry.description || "—"}</span> },
+  {
+    id: "status",
+    header: "Status",
+    accessor: (entry) => entry.status,
+    cell: (entry) => <Badge variant={entry.status === "earned" ? "default" : entry.status === "paid" ? "default" : "secondary"}>{entry.status}</Badge>,
+  },
+];
 
 export function CommissionsTab() {
   const { data: rawProducts } = useQuery<any[]>({ queryKey: ["/api/products"] });
@@ -54,104 +126,26 @@ export function CommissionsTab() {
           title="Commission rates (from product versions)"
           description="Commission rates are configured when creating product versions in the Products section."
           icon={FileText}
-          flush
         >
-            {commissionConfigs.length === 0 ? (
-              <EmptyState title="No commission rates yet" description="Go to Products to set commission rates on a product version." className="border-0 rounded-none bg-transparent py-8" />
-            ) : (
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Version</TableHead>
-                    <TableHead>New Business Rate</TableHead>
-                    <TableHead>Recurring Rate</TableHead>
-                    <TableHead>Clawback Threshold</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {commissionConfigs.map((v: any) => (
-                    <TableRow key={v.id} className="hover:bg-muted/40">
-                      <TableCell className="font-medium">{v.productName}</TableCell>
-                      <TableCell>v{v.version}</TableCell>
-                      <TableCell>{v.commissionFirstMonthsRate}% for {v.commissionFirstMonthsCount ?? "—"} months</TableCell>
-                      <TableCell>{v.commissionRecurringRate}% from month {v.commissionRecurringStartMonth ?? "—"}</TableCell>
-                      <TableCell>{v.commissionClawbackThreshold ?? "—"} payments</TableCell>
-                      <TableCell><Badge variant={v.isActive ? "default" : "secondary"}>{v.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            )}
+          <EnhancedDataTable
+            columns={commissionRatesColumns}
+            rows={commissionConfigs}
+            getRowKey={(v: any) => v.id}
+            exportFilename="commission-rates"
+            storageKey="finance-commission-rates"
+            emptyMessage="No commission rates yet. Go to Products to set commission rates on a product version."
+          />
         </CardSection>
 
-        <CardSection title="Commission ledger" description="Auto-calculated when payments are receipted for policies with agents." icon={TrendingUp} flush>
-            {commissionLedger.length === 0 ? (
-              <EmptyState title="No commission entries yet" description="Commissions appear here after receipted payments on agent-linked policies." className="border-0 rounded-none bg-transparent py-8" />
-            ) : (
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Policy</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Payment Date</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {commissionLedger.map((entry: any) => {
-                    const typeLabel =
-                      entry.entryType === "first_months" ? "New Business" :
-                      entry.entryType === "recurring" ? "Existing Business" :
-                      entry.entryType === "clawback" ? "Clawback" :
-                      entry.entryType === "rollback" ? "Rollback" :
-                      entry.entryType;
-                    const typeBadgeVariant =
-                      entry.entryType === "clawback" ? "destructive" as const :
-                      entry.entryType === "rollback" ? "secondary" as const :
-                      "outline" as const;
-                    const amountVal = parseFloat(entry.amount || "0");
-                    const isNegative = amountVal < 0;
-                    return (
-                      <TableRow key={entry.id} className="hover:bg-muted/40">
-                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(entry.createdAt).toLocaleDateString()}</TableCell>
-                        <TableCell>
-                          {entry.clientFirstName ? (
-                            <div>
-                              <p className="text-sm font-medium">{entry.clientFirstName} {entry.clientLastName}</p>
-                              {entry.clientPhone && <p className="text-[10px] text-muted-foreground">{entry.clientPhone}</p>}
-                            </div>
-                          ) : "—"}
-                        </TableCell>
-                        <TableCell className="font-mono text-sm">{entry.policyNumber || (entry.policyId ? entry.policyId.slice(0, 8) : "—")}</TableCell>
-                        <TableCell className="text-sm">{entry.agentDisplayName || entry.agentEmail || "—"}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                          {entry.paymentDate ? new Date(entry.paymentDate).toLocaleDateString() : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={typeBadgeVariant}>{typeLabel}</Badge>
-                        </TableCell>
-                        <TableCell className={`font-semibold tabular-nums text-right ${isNegative ? "text-red-600" : ""}`}>
-                          {isNegative ? "−" : ""}{entry.currency} {Math.abs(amountVal).toFixed(2)}
-                        </TableCell>
-                        <TableCell className="text-sm max-w-[200px] truncate">{entry.description || "—"}</TableCell>
-                        <TableCell>
-                          <Badge variant={entry.status === "earned" ? "default" : entry.status === "paid" ? "default" : "secondary"}>
-                            {entry.status}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </DataTable>
-            )}
+        <CardSection title="Commission ledger" description="Auto-calculated when payments are receipted for policies with agents." icon={TrendingUp}>
+          <EnhancedDataTable
+            columns={commissionLedgerColumns}
+            rows={commissionLedger}
+            getRowKey={(entry: any) => entry.id}
+            exportFilename="commission-ledger"
+            storageKey="finance-commission-ledger"
+            emptyMessage="No commission entries yet. Commissions appear here after receipted payments on agent-linked policies."
+          />
         </CardSection>
       </div>
     </TabsContent>

@@ -1,15 +1,56 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CardSection, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, CheckCircle2, Clock, ShieldCheck, ShieldX } from "lucide-react";
+import { Loader2, Clock, ShieldCheck, ShieldX } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { QK_PENDING_APPROVALS } from "./query-keys";
+
+function pendingApprovalsColumns(opts: { onAction: (id: string, type: "approve" | "reject") => void }): EdtColumn<any>[] {
+  const { onAction } = opts;
+  return [
+    { id: "receiptNumber", header: "Receipt #", accessor: (r) => r.receiptNumber, cell: (r) => <span className="font-mono text-sm">{r.receiptNumber}</span> },
+    { id: "policy", header: "Policy", accessor: (r) => r.policyNumber || r.policyId || "", cell: (r) => <span className="text-sm">{r.policyNumber || r.policyId?.slice(0, 8)}</span> },
+    { id: "client", header: "Client", accessor: (r) => r.clientName || "", cell: (r) => <span className="text-sm">{r.clientName || "—"}</span> },
+    {
+      id: "reason",
+      header: "Reason",
+      accessor: (r) => (r.metadataJson?.premiumOverride ? "Premium override" : `Backdated to ${r.backdatedDate || "—"}`),
+      cell: (r) => {
+        const isOverride = !!r.metadataJson?.premiumOverride;
+        return (
+          <span className="text-sm">
+            {isOverride
+              ? <span className="text-amber-700">Premium override <span className="text-muted-foreground">(system: {r.currency} {parseFloat(r.metadataJson?.systemPremium ?? 0).toFixed(2)})</span></span>
+              : <span>Backdated to {r.backdatedDate || "—"}</span>}
+          </span>
+        );
+      },
+    },
+    { id: "amount", header: "Amount", accessor: (r) => parseFloat(r.amount), cell: (r) => <span className="text-sm font-medium">{r.currency} {parseFloat(r.amount).toFixed(2)}</span> },
+    { id: "submitterNote", header: "Submitter Note", accessor: (r) => r.submitterNote || "", cell: (r) => <span className="text-sm text-muted-foreground max-w-[200px] truncate block" title={r.submitterNote}>{r.submitterNote || "—"}</span> },
+    {
+      id: "actions",
+      header: "Actions",
+      sortable: false,
+      exportable: false,
+      cell: (r) => (
+        <div className="flex items-center justify-end gap-1">
+          <Button size="sm" variant="outline" className="gap-1.5 text-green-700 border-green-200 hover:bg-green-50" onClick={() => onAction(r.id, "approve")} data-testid={`btn-approve-${r.id}`}>
+            <ShieldCheck className="h-3.5 w-3.5" /> Approve
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1.5 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => onAction(r.id, "reject")} data-testid={`btn-reject-${r.id}`}>
+            <ShieldX className="h-3.5 w-3.5" /> Reject
+          </Button>
+        </div>
+      ),
+    },
+  ];
+}
 
 export function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }) {
   const { toast } = useToast();
@@ -50,51 +91,16 @@ export function PendingApprovalsPanel({ onApproved }: { onApproved: () => void }
     <CardSection title="Pending receipt approvals" description="Backdated receipts and premium overrides awaiting approval. Approving applies the payment to the policy and financial statements." icon={Clock}>
       {isLoading ? (
         <div className="p-8 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-      ) : pending.length === 0 ? (
-        <EmptyState icon={CheckCircle2} title="No pending approvals" description="All pending receipts have been reviewed." className="border-0 rounded-none bg-transparent py-10" />
       ) : (
-        <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-          <TableHeader className={dataTableStickyHeaderClass}>
-            <TableRow>
-              <TableHead className="pl-6">Receipt #</TableHead>
-              <TableHead>Policy</TableHead>
-              <TableHead>Client</TableHead>
-              <TableHead>Reason</TableHead>
-              <TableHead>Amount</TableHead>
-              <TableHead>Submitter Note</TableHead>
-              <TableHead className="text-right pr-6">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {pending.map((r: any) => {
-              const isOverride = !!r.metadataJson?.premiumOverride;
-              return (
-              <TableRow key={r.id} data-testid={`row-pending-approval-${r.id}`}>
-                <TableCell className="pl-6 font-mono text-sm">{r.receiptNumber}</TableCell>
-                <TableCell className="text-sm">{r.policyNumber || r.policyId?.slice(0, 8)}</TableCell>
-                <TableCell className="text-sm">{r.clientName || "—"}</TableCell>
-                <TableCell className="text-sm">
-                  {isOverride
-                    ? <span className="text-amber-700">Premium override <span className="text-muted-foreground">(system: {r.currency} {parseFloat(r.metadataJson?.systemPremium ?? 0).toFixed(2)})</span></span>
-                    : <span>Backdated to {r.backdatedDate || "—"}</span>}
-                </TableCell>
-                <TableCell className="text-sm font-medium">{r.currency} {parseFloat(r.amount).toFixed(2)}</TableCell>
-                <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate" title={r.submitterNote}>{r.submitterNote || "—"}</TableCell>
-                <TableCell className="text-right pr-6">
-                  <div className="flex items-center justify-end gap-1">
-                    <Button size="sm" variant="outline" className="gap-1.5 text-green-700 border-green-200 hover:bg-green-50" onClick={() => openAction(r.id, "approve")} data-testid={`btn-approve-${r.id}`}>
-                      <ShieldCheck className="h-3.5 w-3.5" /> Approve
-                    </Button>
-                    <Button size="sm" variant="outline" className="gap-1.5 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => openAction(r.id, "reject")} data-testid={`btn-reject-${r.id}`}>
-                      <ShieldX className="h-3.5 w-3.5" /> Reject
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-              );
-            })}
-          </TableBody>
-        </DataTable>
+        <EnhancedDataTable
+          columns={pendingApprovalsColumns({ onAction: openAction })}
+          rows={pending}
+          getRowKey={(r: any) => r.id}
+          rowTestId={(r: any) => `row-pending-approval-${r.id}`}
+          exportFilename="pending-approvals"
+          storageKey="finance-pending-approvals"
+          emptyMessage="No pending approvals. All pending receipts have been reviewed."
+        />
       )}
 
       <Dialog open={!!actionId} onOpenChange={(open) => { if (!open) { setActionId(null); setActionType(null); setApprovalNote(""); } }}>

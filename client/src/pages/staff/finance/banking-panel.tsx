@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CardSection, DataTable, EmptyState } from "@/components/ds";
+import { CardSection, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,6 +14,199 @@ import { Plus, Loader2, CheckCircle2, Building2, ArrowDownToLine, Banknote, Tria
 import { getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { QK_BANK_ACCOUNTS, QK_SAFES, QK_BANK_DEPOSITS, QK_CASH_POSITION, QK_BANK_STATEMENT_BALANCES } from "./query-keys";
+
+function daysSince(dateStr: string | null) {
+  if (!dateStr) return null;
+  return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+}
+
+const cashPositionColumns: EdtColumn<any>[] = [
+  {
+    id: "admin",
+    header: "Admin",
+    accessor: (p) => p.displayName,
+    cell: (p) => (
+      <div>
+        <div className="font-medium text-sm">{p.displayName}</div>
+        <div className="text-xs text-muted-foreground">{p.email}</div>
+      </div>
+    ),
+  },
+  { id: "collected", header: "Collected (cashups)", align: "right", accessor: (p) => parseFloat(p.totalCollected), cell: (p) => <span className="tabular-nums font-medium">{p.currency} {parseFloat(p.totalCollected).toFixed(2)}</span> },
+  { id: "deposited", header: "Deposited to bank", align: "right", accessor: (p) => parseFloat(p.totalDeposited), cell: (p) => <span className="tabular-nums">{p.currency} {parseFloat(p.totalDeposited).toFixed(2)}</span> },
+  {
+    id: "onHand",
+    header: "On hand (unbanked)",
+    align: "right",
+    accessor: (p) => parseFloat(p.onHand),
+    cell: (p) => <span className={`tabular-nums font-semibold ${p.onHand > 0 ? "text-amber-600" : "text-green-600"}`}>{p.currency} {parseFloat(p.onHand).toFixed(2)}</span>,
+  },
+  { id: "lastDeposit", header: "Last deposit", accessor: (p) => p.lastDepositDate ? new Date(p.lastDepositDate) : "", cell: (p) => <span className="text-sm text-muted-foreground">{p.lastDepositDate ? new Date(p.lastDepositDate).toLocaleDateString() : "—"}</span> },
+  {
+    id: "status",
+    header: "Status",
+    sortable: false,
+    cell: (p) => {
+      const days = daysSince(p.lastDepositDate);
+      const stale = p.onHand > 0 && (days === null || days > 2);
+      return p.onHand <= 0 ? (
+        <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Banked</Badge>
+      ) : stale ? (
+        <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 gap-1">
+          <TriangleAlert className="h-3 w-3" />
+          {days === null ? "Never banked" : `${days}d unbanked`}
+        </Badge>
+      ) : (
+        <Badge variant="secondary">Pending bank</Badge>
+      );
+    },
+  },
+];
+
+function bankAccountsColumns(opts: {
+  statementBalances: any[];
+  onEnterBalance: (a: any) => void;
+  onEdit: (a: any) => void;
+}): EdtColumn<any>[] {
+  const { statementBalances, onEnterBalance, onEdit } = opts;
+  return [
+    {
+      id: "accountName",
+      header: "Account name",
+      accessor: (a) => a.accountName,
+      cell: (a) => (
+        <span className="font-medium">
+          {a.accountName}
+          {a.isActive === false && <Badge variant="secondary" className="ml-2 text-[10px]">Inactive</Badge>}
+        </span>
+      ),
+    },
+    { id: "bank", header: "Bank", accessor: (a) => a.bankName },
+    { id: "accountNumber", header: "Account #", accessor: (a) => a.accountNumber, cell: (a) => <span className="font-mono text-sm">{a.accountNumber}</span> },
+    { id: "currency", header: "Currency", accessor: (a) => a.currency },
+    {
+      id: "balance",
+      header: "Status",
+      sortable: false,
+      accessor: (a) => {
+        const latestBal = statementBalances.find((b: any) => b.bankAccountId === a.id);
+        return latestBal ? parseFloat(latestBal.closingBalance) : "";
+      },
+      cell: (a) => {
+        const latestBal = statementBalances.find((b: any) => b.bankAccountId === a.id);
+        return latestBal ? (
+          <div>
+            <span className="font-semibold tabular-nums">{a.currency} {parseFloat(latestBal.closingBalance).toFixed(2)}</span>
+            <p className="text-xs text-muted-foreground">as at {new Date(latestBal.statementDate).toLocaleDateString()}</p>
+          </div>
+        ) : (
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => onEnterBalance(a)}>
+            + Enter balance
+          </Button>
+        );
+      },
+    },
+    {
+      id: "actions",
+      header: "",
+      sortable: false,
+      exportable: false,
+      cell: (a) => (
+        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => onEdit(a)}>
+          Edit
+        </Button>
+      ),
+    },
+  ];
+}
+
+function safesColumns(opts: { bankDeposits: any[] }): EdtColumn<any>[] {
+  const { bankDeposits } = opts;
+  return [
+    {
+      id: "name",
+      header: "Safe",
+      accessor: (s) => s.name,
+      cell: (s) => (
+        <span className="font-medium">
+          {s.name}
+          {s.isActive === false && <Badge variant="secondary" className="ml-2 text-[10px]">Inactive</Badge>}
+        </span>
+      ),
+    },
+    { id: "currency", header: "Currency", accessor: (s) => s.currency },
+    {
+      id: "totalMovedIn",
+      header: "Total moved in",
+      align: "right",
+      accessor: (s) => bankDeposits.filter((d: any) => d.safeId === s.id).reduce((sum: number, d: any) => sum + parseFloat(d.amount), 0),
+      cell: (s) => {
+        const total = bankDeposits.filter((d: any) => d.safeId === s.id).reduce((sum: number, d: any) => sum + parseFloat(d.amount), 0);
+        return <span className="tabular-nums font-semibold">{s.currency} {total.toFixed(2)}</span>;
+      },
+    },
+    {
+      id: "status",
+      header: "Status",
+      sortable: false,
+      cell: (s) =>
+        s.isActive === false ? (
+          <Badge variant="secondary">Inactive</Badge>
+        ) : (
+          <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Active</Badge>
+        ),
+    },
+  ];
+}
+
+function depositsColumns(opts: { verifyDepositMutation: { mutate: (id: string) => void; isPending: boolean } }): EdtColumn<any>[] {
+  const { verifyDepositMutation } = opts;
+  return [
+    { id: "date", header: "Date", accessor: (d) => new Date(d.depositDate), cell: (d) => <span className="tabular-nums text-sm">{new Date(d.depositDate).toLocaleDateString()}</span> },
+    { id: "admin", header: "Admin (deposited by)", accessor: (d) => d.depositedByName || d.depositedByUserId, cell: (d) => <span className="text-sm">{d.depositedByName || d.depositedByUserId}</span> },
+    {
+      id: "destination",
+      header: "Destination",
+      accessor: (d) => d.safeId ? (d.safeName || "Safe") : (d.bankAccountName || ""),
+      cell: (d) => (
+        <span className="text-sm text-muted-foreground">
+          {d.safeId ? (
+            <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> {d.safeName || "Safe"}</span>
+          ) : (
+            d.bankAccountName || "—"
+          )}
+        </span>
+      ),
+    },
+    { id: "amount", header: "Amount", align: "right", accessor: (d) => parseFloat(d.amount), cell: (d) => <span className="text-right tabular-nums font-semibold">{d.currency} {parseFloat(d.amount).toFixed(2)}</span> },
+    { id: "reference", header: "Reference", accessor: (d) => d.reference || "", cell: (d) => <span className="font-mono text-xs text-muted-foreground">{d.reference || "—"}</span> },
+    {
+      id: "verified",
+      header: "Verified",
+      accessor: (d) => (d.verifiedAt ? "Verified" : "Unverified"),
+      cell: (d) =>
+        d.verifiedAt ? (
+          <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30 gap-1">
+            <CheckCircle2 className="h-3 w-3" /> {d.verifiedByName || "verified"}
+          </Badge>
+        ) : (
+          <Badge variant="secondary">Unverified</Badge>
+        ),
+    },
+    {
+      id: "actions",
+      header: "",
+      sortable: false,
+      exportable: false,
+      cell: (d) =>
+        !d.verifiedAt ? (
+          <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={verifyDepositMutation.isPending} onClick={() => verifyDepositMutation.mutate(d.id)}>
+            Verify
+          </Button>
+        ) : null,
+    },
+  ];
+}
 
 // ─── Banking & Cash Panel ──────────────────────────────────────────────────
 export function BankingPanel() {
@@ -189,12 +381,6 @@ export function BankingPanel() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  // Helper: days since last deposit
-  function daysSince(dateStr: string | null) {
-    if (!dateStr) return null;
-    return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
-  }
-
   return (
     <div className="space-y-6">
       {/* ── Per-Admin Cash Position ─────────────────────────── */}
@@ -211,55 +397,15 @@ export function BankingPanel() {
       >
         {loadingPos ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-        ) : cashPosition.length === 0 ? (
-          <EmptyState icon={Banknote} title="No cash activity yet" description="Cash positions appear once admins submit cashups." />
         ) : (
-          <DataTable>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Admin</TableHead>
-                <TableHead className="text-right">Collected (cashups)</TableHead>
-                <TableHead className="text-right">Deposited to bank</TableHead>
-                <TableHead className="text-right">On hand (unbanked)</TableHead>
-                <TableHead>Last deposit</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {cashPosition.map((p: any) => {
-                const days = daysSince(p.lastDepositDate);
-                const stale = p.onHand > 0 && (days === null || days > 2);
-                return (
-                  <TableRow key={p.userId} className={stale ? "bg-amber-50/60 dark:bg-amber-900/10" : ""}>
-                    <TableCell>
-                      <div className="font-medium text-sm">{p.displayName}</div>
-                      <div className="text-xs text-muted-foreground">{p.email}</div>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums font-medium">{p.currency} {parseFloat(p.totalCollected).toFixed(2)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{p.currency} {parseFloat(p.totalDeposited).toFixed(2)}</TableCell>
-                    <TableCell className="text-right tabular-nums font-semibold">
-                      <span className={p.onHand > 0 ? "text-amber-600" : "text-green-600"}>{p.currency} {parseFloat(p.onHand).toFixed(2)}</span>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {p.lastDepositDate ? new Date(p.lastDepositDate).toLocaleDateString() : "—"}
-                    </TableCell>
-                    <TableCell>
-                      {p.onHand <= 0 ? (
-                        <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Banked</Badge>
-                      ) : stale ? (
-                        <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 gap-1">
-                          <TriangleAlert className="h-3 w-3" />
-                          {days === null ? "Never banked" : `${days}d unbanked`}
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">Pending bank</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </DataTable>
+          <EnhancedDataTable
+            columns={cashPositionColumns}
+            rows={cashPosition}
+            getRowKey={(p: any) => p.userId}
+            exportFilename="cash-position"
+            storageKey="finance-banking-cash-position"
+            emptyMessage="No cash activity yet. Cash positions appear once admins submit cashups."
+          />
         )}
       </CardSection>
 
@@ -275,66 +421,24 @@ export function BankingPanel() {
           </Button>
         }
       >
-        {bankAccounts.length === 0 ? (
-          <EmptyState icon={Building2} title="No bank accounts" description="Add a bank account to start recording deposits." />
-        ) : (
-          <DataTable>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Account name</TableHead>
-                <TableHead>Bank</TableHead>
-                <TableHead>Account #</TableHead>
-                <TableHead>Currency</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {bankAccounts.map((a: any) => {
-                const latestBal = statementBalances.find((b: any) => b.bankAccountId === a.id);
-                return (
-                  <TableRow key={a.id} className={a.isActive === false ? "opacity-60" : ""}>
-                    <TableCell className="font-medium">
-                      {a.accountName}
-                      {a.isActive === false && <Badge variant="secondary" className="ml-2 text-[10px]">Inactive</Badge>}
-                    </TableCell>
-                    <TableCell>{a.bankName}</TableCell>
-                    <TableCell className="font-mono text-sm">{a.accountNumber}</TableCell>
-                    <TableCell>{a.currency}</TableCell>
-                    <TableCell>
-                      {latestBal ? (
-                        <div>
-                          <span className="font-semibold tabular-nums">{a.currency} {parseFloat(latestBal.closingBalance).toFixed(2)}</span>
-                          <p className="text-xs text-muted-foreground">as at {new Date(latestBal.statementDate).toLocaleDateString()}</p>
-                        </div>
-                      ) : (
-                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setBalForm(f => ({ ...f, bankAccountId: a.id, currency: a.currency })); setShowBalanceDialog(true); }}>
-                          + Enter balance
-                        </Button>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-xs"
-                        onClick={() => {
-                          setEditAccount(a);
-                          setEditAccountForm({
-                            accountName: a.accountName, bankName: a.bankName, accountNumber: a.accountNumber,
-                            currency: a.currency, notes: a.notes || "", isActive: a.isActive !== false,
-                          });
-                        }}
-                      >
-                        Edit
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </DataTable>
-        )}
+        <EnhancedDataTable
+          columns={bankAccountsColumns({
+            statementBalances,
+            onEnterBalance: (a: any) => { setBalForm(f => ({ ...f, bankAccountId: a.id, currency: a.currency })); setShowBalanceDialog(true); },
+            onEdit: (a: any) => {
+              setEditAccount(a);
+              setEditAccountForm({
+                accountName: a.accountName, bankName: a.bankName, accountNumber: a.accountNumber,
+                currency: a.currency, notes: a.notes || "", isActive: a.isActive !== false,
+              });
+            },
+          })}
+          rows={bankAccounts}
+          getRowKey={(a: any) => a.id}
+          exportFilename="bank-accounts"
+          storageKey="finance-banking-accounts"
+          emptyMessage="No bank accounts. Add a bank account to start recording deposits."
+        />
       </CardSection>
 
       {/* ── Safes (cash not always banked — sometimes secured on-site instead) ── */}
@@ -349,44 +453,14 @@ export function BankingPanel() {
           </Button>
         }
       >
-        {safes.length === 0 ? (
-          <EmptyState icon={ShieldCheck} title="No safes" description="Add a safe to record cash moved there instead of a bank." />
-        ) : (
-          <DataTable>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Safe</TableHead>
-                <TableHead>Currency</TableHead>
-                <TableHead className="text-right">Total moved in</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {safes.map((s: any) => {
-                const total = bankDeposits
-                  .filter((d: any) => d.safeId === s.id)
-                  .reduce((sum: number, d: any) => sum + parseFloat(d.amount), 0);
-                return (
-                  <TableRow key={s.id} className={s.isActive === false ? "opacity-60" : ""}>
-                    <TableCell className="font-medium">
-                      {s.name}
-                      {s.isActive === false && <Badge variant="secondary" className="ml-2 text-[10px]">Inactive</Badge>}
-                    </TableCell>
-                    <TableCell>{s.currency}</TableCell>
-                    <TableCell className="text-right tabular-nums font-semibold">{s.currency} {total.toFixed(2)}</TableCell>
-                    <TableCell>
-                      {s.isActive === false ? (
-                        <Badge variant="secondary">Inactive</Badge>
-                      ) : (
-                        <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30">Active</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </DataTable>
-        )}
+        <EnhancedDataTable
+          columns={safesColumns({ bankDeposits })}
+          rows={safes}
+          getRowKey={(s: any) => s.id}
+          exportFilename="safes"
+          storageKey="finance-banking-safes"
+          emptyMessage="No safes. Add a safe to record cash moved there instead of a bank."
+        />
       </CardSection>
 
       {/* ── Deposit History ─────────────────────────────────── */}
@@ -403,55 +477,15 @@ export function BankingPanel() {
       >
         {loadingDeposits ? (
           <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-        ) : bankDeposits.length === 0 ? (
-          <EmptyState icon={ArrowDownToLine} title="No deposits yet" description="Record a deposit when an admin banks collected premiums." />
         ) : (
-          <DataTable>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Admin (deposited by)</TableHead>
-                <TableHead>Destination</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead>Verified</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {bankDeposits.map((d: any) => (
-                <TableRow key={d.id}>
-                  <TableCell className="tabular-nums text-sm">{new Date(d.depositDate).toLocaleDateString()}</TableCell>
-                  <TableCell className="text-sm">{d.depositedByName || d.depositedByUserId}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {d.safeId ? (
-                      <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> {d.safeName || "Safe"}</span>
-                    ) : (
-                      d.bankAccountName || "—"
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums font-semibold">{d.currency} {parseFloat(d.amount).toFixed(2)}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{d.reference || "—"}</TableCell>
-                  <TableCell>
-                    {d.verifiedAt ? (
-                      <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/30 gap-1">
-                        <CheckCircle2 className="h-3 w-3" /> {d.verifiedByName || "verified"}
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary">Unverified</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {!d.verifiedAt && (
-                      <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={verifyDepositMutation.isPending} onClick={() => verifyDepositMutation.mutate(d.id)}>
-                        Verify
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </DataTable>
+          <EnhancedDataTable
+            columns={depositsColumns({ verifyDepositMutation })}
+            rows={bankDeposits}
+            getRowKey={(d: any) => d.id}
+            exportFilename="bank-deposits"
+            storageKey="finance-banking-deposits"
+            emptyMessage="No deposits yet. Record a deposit when an admin banks collected premiums."
+          />
         )}
       </CardSection>
 
