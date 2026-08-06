@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
-import { CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, KpiStatCard, StatusBadge } from "@/components/ds";
+import { CardSection, DataTable, dataTableStickyHeaderClass, EnhancedDataTable, type EdtColumn, EmptyState, KpiStatCard, StatusBadge } from "@/components/ds";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,163 @@ interface FinanceSectionProps extends ReportSectionBaseProps {
   userId: string;
   users: any[];
 }
+
+const cashupReconciliationColumns: EdtColumn<any>[] = [
+  { id: "date", header: "Date", accessor: (cu2) => cu2.cashupDate },
+  { id: "currency", header: "Currency", accessor: (cu2) => cu2.currency },
+  { id: "status", header: "Status", accessor: (cu2) => cu2.status, cell: (cu2) => <span className="capitalize">{cu2.status}</span> },
+  { id: "expected", header: "Expected", align: "right", accessor: (cu2) => Number(cu2.totalAmount || 0), cell: (cu2) => <span className="tabular-nums">{Number(cu2.totalAmount || 0).toFixed(2)}</span> },
+  { id: "counted", header: "Counted", align: "right", accessor: (cu2) => cu2.countedTotal != null ? Number(cu2.countedTotal) : "", cell: (cu2) => <span className="tabular-nums">{cu2.countedTotal != null ? Number(cu2.countedTotal).toFixed(2) : "—"}</span> },
+  { id: "discrepancy", header: "Discrepancy", align: "right", accessor: (cu2) => cu2.discrepancyAmount != null ? Number(cu2.discrepancyAmount) : "", cell: (cu2) => <span className="tabular-nums">{cu2.discrepancyAmount != null ? Number(cu2.discrepancyAmount).toFixed(2) : "—"}</span> },
+];
+
+const ledgerColumns: EdtColumn<any>[] = [
+  { id: "date", header: "Date", accessor: (e) => e.date, cell: (e) => <span className="whitespace-nowrap">{e.date}</span> },
+  {
+    id: "type",
+    header: "Type",
+    accessor: (e) => e.type,
+    cell: (e) => <span className={e.type === "income" ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>{e.type === "income" ? "Income" : "Expense"}</span>,
+  },
+  { id: "description", header: "Description", accessor: (e) => e.description, cell: (e) => <span className="max-w-[280px] truncate block" title={e.description}>{e.description}</span> },
+  { id: "reference", header: "Reference", accessor: (e) => e.reference || "", cell: (e) => <span className="whitespace-nowrap">{e.reference || "—"}</span> },
+  { id: "person", header: "Person", accessor: (e) => e.person || "", cell: (e) => <span className="whitespace-nowrap">{e.person || "—"}</span> },
+  { id: "department", header: "Department / Cost centre", accessor: (e) => e.department || "", cell: (e) => <span className="whitespace-nowrap">{e.department || "—"}</span> },
+  {
+    id: "amount",
+    header: "Amount",
+    align: "right",
+    accessor: (e) => e.type === "expense" ? -Number(e.amount || 0) : Number(e.amount || 0),
+    cell: (e) => (
+      <span className={`tabular-nums whitespace-nowrap ${e.type === "income" ? "text-emerald-600" : "text-destructive"}`}>
+        {e.type === "expense" ? "-" : ""}{e.currency} {Number(e.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </span>
+    ),
+  },
+];
+
+const financeReportColumns: EdtColumn<any>[] = [
+  { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
+  { id: "status", header: "Status", accessor: (r) => r.status, cell: (r) => <StatusBadge status={r.status} variant="policy" /> },
+  { id: "premium", header: "Premium", accessor: (r) => parseFloat(r.premiumAmount || 0), cell: (r) => <span className="whitespace-nowrap tabular-nums">{r.currency} {r.premiumAmount}</span> },
+  { id: "captureDate", header: "Capture date", accessor: (r) => r.policyCreatedAt ? new Date(r.policyCreatedAt) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</span> },
+  { id: "inceptionDate", header: "Inception date", accessor: (r) => r.inceptionDate ? new Date(r.inceptionDate) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</span> },
+  { id: "coverDate", header: "Cover date", accessor: (r) => r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate).toLocaleDateString() : "—"}</span> },
+  { id: "dueDate", header: "Due date", accessor: (r) => r.dueDate ? new Date(r.dueDate) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "—"}</span> },
+  { id: "datePaid", header: "Date paid", accessor: (r) => r.datePaid ? new Date(r.datePaid) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.datePaid ? new Date(r.datePaid).toLocaleDateString() : "—"}</span> },
+  { id: "receiptCount", header: "Receipt count", accessor: (r) => r.receiptCount, cell: (r) => <span className="tabular-nums">{r.receiptCount}</span> },
+  { id: "monthsPaid", header: "Months paid", accessor: (r) => r.monthsPaid, cell: (r) => <span className="tabular-nums">{r.monthsPaid}</span> },
+  { id: "graceUsed", header: "Grace used", accessor: (r) => r.graceDaysUsed, cell: (r) => <span className="tabular-nums">{r.graceDaysUsed}</span> },
+  { id: "graceRemaining", header: "Grace remaining", accessor: (r) => r.graceDaysRemaining != null ? r.graceDaysRemaining : "", cell: (r) => <span className="tabular-nums">{r.graceDaysRemaining != null ? r.graceDaysRemaining : "—"}</span> },
+  { id: "outstanding", header: "Outstanding", accessor: (r) => parseFloat(r.outstandingPremium || 0), cell: (r) => <span className="font-medium tabular-nums">{r.currency} {r.outstandingPremium}</span> },
+  { id: "advance", header: "Advance", accessor: (r) => parseFloat(r.advancePremium || 0), cell: (r) => <span className="text-green-700 tabular-nums">{r.currency} {r.advancePremium}</span> },
+  { id: "client", header: "Client", accessor: (r) => [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), cell: (r) => <span className="whitespace-nowrap">{[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</span> },
+  { id: "product", header: "Product", accessor: (r) => r.productName || "" },
+  { id: "productCode", header: "Product code", accessor: (r) => r.productCode || "", cell: (r) => <span className="font-mono text-sm">{r.productCode || "—"}</span> },
+  { id: "branch", header: "Branch", accessor: (r) => r.branchName || "" },
+  { id: "group", header: "Group", accessor: (r) => r.groupName || "" },
+  { id: "agent", header: "Agent", accessor: (r) => r.agentDisplayName || r.agentEmail || "" },
+];
+
+const underwriterPayableColumns: EdtColumn<any>[] = [
+  { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
+  { id: "status", header: "Status", accessor: (r) => r.status, cell: (r) => <StatusBadge status={r.status} variant="policy" /> },
+  { id: "client", header: "Client", accessor: (r) => [r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), cell: (r) => <span className="whitespace-nowrap">{[r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</span> },
+  { id: "phone", header: "Phone", accessor: (r) => r.clientPhone || "" },
+  { id: "product", header: "Product", accessor: (r) => r.productName || "" },
+  { id: "branch", header: "Branch", accessor: (r) => r.branchName || "" },
+  { id: "adults", header: "Adults", accessor: (r) => r.adults },
+  { id: "children", header: "Children", accessor: (r) => r.children },
+  { id: "rate", header: "Rate (A/C)", sortable: false, accessor: (r) => `${r.underwriterAmountAdult ?? ""}/${r.underwriterAmountChild ?? ""}`, cell: (r) => <span className="text-sm whitespace-nowrap">{r.underwriterAmountAdult ?? "—"} / {r.underwriterAmountChild ?? "—"}</span> },
+  { id: "advanceMonths", header: "Advance (mo)", accessor: (r) => r.underwriterAdvanceMonths },
+  { id: "monthly", header: "Monthly", align: "right", accessor: (r) => r.monthlyPayable, cell: (r) => <span className="font-medium tabular-nums">{r.currency} {r.monthlyPayable.toFixed(2)}</span> },
+  { id: "totalPayable", header: "Total payable", align: "right", accessor: (r) => r.totalPayable, cell: (r) => <span className="font-medium tabular-nums">{r.currency} {r.totalPayable.toFixed(2)}</span> },
+];
+
+const receiptsColumns: EdtColumn<any>[] = [
+  { id: "dtstamp", header: "DTSTAMP", accessor: (r) => r.DTSTAMP || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</span> },
+  { id: "agentsName", header: "agentsName", accessor: (r) => r.agentsName || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.agentsName}>{r.agentsName || "—"}</span> },
+  { id: "monthsPaidInAdvance", header: "MonthsPaidInAdvance", accessor: (r) => r.MonthsPaidInAdvance ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaidInAdvance ?? "—"}</span> },
+  { id: "policyNumber", header: "policy_number", accessor: (r) => r.policy_number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_number || "—"}</span> },
+  { id: "surname", header: "surname", accessor: (r) => r.surname || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.surname || "—"}</span> },
+  { id: "internalReferenceNumber", header: "InternalReferenceNumber", accessor: (r) => r.InternalReferenceNumber || "", cell: (r) => <span className="text-xs font-mono max-w-[90px] truncate block" title={r.InternalReferenceNumber}>{r.InternalReferenceNumber || "—"}</span> },
+  { id: "productName", header: "Product_Name", accessor: (r) => r.Product_Name || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.Product_Name}>{r.Product_Name || "—"}</span> },
+  { id: "inceptionDate", header: "Inception_Date", accessor: (r) => r.Inception_Date || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</span> },
+  { id: "monthNumber", header: "MonthNumber", accessor: (r) => r.MonthNumber ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthNumber ?? "—"}</span> },
+  { id: "yearNumber", header: "YearNumber", accessor: (r) => r.YearNumber ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.YearNumber ?? "—"}</span> },
+  { id: "receiptCount", header: "ReceiptCount", accessor: (r) => r.ReceiptCount ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptCount ?? "—"}</span> },
+  { id: "fdate", header: "fdate", accessor: (r) => r.fdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.fdate || "—"}</span> },
+  { id: "tdate", header: "tdate", accessor: (r) => r.tdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.tdate || "—"}</span> },
+  { id: "paymentBy", header: "PaymentBy", accessor: (r) => r.PaymentBy || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.PaymentBy}>{r.PaymentBy || "—"}</span> },
+  { id: "receiptNumber", header: "ReceiptNumber", accessor: (r) => formatReceiptNumber(r.ReceiptNumber || r.receiptNumber), cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{formatReceiptNumber(r.ReceiptNumber || r.receiptNumber)}</span> },
+  { id: "manualUser", header: "ManualUser", accessor: (r) => r.ManualUser || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.ManualUser}>{r.ManualUser || "—"}</span> },
+  { id: "datePaid", header: "DatePaid", accessor: (r) => r.DatePaid || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DatePaid || "—"}</span> },
+  { id: "transaction", header: "Transaction", accessor: (r) => r.Transaction || "", cell: (r) => <span className="text-xs font-mono max-w-[160px] truncate block" title={r.Transaction}>{r.Transaction || "—"}</span> },
+  { id: "premiumDue", header: "PremiumDue", accessor: (r) => r.PremiumDue || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.PremiumDue || "—"}</span> },
+  { id: "currency", header: "Currency", accessor: (r) => r.Currency || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Currency || "—"}</span> },
+  { id: "amountCollected", header: "AmountCollected", accessor: (r) => parseFloat(String(r.AmountCollected ?? r.amount ?? "0")), cell: (r) => <span className="text-xs font-semibold whitespace-nowrap">{parseFloat(String(r.AmountCollected ?? r.amount ?? "0")).toFixed(2)}</span> },
+  { id: "monthsPaid", header: "MonthsPaid", accessor: (r) => r.MonthsPaid ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaid ?? "—"}</span> },
+  { id: "remarks", header: "Remarks", accessor: (r) => r.Remarks || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.Remarks}>{r.Remarks || "—"}</span> },
+  { id: "paymentMethod", header: "PaymentMethod", accessor: (r) => r.PaymentMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></span> },
+  { id: "defaultPay", header: "DefaultPay", accessor: (r) => r.DefaultPay || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DefaultPay || "—"}</span> },
+  { id: "debitMethod", header: "DebitMethod", accessor: (r) => r.DebitMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DebitMethod || "—"}</span> },
+  { id: "receiptMonth", header: "ReceiptMonth", accessor: (r) => r.ReceiptMonth ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptMonth ?? "—"}</span> },
+  { id: "receiptYear", header: "ReceiptYear", accessor: (r) => r.ReceiptYear ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptYear ?? "—"}</span> },
+  { id: "policyNum", header: "policy_num", accessor: (r) => r.policy_num || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_num || "—"}</span> },
+  { id: "policyBranch", header: "PolicyBranch", accessor: (r) => r.PolicyBranch || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.PolicyBranch}>{r.PolicyBranch || "—"}</span> },
+  { id: "inceptionUnderscore", header: "Inception_", accessor: (r) => r.Inception_ || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_ || "—"}</span> },
+  { id: "sstatus", header: "Sstatus", accessor: (r) => r.Sstatus || "", cell: (r) => <span className="text-xs"><Badge variant="outline" className="text-[10px]">{r.Sstatus || "—"}</Badge></span> },
+  { id: "internalRe", header: "InternalRe", accessor: (r) => r.InternalRe || "", cell: (r) => <span className="text-xs font-mono max-w-[100px] truncate block" title={r.InternalRe}>{r.InternalRe || "—"}</span> },
+  { id: "productN", header: "Product_N", accessor: (r) => r.Product_N || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.Product_N}>{r.Product_N || "—"}</span> },
+  { id: "collectedBy", header: "CollectedBy", accessor: (r) => r.CollectedBy || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.CollectedBy}>{r.CollectedBy || "—"}</span> },
+  { id: "fromDate", header: "fromDate", accessor: (r) => r.fromDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.fromDate || "—"}</span> },
+  { id: "toDate", header: "toDate", accessor: (r) => r.toDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.toDate || "—"}</span> },
+  { id: "groupName", header: "GroupName", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
+  { id: "inceptionD", header: "InceptionD", accessor: (r) => r.InceptionD || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.InceptionD || "—"}</span> },
+  { id: "memberId", header: "MemberID", accessor: (r) => r.MemberID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.MemberID || "—"}</span> },
+  { id: "actualPen", header: "ActualPen", accessor: (r) => r.ActualPen || "", cell: (r) => <span className="text-xs tabular-nums">{r.ActualPen || "—"}</span> },
+  { id: "receiptId", header: "ReceiptID", accessor: (r) => r.ReceiptID || "", cell: (r) => <span className="text-xs font-mono max-w-[90px] truncate block" title={r.ReceiptID}>{r.ReceiptID || "—"}</span> },
+  { id: "capturedBy", header: "CapturedBy", accessor: (r) => r.CapturedBy || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.CapturedBy}>{r.CapturedBy || "—"}</span> },
+];
+
+const paymentsColumns: EdtColumn<any>[] = [
+  { id: "reference", header: "Reference", accessor: (p) => p.reference || "", cell: (p) => <span className="font-mono text-sm">{p.reference || "—"}</span> },
+  { id: "amount", header: "Amount", accessor: (p) => parseFloat(p.amount || 0), cell: (p) => <span className="font-semibold">{p.currency} {p.amount}</span> },
+  { id: "method", header: "Method", accessor: (p) => p.paymentMethod },
+  {
+    id: "status",
+    header: "Status",
+    accessor: (p) => p.status,
+    cell: (p) => <Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>{p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}</Badge>,
+  },
+  { id: "received", header: "Received", accessor: (p) => p.receivedAt ? new Date(p.receivedAt) : "", cell: (p) => <span className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</span> },
+];
+
+const expendituresColumns: EdtColumn<any>[] = [
+  { id: "description", header: "Description", accessor: (e) => e.description },
+  { id: "category", header: "Category", accessor: (e) => e.category, cell: (e) => <Badge variant="outline">{e.category}</Badge> },
+  { id: "amount", header: "Amount", accessor: (e) => parseFloat(e.amount || 0), cell: (e) => <span className="font-semibold">{e.currency} {e.amount}</span> },
+  { id: "date", header: "Date", accessor: (e) => e.spentAt || (e.createdAt ? new Date(e.createdAt) : ""), cell: (e) => <span className="text-sm text-muted-foreground">{e.spentAt || (e.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—")}</span> },
+  { id: "receiptRef", header: "Receipt ref", accessor: (e) => e.receiptRef || "" },
+];
+
+const cashupsColumns = (users: any[]): EdtColumn<any>[] => [
+  { id: "cashupDate", header: "Cashup date", accessor: (c) => c.cashupDate, cell: (c) => <span className="font-mono text-sm">{c.cashupDate}</span> },
+  { id: "currency", header: "Currency", accessor: (c) => c.currency || "USD" },
+  { id: "totalAmount", header: "Total amount", accessor: (c) => parseFloat(c.totalAmount || 0), cell: (c) => <span className="font-semibold">{c.currency || "USD"} {c.totalAmount}</span> },
+  { id: "transactionCount", header: "Transaction count", accessor: (c) => c.transactionCount },
+  { id: "locked", header: "Locked", accessor: (c) => (c.isLocked ? "Locked" : "Open"), cell: (c) => <Badge variant={c.isLocked ? "default" : "secondary"}>{c.isLocked ? "Locked" : "Open"}</Badge> },
+  { id: "preparedBy", header: "Prepared by", accessor: (c) => (users as any[])?.find((u: any) => u.id === c.preparedBy)?.displayName || c.preparedBy || "" },
+  { id: "created", header: "Created", accessor: (c) => new Date(c.createdAt), cell: (c) => <span className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</span> },
+];
+
+const platformColumns: EdtColumn<any>[] = [
+  { id: "description", header: "Description", accessor: (cr) => cr.description },
+  { id: "amount", header: "Amount", accessor: (cr) => parseFloat(cr.amount || 0), cell: (cr) => <span className="font-semibold">{cr.currency || "USD"} {cr.amount}</span> },
+  { id: "currency", header: "Currency", accessor: (cr) => cr.currency },
+  { id: "settled", header: "Settled", accessor: (cr) => (cr.isSettled ? "Settled" : "Pending"), cell: (cr) => <Badge variant={cr.isSettled ? "default" : "secondary"}>{cr.isSettled ? "Settled" : "Pending"}</Badge> },
+  { id: "created", header: "Created", accessor: (cr) => new Date(cr.createdAt), cell: (cr) => <span className="text-sm text-muted-foreground">{new Date(cr.createdAt).toLocaleDateString()}</span> },
+];
 
 export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, users }: FinanceSectionProps) {
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({
@@ -244,21 +401,14 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                   {(!cf.cashups || cf.cashups.length === 0) ? (
                     <p className="text-sm text-muted-foreground">No cash-ups recorded in this period.</p>
                   ) : (
-                    <DataTable containerClassName="border rounded-md">
-                      <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Currency</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Expected</TableHead><TableHead className="text-right">Counted</TableHead><TableHead className="text-right">Discrepancy</TableHead></TableRow></TableHeader>
-                      <TableBody>
-                        {cf.cashups.map((cu2: any) => (
-                          <TableRow key={cu2.id}>
-                            <TableCell>{cu2.cashupDate}</TableCell>
-                            <TableCell>{cu2.currency}</TableCell>
-                            <TableCell className="capitalize">{cu2.status}</TableCell>
-                            <TableCell className="text-right tabular-nums">{Number(cu2.totalAmount || 0).toFixed(2)}</TableCell>
-                            <TableCell className="text-right tabular-nums">{cu2.countedTotal != null ? Number(cu2.countedTotal).toFixed(2) : "—"}</TableCell>
-                            <TableCell className="text-right tabular-nums">{cu2.discrepancyAmount != null ? Number(cu2.discrepancyAmount).toFixed(2) : "—"}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </DataTable>
+                    <EnhancedDataTable
+                      columns={cashupReconciliationColumns}
+                      rows={cf.cashups}
+                      getRowKey={(cu2: any) => cu2.id}
+                      searchable={false}
+                      storageKey="reports-cashflow-reconciliation"
+                      emptyMessage="No cash-ups recorded in this period."
+                    />
                   )}
                 </div>
               </div>
@@ -279,44 +429,20 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
           ) : !ledger || ledger.entries.length === 0 ? (
             <EmptyState title="No transactions for the selected period" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <div className="overflow-x-auto">
+            <div>
               {ledger.total > ledger.entries.length && (
                 <p className="text-xs text-muted-foreground px-4 pt-3">
                   Showing {ledger.entries.length} of {ledger.total} transactions — narrow the date range to see the rest.
                 </p>
               )}
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[900px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Reference</TableHead>
-                    <TableHead>Person</TableHead>
-                    <TableHead>Department / Cost centre</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {ledger.entries.map((e: any, i: number) => (
-                    <TableRow key={i}>
-                      <TableCell className="whitespace-nowrap">{e.date}</TableCell>
-                      <TableCell>
-                        <span className={e.type === "income" ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>
-                          {e.type === "income" ? "Income" : "Expense"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="max-w-[280px] truncate" title={e.description}>{e.description}</TableCell>
-                      <TableCell className="whitespace-nowrap">{e.reference || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{e.person || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{e.department || "—"}</TableCell>
-                      <TableCell className={`text-right tabular-nums whitespace-nowrap ${e.type === "income" ? "text-emerald-600" : "text-destructive"}`}>
-                        {e.type === "expense" ? "-" : ""}{e.currency} {Number(e.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
+              <EnhancedDataTable
+                columns={ledgerColumns}
+                rows={ledger.entries.map((e: any, i: number) => ({ ...e, _rowKey: i }))}
+                getRowKey={(row: any) => String(row._rowKey)}
+                exportFilename="transaction-ledger"
+                storageKey="reports-ledger"
+                emptyMessage="No transactions for the selected period."
+              />
             </div>
           )}
         </CardSection>
@@ -341,67 +467,16 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         >
           {loadingFinance ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : financeReport.length === 0 ? (
-            <EmptyState
-              title="No policies match the filters"
-              className="border-0 rounded-none bg-transparent py-8"
-              dataTestId="text-no-finance-report"
-            />
           ) : (
-            <div className="overflow-x-auto">
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Policy #</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Capture date</TableHead>
-                    <TableHead>Inception date</TableHead>
-                    <TableHead>Cover date</TableHead>
-                    <TableHead>Due date</TableHead>
-                    <TableHead>Date paid</TableHead>
-                    <TableHead>Receipt count</TableHead>
-                    <TableHead>Months paid</TableHead>
-                    <TableHead>Grace used</TableHead>
-                    <TableHead>Grace remaining</TableHead>
-                    <TableHead>Outstanding</TableHead>
-                    <TableHead>Advance</TableHead>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Product code</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Group</TableHead>
-                    <TableHead>Agent</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {financeReport.map((r: any) => (
-                    <TableRow key={r.policyId} data-testid={`row-finance-${r.policyId}`}>
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
-                      <TableCell><StatusBadge status={r.status} variant="policy" /></TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums">{r.currency} {r.premiumAmount}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.datePaid ? new Date(r.datePaid).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="tabular-nums">{r.receiptCount}</TableCell>
-                      <TableCell className="tabular-nums">{r.monthsPaid}</TableCell>
-                      <TableCell className="tabular-nums">{r.graceDaysUsed}</TableCell>
-                      <TableCell className="tabular-nums">{r.graceDaysRemaining != null ? r.graceDaysRemaining : "—"}</TableCell>
-                      <TableCell className="font-medium tabular-nums">{r.currency} {r.outstandingPremium}</TableCell>
-                      <TableCell className="text-green-700 tabular-nums">{r.currency} {r.advancePremium}</TableCell>
-                      <TableCell className="whitespace-nowrap">{[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</TableCell>
-                      <TableCell className="text-sm">{r.productName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.productCode || "—"}</TableCell>
-                      <TableCell>{r.branchName || "—"}</TableCell>
-                      <TableCell>{r.groupName || "—"}</TableCell>
-                      <TableCell className="text-sm">{r.agentDisplayName || r.agentEmail || "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            </div>
+            <EnhancedDataTable
+              columns={financeReportColumns}
+              rows={financeReport}
+              getRowKey={(r) => r.policyId}
+              rowTestId={(r) => `row-finance-${r.policyId}`}
+              exportFilename="finance-report"
+              storageKey="reports-finance"
+              emptyMessage="No policies match the filters."
+            />
           )}
         </CardSection>
       </TabsContent>
@@ -449,44 +524,15 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                   icon={TrendingUp}
                 />
               </div>
-              <div className="overflow-x-auto">
-                <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[900px]">
-                  <TableHeader className={dataTableStickyHeaderClass}>
-                    <TableRow>
-                      <TableHead>Policy #</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Client</TableHead>
-                      <TableHead>Phone</TableHead>
-                      <TableHead>Product</TableHead>
-                      <TableHead>Branch</TableHead>
-                      <TableHead>Adults</TableHead>
-                      <TableHead>Children</TableHead>
-                      <TableHead>Rate (A/C)</TableHead>
-                      <TableHead>Advance (mo)</TableHead>
-                      <TableHead>Monthly</TableHead>
-                      <TableHead>Total payable</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {underwriterPayableResult.rows.map((r: any) => (
-                      <TableRow key={r.policyId} className="hover:bg-muted/40" data-testid={`row-underwriter-${r.policyId}`}>
-                        <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
-                        <TableCell><StatusBadge status={r.status} variant="policy" /></TableCell>
-                        <TableCell className="whitespace-nowrap">{[r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</TableCell>
-                        <TableCell className="text-sm whitespace-nowrap">{r.clientPhone || "—"}</TableCell>
-                        <TableCell className="text-sm">{r.productName || "—"}</TableCell>
-                        <TableCell>{r.branchName || "—"}</TableCell>
-                        <TableCell>{r.adults}</TableCell>
-                        <TableCell>{r.children}</TableCell>
-                        <TableCell className="text-sm whitespace-nowrap">{r.underwriterAmountAdult ?? "—"} / {r.underwriterAmountChild ?? "—"}</TableCell>
-                        <TableCell>{r.underwriterAdvanceMonths}</TableCell>
-                        <TableCell className="font-medium tabular-nums">{r.currency} {r.monthlyPayable.toFixed(2)}</TableCell>
-                        <TableCell className="font-medium tabular-nums">{r.currency} {r.totalPayable.toFixed(2)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </DataTable>
-              </div>
+              <EnhancedDataTable
+                columns={underwriterPayableColumns}
+                rows={underwriterPayableResult.rows}
+                getRowKey={(r) => r.policyId}
+                rowTestId={(r) => `row-underwriter-${r.policyId}`}
+                exportFilename="underwriter-payable"
+                storageKey="reports-underwriter-payable"
+                emptyMessage="No matching policies."
+              />
             </>
           )}
         </CardSection>
@@ -496,109 +542,15 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         <CardSection title="Daily receipts report" icon={Receipt} description={<>{receiptReport.length} receipts{filters.fromDate ? ` from ${filters.fromDate}` : ""}{filters.toDate ? ` to ${filters.toDate}` : ""}. Includes UTC <span className="font-mono">DTSTAMP</span> (YYYYMMDDTHHmmssZ) per receipt and policy-receipt detail columns for export.</>} headerRight={<ExportButton reportType="receipts" filters={filters} />} flush>
           {loadingReceipts ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : receiptReport.length === 0 ? (
-            <EmptyState title="No receipts found" description="Use the date filters above to select a reporting period." className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <div className="overflow-x-auto min-w-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="text-xs whitespace-nowrap font-mono">DTSTAMP</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">agentsName</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">MonthsPaidInAdvance</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">policy_number</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">surname</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">InternalReferenceNumber</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Product_Name</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Inception_Date</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">MonthNumber</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">YearNumber</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ReceiptCount</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">fdate</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">tdate</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">PaymentBy</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ReceiptNumber</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ManualUser</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">DatePaid</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Transaction</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">PremiumDue</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Currency</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">AmountCollected</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">MonthsPaid</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Remarks</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">PaymentMethod</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">DefaultPay</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">DebitMethod</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ReceiptMonth</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ReceiptYear</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">policy_num</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">PolicyBranch</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Inception_</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Sstatus</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">InternalRe</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Product_N</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">CollectedBy</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">fromDate</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">toDate</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">GroupName</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">InceptionD</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">MemberID</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ActualPen</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ReceiptID</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">CapturedBy</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {receiptReport.map((r: any, idx: number) => (
-                    <TableRow key={r.receiptId || idx}>
-                      <TableCell className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.agentsName}>{r.agentsName || "—"}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.MonthsPaidInAdvance ?? "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.policy_number || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.surname || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono max-w-[90px] truncate" title={r.InternalReferenceNumber}>{r.InternalReferenceNumber || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.Product_Name}>{r.Product_Name || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.MonthNumber ?? "—"}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.YearNumber ?? "—"}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.ReceiptCount ?? "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.fdate || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.tdate || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[120px] truncate" title={r.PaymentBy}>{r.PaymentBy || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{formatReceiptNumber(r.ReceiptNumber || r.receiptNumber)}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.ManualUser}>{r.ManualUser || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.DatePaid || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono max-w-[160px] truncate" title={r.Transaction}>{r.Transaction || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.PremiumDue || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Currency || "—"}</TableCell>
-                      <TableCell className="text-xs font-semibold whitespace-nowrap">{parseFloat(String(r.AmountCollected ?? r.amount ?? "0")).toFixed(2)}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.MonthsPaid ?? "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.Remarks}>{r.Remarks || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.DefaultPay || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.DebitMethod || "—"}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.ReceiptMonth ?? "—"}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.ReceiptYear ?? "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.policy_num || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.PolicyBranch}>{r.PolicyBranch || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Inception_ || "—"}</TableCell>
-                      <TableCell className="text-xs"><Badge variant="outline" className="text-[10px]">{r.Sstatus || "—"}</Badge></TableCell>
-                      <TableCell className="text-xs font-mono max-w-[100px] truncate" title={r.InternalRe}>{r.InternalRe || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[120px] truncate" title={r.Product_N}>{r.Product_N || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.CollectedBy}>{r.CollectedBy || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.fromDate || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.toDate || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.GroupName}>{r.GroupName || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.InceptionD || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.MemberID || "—"}</TableCell>
-                      <TableCell className="text-xs tabular-nums">{r.ActualPen || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono max-w-[90px] truncate" title={r.ReceiptID}>{r.ReceiptID || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[100px] truncate" title={r.CapturedBy}>{r.CapturedBy || "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <EnhancedDataTable
+              columns={receiptsColumns}
+              rows={receiptReport.map((r: any, idx: number) => ({ ...r, _rowKey: r.receiptId || idx }))}
+              getRowKey={(row: any) => String(row._rowKey)}
+              exportFilename="daily-receipts"
+              storageKey="reports-receipts"
+              emptyMessage="No receipts found. Use the date filters above to select a reporting period."
+            />
           )}
         </CardSection>
       </TabsContent>
@@ -607,31 +559,15 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         <CardSection title="Payment Transactions" icon={Receipt} headerRight={<ExportButton reportType="payments" filters={filters} />} flush>
           {loadingPayments ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : payments.length === 0 ? (
-            <EmptyState title="No payments recorded" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Reference</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Method</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Received</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {payments.slice(0, 20).map((p: any) => (
-                  <TableRow key={p.id}>
-                    <TableCell className="font-mono text-sm">{p.reference || "—"}</TableCell>
-                    <TableCell className="font-semibold">{p.currency} {p.amount}</TableCell>
-                    <TableCell>{p.paymentMethod}</TableCell>
-                    <TableCell><Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>{p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}</Badge></TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <EnhancedDataTable
+              columns={paymentsColumns}
+              rows={payments}
+              getRowKey={(p) => p.id}
+              exportFilename="payment-transactions"
+              storageKey="reports-payments"
+              emptyMessage="No payments recorded."
+            />
           )}
         </CardSection>
       </TabsContent>
@@ -640,66 +576,32 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         <CardSection title="Expenditure Report" icon={DollarSign} headerRight={<ExportButton reportType="expenditures" filters={filters} />} flush>
           {loadingExpenditures ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : expenditures.length === 0 ? (
-            <EmptyState title="No expenditures recorded" data-testid="text-no-expenditures" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Receipt ref</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {expenditures.slice(0, 20).map((e: any) => (
-                  <TableRow key={e.id} data-testid={`row-expenditure-${e.id}`}>
-                    <TableCell>{e.description}</TableCell>
-                    <TableCell><Badge variant="outline">{e.category}</Badge></TableCell>
-                    <TableCell className="font-semibold">{e.currency} {e.amount}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{e.spentAt || (e.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—")}</TableCell>
-                    <TableCell>{e.receiptRef || "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <EnhancedDataTable
+              columns={expendituresColumns}
+              rows={expenditures}
+              getRowKey={(e) => e.id}
+              rowTestId={(e) => `row-expenditure-${e.id}`}
+              exportFilename="expenditure-report"
+              storageKey="reports-expenditures"
+              emptyMessage="No expenditures recorded."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="cashups">
         <CardSection title="Daily Cashups by User" icon={Calendar} description="Use the Report filters above to set date range and optional user." headerRight={<ExportButton reportType="cashups" filters={filters} />} flush>
-          {loadingCashups ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : cashups.length === 0 ? (
-            <EmptyState title="No cashups in range" data-testid="text-no-cashups" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Cashup date</TableHead>
-                  <TableHead>Currency</TableHead>
-                  <TableHead>Total amount</TableHead>
-                  <TableHead>Transaction count</TableHead>
-                  <TableHead>Locked</TableHead>
-                  <TableHead>Prepared by</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {cashups.map((c: any) => (
-                  <TableRow key={c.id} data-testid={`row-cashup-${c.id}`}>
-                    <TableCell className="font-mono text-sm">{c.cashupDate}</TableCell>
-                    <TableCell>{c.currency || "USD"}</TableCell>
-                    <TableCell className="font-semibold">{c.currency || "USD"} {c.totalAmount}</TableCell>
-                    <TableCell>{c.transactionCount}</TableCell>
-                    <TableCell><Badge variant={c.isLocked ? "default" : "secondary"}>{c.isLocked ? "Locked" : "Open"}</Badge></TableCell>
-                    <TableCell>{(users as any[])?.find((u: any) => u.id === c.preparedBy)?.displayName || c.preparedBy || "—"}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          {loadingCashups ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={cashupsColumns(users)}
+              rows={cashups}
+              getRowKey={(c) => c.id}
+              rowTestId={(c) => `row-cashup-${c.id}`}
+              exportFilename="daily-cashups"
+              storageKey="reports-cashups"
+              emptyMessage="No cashups in range."
+            />
           )}
         </CardSection>
       </TabsContent>
@@ -708,31 +610,16 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         <CardSection title="POL263 Platform Revenue Share" icon={Building} headerRight={<ExportButton reportType="platform" filters={filters} />} flush>
           {loadingPlatform ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : platformReceivables.length === 0 ? (
-            <EmptyState title="No POL263 Platform receivables recorded" data-testid="text-no-platform-receivables" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Currency</TableHead>
-                  <TableHead>Settled</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {platformReceivables.slice(0, 20).map((cr: any) => (
-                  <TableRow key={cr.id} data-testid={`row-platform-receivable-${cr.id}`}>
-                    <TableCell>{cr.description}</TableCell>
-                    <TableCell className="font-semibold">{cr.currency || "USD"} {cr.amount}</TableCell>
-                    <TableCell>{cr.currency}</TableCell>
-                    <TableCell><Badge variant={cr.isSettled ? "default" : "secondary"}>{cr.isSettled ? "Settled" : "Pending"}</Badge></TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(cr.createdAt).toLocaleDateString()}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <EnhancedDataTable
+              columns={platformColumns}
+              rows={platformReceivables}
+              getRowKey={(cr) => cr.id}
+              rowTestId={(cr) => `row-platform-receivable-${cr.id}`}
+              exportFilename="platform-revenue-share"
+              storageKey="reports-platform"
+              emptyMessage="No POL263 Platform receivables recorded."
+            />
           )}
         </CardSection>
       </TabsContent>

@@ -1,12 +1,206 @@
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
-import { CardSection, DataTable, dataTableStickyHeaderClass, EmptyState, StatusBadge } from "@/components/ds";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CardSection, EnhancedDataTable, type EdtColumn, EmptyState, StatusBadge } from "@/components/ds";
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { BarChart3, FileText, Loader2, CheckCircle, Clock, AlertCircle, UserCheck, RotateCcw } from "lucide-react";
 import { ExportButton } from "../export-button";
 import type { ReportSectionBaseProps } from "../use-report-filters";
+
+const policiesOverviewColumns: EdtColumn<any>[] = [
+  { id: "policyNumber", header: "Policy #", accessor: (p) => p.policyNumber, cell: (p) => <span className="font-mono text-sm">{p.policyNumber}</span> },
+  { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
+  { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || 0), cell: (p) => <span className="tabular-nums">{p.currency} {p.premiumAmount}</span> },
+  { id: "schedule", header: "Schedule", accessor: (p) => p.paymentSchedule },
+  {
+    id: "created",
+    header: "Created",
+    accessor: (p) => new Date(p.createdAt),
+    cell: (p) => <span className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</span>,
+  },
+];
+
+const policyDetailsColumns: EdtColumn<any>[] = [
+  { id: "branch", header: "Branch", accessor: (r) => r.branchName || "" },
+  { id: "memberNo", header: "Member No", accessor: (r) => r.memberNumber || "", cell: (r) => <span className="font-mono text-sm">{r.memberNumber || "—"}</span> },
+  { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
+  { id: "nationalId", header: "National ID", accessor: (r) => r.clientNationalId || "", cell: (r) => <span className="font-mono text-sm">{r.clientNationalId || "—"}</span> },
+  { id: "firstName", header: "First Name", accessor: (r) => r.clientFirstName },
+  { id: "surname", header: "Surname", accessor: (r) => r.clientLastName },
+  { id: "address", header: "Address", accessor: (r) => r.clientAddress || "", cell: (r) => <span className="text-sm max-w-[200px] truncate block" title={r.clientAddress || ""}>{r.clientAddress || "—"}</span> },
+  { id: "phone", header: "Phone", accessor: (r) => r.clientPhone || "" },
+  {
+    id: "dob",
+    header: "DOB",
+    accessor: (r) => r.clientDateOfBirth ? new Date(r.clientDateOfBirth) : "",
+    cell: (r) => <span className="text-sm whitespace-nowrap">{r.clientDateOfBirth ? new Date(r.clientDateOfBirth).toLocaleDateString() : "—"}</span>,
+  },
+  { id: "product", header: "Product", accessor: (r) => r.productName || "" },
+  { id: "productCode", header: "Product Code", accessor: (r) => r.productCode || "", cell: (r) => <span className="font-mono text-sm">{r.productCode || "—"}</span> },
+  {
+    id: "inceptionDate",
+    header: "Inception Date",
+    accessor: (r) => r.inceptionDate ? new Date(r.inceptionDate) : "",
+    cell: (r) => <span className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</span>,
+  },
+  { id: "premium", header: "Premium", accessor: (r) => parseFloat(r.premiumAmount || 0), cell: (r) => <span className="whitespace-nowrap">{r.currency} {r.premiumAmount}</span> },
+  { id: "coverAmount", header: "Cover Amount", accessor: (r) => r.coverAmount || "", cell: (r) => <span className="whitespace-nowrap">{r.coverAmount ? `${r.coverCurrency || r.currency} ${r.coverAmount}` : "—"}</span> },
+  { id: "status", header: "Status", accessor: (r) => r.status, cell: (r) => <StatusBadge status={r.status} variant="policy" /> },
+  {
+    id: "dateAdded",
+    header: "Date Added",
+    accessor: (r) => r.policyCreatedAt ? new Date(r.policyCreatedAt) : "",
+    cell: (r) => <span className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</span>,
+  },
+  { id: "group", header: "Group", accessor: (r) => r.groupName || "" },
+  { id: "agent", header: "Agent", accessor: (r) => r.agentDisplayName || r.agentEmail || "" },
+  { id: "beneficiary", header: "Beneficiary", accessor: (r) => [r.beneficiaryFirstName, r.beneficiaryLastName].filter(Boolean).join(" ") || "" },
+  { id: "beneficiaryId", header: "Beneficiary ID", accessor: (r) => r.beneficiaryNationalId || "", cell: (r) => <span className="font-mono text-sm">{r.beneficiaryNationalId || "—"}</span> },
+  { id: "beneficiaryPhone", header: "Beneficiary Phone", accessor: (r) => r.beneficiaryPhone || "" },
+  { id: "beneficiaryRel", header: "Beneficiary Rel.", accessor: (r) => r.beneficiaryRelationship || "" },
+  {
+    id: "dependents",
+    header: "Dependents",
+    sortable: false,
+    cell: (r) => (
+      <span className="text-sm max-w-[300px] block">
+        {r.dependents?.length > 0
+          ? r.dependents.map((d: any, i: number) => (
+              <span key={i} className="block whitespace-nowrap">{d.firstName} {d.lastName} ({d.relationship})</span>
+            ))
+          : "—"}
+      </span>
+    ),
+  },
+];
+
+function policyListColumns(dateHeader: string, dateAccessor: (p: any) => any): EdtColumn<any>[] {
+  return [
+    { id: "policyNumber", header: "Policy #", accessor: (p) => p.policyNumber, cell: (p) => <span className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</span> },
+    { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
+    { id: "firstName", header: "First Name", accessor: (p) => p.clientFirstName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientFirstName || "—"}</span> },
+    { id: "surname", header: "Surname", accessor: (p) => p.clientLastName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientLastName || "—"}</span> },
+    { id: "nationalId", header: "National ID", accessor: (p) => p.clientNationalId || "", cell: (p) => <span className="font-mono text-sm">{p.clientNationalId || "—"}</span> },
+    { id: "phone", header: "Phone", accessor: (p) => p.clientPhone || "" },
+    { id: "product", header: "Product", accessor: (p) => p.productName || "" },
+    { id: "branch", header: "Branch", accessor: (p) => p.branchName || "" },
+    { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "" },
+    { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || 0), cell: (p) => <span className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</span> },
+    {
+      id: "date",
+      header: dateHeader,
+      accessor: dateAccessor,
+      cell: (p) => {
+        const d = dateAccessor(p);
+        return <span className="text-sm whitespace-nowrap">{d ? d.toLocaleDateString() : "—"}</span>;
+      },
+    },
+    {
+      id: "captureDate",
+      header: "Capture Date",
+      accessor: (p) => p.policyCreatedAt ? new Date(p.policyCreatedAt) : "",
+      cell: (p) => <span className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</span>,
+    },
+  ];
+}
+
+const activePoliciesColumns = policyListColumns("Inception Date", (p) => p.inceptionDate ? new Date(p.inceptionDate) : "");
+const lapsedPoliciesColumns = policyListColumns("Inception Date", (p) => p.inceptionDate ? new Date(p.inceptionDate) : "");
+
+function graceListColumns(): EdtColumn<any>[] {
+  return [
+    { id: "policyNumber", header: "Policy #", accessor: (p) => p.policyNumber, cell: (p) => <span className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</span> },
+    { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
+    { id: "firstName", header: "First Name", accessor: (p) => p.clientFirstName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientFirstName || "—"}</span> },
+    { id: "surname", header: "Surname", accessor: (p) => p.clientLastName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientLastName || "—"}</span> },
+    { id: "nationalId", header: "National ID", accessor: (p) => p.clientNationalId || "", cell: (p) => <span className="font-mono text-sm">{p.clientNationalId || "—"}</span> },
+    { id: "phone", header: "Phone", accessor: (p) => p.clientPhone || "" },
+    { id: "product", header: "Product", accessor: (p) => p.productName || "" },
+    { id: "branch", header: "Branch", accessor: (p) => p.branchName || "" },
+    { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "" },
+    { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || 0), cell: (p) => <span className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</span> },
+    {
+      id: "graceEnd",
+      header: "Grace End",
+      accessor: (p) => p.graceEndDate ? new Date(p.graceEndDate) : "",
+      cell: (p) => <span className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</span>,
+    },
+    {
+      id: "captureDate",
+      header: "Capture Date",
+      accessor: (p) => p.policyCreatedAt ? new Date(p.policyCreatedAt) : "",
+      cell: (p) => <span className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</span>,
+    },
+  ];
+}
+
+const awaitingPaymentsColumns = graceListColumns();
+const overduePoliciesColumns: EdtColumn<any>[] = graceListColumns().filter((c) => c.id !== "status");
+const preLapsePoliciesColumns = graceListColumns();
+
+const newJoiningsColumns: EdtColumn<any>[] = [
+  { id: "franchiseBranchId", header: "Franchise_Branch_ID", accessor: (r) => r.Franchise_Branch_ID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Franchise_Branch_ID || "—"}</span> },
+  { id: "franchiseBranchName", header: "Franchise_BranchName", accessor: (r) => r.Franchise_BranchName || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[120px] truncate block" title={r.Franchise_BranchName}>{r.Franchise_BranchName || "—"}</span> },
+  { id: "marketingMemberId", header: "Marketing_Member_ID", accessor: (r) => r.Marketing_Member_ID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Marketing_Member_ID || "—"}</span> },
+  { id: "policyNum", header: "Policy_num", accessor: (r) => r.Policy_num, cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Policy_num}</span> },
+  { id: "inceptionDate", header: "Inception_Date", accessor: (r) => r.Inception_Date || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</span> },
+  { id: "idNumber", header: "ID_Number", accessor: (r) => r.ID_Number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.ID_Number || "—"}</span> },
+  { id: "firstName", header: "First_Name", accessor: (r) => r.First_Name, cell: (r) => <span className="text-xs whitespace-nowrap">{r.First_Name}</span> },
+  { id: "surname", header: "Surname", accessor: (r) => r.Surname, cell: (r) => <span className="text-xs whitespace-nowrap">{r.Surname}</span> },
+  { id: "policyHolder", header: "PolicyHolder", accessor: (r) => r.PolicyHolder || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.PolicyHolder}>{r.PolicyHolder || "—"}</span> },
+  { id: "title", header: "Title", accessor: (r) => r.Title || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Title || "—"}</span> },
+  { id: "initials", header: "Initials", accessor: (r) => r.Initials || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Initials || "—"}</span> },
+  { id: "usualPrem", header: "UsualPrem", accessor: (r) => r.UsualPrem || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.UsualPrem || "—"}</span> },
+  { id: "cellNum", header: "Cell_Num", accessor: (r) => r.Cell_Num || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Cell_Num || "—"}</span> },
+  { id: "physicalAdd", header: "PhysicalAdd", accessor: (r) => r.PhysicalAdd || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.PhysicalAdd}>{r.PhysicalAdd || "—"}</span> },
+  { id: "postalAdd", header: "PostalAdd", accessor: (r) => r.PostalAdd || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.PostalAdd}>{r.PostalAdd || "—"}</span> },
+  { id: "easyPayNo", header: "EasyPayNo", accessor: (r) => r.EasyPayNo || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.EasyPayNo || "—"}</span> },
+  { id: "paymentM", header: "Payment_M", accessor: (r) => r.Payment_M || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Payment_M || "—"}</span> },
+  { id: "stopOrder", header: "StopOrder", accessor: (r) => r.StopOrder || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.StopOrder || "—"}</span> },
+  { id: "productN", header: "Product_N", accessor: (r) => r.Product_N || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.Product_N}>{r.Product_N || "—"}</span> },
+  { id: "waitingPe", header: "Waiting_Pe", accessor: (r) => r.Waiting_Pe || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Waiting_Pe || "—"}</span> },
+  { id: "internalRe", header: "InternalRe", accessor: (r) => r.InternalRe || "", cell: (r) => <span className="text-xs font-mono max-w-[120px] truncate block" title={r.InternalRe}>{r.InternalRe || "—"}</span> },
+  { id: "agentNam", header: "AgentNam", accessor: (r) => r.AgentNam || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[100px] truncate block" title={r.AgentNam}>{r.AgentNam || "—"}</span> },
+  { id: "maturityTe", header: "MaturityTe", accessor: (r) => r.MaturityTe || "", cell: (r) => <span className="text-xs max-w-[160px] truncate block" title={r.MaturityTe}>{r.MaturityTe || "—"}</span> },
+  { id: "groupName", header: "GroupName", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[100px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
+  { id: "idate", header: "Idate", accessor: (r) => r.Idate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Idate || "—"}</span> },
+  { id: "tdate", header: "tdate", accessor: (r) => r.tdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.tdate || "—"}</span> },
+  { id: "status", header: "Status", accessor: (r) => r._status || "", cell: (r) => <Badge variant="outline" className="text-xs">{r._status || "—"}</Badge> },
+  {
+    id: "captured",
+    header: "Captured",
+    accessor: (r) => r._policyCreatedAt ? new Date(r._policyCreatedAt) : "",
+    cell: (r) => <span className="text-xs text-muted-foreground whitespace-nowrap">{r._policyCreatedAt ? new Date(r._policyCreatedAt).toLocaleDateString() : "—"}</span>,
+  },
+];
+
+function statusHistoryColumns(dateHeader: string, dateAccessor: (r: any) => any): EdtColumn<any>[] {
+  return [
+    { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm">{r.policyNumber}</span> },
+    { id: "client", header: "Client", accessor: (r) => r.clientName },
+    { id: "previousStatus", header: "Previous status", accessor: (r) => r.fromStatus || "", cell: (r) => <Badge variant="outline">{r.fromStatus || "—"}</Badge> },
+    {
+      id: "date",
+      header: dateHeader,
+      accessor: dateAccessor,
+      cell: (r) => {
+        const d = dateAccessor(r);
+        return <span className="text-sm text-muted-foreground">{d ? d.toLocaleString() : "—"}</span>;
+      },
+    },
+    { id: "reason", header: "Reason", accessor: (r) => r.reason || "" },
+    {
+      id: "currentStatus",
+      header: "Current status",
+      accessor: (r) => r.currentStatus,
+      cell: (r) => <Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge>,
+    },
+  ];
+}
+
+const activationsColumns = statusHistoryColumns("Activated at", (r) => r.activatedAt ? new Date(r.activatedAt) : "");
+const conversionsColumns = statusHistoryColumns("Converted at", (r) => r.convertedAt ? new Date(r.convertedAt) : "");
+const reinstatementsColumns = statusHistoryColumns("Reinstated date", (r) => r.reinstatedAt ? new Date(r.reinstatedAt) : "");
 
 export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: ReportSectionBaseProps) {
   const { data: policies = [], isLoading: loadingPolicies } = useQuery<any[]>({
@@ -137,28 +331,14 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
           {loadingPolicies ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : (
-            <DataTable>
-              <TableHeader className={dataTableStickyHeaderClass}>
-                <TableRow>
-                  <TableHead>Policy #</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Premium</TableHead>
-                  <TableHead>Schedule</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {policies.slice(0, 20).map((p: any) => (
-                  <TableRow key={p.id} className="hover:bg-muted/40">
-                    <TableCell className="font-mono text-sm">{p.policyNumber}</TableCell>
-                    <TableCell><StatusBadge status={p.status} variant="policy" /></TableCell>
-                    <TableCell className="tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
-                    <TableCell>{p.paymentSchedule}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </DataTable>
+            <EnhancedDataTable
+              columns={policiesOverviewColumns}
+              rows={policies}
+              getRowKey={(p) => p.id}
+              exportFilename="policies-overview"
+              storageKey="reports-policies-overview"
+              emptyMessage="No policies found."
+            />
           )}
         </CardSection>
       </TabsContent>
@@ -173,422 +353,121 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
         >
           {loadingPolicyDetails ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : policyDetails.length === 0 ? (
-            <EmptyState
-              title="No policies match the filters"
-              className="border-0 rounded-none bg-transparent py-8"
-              dataTestId="text-no-policy-details"
-            />
           ) : (
-            <div className="overflow-x-auto">
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1200px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Member No</TableHead>
-                    <TableHead>Policy #</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Surname</TableHead>
-                    <TableHead>Address</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>DOB</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Product Code</TableHead>
-                    <TableHead>Inception Date</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Cover Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Date Added</TableHead>
-                    <TableHead>Group</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Beneficiary</TableHead>
-                    <TableHead>Beneficiary ID</TableHead>
-                    <TableHead>Beneficiary Phone</TableHead>
-                    <TableHead>Beneficiary Rel.</TableHead>
-                    <TableHead>Dependents</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {policyDetails.map((r: any) => (
-                    <TableRow key={r.policyId} data-testid={`row-policy-detail-${r.policyId}`}>
-                      <TableCell>{r.branchName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.memberNumber || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.clientNationalId || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{r.clientFirstName}</TableCell>
-                      <TableCell className="whitespace-nowrap">{r.clientLastName}</TableCell>
-                      <TableCell className="text-sm max-w-[200px] truncate" title={r.clientAddress || ""}>{r.clientAddress || "—"}</TableCell>
-                      <TableCell className="text-sm">{r.clientPhone || "—"}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.clientDateOfBirth ? new Date(r.clientDateOfBirth).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm">{r.productName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.productCode || "—"}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{r.currency} {r.premiumAmount}</TableCell>
-                      <TableCell className="whitespace-nowrap">{r.coverAmount ? `${r.coverCurrency || r.currency} ${r.coverAmount}` : "—"}</TableCell>
-                      <TableCell><StatusBadge status={r.status} variant="policy" /></TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell>{r.groupName || "—"}</TableCell>
-                      <TableCell className="text-sm">{r.agentDisplayName || r.agentEmail || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{[r.beneficiaryFirstName, r.beneficiaryLastName].filter(Boolean).join(" ") || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{r.beneficiaryNationalId || "—"}</TableCell>
-                      <TableCell className="text-sm">{r.beneficiaryPhone || "—"}</TableCell>
-                      <TableCell>{r.beneficiaryRelationship || "—"}</TableCell>
-                      <TableCell className="text-sm max-w-[300px]">
-                        {r.dependents?.length > 0
-                          ? r.dependents.map((d: any, i: number) => (
-                              <div key={i} className="whitespace-nowrap">{d.firstName} {d.lastName} ({d.relationship})</div>
-                            ))
-                          : "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            </div>
+            <EnhancedDataTable
+              columns={policyDetailsColumns}
+              rows={policyDetails}
+              getRowKey={(r) => r.policyId}
+              rowTestId={(r) => `row-policy-detail-${r.policyId}`}
+              exportFilename="policy-details"
+              storageKey="reports-policy-details"
+              emptyMessage="No policies match the filters."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="active-policies">
         <CardSection title="Active policies" icon={CheckCircle} description="Policies with status active. When from/to are set, results are limited to policies captured in that window." headerRight={<ExportButton reportType="active-policies" filters={filters} />} flush>
-          {loadingActivePolicies ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : activePolicies.length === 0 ? (
-            <EmptyState title="No active policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <div className="overflow-x-auto">
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Policy #</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Surname</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Inception Date</TableHead>
-                    <TableHead>Capture Date</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {activePolicies.slice(0, 100).map((p: any) => (
-                    <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
-                      <TableCell><StatusBadge status={p.status} variant="policy" /></TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.productName || "—"}</TableCell>
-                      <TableCell>{p.branchName || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{p.inceptionDate ? new Date(p.inceptionDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            </div>
+          {loadingActivePolicies ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={activePoliciesColumns}
+              rows={activePolicies}
+              getRowKey={(p) => p.policyId || p.id}
+              exportFilename="active-policies"
+              storageKey="reports-active-policies"
+              emptyMessage="No active policies match the filters."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="awaiting-payments">
         <CardSection title="Policies Awaiting Payments" icon={Clock} description="Active and grace policies — awaiting premium payment. Filter by branch, product, or agent." headerRight={<ExportButton reportType="awaiting-payments" filters={filters} />} flush>
-          {loadingAwaitingPayments ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : awaitingPayments.length === 0 ? (
-            <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <div className="overflow-x-auto">
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Policy #</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Surname</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Grace End</TableHead>
-                    <TableHead>Capture Date</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {awaitingPayments.slice(0, 100).map((p: any) => (
-                    <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
-                      <TableCell><StatusBadge status={p.status} variant="policy" /></TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.productName || "—"}</TableCell>
-                      <TableCell>{p.branchName || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            </div>
+          {loadingAwaitingPayments ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={awaitingPaymentsColumns}
+              rows={awaitingPayments}
+              getRowKey={(p) => p.policyId || p.id}
+              exportFilename="awaiting-payments"
+              storageKey="reports-awaiting-payments"
+              emptyMessage="No policies match the filters."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="overdue">
         <CardSection title="Overdue Payments (Grace)" icon={AlertCircle} description="Policies currently in grace period — payment overdue. Filter by branch, product, or agent." headerRight={<ExportButton reportType="overdue" filters={filters} />} flush>
-          {loadingOverdue ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : overduePolicies.length === 0 ? (
-            <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <div className="overflow-x-auto">
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Policy #</TableHead>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Surname</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Grace End</TableHead>
-                    <TableHead>Capture Date</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {overduePolicies.slice(0, 100).map((p: any) => (
-                    <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.productName || "—"}</TableCell>
-                      <TableCell>{p.branchName || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            </div>
+          {loadingOverdue ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={overduePoliciesColumns}
+              rows={overduePolicies}
+              getRowKey={(p) => p.policyId || p.id}
+              exportFilename="overdue-policies"
+              storageKey="reports-overdue"
+              emptyMessage="No policies match the filters."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="pre-lapse">
         <CardSection title="Pre-lapse (Grace period)" icon={AlertCircle} description="Policies in grace period at risk of lapsing. Filter by branch, product, or agent." headerRight={<ExportButton reportType="pre-lapse" filters={filters} />} flush>
-          {loadingPreLapse ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : preLapsePolicies.length === 0 ? (
-            <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <div className="overflow-x-auto">
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Policy #</TableHead>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Surname</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Grace End</TableHead>
-                    <TableHead>Capture Date</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {preLapsePolicies.slice(0, 100).map((p: any) => (
-                    <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.productName || "—"}</TableCell>
-                      <TableCell>{p.branchName || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            </div>
+          {loadingPreLapse ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={preLapsePoliciesColumns}
+              rows={preLapsePolicies}
+              getRowKey={(p) => p.policyId || p.id}
+              exportFilename="pre-lapse-policies"
+              storageKey="reports-pre-lapse"
+              emptyMessage="No policies match the filters."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="lapsed">
         <CardSection title="Lapsed Policies" icon={AlertCircle} description="Policies that have lapsed due to non-payment. Filter by branch, product, or agent." headerRight={<ExportButton reportType="lapsed" filters={filters} />} flush>
-          {loadingLapsed ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : lapsedPolicies.length === 0 ? (
-            <EmptyState title="No policies match the filters" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <div className="overflow-x-auto">
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[1100px]">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Policy #</TableHead>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Surname</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Agent</TableHead>
-                    <TableHead>Premium</TableHead>
-                    <TableHead>Inception Date</TableHead>
-                    <TableHead>Capture Date</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {lapsedPolicies.slice(0, 100).map((p: any) => (
-                    <TableRow key={p.policyId || p.id} className="hover:bg-muted/40">
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientFirstName || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap">{p.clientLastName || "—"}</TableCell>
-                      <TableCell className="font-mono text-sm">{p.clientNationalId || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.clientPhone || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.productName || "—"}</TableCell>
-                      <TableCell>{p.branchName || "—"}</TableCell>
-                      <TableCell className="text-sm">{p.agentDisplayName || p.agentEmail || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{p.inceptionDate ? new Date(p.inceptionDate).toLocaleDateString() : "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
-            </div>
+          {loadingLapsed ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={lapsedPoliciesColumns}
+              rows={lapsedPolicies}
+              getRowKey={(p) => p.policyId || p.id}
+              exportFilename="lapsed-policies"
+              storageKey="reports-lapsed"
+              emptyMessage="No policies match the filters."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="new-joinings">
         <CardSection title="New joinings report" icon={FileText} description="All policies captured in the date range (inactive through cancelled), paid or unpaid. Filter by branch, product, or agent above; status filter does not apply to this report." headerRight={<ExportButton reportType="new-joinings" filters={filters} />} flush>
-          {loadingNewJoinings ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : newJoinings.length === 0 ? (
-            <EmptyState title="No policies in range" description="Set from/to dates or widen filters." className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <div className="overflow-x-auto min-w-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="text-xs whitespace-nowrap">Franchise_Branch_ID</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Franchise_BranchName</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Marketing_Member_ID</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Policy_num</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Inception_Date</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">ID_Number</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">First_Name</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Surname</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">PolicyHolder</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Title</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Initials</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">UsualPrem</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Cell_Num</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">PhysicalAdd</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">PostalAdd</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">EasyPayNo</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Payment_M</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">StopOrder</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Product_N</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Waiting_Pe</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">InternalRe</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">AgentNam</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">MaturityTe</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">GroupName</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Idate</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">tdate</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
-                    <TableHead className="text-xs whitespace-nowrap">Captured</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {newJoinings.slice(0, 100).map((r: any) => (
-                    <TableRow key={r._policyId || `${r.Policy_num}-${r._policyCreatedAt}`}>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.Franchise_Branch_ID || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap max-w-[120px] truncate" title={r.Franchise_BranchName}>{r.Franchise_BranchName || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.Marketing_Member_ID || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.Policy_num}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.ID_Number || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.First_Name}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Surname}</TableCell>
-                      <TableCell className="text-xs max-w-[140px] truncate" title={r.PolicyHolder}>{r.PolicyHolder || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Title || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Initials || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.UsualPrem || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Cell_Num || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[140px] truncate" title={r.PhysicalAdd}>{r.PhysicalAdd || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[120px] truncate" title={r.PostalAdd}>{r.PostalAdd || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono whitespace-nowrap">{r.EasyPayNo || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Payment_M || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.StopOrder || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[140px] truncate" title={r.Product_N}>{r.Product_N || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Waiting_Pe || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono max-w-[120px] truncate" title={r.InternalRe}>{r.InternalRe || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap max-w-[100px] truncate" title={r.AgentNam}>{r.AgentNam || "—"}</TableCell>
-                      <TableCell className="text-xs max-w-[160px] truncate" title={r.MaturityTe}>{r.MaturityTe || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap max-w-[100px] truncate" title={r.GroupName}>{r.GroupName || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.Idate || "—"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{r.tdate || "—"}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-xs">{r._status || "—"}</Badge></TableCell>
-                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                        {r._policyCreatedAt ? new Date(r._policyCreatedAt).toLocaleDateString() : "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+          {loadingNewJoinings ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={newJoiningsColumns}
+              rows={newJoinings}
+              getRowKey={(r) => r._policyId || `${r.Policy_num}-${r._policyCreatedAt}`}
+              exportFilename="new-joinings"
+              storageKey="reports-new-joinings"
+              emptyMessage="No policies in range. Set from/to dates or widen filters."
+            />
           )}
         </CardSection>
       </TabsContent>
 
       <TabsContent value="activations">
         <CardSection title="Policy activations" icon={UserCheck} description="Rows when a policy moved to active (status history). From/to filter that event time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="activations" filters={filters} />} flush>
-          {loadingActivations ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : activations.length === 0 ? (
-            <EmptyState title="No activations in this period" className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Policy #</TableHead>
-                  <TableHead>Client</TableHead>
-                  <TableHead>Previous status</TableHead>
-                  <TableHead>Activated at</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Current status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {activations.map((r: any) => (
-                  <TableRow key={`${r.policyId}-${r.activatedAt}`}>
-                    <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
-                    <TableCell>{r.clientName}</TableCell>
-                    <TableCell><Badge variant="outline">{r.fromStatus || "—"}</Badge></TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(r.activatedAt).toLocaleString()}</TableCell>
-                    <TableCell>{r.reason || "—"}</TableCell>
-                    <TableCell><Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          {loadingActivations ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
+            <EnhancedDataTable
+              columns={activationsColumns}
+              rows={activations}
+              getRowKey={(r) => `${r.policyId}-${r.activatedAt}`}
+              exportFilename="policy-activations"
+              storageKey="reports-activations"
+              emptyMessage="No activations in this period."
+            />
           )}
         </CardSection>
       </TabsContent>
@@ -597,31 +476,15 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
         <CardSection title="Policy conversions" icon={RotateCcw} description="Inactive to active conversions. From/to filter the status-change time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="conversions" filters={filters} />} flush>
           {loadingConversions ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : conversions.length === 0 ? (
-            <EmptyState title="No conversions in this period" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Policy #</TableHead>
-                  <TableHead>Client</TableHead>
-                  <TableHead>Converted at</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Current status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {conversions.map((r: any) => (
-                  <TableRow key={`${r.policyId}-${r.convertedAt}`}>
-                    <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
-                    <TableCell>{r.clientName}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(r.convertedAt).toLocaleString()}</TableCell>
-                    <TableCell>{r.reason || "—"}</TableCell>
-                    <TableCell><Badge variant="outline">{r.currentStatus}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <EnhancedDataTable
+              columns={conversionsColumns}
+              rows={conversions}
+              getRowKey={(r) => `${r.policyId}-${r.convertedAt}`}
+              exportFilename="policy-conversions"
+              storageKey="reports-conversions"
+              emptyMessage="No conversions in this period."
+            />
           )}
         </CardSection>
       </TabsContent>
@@ -630,33 +493,16 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
         <CardSection title="Reinstated policies" icon={RotateCcw} description="Lapsed to active reinstatements. From/to filter the status-change time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="reinstatements" filters={filters} />} flush>
           {loadingReinstatements ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : reinstatements.length === 0 ? (
-            <EmptyState title="No reinstatements in this period" data-testid="text-no-reinstatements" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Policy #</TableHead>
-                  <TableHead>Client</TableHead>
-                  <TableHead>Previous status</TableHead>
-                  <TableHead>Reinstated date</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Current status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {reinstatements.map((r: any) => (
-                  <TableRow key={`${r.policyId}-${r.reinstatedAt}`} data-testid={`row-reinstatement-${r.policyId}`}>
-                    <TableCell className="font-mono text-sm">{r.policyNumber}</TableCell>
-                    <TableCell>{r.clientName}</TableCell>
-                    <TableCell><Badge variant="outline">{r.fromStatus || "—"}</Badge></TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(r.reinstatedAt).toLocaleString()}</TableCell>
-                    <TableCell>{r.reason || "—"}</TableCell>
-                    <TableCell><Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <EnhancedDataTable
+              columns={reinstatementsColumns}
+              rows={reinstatements}
+              getRowKey={(r) => `${r.policyId}-${r.reinstatedAt}`}
+              rowTestId={(r) => `row-reinstatement-${r.policyId}`}
+              exportFilename="reinstatements"
+              storageKey="reports-reinstatements"
+              emptyMessage="No reinstatements in this period."
+            />
           )}
         </CardSection>
       </TabsContent>
