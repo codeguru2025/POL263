@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EnhancedDataTable, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -653,50 +653,68 @@ function GroupDetailPanel({ group }: { group: Group }) {
           ) : groupPolicies.length === 0 ? (
             <EmptyState icon={FileStack} title="No members yet" description={group.isLegacy ? "Use 'Issue Policy' to capture a legacy member and issue their policy." : "Assign or issue a policy to add members to this group."} className="border-0 bg-transparent py-8" />
           ) : (
-            <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-              <TableHeader className={dataTableStickyHeaderClass}>
-                <TableRow>
-                  <TableHead className="pl-0">Member</TableHead>
-                  <TableHead>Policy #</TableHead>
-                  <TableHead>Premium</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {groupPolicies.map((p: any) => (
-                  <TableRow key={p.id} data-testid={`row-group-member-${p.id}`}>
-                    <TableCell className="pl-0">
-                      <div>
-                        <p className="font-medium text-sm">{p.clientFirstName || "—"} {p.clientLastName || ""}</p>
-                        {p.clientPhone && <p className="text-xs text-muted-foreground">{p.clientPhone}</p>}
-                        {p.clientNationalId && <p className="text-xs text-muted-foreground font-mono">ID: {p.clientNationalId}</p>}
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">{p.policyNumber}</TableCell>
-                    <TableCell className="text-sm">{p.currency} {parseFloat(p.premiumAmount).toFixed(2)}</TableCell>
-                    <TableCell>
-                      <Badge variant={p.status === "active" ? "default" : "secondary"} className="text-xs">{p.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button size="sm" variant="ghost" className="gap-1.5 text-xs h-7"
-                          onClick={() => window.open(getApiBase() + `/api/receipts/${p.id}/view?format=a4`, "_blank")}
-                          title="Print latest receipt"
-                          data-testid={`btn-print-receipt-${p.id}`}>
-                          <Printer className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button size="sm" variant="ghost" className="text-xs h-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          onClick={() => unassignMutation.mutate(p.id)}
-                          disabled={unassignMutation.isPending}>
-                          Remove
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </DataTable>
+            <EnhancedDataTable
+              columns={[
+                {
+                  id: "member",
+                  header: "Member",
+                  accessor: (p) => `${p.clientFirstName || ""} ${p.clientLastName || ""}`,
+                  cell: (p) => (
+                    <div>
+                      <p className="font-medium text-sm">{p.clientFirstName || "—"} {p.clientLastName || ""}</p>
+                      {p.clientPhone && <p className="text-xs text-muted-foreground">{p.clientPhone}</p>}
+                      {p.clientNationalId && <p className="text-xs text-muted-foreground font-mono">ID: {p.clientNationalId}</p>}
+                    </div>
+                  ),
+                },
+                {
+                  id: "policyNumber",
+                  header: "Policy #",
+                  accessor: (p) => p.policyNumber,
+                  cell: (p) => <span className="font-mono text-sm">{p.policyNumber}</span>,
+                },
+                {
+                  id: "premium",
+                  header: "Premium",
+                  accessor: (p) => parseFloat(p.premiumAmount),
+                  cell: (p) => <span className="text-sm">{p.currency} {parseFloat(p.premiumAmount).toFixed(2)}</span>,
+                },
+                {
+                  id: "status",
+                  header: "Status",
+                  accessor: (p) => p.status,
+                  cell: (p) => <Badge variant={p.status === "active" ? "default" : "secondary"} className="text-xs">{p.status}</Badge>,
+                },
+                {
+                  id: "actions",
+                  header: "Actions",
+                  align: "right",
+                  sortable: false,
+                  cell: (p) => (
+                    <div className="flex items-center justify-end gap-1">
+                      <Button size="sm" variant="ghost" className="gap-1.5 text-xs h-7"
+                        onClick={() => window.open(getApiBase() + `/api/receipts/${p.id}/view?format=a4`, "_blank")}
+                        title="Print latest receipt"
+                        data-testid={`btn-print-receipt-${p.id}`}>
+                        <Printer className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button size="sm" variant="ghost" className="text-xs h-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={() => unassignMutation.mutate(p.id)}
+                        disabled={unassignMutation.isPending}>
+                        Remove
+                      </Button>
+                    </div>
+                  ),
+                },
+              ]}
+              rows={groupPolicies}
+              getRowKey={(p: any) => p.id}
+              rowTestId={(p: any) => `row-group-member-${p.id}`}
+              searchPlaceholder="Search members…"
+              exportFilename={`group-members-${group.id}`}
+              storageKey="group-members"
+              emptyMessage="No members yet."
+            />
           )}
         </div>
       )}
@@ -1535,30 +1553,35 @@ function LegacyReceiptsSection() {
       ) : filtered.length === 0 ? (
         <EmptyState icon={History} title="No receipts found" description="No legacy group receipts match your filters." className="border-0 rounded-none bg-transparent py-10" />
       ) : (
-        <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-          <TableHeader className={dataTableStickyHeaderClass}>
-            <TableRow>
-              <TableHead className="pl-6">Receipt #</TableHead>
-              <TableHead>Group</TableHead>
-              <TableHead>Currency</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
-              <TableHead>Payment Date</TableHead>
-              <TableHead className="pr-6">Notes</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filtered.map((r: any) => (
-              <TableRow key={r.id}>
-                <TableCell className="pl-6 font-mono text-sm">{r.receipt_number || "—"}</TableCell>
-                <TableCell className="font-medium text-sm">{r.group_name}</TableCell>
-                <TableCell className="text-sm">{r.currency}</TableCell>
-                <TableCell className="text-right tabular-nums text-sm font-medium">{parseFloat(r.amount).toFixed(2)}</TableCell>
-                <TableCell className="text-sm">{new Date(r.payment_date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</TableCell>
-                <TableCell className="pr-6 text-sm text-muted-foreground">{r.notes || "—"}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </DataTable>
+        <div className="p-4">
+          <EnhancedDataTable
+            columns={[
+              { id: "receiptNumber", header: "Receipt #", accessor: (r) => r.receipt_number || "", cell: (r) => <span className="font-mono text-sm">{r.receipt_number || "—"}</span> },
+              { id: "group", header: "Group", accessor: (r) => r.group_name, cell: (r) => <span className="font-medium text-sm">{r.group_name}</span> },
+              { id: "currency", header: "Currency", accessor: (r) => r.currency, cell: (r) => <span className="text-sm">{r.currency}</span> },
+              {
+                id: "amount",
+                header: "Amount",
+                align: "right",
+                accessor: (r) => parseFloat(r.amount),
+                cell: (r) => <span className="tabular-nums text-sm font-medium">{parseFloat(r.amount).toFixed(2)}</span>,
+              },
+              {
+                id: "paymentDate",
+                header: "Payment Date",
+                accessor: (r) => new Date(r.payment_date),
+                cell: (r) => <span className="text-sm">{new Date(r.payment_date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>,
+              },
+              { id: "notes", header: "Notes", accessor: (r) => r.notes || "", cell: (r) => <span className="text-sm text-muted-foreground">{r.notes || "—"}</span> },
+            ]}
+            rows={filtered}
+            getRowKey={(r: any) => r.id}
+            searchable={false}
+            exportFilename="legacy-group-receipts"
+            storageKey="group-legacy-receipts"
+            emptyMessage="No receipts found."
+          />
+        </div>
       )}
     </CardSection>
   );

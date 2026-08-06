@@ -2,10 +2,9 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, EnhancedDataTable, type EdtColumn, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -15,7 +14,7 @@ import { CurrencySelect } from "@/components/currency-select";
 import { SearchableSelect, type SearchableOption } from "@/components/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Plus, Search, Loader2, BookOpen, DollarSign, FileSpreadsheet,
+  Plus, Loader2, BookOpen, DollarSign, FileSpreadsheet,
   Trash2, Calculator,
 } from "lucide-react";
 
@@ -95,7 +94,6 @@ export default function StaffPriceBook() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("pricebook");
-  const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [showCreateItem, setShowCreateItem] = useState(false);
   const [editingItem, setEditingItem] = useState<PriceBookItem | null>(null);
@@ -177,11 +175,9 @@ export default function StaffPriceBook() {
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
-  const filteredItems = priceBookItems.filter((item) => {
-    const matchesSearch = item.name.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = categoryFilter === "all" || item.category === categoryFilter;
-    return matchesSearch && matchesCategory;
-  });
+  const filteredItems = priceBookItems.filter((item) =>
+    categoryFilter === "all" || item.category === categoryFilter
+  );
 
   const activeItemCount = priceBookItems.filter((i) => i.isActive).length;
   const draftSheetCount = costSheets.filter((s) => s.status === "draft").length;
@@ -193,6 +189,74 @@ export default function StaffPriceBook() {
     : null;
 
   const lineItemsTotal = lineItems.reduce((sum, li) => sum + parseFloat(li.totalPrice || "0"), 0);
+
+  const pricebookColumns: EdtColumn<PriceBookItem>[] = [
+    { id: "name", header: "Item Name", accessor: (item) => item.name, cell: (item) => <span className="font-medium">{item.name}</span> },
+    {
+      id: "category",
+      header: "Category",
+      accessor: (item) => item.category || "",
+      cell: (item) =>
+        item.category ? (
+          <Badge variant="outline" className="text-[10px]">{item.category}</Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    { id: "unit", header: "Unit", accessor: (item) => item.unit, cell: (item) => <span className="text-muted-foreground">{item.unit}</span> },
+    {
+      id: "price",
+      header: "Price",
+      align: "right",
+      accessor: (item) => parseFloat(item.priceAmount),
+      cell: (item) => <span className="font-semibold tabular-nums">{item.currency} {parseFloat(item.priceAmount).toFixed(2)}</span>,
+    },
+    {
+      id: "effective",
+      header: "Effective",
+      accessor: (item) => item.effectiveFrom || "",
+      cell: (item) => (
+        <span className="text-muted-foreground text-sm">
+          {item.effectiveFrom || "—"} {item.effectiveTo ? `→ ${item.effectiveTo}` : ""}
+        </span>
+      ),
+    },
+    {
+      id: "version",
+      header: "Version",
+      accessor: (item) => item.version,
+      cell: (item) => <Badge variant="outline" className="font-mono text-[10px]">v{item.version}</Badge>,
+    },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (item) => (item.isActive ? "Active" : "Inactive"),
+      cell: (item) => (
+        <Badge
+          variant={item.isActive ? "default" : "secondary"}
+          className={item.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}
+        >
+          {item.isActive ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    {
+      id: "actions",
+      header: "",
+      sortable: false,
+      cell: (item) => (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          onClick={() => setEditingItem(item)}
+          data-testid={`button-edit-pricebook-${item.id}`}
+        >
+          Edit
+        </Button>
+      ),
+    },
+  ];
 
   return (
     <StaffLayout>
@@ -222,16 +286,6 @@ export default function StaffPriceBook() {
               icon={BookOpen}
               headerRight={(
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap sm:justify-end">
-                  <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      placeholder="Search items..."
-                      className="pl-9"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      data-testid="input-search-pricebook"
-                    />
-                  </div>
                   <Select value={categoryFilter} onValueChange={setCategoryFilter}>
                     <SelectTrigger className="w-full sm:w-44" data-testid="select-category-filter">
                       <SelectValue placeholder="All Categories" />
@@ -248,7 +302,6 @@ export default function StaffPriceBook() {
                   </Button>
                 </div>
               )}
-              flush
             >
                 {loadingItems ? (
                   <div className="flex items-center justify-center py-12">
@@ -262,63 +315,16 @@ export default function StaffPriceBook() {
                     className="border-0 rounded-none bg-transparent py-12"
                   />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead className="pl-6">Item Name</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead>Unit</TableHead>
-                        <TableHead className="text-right">Price</TableHead>
-                        <TableHead>Effective</TableHead>
-                        <TableHead>Version</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead />
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredItems.map((item) => (
-                        <TableRow key={item.id} className="hover:bg-muted/40" data-testid={`row-pricebook-${item.id}`}>
-                          <TableCell className="font-medium pl-6">{item.name}</TableCell>
-                          <TableCell>
-                            {item.category ? (
-                              <Badge variant="outline" className="text-[10px]">{item.category}</Badge>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">{item.unit}</TableCell>
-                          <TableCell className="text-right font-semibold tabular-nums">
-                            {item.currency} {parseFloat(item.priceAmount).toFixed(2)}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
-                            {item.effectiveFrom || "—"} {item.effectiveTo ? `→ ${item.effectiveTo}` : ""}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="font-mono text-[10px]">v{item.version}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={item.isActive ? "default" : "secondary"}
-                              className={item.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}
-                            >
-                              {item.isActive ? "Active" : "Inactive"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 px-2 text-xs"
-                              onClick={() => setEditingItem(item)}
-                              data-testid={`button-edit-pricebook-${item.id}`}
-                            >
-                              Edit
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
+                  <EnhancedDataTable
+                    columns={pricebookColumns}
+                    rows={filteredItems}
+                    getRowKey={(item) => item.id}
+                    rowTestId={(item) => `row-pricebook-${item.id}`}
+                    searchPlaceholder="Search items…"
+                    exportFilename="price-book"
+                    storageKey="staff-pricebook-catalog"
+                    emptyMessage="No price book items."
+                  />
                 )}
             </CardSection>
           </TabsContent>
@@ -414,7 +420,6 @@ export default function StaffPriceBook() {
                         <Plus className="h-3 w-3" /> Add Item
                       </Button>
                     )}
-                    flush
                   >
                       {loadingLineItems ? (
                         <div className="flex items-center justify-center py-8">
@@ -429,38 +434,54 @@ export default function StaffPriceBook() {
                         />
                       ) : (
                         <>
-                          <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                            <TableHeader className={dataTableStickyHeaderClass}>
-                              <TableRow>
-                                <TableHead className="pl-6">Description</TableHead>
-                                <TableHead className="text-right">Qty</TableHead>
-                                <TableHead className="text-right">Unit Price</TableHead>
-                                <TableHead className="text-right pr-6">Total</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {lineItems.map((li) => (
-                                <TableRow key={li.id} className="hover:bg-muted/40" data-testid={`row-lineitem-${li.id}`}>
-                                  <TableCell className="font-medium pl-6">
+                          <EnhancedDataTable
+                            columns={[
+                              {
+                                id: "description",
+                                header: "Description",
+                                accessor: (li) => li.description,
+                                cell: (li) => (
+                                  <span className="font-medium">
                                     {li.description}
                                     {li.requisitionId ? (
                                       <Badge variant="outline" className="ml-2 text-[10px] bg-emerald-500/10 text-emerald-700 border-emerald-200">Actual</Badge>
                                     ) : li.priceBookItemId ? (
                                       <Badge variant="outline" className="ml-2 text-[10px]">Estimate</Badge>
                                     ) : null}
-                                  </TableCell>
-                                  <TableCell className="text-right tabular-nums">{parseFloat(li.quantity).toFixed(0)}</TableCell>
-                                  <TableCell className="text-right tabular-nums">
-                                    {selectedSheet.currency} {parseFloat(li.unitPrice).toFixed(2)}
-                                  </TableCell>
-                                  <TableCell className="text-right font-semibold pr-6 tabular-nums">
-                                    {selectedSheet.currency} {parseFloat(li.totalPrice).toFixed(2)}
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </DataTable>
-                          <div className="border-t bg-muted/30 px-6 py-4 flex items-center justify-between">
+                                  </span>
+                                ),
+                              },
+                              {
+                                id: "quantity",
+                                header: "Qty",
+                                align: "right",
+                                accessor: (li) => parseFloat(li.quantity),
+                                cell: (li) => <span className="tabular-nums">{parseFloat(li.quantity).toFixed(0)}</span>,
+                              },
+                              {
+                                id: "unitPrice",
+                                header: "Unit Price",
+                                align: "right",
+                                accessor: (li) => parseFloat(li.unitPrice),
+                                cell: (li) => <span className="tabular-nums">{selectedSheet.currency} {parseFloat(li.unitPrice).toFixed(2)}</span>,
+                              },
+                              {
+                                id: "totalPrice",
+                                header: "Total",
+                                align: "right",
+                                accessor: (li) => parseFloat(li.totalPrice),
+                                cell: (li) => <span className="font-semibold tabular-nums">{selectedSheet.currency} {parseFloat(li.totalPrice).toFixed(2)}</span>,
+                              },
+                            ]}
+                            rows={lineItems}
+                            getRowKey={(li) => li.id}
+                            rowTestId={(li) => `row-lineitem-${li.id}`}
+                            searchable={false}
+                            exportFilename="cost-sheet-line-items"
+                            storageKey="staff-costsheet-lineitems"
+                            emptyMessage="No line items yet."
+                          />
+                          <div className="mt-4 rounded-lg border bg-muted/30 px-4 py-3 flex items-center justify-between">
                             <span className="text-sm font-medium text-muted-foreground">Grand Total</span>
                             <span className="text-xl font-display font-bold tabular-nums" data-testid="text-costsheet-total">
                               {selectedSheet.currency} {lineItemsTotal.toFixed(2)}

@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, KpiStatCard, CardSection, DataTable, dataTableStickyHeaderClass, EnhancedDataTable, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -393,35 +393,42 @@ export default function ProductBuilder() {
               description="Individual benefit items that can be grouped into bundles."
               icon={Layers}
               headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateBenefit(true)} data-testid="button-create-benefit"><Plus className="h-4 w-4" /> New Benefit</Button>}
-              flush
             >
                 {loadingBenefits ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : benefitCatalog.length === 0 ? (
                   <EmptyState icon={Layers} title="No benefit items yet" description="Create benefits to attach to bundles and products." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead className="pl-6">Name</TableHead>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Default Cost</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-12"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {benefitCatalog.map((item) => (
-                        <TableRow key={item.id} className="hover:bg-muted/40" data-testid={`row-benefit-${item.id}`}>
-                          <TableCell className="font-medium pl-6">{item.name}</TableCell>
-                          <TableCell className="text-muted-foreground">{item.description || "—"}</TableCell>
-                          <TableCell>{item.internalCostDefault ? formatAmount(item.internalCostDefault, "USD") : "—"}</TableCell>
-                          <TableCell><Badge variant={item.isActive ? "default" : "secondary"} className={item.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{item.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit benefit item" onClick={() => setEditingBenefit(item)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
+                  <EnhancedDataTable
+                    columns={[
+                      { id: "name", header: "Name", accessor: (item) => item.name, cell: (item) => <span className="font-medium">{item.name}</span> },
+                      { id: "description", header: "Description", accessor: (item) => item.description || "", cell: (item) => <span className="text-muted-foreground">{item.description || "—"}</span> },
+                      {
+                        id: "cost",
+                        header: "Default Cost",
+                        accessor: (item) => item.internalCostDefault ? parseFloat(item.internalCostDefault) : 0,
+                        cell: (item) => <span>{item.internalCostDefault ? formatAmount(item.internalCostDefault, "USD") : "—"}</span>,
+                      },
+                      {
+                        id: "status",
+                        header: "Status",
+                        accessor: (item) => (item.isActive ? "Active" : "Inactive"),
+                        cell: (item) => <Badge variant={item.isActive ? "default" : "secondary"} className={item.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{item.isActive ? "Active" : "Inactive"}</Badge>,
+                      },
+                      {
+                        id: "actions",
+                        header: "",
+                        sortable: false,
+                        cell: (item) => <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit benefit item" onClick={() => setEditingBenefit(item)}><Edit className="h-4 w-4" aria-hidden="true" /></Button>,
+                      },
+                    ]}
+                    rows={benefitCatalog}
+                    getRowKey={(item) => item.id}
+                    rowTestId={(item) => `row-benefit-${item.id}`}
+                    exportFilename="benefit-catalog"
+                    storageKey="products-benefit-catalog"
+                    emptyMessage="No benefit items yet."
+                  />
                 )}
             </CardSection>
           </TabsContent>
@@ -432,33 +439,36 @@ export default function ProductBuilder() {
               description="Groups of benefits linked to product versions."
               icon={Package}
               headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateBundle(true)} data-testid="button-create-bundle"><Plus className="h-4 w-4" /> New Bundle</Button>}
-              flush
             >
                 {loadingBundles ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : benefitBundles.length === 0 ? (
                   <EmptyState icon={Package} title="No bundles yet" description="Create a bundle to group benefits for product versions." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead className="pl-6">Name</TableHead>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-12"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {benefitBundles.map((bundle) => (
-                        <TableRow key={bundle.id} className="hover:bg-muted/40" data-testid={`row-bundle-${bundle.id}`}>
-                          <TableCell className="font-medium pl-6">{bundle.name}</TableCell>
-                          <TableCell className="text-muted-foreground">{bundle.description || "—"}</TableCell>
-                          <TableCell><Badge variant={bundle.isActive ? "default" : "secondary"} className={bundle.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{bundle.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit bundle" onClick={() => setEditingBundle(bundle)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
+                  <EnhancedDataTable
+                    columns={[
+                      { id: "name", header: "Name", accessor: (bundle) => bundle.name, cell: (bundle) => <span className="font-medium">{bundle.name}</span> },
+                      { id: "description", header: "Description", accessor: (bundle) => bundle.description || "", cell: (bundle) => <span className="text-muted-foreground">{bundle.description || "—"}</span> },
+                      {
+                        id: "status",
+                        header: "Status",
+                        accessor: (bundle) => (bundle.isActive ? "Active" : "Inactive"),
+                        cell: (bundle) => <Badge variant={bundle.isActive ? "default" : "secondary"} className={bundle.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{bundle.isActive ? "Active" : "Inactive"}</Badge>,
+                      },
+                      {
+                        id: "actions",
+                        header: "",
+                        sortable: false,
+                        cell: (bundle) => <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit bundle" onClick={() => setEditingBundle(bundle)}><Edit className="h-4 w-4" aria-hidden="true" /></Button>,
+                      },
+                    ]}
+                    rows={benefitBundles}
+                    getRowKey={(bundle) => bundle.id}
+                    rowTestId={(bundle) => `row-bundle-${bundle.id}`}
+                    exportFilename="benefit-bundles"
+                    storageKey="products-benefit-bundles"
+                    emptyMessage="No bundles yet."
+                  />
                 )}
             </CardSection>
           </TabsContent>
@@ -469,42 +479,64 @@ export default function ProductBuilder() {
               description="Optional extras with their own premiums that can be added to policies."
               icon={Puzzle}
               headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateAddOn(true)} data-testid="button-create-addon"><Plus className="h-4 w-4" /> New Add-On</Button>}
-              flush
             >
                 {loadingAddOns ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : addOns.length === 0 ? (
                   <EmptyState icon={Puzzle} title="No add-ons yet" description="Create add-ons for optional policy extras." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead className="pl-6">Name</TableHead>
-                        <TableHead>Mode</TableHead>
-                        <TableHead>Monthly</TableHead>
-                        <TableHead>Weekly</TableHead>
-                        <TableHead>Bi-weekly</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-12"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {addOns.map((addon) => (
-                        <TableRow key={addon.id} className="hover:bg-muted/40" data-testid={`row-addon-${addon.id}`}>
-                          <TableCell className="pl-6">
+                  <EnhancedDataTable
+                    columns={[
+                      {
+                        id: "name",
+                        header: "Name",
+                        accessor: (addon) => addon.name,
+                        cell: (addon) => (
+                          <div>
                             <p className="font-medium">{addon.name}</p>
                             {addon.description && <p className="text-xs text-muted-foreground">{addon.description}</p>}
-                          </TableCell>
-                          <TableCell><Badge variant="outline" className="font-mono text-[10px]">{addon.pricingMode}</Badge></TableCell>
-                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || "—"}%` : (addon.priceMonthly || addon.priceAmount ? formatAmount(addon.priceMonthly || addon.priceAmount!, "USD") : "—")}</TableCell>
-                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceWeekly ? formatAmount(addon.priceWeekly, "USD") : "—")}</TableCell>
-                          <TableCell className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceBiweekly ? formatAmount(addon.priceBiweekly, "USD") : "—")}</TableCell>
-                          <TableCell><Badge variant={addon.isActive ? "default" : "secondary"} className={addon.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{addon.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit add-on" onClick={() => setEditingAddOn(addon)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
+                          </div>
+                        ),
+                      },
+                      { id: "mode", header: "Mode", accessor: (addon) => addon.pricingMode, cell: (addon) => <Badge variant="outline" className="font-mono text-[10px]">{addon.pricingMode}</Badge> },
+                      {
+                        id: "monthly",
+                        header: "Monthly",
+                        accessor: (addon) => addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || ""}%` : (addon.priceMonthly || addon.priceAmount || ""),
+                        cell: (addon) => <span className="font-semibold">{addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || "—"}%` : (addon.priceMonthly || addon.priceAmount ? formatAmount(addon.priceMonthly || addon.priceAmount!, "USD") : "—")}</span>,
+                      },
+                      {
+                        id: "weekly",
+                        header: "Weekly",
+                        accessor: (addon) => addon.pricingMode === "percentage" ? "" : (addon.priceWeekly || ""),
+                        cell: (addon) => <span className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceWeekly ? formatAmount(addon.priceWeekly, "USD") : "—")}</span>,
+                      },
+                      {
+                        id: "biweekly",
+                        header: "Bi-weekly",
+                        accessor: (addon) => addon.pricingMode === "percentage" ? "" : (addon.priceBiweekly || ""),
+                        cell: (addon) => <span className="font-semibold">{addon.pricingMode === "percentage" ? "—" : (addon.priceBiweekly ? formatAmount(addon.priceBiweekly, "USD") : "—")}</span>,
+                      },
+                      {
+                        id: "status",
+                        header: "Status",
+                        accessor: (addon) => (addon.isActive ? "Active" : "Inactive"),
+                        cell: (addon) => <Badge variant={addon.isActive ? "default" : "secondary"} className={addon.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{addon.isActive ? "Active" : "Inactive"}</Badge>,
+                      },
+                      {
+                        id: "actions",
+                        header: "",
+                        sortable: false,
+                        cell: (addon) => <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit add-on" onClick={() => setEditingAddOn(addon)}><Edit className="h-4 w-4" aria-hidden="true" /></Button>,
+                      },
+                    ]}
+                    rows={addOns}
+                    getRowKey={(addon) => addon.id}
+                    rowTestId={(addon) => `row-addon-${addon.id}`}
+                    exportFilename="add-ons"
+                    storageKey="products-addons"
+                    emptyMessage="No add-ons yet."
+                  />
                 )}
             </CardSection>
           </TabsContent>
@@ -515,39 +547,39 @@ export default function ProductBuilder() {
               description="Age-based pricing modifiers for products."
               icon={BarChart3}
               headerRight={<Button className="gap-2 shrink-0" onClick={() => setShowCreateAgeBand(true)} data-testid="button-create-ageband"><Plus className="h-4 w-4" /> New Age Band</Button>}
-              flush
             >
                 {loadingAgeBands ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : ageBands.length === 0 ? (
                   <EmptyState icon={BarChart3} title="No age bands configured" description="Define age bands to adjust premiums by age." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead className="pl-6">Name</TableHead>
-                        <TableHead>Min Age</TableHead>
-                        <TableHead>Max Age</TableHead>
-                        <TableHead>Version</TableHead>
-                        <TableHead>Effective From</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-12"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {ageBands.map((band) => (
-                        <TableRow key={band.id} className="hover:bg-muted/40" data-testid={`row-ageband-${band.id}`}>
-                          <TableCell className="font-medium pl-6">{band.name}</TableCell>
-                          <TableCell>{band.minAge}</TableCell>
-                          <TableCell>{band.maxAge}</TableCell>
-                          <TableCell><Badge variant="outline" className="font-mono text-[10px]">v{band.version}</Badge></TableCell>
-                          <TableCell className="text-muted-foreground">{band.effectiveFrom || "—"}</TableCell>
-                          <TableCell><Badge variant={band.isActive ? "default" : "secondary"} className={band.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{band.isActive ? "Active" : "Inactive"}</Badge></TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit age band" onClick={() => setEditingAgeBand(band)}><Edit className="h-4 w-4" aria-hidden="true" /></Button></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
+                  <EnhancedDataTable
+                    columns={[
+                      { id: "name", header: "Name", accessor: (band) => band.name, cell: (band) => <span className="font-medium">{band.name}</span> },
+                      { id: "minAge", header: "Min Age", accessor: (band) => band.minAge },
+                      { id: "maxAge", header: "Max Age", accessor: (band) => band.maxAge },
+                      { id: "version", header: "Version", accessor: (band) => band.version, cell: (band) => <Badge variant="outline" className="font-mono text-[10px]">v{band.version}</Badge> },
+                      { id: "effectiveFrom", header: "Effective From", accessor: (band) => band.effectiveFrom || "", cell: (band) => <span className="text-muted-foreground">{band.effectiveFrom || "—"}</span> },
+                      {
+                        id: "status",
+                        header: "Status",
+                        accessor: (band) => (band.isActive ? "Active" : "Inactive"),
+                        cell: (band) => <Badge variant={band.isActive ? "default" : "secondary"} className={band.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{band.isActive ? "Active" : "Inactive"}</Badge>,
+                      },
+                      {
+                        id: "actions",
+                        header: "",
+                        sortable: false,
+                        cell: (band) => <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit age band" onClick={() => setEditingAgeBand(band)}><Edit className="h-4 w-4" aria-hidden="true" /></Button>,
+                      },
+                    ]}
+                    rows={ageBands}
+                    getRowKey={(band) => band.id}
+                    rowTestId={(band) => `row-ageband-${band.id}`}
+                    exportFilename="age-bands"
+                    storageKey="products-agebands"
+                    emptyMessage="No age bands configured."
+                  />
                 )}
             </CardSection>
           </TabsContent>
@@ -562,58 +594,71 @@ export default function ProductBuilder() {
                   <Plus className="h-4 w-4" /> New Term
                 </Button>
               )}
-              flush
             >
                 {loadingTerms ? (
                   <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
                 ) : termsList.length === 0 ? (
                   <EmptyState icon={FileText} title="No terms configured yet" description="Add clauses for product versions or general use." className="border-0 rounded-none bg-transparent py-12" />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead className="pl-6">Title</TableHead>
-                        <TableHead>Product Version</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead>Order</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-20">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {termsList.map((term: any) => {
-                        const pv = allProductVersions.find((v) => v.id === term.productVersionId);
-                        return (
-                          <TableRow key={term.id} className="hover:bg-muted/40">
-                            <TableCell className="pl-6">
-                              <p className="font-medium">{term.title}</p>
-                              <p className="text-xs text-muted-foreground line-clamp-1 max-w-[300px]">{term.content}</p>
-                            </TableCell>
-                            <TableCell>
-                              {pv ? (
-                                <Badge variant="outline" className="font-mono text-[10px]">{pv.productName} v{pv.version}</Badge>
-                              ) : (
-                                <Badge variant="secondary" className="text-[10px]">General (all products)</Badge>
-                              )}
-                            </TableCell>
-                            <TableCell className="capitalize text-sm">{term.category || "general"}</TableCell>
-                            <TableCell className="text-sm">{term.sortOrder}</TableCell>
-                            <TableCell>
-                              <Badge variant={term.isActive ? "default" : "secondary"} className={term.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>
-                                {term.isActive ? "Active" : "Inactive"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex gap-1">
-                                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit term" onClick={() => setEditingTerm(term)}><Edit className="h-4 w-4" aria-hidden="true" /></Button>
-                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" aria-label="Delete term" onClick={() => { if (confirm("Delete this term?")) deleteTermMut.mutate(term.id); }}><Trash2 className="h-4 w-4" aria-hidden="true" /></Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </DataTable>
+                  <EnhancedDataTable
+                    columns={[
+                      {
+                        id: "title",
+                        header: "Title",
+                        accessor: (term: any) => term.title,
+                        cell: (term: any) => (
+                          <div>
+                            <p className="font-medium">{term.title}</p>
+                            <p className="text-xs text-muted-foreground line-clamp-1 max-w-[300px]">{term.content}</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        id: "productVersion",
+                        header: "Product Version",
+                        accessor: (term: any) => {
+                          const pv = allProductVersions.find((v) => v.id === term.productVersionId);
+                          return pv ? `${pv.productName} v${pv.version}` : "General (all products)";
+                        },
+                        cell: (term: any) => {
+                          const pv = allProductVersions.find((v) => v.id === term.productVersionId);
+                          return pv ? (
+                            <Badge variant="outline" className="font-mono text-[10px]">{pv.productName} v{pv.version}</Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-[10px]">General (all products)</Badge>
+                          );
+                        },
+                      },
+                      { id: "category", header: "Category", accessor: (term: any) => term.category || "general", cell: (term: any) => <span className="capitalize text-sm">{term.category || "general"}</span> },
+                      { id: "order", header: "Order", accessor: (term: any) => term.sortOrder },
+                      {
+                        id: "status",
+                        header: "Status",
+                        accessor: (term: any) => (term.isActive ? "Active" : "Inactive"),
+                        cell: (term: any) => (
+                          <Badge variant={term.isActive ? "default" : "secondary"} className={term.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>
+                            {term.isActive ? "Active" : "Inactive"}
+                          </Badge>
+                        ),
+                      },
+                      {
+                        id: "actions",
+                        header: "Actions",
+                        sortable: false,
+                        cell: (term: any) => (
+                          <div className="flex gap-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit term" onClick={() => setEditingTerm(term)}><Edit className="h-4 w-4" aria-hidden="true" /></Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" aria-label="Delete term" onClick={() => { if (confirm("Delete this term?")) deleteTermMut.mutate(term.id); }}><Trash2 className="h-4 w-4" aria-hidden="true" /></Button>
+                          </div>
+                        ),
+                      },
+                    ]}
+                    rows={termsList}
+                    getRowKey={(term: any) => term.id}
+                    exportFilename="product-terms"
+                    storageKey="products-terms"
+                    emptyMessage="No terms configured yet."
+                  />
                 )}
             </CardSection>
           </TabsContent>
