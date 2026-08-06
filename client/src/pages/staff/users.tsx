@@ -9,12 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import { UserPlus, Shield, Copy, Search, Pencil, Check, Trash2, Users, KeyRound, AlertTriangle } from "lucide-react";
-import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, KpiStatCard, EmptyState } from "@/components/ds";
+import { UserPlus, Shield, Copy, Pencil, Check, Trash2, Users, KeyRound, AlertTriangle } from "lucide-react";
+import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, KpiStatCard } from "@/components/ds";
 
 export default function StaffUsers() {
   const { toast } = useToast();
@@ -24,7 +23,6 @@ export default function StaffUsers() {
   const canDeleteUsers = permissions.includes("delete:user");
   const canManageOverrides = permissions.includes("write:role");
   const isSuperuser = permissions.includes("create:tenant");
-  const [searchTerm, setSearchTerm] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const [newUser, setNewUser] = useState({ email: "", displayName: "", roleIds: [] as string[], branchId: "", password: "", phone: "", address: "", nationalId: "", dateOfBirth: "", gender: "", maritalStatus: "", nextOfKinName: "", nextOfKinPhone: "" });
@@ -165,11 +163,6 @@ export default function StaffUsers() {
     }
   };
 
-  const filtered = users.filter((u: any) =>
-    (u.email || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (u.displayName || "").toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
   const activeCount = users.filter((u: any) => u.isActive).length;
   const agentCount = users.filter((u: any) => u.roles?.some((r: any) => r.name === "agent")).length;
 
@@ -197,6 +190,96 @@ export default function StaffUsers() {
     };
     return colors[name] || colors.staff;
   };
+
+  const userColumns: EdtColumn<any>[] = [
+    {
+      id: "name",
+      header: "Name",
+      accessor: (u) => u.displayName || "",
+      cell: (u) => <span className="font-medium">{u.displayName || "—"}</span>,
+    },
+    {
+      id: "email",
+      header: "Email",
+      accessor: (u) => u.email,
+      cell: (u) => <span className="text-muted-foreground">{u.email}</span>,
+    },
+    {
+      id: "phone",
+      header: "Phone",
+      accessor: (u) => u.phone || "",
+      cell: (u) => <span className="text-muted-foreground">{u.phone || "—"}</span>,
+    },
+    {
+      id: "roles",
+      header: "Roles",
+      accessor: (u) => u.roles?.map((r: any) => r.name).join(" ") || "",
+      cell: (u) => (
+        <div className="flex flex-wrap gap-1">
+          {u.roles?.length > 0 ? u.roles.map((r: any) => (
+            <span key={r.id} className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${roleColor(r.name)}`}>
+              {r.name}
+            </span>
+          )) : <span className="text-muted-foreground text-sm">No roles</span>}
+        </div>
+      ),
+    },
+    {
+      id: "referral",
+      header: "Referral Link",
+      sortable: false,
+      accessor: (u) => u.referralCode || "",
+      cell: (u) =>
+        u.referralCode ? (
+          <button
+            className="inline-flex items-center gap-1 text-sm font-mono bg-muted px-2 py-0.5 rounded hover:bg-muted/80"
+            onClick={(e) => { e.stopPropagation(); copyToClipboard(`${window.location.origin}/join?ref=${u.referralCode}`); }}
+            data-testid={`button-copy-referral-${u.id}`}
+          >
+            {u.referralCode} <Copy className="h-3 w-3" />
+          </button>
+        ) : "—",
+    },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (u) => (u.isActive ? "Active" : "Inactive"),
+      cell: (u) => (
+        <Badge variant={u.isActive ? "default" : "secondary"} className={u.isActive ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : ""} data-testid={`badge-status-${u.id}`}>
+          {u.isActive ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    {
+      id: "joined",
+      header: "Joined",
+      accessor: (u) => new Date(u.createdAt),
+      cell: (u) => <span className="text-muted-foreground text-sm">{new Date(u.createdAt).toLocaleDateString()}</span>,
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      align: "right",
+      sortable: false,
+      cell: (u) => (
+        <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+          <Button variant="ghost" size="sm" onClick={() => setEditingUser({ ...u, roleIds: u.roles?.map((r: any) => r.id) || [], branchId: u.branchId || "" })} data-testid={`button-edit-user-${u.id}`} title="Edit user">
+            <Pencil className="h-4 w-4" />
+          </Button>
+          {canEditUsers && (
+            <Button variant="ghost" size="sm" onClick={() => { setResetTarget(u); setNewPassword(""); setConfirmPassword(""); }} data-testid={`button-reset-pw-${u.id}`} title="Reset password">
+              <KeyRound className="h-4 w-4" />
+            </Button>
+          )}
+          {canDeleteUsers && u.isActive && (
+            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => openDeleteDialog(u)} data-testid={`button-deactivate-user-${u.id}`} title="Delete user">
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <StaffLayout>
@@ -334,83 +417,21 @@ export default function StaffUsers() {
         <CardSection
           title="Team members"
           description="All staff and agent accounts in your organization"
-          headerRight={(
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Search by name or email..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9" data-testid="input-search-users" />
-              </div>
-          )}
-          flush
         >
             {isLoading ? (
               <div className="text-center py-8 text-muted-foreground">Loading users...</div>
-            ) : filtered.length === 0 ? (
-              <EmptyState title="No users found" description="Try a different search term." className="border-0 rounded-none bg-transparent py-10" />
             ) : (
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Roles</TableHead>
-                    <TableHead>Referral Link</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Joined</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((u: any) => (
-                    <TableRow key={u.id} data-testid={`row-user-${u.id}`} className="cursor-pointer hover:bg-muted/40" onClick={() => setViewingUser(u)}>
-                      <TableCell className="font-medium">{u.displayName || "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{u.email}</TableCell>
-                      <TableCell className="text-muted-foreground">{u.phone || "—"}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {u.roles?.length > 0 ? u.roles.map((r: any) => (
-                            <span key={r.id} className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${roleColor(r.name)}`}>
-                              {r.name}
-                            </span>
-                          )) : <span className="text-muted-foreground text-sm">No roles</span>}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {u.referralCode ? (
-                          <div className="flex flex-col gap-1">
-                            <button className="inline-flex items-center gap-1 text-sm font-mono bg-muted px-2 py-0.5 rounded hover:bg-muted/80" onClick={(e) => { e.stopPropagation(); copyToClipboard(`${window.location.origin}/join?ref=${u.referralCode}`); }} data-testid={`button-copy-referral-${u.id}`}>
-                              {u.referralCode} <Copy className="h-3 w-3" />
-                            </button>
-                          </div>
-                        ) : "—"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={u.isActive ? "default" : "secondary"} className={u.isActive ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : ""} data-testid={`badge-status-${u.id}`}>
-                          {u.isActive ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
-                      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => setEditingUser({ ...u, roleIds: u.roles?.map((r: any) => r.id) || [], branchId: u.branchId || "" })} data-testid={`button-edit-user-${u.id}`} title="Edit user">
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          {canEditUsers && (
-                            <Button variant="ghost" size="sm" onClick={() => { setResetTarget(u); setNewPassword(""); setConfirmPassword(""); }} data-testid={`button-reset-pw-${u.id}`} title="Reset password">
-                              <KeyRound className="h-4 w-4" />
-                            </Button>
-                          )}
-                          {canDeleteUsers && u.isActive && (
-                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => openDeleteDialog(u)} data-testid={`button-deactivate-user-${u.id}`} title="Delete user">
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
+              <EnhancedDataTable
+                columns={userColumns}
+                rows={users}
+                getRowKey={(u) => u.id}
+                rowTestId={(u) => `row-user-${u.id}`}
+                onRowClick={(u) => setViewingUser(u)}
+                searchPlaceholder="Search by name or email..."
+                exportFilename="staff-users"
+                storageKey="staff-users"
+                emptyMessage="No users found."
+              />
             )}
         </CardSection>
 

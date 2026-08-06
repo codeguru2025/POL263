@@ -2,8 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
-import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,6 +21,62 @@ function currencyLines(m: Record<string, number> | undefined) {
   if (!m || Object.keys(m).length === 0) return "—";
   return Object.entries(m).filter(([, v]) => Math.abs(v) > 0.004).map(([c, v]) => `${c} ${money(v)}`).join(" · ") || "—";
 }
+
+const ledgerColumns: EdtColumn<any>[] = [
+  {
+    id: "type",
+    header: "Type",
+    accessor: (e) => (e.type === "income" ? "Income" : "Expense"),
+    cell: (e) => (
+      <span className={e.type === "income" ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>
+        {e.type === "income" ? "Income" : "Expense"}
+      </span>
+    ),
+  },
+  {
+    id: "description",
+    header: "Description",
+    accessor: (e) => e.description,
+    cell: (e) => (
+      <span className="block max-w-[280px] truncate" title={e.description}>{e.description}</span>
+    ),
+  },
+  {
+    id: "reference",
+    header: "Reference",
+    accessor: (e) => e.reference || "",
+    cell: (e) => <span className="whitespace-nowrap">{e.reference || "—"}</span>,
+  },
+  {
+    id: "person",
+    header: "Person",
+    accessor: (e) => e.person || "",
+    cell: (e) => <span className="whitespace-nowrap">{e.person || "—"}</span>,
+  },
+  {
+    id: "department",
+    header: "Dept / cost centre",
+    accessor: (e) => e.department || "",
+    cell: (e) => <span className="whitespace-nowrap">{e.department || "—"}</span>,
+  },
+  {
+    id: "currency",
+    header: "Currency",
+    accessor: (e) => e.currency,
+    defaultHidden: true,
+  },
+  {
+    id: "amount",
+    header: "Amount",
+    align: "right",
+    accessor: (e) => (e.type === "expense" ? -Number(e.amount || 0) : Number(e.amount || 0)),
+    cell: (e) => (
+      <span className={`tabular-nums whitespace-nowrap ${e.type === "income" ? "text-emerald-600" : "text-destructive"}`}>
+        {e.type === "expense" ? "-" : ""}{e.currency} {money(e.amount)}
+      </span>
+    ),
+  },
+];
 
 export default function DailyReport() {
   const { toast } = useToast();
@@ -164,34 +219,19 @@ export default function DailyReport() {
             </CardSection>
 
             {/* Ledger */}
-            <CardSection title="Transaction Ledger" description={`${report.financials.ledger.total} transaction(s) today.`} flush>
+            <CardSection title="Transaction Ledger" description={`${report.financials.ledger.total} transaction(s) today.`}>
               {report.financials.ledger.entries.length === 0 ? (
                 <EmptyState title="No transactions today" className="border-0 rounded-none bg-transparent py-8" />
               ) : (
-                <div className="overflow-x-auto">
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[820px]">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead>Type</TableHead><TableHead>Description</TableHead><TableHead>Reference</TableHead>
-                        <TableHead>Person</TableHead><TableHead>Dept / cost centre</TableHead><TableHead className="text-right">Amount</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {report.financials.ledger.entries.map((e: any, i: number) => (
-                        <TableRow key={i}>
-                          <TableCell className={e.type === "income" ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>{e.type === "income" ? "Income" : "Expense"}</TableCell>
-                          <TableCell className="max-w-[280px] truncate" title={e.description}>{e.description}</TableCell>
-                          <TableCell className="whitespace-nowrap">{e.reference || "—"}</TableCell>
-                          <TableCell className="whitespace-nowrap">{e.person || "—"}</TableCell>
-                          <TableCell className="whitespace-nowrap">{e.department || "—"}</TableCell>
-                          <TableCell className={`text-right tabular-nums whitespace-nowrap ${e.type === "income" ? "text-emerald-600" : "text-destructive"}`}>
-                            {e.type === "expense" ? "-" : ""}{e.currency} {money(e.amount)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
-                </div>
+                <EnhancedDataTable
+                  columns={ledgerColumns}
+                  rows={report.financials.ledger.entries.map((e: any, i: number) => ({ ...e, _rowKey: i }))}
+                  getRowKey={(row) => String(row._rowKey)}
+                  searchPlaceholder="Search description, reference, person…"
+                  exportFilename={`daily-report-ledger-${date}`}
+                  storageKey="daily-report-ledger"
+                  emptyMessage="No transactions today."
+                />
               )}
             </CardSection>
 

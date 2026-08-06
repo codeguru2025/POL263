@@ -1,8 +1,7 @@
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, FilterBar, DataTable, dataTableStickyHeaderClass } from "@/components/ds";
+import { PageHeader, PageShell, FilterBar, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
-import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,6 +85,87 @@ export default function AuditLogs() {
   const showingFrom = total === 0 ? 0 : page * PAGE_SIZE + 1;
   const showingTo = Math.min((page + 1) * PAGE_SIZE, total);
 
+  const columns: EdtColumn<any>[] = [
+    {
+      id: "timestamp",
+      header: "Timestamp",
+      accessor: (log) => new Date(log.timestamp),
+      cell: (log) => (
+        <span className="text-sm whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</span>
+      ),
+    },
+    {
+      id: "action",
+      header: "Action",
+      accessor: (log) => log.action,
+      cell: (log) => (
+        <Badge variant="outline" className="font-mono text-[10px]">
+          {log.action}
+        </Badge>
+      ),
+    },
+    {
+      id: "actor",
+      header: "Actor",
+      accessor: (log) => log.actorEmail || "system",
+      cell: (log) => <span className="text-sm">{log.actorEmail || "system"}</span>,
+    },
+    {
+      id: "entity",
+      header: "Target Entity",
+      accessor: (log) => log.entityType,
+      cell: (log) => (
+        <span className="text-sm">
+          {log.entityType}
+          {log.entityId && (
+            <span className="text-muted-foreground ml-1 font-mono text-[10px]">
+              ({log.entityId.slice(0, 8)}...)
+            </span>
+          )}
+        </span>
+      ),
+    },
+    {
+      id: "requestId",
+      header: "Request ID",
+      accessor: (log) => log.requestId || "",
+      cell: (log) => (
+        <span className="font-mono text-[10px] text-muted-foreground">{log.requestId || "—"}</span>
+      ),
+    },
+    {
+      id: "diff",
+      header: "Before/After Diff",
+      sortable: false,
+      cell: (log) =>
+        log.before || log.after ? (
+          <details className="cursor-pointer">
+            <summary className="text-xs text-primary hover:underline">View diff</summary>
+            <div className="mt-2 space-y-2">
+              {log.before && (
+                <div>
+                  <span className="text-[10px] font-semibold text-destructive">BEFORE:</span>
+                  <pre className="text-[10px] bg-destructive/5 p-2 rounded-md font-mono mt-1 overflow-x-auto max-w-sm">
+                    {JSON.stringify(log.before, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {log.after && (
+                <div>
+                  <span className="text-[10px] font-semibold text-emerald-600">AFTER:</span>
+                  <pre className="text-[10px] bg-emerald-500/5 p-2 rounded-md font-mono mt-1 overflow-x-auto max-w-sm">
+                    {JSON.stringify(log.after, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </details>
+        ) : (
+          <span className="text-xs text-muted-foreground italic">No diff</span>
+        ),
+    },
+  ];
+
   return (
     <StaffLayout>
       <PageShell>
@@ -136,120 +216,55 @@ export default function AuditLogs() {
           </div>
         </FilterBar>
 
-        <div className="rounded-xl border border-border/70 bg-card shadow-sm overflow-hidden">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-            </div>
-          ) : (
-            <>
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead>Timestamp</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Actor</TableHead>
-                    <TableHead>Target Entity</TableHead>
-                    <TableHead>Request ID</TableHead>
-                    <TableHead>Before/After Diff</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {logs.length > 0 ? (
-                      logs.map((log: any) => (
-                        <TableRow key={log.id}>
-                          <TableCell className="text-sm whitespace-nowrap">
-                            {new Date(log.timestamp).toLocaleString()}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="font-mono text-[10px]">
-                              {log.action}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-sm">{log.actorEmail || "system"}</TableCell>
-                          <TableCell className="text-sm">
-                            {log.entityType}
-                            {log.entityId && (
-                              <span className="text-muted-foreground ml-1 font-mono text-[10px]">
-                                ({log.entityId.slice(0, 8)}...)
-                              </span>
-                            )}
-                          </TableCell>
-                          <TableCell className="font-mono text-[10px] text-muted-foreground">
-                            {log.requestId || "—"}
-                          </TableCell>
-                          <TableCell>
-                            {log.before || log.after ? (
-                              <details className="cursor-pointer">
-                                <summary className="text-xs text-primary hover:underline">View diff</summary>
-                                <div className="mt-2 space-y-2">
-                                  {log.before && (
-                                    <div>
-                                      <span className="text-[10px] font-semibold text-destructive">BEFORE:</span>
-                                      <pre className="text-[10px] bg-destructive/5 p-2 rounded-md font-mono mt-1 overflow-x-auto max-w-sm">
-                                        {JSON.stringify(log.before, null, 2)}
-                                      </pre>
-                                    </div>
-                                  )}
-                                  {log.after && (
-                                    <div>
-                                      <span className="text-[10px] font-semibold text-emerald-600">AFTER:</span>
-                                      <pre className="text-[10px] bg-emerald-500/5 p-2 rounded-md font-mono mt-1 overflow-x-auto max-w-sm">
-                                        {JSON.stringify(log.after, null, 2)}
-                                      </pre>
-                                    </div>
-                                  )}
-                                </div>
-                              </details>
-                            ) : (
-                              <span className="text-xs text-muted-foreground italic">No diff</span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                          No audit logs found.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                </TableBody>
-              </DataTable>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <EnhancedDataTable
+              columns={columns}
+              rows={logs}
+              getRowKey={(log) => log.id}
+              searchable={false}
+              exportable
+              exportFilename="audit-logs"
+              storageKey="audit-logs"
+              emptyMessage="No audit logs found."
+            />
 
-              <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/30">
-                <p className="text-sm text-muted-foreground">
-                  {total === 0
-                    ? "No results"
-                    : `Showing ${showingFrom}–${showingTo} of ${total} results`}
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page === 0}
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  >
-                    <ChevronLeft className="h-4 w-4 mr-1" />
-                    Previous
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    Page {page + 1} of {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page >= totalPages - 1}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                    <ChevronRight className="h-4 w-4 ml-1" />
-                  </Button>
-                </div>
+            <div className="flex items-center justify-between px-4 py-3 rounded-xl border border-border/70 bg-muted/30">
+              <p className="text-sm text-muted-foreground">
+                {total === 0
+                  ? "No results"
+                  : `Showing ${showingFrom}–${showingTo} of ${total} results`}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                >
+                  <ChevronLeft className="h-4 w-4 mr-1" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Page {page + 1} of {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= totalPages - 1}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
               </div>
-            </>
-          )}
-        </div>
+            </div>
+          </div>
+        )}
       </PageShell>
     </StaffLayout>
   );

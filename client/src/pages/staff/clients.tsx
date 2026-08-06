@@ -729,34 +729,50 @@ export default function StaffClients() {
                       dataTestId="text-no-dependents"
                     />
                   ) : (
-                    <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                      <TableHeader className={dataTableStickyHeaderClass}>
-                        <TableRow>
-                          <TableHead>Name</TableHead>
-                          <TableHead>Relationship</TableHead>
-                          <TableHead>National ID</TableHead>
-                          <TableHead>Date of Birth</TableHead>
-                          <TableHead>Gender</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {(clientDependents ?? []).map((dep) => (
-                          <TableRow key={dep.id} className="hover:bg-muted/40" data-testid={`row-dependent-${dep.id}`}>
-                            <TableCell className="font-medium">
-                              {dep.firstName} {dep.lastName}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="outline">{dep.relationship}</Badge>
-                            </TableCell>
-                            <TableCell className="font-mono text-sm">{dep.nationalId || "—"}</TableCell>
-                            <TableCell>{dep.dateOfBirth || "—"}</TableCell>
-                            <TableCell className="capitalize">{dep.gender || "—"}</TableCell>
-                            <TableCell>
-                              <StatusBadge status={dep.isActive ? "active" : "inactive"} variant="policy" />
-                            </TableCell>
-                            <TableCell className="text-right">
+                    <div className="px-4 pb-4 pt-2 sm:px-6">
+                      <EnhancedDataTable
+                        columns={[
+                          {
+                            id: "name",
+                            header: "Name",
+                            accessor: (dep) => `${dep.firstName} ${dep.lastName}`,
+                            cell: (dep) => <span className="font-medium">{dep.firstName} {dep.lastName}</span>,
+                          },
+                          {
+                            id: "relationship",
+                            header: "Relationship",
+                            accessor: (dep) => dep.relationship,
+                            cell: (dep) => <Badge variant="outline">{dep.relationship}</Badge>,
+                          },
+                          {
+                            id: "nationalId",
+                            header: "National ID",
+                            accessor: (dep) => dep.nationalId || "",
+                            cell: (dep) => <span className="font-mono text-sm">{dep.nationalId || "—"}</span>,
+                          },
+                          {
+                            id: "dob",
+                            header: "Date of Birth",
+                            accessor: (dep) => dep.dateOfBirth || "",
+                          },
+                          {
+                            id: "gender",
+                            header: "Gender",
+                            accessor: (dep) => dep.gender || "",
+                            cell: (dep) => <span className="capitalize">{dep.gender || "—"}</span>,
+                          },
+                          {
+                            id: "status",
+                            header: "Status",
+                            accessor: (dep) => (dep.isActive ? "active" : "inactive"),
+                            cell: (dep) => <StatusBadge status={dep.isActive ? "active" : "inactive"} variant="policy" />,
+                          },
+                          {
+                            id: "actions",
+                            header: "Actions",
+                            align: "right",
+                            sortable: false,
+                            cell: (dep) => (
                               <div className="flex items-center justify-end gap-1">
                                 <Button
                                   variant="ghost"
@@ -793,11 +809,17 @@ export default function StaffClients() {
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </DataTable>
+                            ),
+                          },
+                        ]}
+                        rows={clientDependents ?? []}
+                        getRowKey={(dep) => dep.id}
+                        rowTestId={(dep) => `row-dependent-${dep.id}`}
+                        exportFilename="client-dependents"
+                        storageKey="client-dependents"
+                        emptyMessage="No dependents yet."
+                      />
+                    </div>
                   )}
               </CardSection>
 
@@ -827,37 +849,48 @@ export default function StaffClients() {
                     className="border-0 rounded-none bg-transparent py-8"
                   />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead>Document</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Size</TableHead>
-                        <TableHead>Uploaded</TableHead>
-                        <TableHead>Verification</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {clientDocumentsList.map((doc) => (
-                        <TableRow key={doc.id} className="hover:bg-muted/40">
-                          <TableCell className="font-medium">
+                  <div className="px-4 pb-4 pt-2 sm:px-6">
+                    <EnhancedDataTable
+                      columns={[
+                        {
+                          id: "document",
+                          header: "Document",
+                          accessor: (doc) => doc.label || doc.fileName,
+                          cell: (doc) => (
                             <div className="flex items-center gap-2">
                               <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                               <span className="truncate max-w-[200px]">{doc.label || doc.fileName}</span>
                             </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="capitalize">{doc.documentType.replace(/_/g, " ")}</Badge>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
-                            {doc.fileSize ? `${(doc.fileSize / 1024).toFixed(1)} KB` : "—"}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
-                            {new Date(doc.createdAt).toLocaleDateString()}
-                          </TableCell>
-                          <TableCell>
-                            {(doc as any).verificationStatus === "verified" ? (
+                          ),
+                        },
+                        {
+                          id: "type",
+                          header: "Type",
+                          accessor: (doc) => doc.documentType,
+                          cell: (doc) => <Badge variant="outline" className="capitalize">{doc.documentType.replace(/_/g, " ")}</Badge>,
+                        },
+                        {
+                          id: "size",
+                          header: "Size",
+                          accessor: (doc) => doc.fileSize || 0,
+                          cell: (doc) => (
+                            <span className="text-muted-foreground text-sm">
+                              {doc.fileSize ? `${(doc.fileSize / 1024).toFixed(1)} KB` : "—"}
+                            </span>
+                          ),
+                        },
+                        {
+                          id: "uploaded",
+                          header: "Uploaded",
+                          accessor: (doc) => new Date(doc.createdAt),
+                          cell: (doc) => <span className="text-muted-foreground text-sm">{new Date(doc.createdAt).toLocaleDateString()}</span>,
+                        },
+                        {
+                          id: "verification",
+                          header: "Verification",
+                          accessor: (doc) => (doc as any).verificationStatus || "pending",
+                          cell: (doc) =>
+                            (doc as any).verificationStatus === "verified" ? (
                               <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600">
                                 <CheckCircle2 className="h-3 w-3" /> Verified
                               </Badge>
@@ -867,9 +900,14 @@ export default function StaffClients() {
                               </Badge>
                             ) : (
                               <Badge variant="outline">Pending review</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
+                            ),
+                        },
+                        {
+                          id: "actions",
+                          header: "Actions",
+                          align: "right",
+                          sortable: false,
+                          cell: (doc) => (
                             <div className="flex items-center justify-end gap-1">
                               {(doc as any).verificationStatus !== "verified" && (
                                 <Button
@@ -911,11 +949,16 @@ export default function StaffClients() {
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
+                          ),
+                        },
+                      ]}
+                      rows={clientDocumentsList}
+                      getRowKey={(doc) => doc.id}
+                      exportFilename="client-documents"
+                      storageKey="client-documents"
+                      emptyMessage="No documents uploaded."
+                    />
+                  </div>
                 )}
               </CardSection>
 

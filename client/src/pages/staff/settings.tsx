@@ -1,7 +1,7 @@
 import { useState, useEffect, type ChangeEvent } from "react";
 import { useSearch, useLocation, Link } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -377,6 +377,28 @@ export default function StaffSettings() {
       toast({ title: "Sync failed", description: err.message || "Could not synchronize permissions.", variant: "destructive" });
     },
   });
+
+  const termsColumns: EdtColumn<any>[] = [
+    { id: "title", header: "Title", accessor: (term) => term.title, cell: (term) => <span className="font-medium">{term.title}</span> },
+    { id: "category", header: "Category", accessor: (term) => term.category || "general", cell: (term) => <span className="text-muted-foreground">{term.category || "general"}</span> },
+    { id: "order", header: "Order", accessor: (term) => term.sortOrder },
+    { id: "active", header: "Active", accessor: (term) => (term.isActive ? "Yes" : "No") },
+    {
+      id: "actions",
+      header: "Actions",
+      sortable: false,
+      cell: (term) => (
+        <div className="flex gap-2">
+          <Button variant="ghost" size="icon" onClick={() => openEditTermDialog(term)} aria-label="Edit">
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={() => setTermToDeleteId(term.id)} aria-label="Delete">
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
 
   return (
     <StaffLayout>
@@ -807,50 +829,20 @@ export default function StaffSettings() {
                   <Plus className="h-4 w-4 mr-2" /> Add term
                 </Button>
               )}
-              flush
             >
                 {termsList === undefined ? (
                   <div className="flex justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin text-primary" />
                   </div>
-                ) : (termsList ?? []).length === 0 ? (
-                  <EmptyState
-                    title="No terms yet"
-                    description="Add one to show on policy documents."
-                    className="border-0 rounded-none bg-transparent py-10"
-                  />
                 ) : (
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow>
-                        <TableHead>Title</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead className="w-20">Order</TableHead>
-                        <TableHead className="w-24">Active</TableHead>
-                        <TableHead className="w-28">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(termsList ?? []).map((term: any) => (
-                        <TableRow key={term.id} className="hover:bg-muted/40">
-                          <TableCell className="font-medium">{term.title}</TableCell>
-                          <TableCell className="text-muted-foreground">{term.category || "general"}</TableCell>
-                          <TableCell>{term.sortOrder}</TableCell>
-                          <TableCell>{term.isActive ? "Yes" : "No"}</TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <Button variant="ghost" size="icon" onClick={() => openEditTermDialog(term)} aria-label="Edit">
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" onClick={() => setTermToDeleteId(term.id)} aria-label="Delete">
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
+                  <EnhancedDataTable
+                    columns={termsColumns}
+                    rows={termsList ?? []}
+                    getRowKey={(term) => term.id}
+                    exportFilename="terms-and-conditions"
+                    storageKey="staff-settings-terms"
+                    emptyMessage="No terms yet. Add one to show on policy documents."
+                  />
                 )}
             </CardSection>
 

@@ -1,9 +1,8 @@
 import { useState } from "react";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, EmptyState } from "@/components/ds";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -143,6 +142,96 @@ export default function StaffFeedback() {
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
 
+  const feedbackColumns: EdtColumn<ClientFeedback>[] = [
+    {
+      id: "client",
+      header: "Client",
+      sortable: false,
+      cell: (f) => <ClientName clientId={f.clientId} />,
+    },
+    {
+      id: "type",
+      header: "Type",
+      accessor: (f) => f.type,
+      cell: (f) => <Badge variant="outline" className="text-[10px] capitalize">{f.type}</Badge>,
+    },
+    {
+      id: "subject",
+      header: "Subject",
+      accessor: (f) => f.subject,
+      cell: (f) => <span className="font-medium block max-w-[220px] truncate" title={f.subject}>{f.subject}</span>,
+    },
+    {
+      id: "message",
+      header: "Message",
+      accessor: (f) => f.message,
+      cell: (f) => <span className="text-sm text-muted-foreground block max-w-[320px] truncate" title={f.message}>{f.message}</span>,
+    },
+    {
+      id: "submitted",
+      header: "Submitted",
+      accessor: (f) => new Date(f.createdAt),
+      cell: (f) => <span className="text-xs text-muted-foreground">{new Date(f.createdAt).toLocaleString()}</span>,
+    },
+    {
+      id: "age",
+      header: "Age",
+      accessor: (f) => f.ageDays,
+      cell: (f) => (
+        <span
+          className={`text-sm tabular-nums flex items-center gap-1 ${f.isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`}
+          title={f.isOverdue ? `Open ${f.ageDays} days — past the complaints SLA` : undefined}
+        >
+          {f.isOverdue && <AlertTriangle className="h-3.5 w-3.5" />}
+          {f.ageDays} {f.ageDays === 1 ? "day" : "days"}
+        </span>
+      ),
+    },
+    {
+      id: "status",
+      header: "Status",
+      accessor: (f) => f.status,
+      cell: (f) =>
+        canWrite ? (
+          <Select
+            value={f.status}
+            onValueChange={(status) => handleStatusChange(f, status)}
+            disabled={updateStatusMutation.isPending}
+          >
+            <SelectTrigger className="w-36 h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <Badge variant="outline" className={`text-[10px] capitalize ${statusBadgeClass(f.status)}`}>
+            {f.status.replace(/_/g, " ")}
+          </Badge>
+        ),
+    },
+    {
+      id: "escalation",
+      header: "Escalation",
+      sortable: false,
+      cell: (f) =>
+        f.escalated ? (
+          <Badge variant="outline" className="text-[10px] gap-1 bg-amber-50 text-amber-700 border-amber-200">
+            <ArrowUpCircle className="h-3 w-3" /> Escalated
+          </Badge>
+        ) : canWrite ? (
+          <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setEscalatingFeedback(f)}>
+            <ArrowUpCircle className="h-3.5 w-3.5" /> Escalate
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        ),
+    },
+  ];
+
   return (
     <StaffLayout>
       <PageShell>
@@ -154,7 +243,6 @@ export default function StaffFeedback() {
         <CardSection
           title="Feedback inbox"
           icon={MessageSquare}
-          flush
           headerRight={(
             <div className="flex items-center gap-2 flex-wrap">
               <div className="relative w-56">
@@ -195,80 +283,18 @@ export default function StaffFeedback() {
               className="border-0 rounded-none bg-transparent py-10"
             />
           ) : (
-            <>
-              <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-                <TableHeader className={dataTableStickyHeaderClass}>
-                  <TableRow>
-                    <TableHead className="pl-6">Client</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Subject</TableHead>
-                    <TableHead>Message</TableHead>
-                    <TableHead>Submitted</TableHead>
-                    <TableHead>Age</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="pr-6">Escalation</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((f) => (
-                    <TableRow key={f.id} className="hover:bg-muted/30">
-                      <TableCell className="pl-6"><ClientName clientId={f.clientId} /></TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-[10px] capitalize">{f.type}</Badge>
-                      </TableCell>
-                      <TableCell className="font-medium max-w-[220px] truncate" title={f.subject}>{f.subject}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-[320px] truncate" title={f.message}>{f.message}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{new Date(f.createdAt).toLocaleString()}</TableCell>
-                      <TableCell>
-                        <span
-                          className={`text-sm tabular-nums flex items-center gap-1 ${f.isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`}
-                          title={f.isOverdue ? `Open ${f.ageDays} days — past the complaints SLA` : undefined}
-                        >
-                          {f.isOverdue && <AlertTriangle className="h-3.5 w-3.5" />}
-                          {f.ageDays} {f.ageDays === 1 ? "day" : "days"}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        {canWrite ? (
-                          <Select
-                            value={f.status}
-                            onValueChange={(status) => handleStatusChange(f, status)}
-                            disabled={updateStatusMutation.isPending}
-                          >
-                            <SelectTrigger className="w-36 h-8">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {STATUSES.map((s) => (
-                                <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Badge variant="outline" className={`text-[10px] capitalize ${statusBadgeClass(f.status)}`}>
-                            {f.status.replace(/_/g, " ")}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="pr-6">
-                        {f.escalated ? (
-                          <Badge variant="outline" className="text-[10px] gap-1 bg-amber-50 text-amber-700 border-amber-200">
-                            <ArrowUpCircle className="h-3 w-3" /> Escalated
-                          </Badge>
-                        ) : canWrite ? (
-                          <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setEscalatingFeedback(f)}>
-                            <ArrowUpCircle className="h-3.5 w-3.5" /> Escalate
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </DataTable>
+            <div className="space-y-3">
+              <EnhancedDataTable
+                columns={feedbackColumns}
+                rows={rows}
+                getRowKey={(f) => f.id}
+                searchable={false}
+                exportFilename="client-feedback"
+                storageKey="staff-feedback"
+                emptyMessage="No feedback found."
+              />
 
-              <div className="flex items-center justify-between px-6 py-3 border-t text-sm text-muted-foreground">
+              <div className="flex items-center justify-between px-1 py-2 text-sm text-muted-foreground">
                 <span>{total} total</span>
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="outline" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
@@ -279,7 +305,7 @@ export default function StaffFeedback() {
                   </Button>
                 </div>
               </div>
-            </>
+            </div>
           )}
         </CardSection>
 

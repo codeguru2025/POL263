@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
-import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
-import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, EmptyState } from "@/components/ds";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getApiBase } from "@/lib/queryClient";
@@ -38,6 +37,19 @@ function currencyLines(m: Record<string, number> | undefined) {
 function pct(n: number | null | undefined) {
   return n == null ? "—" : `${n}%`;
 }
+
+const branchBreakdownColumns: EdtColumn<any>[] = [
+  { id: "branch", header: "Branch", accessor: (r) => r.branchName },
+  { id: "currency", header: "Currency", accessor: (r) => r.currency },
+  { id: "policies", header: "Policies", align: "right", accessor: (r) => r.policyCount },
+  {
+    id: "income",
+    header: "Income",
+    align: "right",
+    accessor: (r) => Number(r.income || 0),
+    cell: (r) => <span className="tabular-nums">{money(r.income)}</span>,
+  },
+];
 
 /** Pivots {group, currency, value} rows into one row per group with one field per currency —
  *  never blends currencies into a single bar; each currency gets its own <Bar> series instead. */
@@ -217,24 +229,16 @@ export default function ExecutiveReport() {
 
             {/* Income by branch */}
             {report.financial.branchBreakdown.length > 0 && (
-              <CardSection title="Income by Branch" flush>
-                <div className="overflow-x-auto">
-                  <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent min-w-[520px]">
-                    <TableHeader className={dataTableStickyHeaderClass}>
-                      <TableRow><TableHead>Branch</TableHead><TableHead>Currency</TableHead><TableHead className="text-right">Policies</TableHead><TableHead className="text-right">Income</TableHead></TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {report.financial.branchBreakdown.map((r: any, i: number) => (
-                        <TableRow key={i}>
-                          <TableCell>{r.branchName}</TableCell>
-                          <TableCell>{r.currency}</TableCell>
-                          <TableCell className="text-right tabular-nums">{r.policyCount}</TableCell>
-                          <TableCell className="text-right tabular-nums">{money(r.income)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </DataTable>
-                </div>
+              <CardSection title="Income by Branch">
+                <EnhancedDataTable
+                  columns={branchBreakdownColumns}
+                  rows={report.financial.branchBreakdown.map((r: any, i: number) => ({ ...r, _rowKey: i }))}
+                  getRowKey={(row) => String(row._rowKey)}
+                  searchable={false}
+                  exportFilename={`executive-report-branch-breakdown-${period.from}-${period.to}`}
+                  storageKey="executive-report-branch-breakdown"
+                  emptyMessage="No branch data."
+                />
               </CardSection>
             )}
 
