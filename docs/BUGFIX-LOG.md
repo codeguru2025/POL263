@@ -10,6 +10,51 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-07 — Fixed-column form grids overlapped on mobile: 58 sites across 22 files with no responsive fallback
+
+Augustus reported policy search "not filtering" (turned out to be a stale cached bundle from a
+rocky mid-session deploy, not a real bug — resolved itself on reload) and, separately, sent a
+real-device screenshot of the "Issue New Policy" wizard's New Client form on an Android phone:
+labels and inputs rendering fused together ("NamEmail", "PhoneEmail", "National Date of Birth").
+
+**Root cause:** several `<div className="grid grid-cols-N ...">` layouts (N=2 or 3) had zero
+responsive breakpoint variation — Tailwind is mobile-first, so an unprefixed `grid-cols-N`
+applies at *every* screen width, including phones (~360-430px). Two form-field columns forced
+into that width left each `<Input>` a sliver wide, with labels crowding into the next field's
+space. The specific quote-dependent mini-form inside `create-policy-wizard.tsx` (lines 957/961,
+`grid-cols-2` with no breakpoint) was the immediate site behind the screenshot; a codebase-wide
+grep for the same bare-`grid-cols-N` pattern turned up 58 more instances across 22 files —
+staff dashboards, client detail panels, group/society forms, finance report KPI rows, and public
+pages (agent vCard quote form, tenant signup, policy registration) that are disproportionately
+opened on phones since they're shared as links.
+
+**Fix:** `grid-cols-1 sm:grid-cols-N` — the pattern this codebase already used correctly
+elsewhere (e.g. `create-policy-wizard.tsx:579`, `overview-tab.tsx:155`). Single column below
+640px, identical N-column layout at `sm:` and up, so no desktop/tablet spacing or density
+changed. Deliberately left alone: decorative "how it works" 3-icon strips and short two-button
+toggle rows (WhatsApp/Call, Save/Share, Monthly/Yearly) — those aren't broken at N columns on a
+narrow screen, only genuine multi-field forms are. Applied via two parallel subagents (batched
+by risk area) plus direct edits for the public-facing signup/registration/vcard pages, each
+verified as a single-token diff (`grid-cols-N` → `grid-cols-1 sm:grid-cols-N`, nothing else
+touched) before `tsc`/build/331 tests were run as a final combined check.
+
+**Verified:** `npm run check`, `npm run build`, `npm run test` (331/331) all clean; every diff
+hunk spot-checked to confirm only the grid-cols token changed, no gap/spacing/text-size classes
+touched. Not yet re-verified on a real device post-fix (my own browser-automation viewport
+resize doesn't actually change `window.innerWidth` in this environment — confirmed stuck at
+1536px across multiple resize attempts — so live mobile testing depends on Augustus's phone).
+
+**Lesson for next time:** a bare `grid-cols-N` (N≥2) with no `sm:`/`md:` prefix anywhere on the
+line is the single highest-signal grep for "broken on mobile" in this codebase — `grid grid-cols-[2-6]` catches candidates, but many are legitimate (KPI stat pairs that already vary
+by breakpoint, e.g. `grid-cols-2 md:grid-cols-4`, or short button-pair rows) so each hit needs a
+quick read to distinguish "form fields crammed into a fixed column count" (real bug) from
+"intentionally short 2-3-up cards/buttons that are fine at any width" (not a bug). Also: this
+session's own `resize_window` browser-automation tool does not reliably change the actual
+rendered viewport in this sandboxed environment — don't trust it for mobile-viewport
+verification without confirming `window.innerWidth` actually changed first.
+
+---
+
 ## 2026-08-04 — Per-tenant dedicated-database provisioning had never actually worked: 8 latent bugs found by finally exercising it end-to-end
 
 Augustus asked which database IFALAKHE FUNERAL SERVICES (a same-day self-signup tenant) was
