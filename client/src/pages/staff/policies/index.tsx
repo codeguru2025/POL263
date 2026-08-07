@@ -208,6 +208,12 @@ export default function StaffPolicies() {
     <StaffLayout>
       {selection.showDetailView && selection.selectedPolicy ? (
         <PolicyDetailView
+          // Remount on policy change so local UI state (active sub-tab, doc language) resets
+          // instead of carrying over when navigating directly between two policies' detail
+          // views (e.g. browser back/forward across two ?policyId= links) without an
+          // intervening list-view visit — the underlying data already re-keys correctly via
+          // each query's selectedPolicy.id-keyed queryKey, this only resets local component state.
+          key={selection.selectedPolicy.id}
           selectedPolicy={selection.selectedPolicy}
           setSelectedPolicy={selection.setSelectedPolicy}
           onBack={selection.closeDetail}

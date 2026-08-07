@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { getApiBase } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 /**
  * Owns which policy (if any) is open in detail view, and keeps it in sync with a persistent
@@ -19,6 +20,7 @@ import { getApiBase } from "@/lib/queryClient";
 export function usePolicySelection() {
   const [, setLocation] = useLocation();
   const searchString = useSearch();
+  const { toast } = useToast();
 
   const [showDetailView, setShowDetailView] = useState(false);
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
@@ -29,7 +31,7 @@ export function usePolicySelection() {
   // currently selected (first load of a bookmarked/shared link, or browser back/forward
   // landing on a different policy). A direct single-record fetch is simplest and correct
   // regardless of which view is active or what the list view's current search filter is.
-  const { data: resolvedPolicy } = useQuery<any>({
+  const { data: resolvedPolicy, isFetched: isResolveFetched } = useQuery<any>({
     queryKey: ["/api/policies", urlPolicyId, "selection"],
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/policies/${urlPolicyId}`, { credentials: "include" });
@@ -54,8 +56,21 @@ export function usePolicySelection() {
     if (resolvedPolicy?.id === urlPolicyId) {
       setSelectedPolicy(resolvedPolicy);
       setShowDetailView(true);
+      return;
     }
-  }, [urlPolicyId, resolvedPolicy, selectedPolicy?.id, showDetailView]);
+    // The fetch for this policyId has settled but didn't resolve to a matching record — it's
+    // either been deleted or the user lacks permission to view it. A bookmarked/shared
+    // ?policyId= link can easily go stale, so this isn't a rare path: fail loudly (toast) and
+    // drop the dead param instead of silently falling back to the list view with no explanation.
+    if (isResolveFetched && resolvedPolicy == null) {
+      toast({
+        title: "Policy not found",
+        description: "It may have been deleted, or you may not have permission to view it.",
+        variant: "destructive",
+      });
+      setLocation("/staff/policies", { replace: true });
+    }
+  }, [urlPolicyId, resolvedPolicy, isResolveFetched, selectedPolicy?.id, showDetailView, toast, setLocation]);
 
   const openDetail = (policy: any) => {
     setSelectedPolicy(policy);
